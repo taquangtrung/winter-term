@@ -1,0 +1,55 @@
+# Changelog
+
+All notable changes to Winter are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+While the major version is `0`, the TBP wire format, the KDL config schema, and every crate's public API may change in a minor release.
+
+## [Unreleased]
+
+### Added
+
+- **Tool panes.** A pane can hold a *tool page*: content Winter paints itself, as rows of styled text rather than PTY output. A page covers the pane rather than replacing it, so the shell underneath goes on running and comes back in the mode it was in when the page closes, and the split tree, tabs, focus, and zoom never learn that a tool was up. A page names semantic styles rather than colors, so the active theme resolves them, and it is a fifth per-pane mode: keys it declines fall through to the window-layout chords alone, so splitting, zooming, and moving focus all still work from a tool.
+- **Dir** (`Ctrl-Shift-d`): a keyboard-driven directory listing rooted at the pane's working directory, with tree folding to any depth, visit history, marks, copy, move, rename, delete, permission bits, per-entry Nerd Font glyphs, sorting by name, time, or size, and directory totals walked in the background a directory at a time.
+- **Git** (`Ctrl-Shift-g`): the working tree as foldable sections, with a file's diff shown hunk by hunk. Hunks stage, unstage, and discard one at a time through `git apply` on standard input, so the rest of the file is untouched, and transient menus drive branch, commit, diff, ignore, merge, rebase, tag, stash, cherry-pick, bisect, remote, reset, revert, worktree, and log. `Alt-b` blames the file under the cursor, `Alt-y` lists every ref, and `Alt-g` opens the remote in a browser. Anything that wants a terminal of its own, an editor for a commit message or an interactive rebase's todo list, goes to a new tab.
+- **Grep** (`Ctrl-Shift-f`): the lines under the pane's working directory that hold some text, grouped under one heading per file, with `n` and `N` stepping between matches, `Alt-n` and `Alt-p` over whole files, and `Enter` opening a match in `$EDITOR` at its line. The walk is Winter's own rather than a shelled-out `grep`, so it behaves the same on every platform, and it runs off the event loop with `Esc` to abandon it. It skips what would swamp the results instead of reading everything: version-control internals, `node_modules`, `target`, files over a megabyte, anything that is not text, and symlinks, which are never followed. Matches stop at a cap of 500, and the header says when they did.
+- **Keys** (`Keys: Show Every Command`): every built-in command beside the chord bound to it, read from the keymap in force so it cannot disagree with what the keys actually do. `Enter` runs the command under the cursor.
+- **Search in every tool**: `/` asks for text, `n` and `N` step through the matches and wrap, and a search that finds nothing says so. One matcher serves every tool, matching literal text without regard to case, which keeps the page layer free of a pattern engine. Grep is the one place `/` means something else, since its rows already are a search: there it asks for a new one, and `n` and `N` step through what that found.
+- **Every setting is editable in the settings page.** Ten rows that only the config file could reach before: dimmed inactive panes, the pane divider's width, session restore, the prompt-line binding set, ligatures, cursor blink and hiding, clipboard reads, and the two block-trust settings, each with the note explaining what it costs. Tests hold the page, the shipped sample, and the file writer to the schema, so a setting added to one and not the others fails the suite.
+- **Slow work off the event loop.** A page asks for work, a detached worker does it, and the answer is collected on the next poll. Requests past a fixed number in flight are dropped rather than queued, since every caller is asking about what is on screen, and cancelling forgets the job rather than killing the thread. A page that needs an answer from the user returns a tagged prompt request the host collects in the status bar, and a question whose wrong answer cannot be undone is collected as a single key instead of a line.
+
+### Fixed
+
+- **Saving settings no longer drops the keys the writer did not know about.** Writing `settings.kdl` rebuilds the whole file from the live configuration, and three settings were never written back: `dim-inactive`, `restore-session`, and the cursor's `hide-in-inactive`. Any of them set by hand was lost the moment anything else was saved from the settings page.
+
+## [0.1.0]
+
+First release. Winter is a terminal emulator that models a session as a list of typed, MIME-tagged blocks rather than a flat scrollback, with a persistent Vim layer that works against any shell.
+
+### Added
+
+- **Terminal Block Protocol (TBP) v1**: one OSC 9001 escape carrying a MIME bundle, so a program can hand the terminal structured content while staying invisible to terminals that do not implement it. Every bundle carries a `text/plain` fallback, which is what keeps the same program readable under `tmux`, over `ssh`, and in CI. Specified in [`docs/terminal-block-protocol-spec.md`](docs/terminal-block-protocol-spec.md) and implemented by the `winter-proto` reference codec.
+- **Live blocks**: `open`, `patch`, and `close` fold RFC 6902 patches into a block that re-renders in place and re-reserves grid rows as its content grows. Patch folding is best-effort, so a malformed operation is skipped rather than freezing the display.
+- **Vim-style modal navigation over the scrollback.** Four per-pane modes (Insert, Normal, Visual, Block-Focus) with operators, text objects, registers, marks, the jumplist and changelist, dot-repeat, regex search, blockwise Visual, surround, and which-key hints. The modal layer lives in the terminal rather than the shell's line editor, so it works identically in bash, zsh, fish, a Python REPL, or over `ssh` to a machine you cannot configure.
+- **Prompt-line editing**: Vim operators aimed at the line the shell is currently editing are translated into the equivalent readline keystrokes, with `prompt-edit-bindings` (`"emacs"` default, `"none"`) to decline them when the shell is in vi mode and has those chords bound elsewhere.
+- **Block-aware scrollback** driven by OSC 133 marks: per-command boundaries, exit-code tags, folding, working directories from OSC 7, and block navigation. Shell integration scripts for bash, zsh, and fish ship in `clients/shell-integration/` and are installed by the `.deb` and the Windows installer.
+- **Session multiplexer**: `winter mux serve/new/attach/list/kill/proxy`, session persistence across server restarts, PTY size arbitration across attached clients, and remote attach over an SSH tunnel.
+- **GPU text rendering** on wgpu and glyphon, with sixel and raster image blocks, SVG, markdown and CSV blocks, ligatures, rainbow parens, and a WebView pass for rich content.
+- **Client SDKs** for Rust ([`clients/client-rs`](clients/client-rs)), Python ([`clients/client-py`](clients/client-py)), and shell ([`clients/client.sh`](clients/client.sh)).
+- **Configuration in KDL**: `settings.kdl`, `keybindings.kdl`, and user themes under `themes/<name>.kdl`, all hot-reloaded on save. `winter --reload` reloads a running instance.
+- **Documentation**: [`docs/usage-guide.md`](docs/usage-guide.md) for the modes, the full keymap, and every settings key; [`docs/terminal-block-protocol-spec.md`](docs/terminal-block-protocol-spec.md) for the protocol; [`docs/architecture.md`](docs/architecture.md) for how the workspace fits together; and [`SECURITY.md`](SECURITY.md) for the threat model and disclosure channel.
+- **Packaging** for all three platforms: a `.deb`, an arm64 `.dmg`, and a Windows installer, plus downstream manifests for the AUR, Scoop, and winget under `packaging/`. Pushing a `vx.y.z` tag builds all three on their native runners and opens a draft GitHub Release.
+- **Continuous integration** covering rustfmt, clippy, tests on Linux, Windows, and macOS, the advertised MSRV, the Python client, `cargo audit`, and a crates.io publish dry run.
+
+### Security
+
+Winter's threat model starts from the assumption that every byte arriving from a PTY is attacker-controlled: a `cat` of a downloaded file, output piped from `curl`, or a program on the far side of an `ssh` can all write arbitrary escape sequences.
+
+- **A trust tier on the wire is a request, never a grant.** The tier a block asks for is clamped against `security.block-max-trust`, which defaults to `restricted`, so nothing arriving from a PTY reaches scripting without the user configuring it.
+- **Rendering a block makes no network request the user did not ask for.** Remote subresources for Vega and Vega-Lite blocks require opting in through `security.block-remote-assets`; the default renders the spec inline.
+- **OSC 52 clipboard reads are opt-in** (the top-level `clipboard-read` setting), because the query is silent on the querying side.
+- **Every crate sets `#![forbid(unsafe_code)]`.**
+- **Every unbounded accumulator has an explicit cap** with a documented rationale: retained block output, live-block patch count, scrollback rows, the mux client outbox, and the APC payload buffer.
+- **Both parsers driven entirely by untrusted input are fuzzed.** `crates/winter-render/tests/vt_fuzz.rs` covers the VT escape parser and cell grid; `crates/winter-core/tests/tbp_fuzz.rs` covers the OSC 133 block state machine and the TBP codec. Both generate streams from a seeded PRNG biased toward the shapes that break terminals (extreme CSI parameters, inverted scroll regions, truncated OSC, wide characters at the right margin, resizes interleaved with output, invalid UTF-8) and assert structural invariants after every chunk. A failure prints a seed that reproduces it.
+
+[Unreleased]: https://github.com/taquangtrung/winter-term/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/taquangtrung/winter-term/releases/tag/v0.1.0

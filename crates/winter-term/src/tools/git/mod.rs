@@ -1,0 +1,2116 @@
+//! Git: the working tree's state in a pane, and the keys that change it.
+//!
+//! - [`diff`]: reading a unified diff, and writing one hunk back out.
+//! - [`exec`]: the git command lines the view runs.
+//! - [`parse`]: reading git's own output.
+//! - [`popup`]: the transient menus a key opens.
+//! - [`rows`]: painting the view, and what each row stands for.
+
+pub mod diff;
+pub mod exec;
+pub mod parse;
+pub mod popup;
+pub mod rows;
+
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
+
+use crate::model::input::{Key, KeyCode};
+use crate::model::page::{
+    find_match, row_text, scroll_to_cursor, CommandOutput, JobReply, JobRequest, OpenTarget, Page,
+    PageContent, PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
+    SpawnRequest,
+};
+
+use diff::FileDiff;
+use exec::{LogScope, ResetMode, SequenceStep};
+use parse::{Commit, Section, Status};
+use popup::Popup;
+use rows::{FileRow, Item, ViewRow};
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+/// Prompt tags, one per question the view asks.
+const ASK_BRANCH_CHECKOUT: &str = "branch-checkout";
+const ASK_BRANCH_CREATE: &str = "branch-create";
+const ASK_BRANCH_CREATE_HERE: &str = "branch-create-here";
+const ASK_BRANCH_DELETE: &str = "branch-delete";
+const ASK_BRANCH_DELETE_FORCE: &str = "branch-delete-force";
+const ASK_CHERRY_PICK: &str = "cherry-pick";
+const ASK_COMMIT: &str = "commit";
+const ASK_CUSTOM: &str = "custom";
+const ASK_DIFF_REV: &str = "diff-rev";
+const ASK_DISCARD: &str = "discard";
+const ASK_MERGE: &str = "merge";
+const ASK_REBASE: &str = "rebase";
+const ASK_REMOTE_ADD: &str = "remote-add";
+const ASK_REMOTE_PRUNE: &str = "remote-prune";
+const ASK_REMOTE_REMOVE: &str = "remote-remove";
+const ASK_RESET_HARD: &str = "reset-hard";
+const ASK_RESET_MIXED: &str = "reset-mixed";
+const ASK_RESET_SOFT: &str = "reset-soft";
+const ASK_REVERT: &str = "revert";
+const ASK_SEARCH: &str = "search";
+const ASK_STASH: &str = "stash";
+const ASK_TAG_CREATE: &str = "tag-create";
+const ASK_TAG_DELETE: &str = "tag-delete";
+const ASK_WORKTREE_ADD: &str = "worktree-add";
+const ASK_WORKTREE_REMOVE: &str = "worktree-remove";
+
+/// Commits the log view asks for at a time, and adds on each request for more.
+const LOG_PAGE: usize = 50;
+
+/// The remote a browser is pointed at, and whose refs are pruned by default.
+const DEFAULT_REMOTE: &str = "origin";
+
+/// Shown while the first status has not come back yet.
+const LOADING: &str = "  reading the repository...";
+
+/// Shown when the directory the view opened in is not in a repository.
+const NOT_A_REPO: &str = "  not a git repository";
+
+/// Rows of header above the first section.
+const HEADER_ROWS: usize = 1;
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// Output filling the view in place of the status: what it is, and its lines.
+#[derive(Clone, Debug)]
+pub struct Output {
+    /// What produced it, for the title.
+    title: String,
+    /// The lines, as they came back.
+    lines: Vec<String>,
+    /// Cursor over the lines.
+    cursor: usize,
+    /// Whether more can be asked for, which only the log offers.
+    more: bool,
+}
+
+/// The working tree's state, and the cursor over it.
+pub struct GitPage {
+    /// Sections the user has shut. `None` stands for the recent-commits
+    /// section, which has no `Section` of its own.
+    collapsed: HashSet<Option<Section>>,
+    commits: Vec<Commit>,
+    /// Diffs already read, keyed by the row that asked for one. A file's
+    /// working-tree and index diffs are different things, so the section is
+    /// part of the key.
+    diffs: HashMap<FileRow, FileDiff>,
+    /// Files whose diff is showing.
+    expanded: HashSet<FileRow>,
+    cursor: usize,
+    /// What the last command reported, shown in the header.
+    message: Option<String>,
+    /// Where the repository is rooted, once git has said.
+    root: Option<PathBuf>,
+    rows: Vec<ViewRow>,
+    scroll: usize,
+    /// The last text searched for, repeated by the next and previous keys.
+    search: String,
+    /// Set by `g`, waiting for the key that says which section to jump to.
+    pending: bool,
+    /// The file whose diff was asked for and has not come back yet.
+    pending_diff: Option<FileRow>,
+    /// The menu waiting for its second key.
+    popup: Option<Popup>,
+    /// Output shown in place of the status view: a log, a blame, a listing.
+    /// `None` when the status view is showing.
+    output: Option<Output>,
+    /// How many commits the log view last asked for.
+    log_count: usize,
+    /// Where the page was opened, which is where the root is looked up from.
+    start: PathBuf,
+    status: Status,
+    /// Set once a status has come back, so an empty view can say which it is:
+    /// a clean tree, or one still being read.
+    loaded: bool,
+}
+
+// ========================================================================
+// GitPage
+// ========================================================================
+
+impl GitPage {
+    /// A view of the repository containing `start`, which is asked for first.
+    pub fn new(start: PathBuf) -> Self {
+        Self {
+            collapsed: HashSet::new(),
+            commits: Vec::new(),
+            diffs: HashMap::new(),
+            expanded: HashSet::new(),
+            cursor: 0,
+            loaded: false,
+            message: None,
+            log_count: LOG_PAGE,
+            output: None,
+            pending: false,
+            pending_diff: None,
+            popup: None,
+            root: None,
+            rows: Vec::new(),
+            scroll: 0,
+            search: String::new(),
+            start,
+            status: Status::default(),
+        }
+    }
+
+    /// The first request the view makes: where the repository is.
+    pub fn initial_request(&self) -> JobRequest {
+        exec::repo_root(&self.start)
+    }
+
+    /// Re-read the working tree.
+    fn refresh(&self) -> PageOutcome {
+        match &self.root {
+            Some(root) => PageOutcome::Job(exec::status(root)),
+            None => PageOutcome::Job(self.initial_request()),
+        }
+    }
+
+    fn rebuild(&mut self) {
+        let collapsed = self.collapsed.clone();
+        let expanded = self.expanded.clone();
+        let diffs = self.diffs.clone();
+        self.rows = rows::build(
+            &self.status,
+            &self.commits,
+            &|section| collapsed.contains(&section),
+            self.message.as_deref(),
+            &|file| {
+                expanded
+                    .contains(file)
+                    .then(|| diffs.get(file).cloned())
+                    .flatten()
+            },
+        );
+        self.cursor = self.cursor.min(self.rows.len().saturating_sub(1));
+    }
+
+    fn selected(&self) -> Option<&ViewRow> {
+        self.rows.get(self.cursor)
+    }
+
+    /// The paths a key acts on: the file under the cursor, or every file in the
+    /// section whose heading it is on.
+    fn targets(&self) -> Vec<String> {
+        match self.selected().map(|row| &row.item) {
+            Some(Item::File(file)) => vec![file.path.clone()],
+            Some(Item::Hunk(hunk)) => vec![hunk.path.clone()],
+            Some(Item::Heading(section)) => self.paths_in(*section),
+            Some(Item::Commit(_)) | Some(Item::RecentHeading) | Some(Item::None) | None => {
+                Vec::new()
+            }
+        }
+    }
+
+    fn paths_in(&self, section: Section) -> Vec<String> {
+        self.status
+            .files
+            .iter()
+            .filter(|file| file.section == section)
+            .map(|file| file.path.clone())
+            .collect()
+    }
+
+    /// Which section the cursor is in, taken from the row itself so a heading
+    /// and its entries agree.
+    fn section_at_cursor(&self) -> Option<Section> {
+        match self.selected().map(|row| &row.item) {
+            Some(Item::File(file)) => Some(file.section),
+            Some(Item::Hunk(hunk)) => Some(hunk.section),
+            Some(Item::Heading(section)) => Some(*section),
+            _ => None,
+        }
+    }
+
+    fn move_by(&mut self, delta: isize) {
+        let last = self.rows.len().saturating_sub(1);
+        let next = self.cursor as isize + delta;
+        self.cursor = next.clamp(0, last as isize) as usize;
+    }
+
+    /// Move to the next or previous row that stands for something, skipping the
+    /// blank lines between sections.
+    fn move_to_entity(&mut self, forward: bool) {
+        let step: isize = if forward { 1 } else { -1 };
+        let mut index = self.cursor as isize;
+        loop {
+            index += step;
+            if index < 0 || index as usize >= self.rows.len() {
+                return;
+            }
+            if self.rows[index as usize].item != Item::None {
+                self.cursor = index as usize;
+                return;
+            }
+        }
+    }
+
+    /// Remember `query` and move to the first row holding it.
+    fn search_for(&mut self, query: &str) {
+        self.search = query.to_string();
+        self.search_step(true);
+    }
+
+    /// Move to the next row matching the last search, in whichever view is up:
+    /// one query serves the status and the output it opens.
+    fn search_step(&mut self, forward: bool) {
+        if self.search.is_empty() {
+            self.message = Some("no search".to_string());
+            self.rebuild();
+            return;
+        }
+        if let Some(output) = self.output.as_mut() {
+            if let Some(index) = find_match(&output.lines, &self.search, output.cursor, forward) {
+                output.cursor = index;
+                return;
+            }
+        } else {
+            let labels: Vec<String> = self.rows.iter().map(|row| row_text(&row.spans)).collect();
+            if let Some(index) = find_match(&labels, &self.search, self.cursor, forward) {
+                self.cursor = index;
+                return;
+            }
+        }
+        self.message = Some(format!("not found: {}", self.search));
+        self.rebuild();
+    }
+
+    /// Jump to a section's heading, which is how the `g` keys navigate.
+    fn move_to_section(&mut self, section: Option<Section>) {
+        let target = self.rows.iter().position(|row| match (&row.item, section) {
+            (Item::Heading(found), Some(want)) => *found == want,
+            (Item::RecentHeading, None) => true,
+            _ => false,
+        });
+        if let Some(index) = target {
+            self.cursor = index;
+        }
+    }
+
+    /// Fold what the cursor is on: a heading shuts its section, a file shows or
+    /// hides its own diff, and a hunk folds the file it belongs to.
+    fn toggle_fold(&mut self) -> PageOutcome {
+        match self.selected().map(|row| row.item.clone()) {
+            Some(Item::Heading(section)) => {
+                self.toggle_section(Some(section));
+                PageOutcome::Consumed
+            }
+            Some(Item::RecentHeading) | Some(Item::Commit(_)) => {
+                self.toggle_section(None);
+                PageOutcome::Consumed
+            }
+            Some(Item::File(file)) => self.toggle_file(file),
+            Some(Item::Hunk(hunk)) => {
+                let file = FileRow {
+                    path: hunk.path,
+                    section: hunk.section,
+                };
+                self.expanded.remove(&file);
+                self.rebuild();
+                PageOutcome::Consumed
+            }
+            Some(Item::None) | None => PageOutcome::Consumed,
+        }
+    }
+
+    fn toggle_section(&mut self, key: Option<Section>) {
+        if !self.collapsed.remove(&key) {
+            self.collapsed.insert(key);
+        }
+        self.rebuild();
+    }
+
+    /// Show or hide one file's diff, reading it the first time it is asked for.
+    fn toggle_file(&mut self, file: FileRow) -> PageOutcome {
+        if self.expanded.remove(&file) {
+            self.rebuild();
+            return PageOutcome::Consumed;
+        }
+        self.expanded.insert(file.clone());
+        if self.diffs.contains_key(&file) {
+            self.rebuild();
+            return PageOutcome::Consumed;
+        }
+        self.pending_diff = Some(file.clone());
+        match &self.root {
+            Some(root) => PageOutcome::Job(diff_request(root, &file)),
+            None => PageOutcome::Consumed,
+        }
+    }
+
+    /// Stage, unstage, or discard the hunk under the cursor by applying its own
+    /// patch, which leaves the rest of the file untouched.
+    fn apply_hunk(&self, target: exec::ApplyTarget) -> Option<PageOutcome> {
+        let Some(Item::Hunk(hunk)) = self.selected().map(|row| row.item.clone()) else {
+            return None;
+        };
+        let root = self.root.as_ref()?;
+        let file = FileRow {
+            path: hunk.path.clone(),
+            section: hunk.section,
+        };
+        let patch = self.diffs.get(&file)?.patch_for(hunk.index)?;
+        Some(PageOutcome::Job(exec::apply_patch(root, patch, target)))
+    }
+
+    fn toggle_fold_all(&mut self) {
+        if self.collapsed.is_empty() {
+            self.collapsed = Section::all().into_iter().map(Some).collect();
+            self.collapsed.insert(None);
+        } else {
+            self.collapsed.clear();
+        }
+        self.rebuild();
+    }
+
+    /// Stage what the cursor is on. Untracked files are staged by the same key,
+    /// since "add this" is what the user means either way.
+    fn stage(&self, all: bool) -> PageOutcome {
+        if !all {
+            if let Some(outcome) = self.apply_hunk(exec::ApplyTarget::Index) {
+                return outcome;
+            }
+        }
+        let Some(root) = &self.root else {
+            return PageOutcome::Consumed;
+        };
+        let paths = if all { Vec::new() } else { self.targets() };
+        if !all && paths.is_empty() {
+            return PageOutcome::Consumed;
+        }
+        PageOutcome::Job(exec::stage(root, &paths))
+    }
+
+    fn unstage(&self, all: bool) -> PageOutcome {
+        if !all {
+            if let Some(outcome) = self.apply_hunk(exec::ApplyTarget::IndexReverse) {
+                return outcome;
+            }
+        }
+        let Some(root) = &self.root else {
+            return PageOutcome::Consumed;
+        };
+        let paths = if all { Vec::new() } else { self.targets() };
+        if !all && paths.is_empty() {
+            return PageOutcome::Consumed;
+        }
+        PageOutcome::Job(exec::unstage(root, &paths))
+    }
+
+    /// Ask before throwing away work, naming what will go: nothing recovers a
+    /// discarded working-tree change.
+    fn ask_discard(&self) -> PageOutcome {
+        let paths = self.targets();
+        let label = match paths.len() {
+            0 => return PageOutcome::Consumed,
+            1 => format!("Discard changes to {}? (y/n) ", paths[0]),
+            count => format!("Discard changes to {count} files? (y/n) "),
+        };
+        PageOutcome::Prompt(PromptRequest {
+            initial: String::new(),
+            label,
+            mode: PromptMode::Confirm,
+            tag: ASK_DISCARD,
+        })
+    }
+
+    fn discard(&self) -> PageOutcome {
+        if let Some(outcome) = self.apply_hunk(exec::ApplyTarget::WorktreeReverse) {
+            return outcome;
+        }
+        let Some(root) = &self.root else {
+            return PageOutcome::Consumed;
+        };
+        let paths = self.targets();
+        if paths.is_empty() {
+            return PageOutcome::Consumed;
+        }
+        // Untracked files are not in the index, so `restore` cannot reach
+        // them: deleting is what discarding means for those.
+        if self.section_at_cursor() == Some(Section::Untracked) {
+            return PageOutcome::Job(exec::remove_untracked(root, &paths));
+        }
+        PageOutcome::Job(exec::discard(root, &paths))
+    }
+
+    /// Ask for a one-line message. The long-form editor is the `c` key.
+    fn ask_commit_message(&self) -> PageOutcome {
+        if self.paths_in(Section::Staged).is_empty() {
+            return PageOutcome::Consumed;
+        }
+        PageOutcome::Prompt(PromptRequest {
+            initial: String::new(),
+            label: "Commit message: ".to_string(),
+            mode: PromptMode::Text,
+            tag: ASK_COMMIT,
+        })
+    }
+
+    /// Ask for the next open diff that has not been read since the last
+    /// status, one at a time so a view of twenty open files does not run twenty
+    /// commands at once.
+    fn request_stale_diff(&mut self) -> PageOutcome {
+        let Some(root) = self.root.clone() else {
+            return PageOutcome::Consumed;
+        };
+        let stale = self
+            .rows
+            .iter()
+            .filter_map(|row| match &row.item {
+                Item::File(file) => Some(file.clone()),
+                _ => None,
+            })
+            .find(|file| self.expanded.contains(file) && !self.diffs.contains_key(file));
+        match stale {
+            Some(file) => {
+                self.pending_diff = Some(file.clone());
+                PageOutcome::Job(diff_request(&root, &file))
+            }
+            None => PageOutcome::Consumed,
+        }
+    }
+
+    /// Drop the expansion of a file the status no longer lists: staged away, or
+    /// committed, it has no diff to show.
+    fn forget_unlisted_files(&mut self) {
+        let listed: HashSet<FileRow> = self
+            .status
+            .files
+            .iter()
+            .map(|file| FileRow {
+                path: file.path.clone(),
+                section: file.section,
+            })
+            .collect();
+        self.expanded.retain(|file| listed.contains(file));
+    }
+
+    /// Open a menu, which owns the next keystroke.
+    fn open_popup(&mut self, popup: Popup) -> PageOutcome {
+        self.popup = Some(popup);
+        PageOutcome::Consumed
+    }
+
+    /// The keymap's `a` and `-`: apply or reverse the hunk under the cursor,
+    /// doing nothing when the cursor is not on one.
+    fn apply_at_point(&self, target: exec::ApplyTarget) -> PageOutcome {
+        self.apply_hunk(target).unwrap_or(PageOutcome::Consumed)
+    }
+
+    /// Reset to the commit under the cursor, which is the only revision the
+    /// view can name without asking.
+    fn reset_at_point(&mut self, mode: ResetMode) -> PageOutcome {
+        let Some(root) = self.root.clone() else {
+            return PageOutcome::Consumed;
+        };
+        match self.revision_at_cursor() {
+            Some(rev) => PageOutcome::Job(exec::reset(&root, mode, &rev)),
+            None => self.ask(ASK_RESET_MIXED, "Reset (mixed) to: "),
+        }
+    }
+
+    /// Copy what the cursor is on: a commit hash, or a path.
+    fn yank_at_point(&mut self) -> PageOutcome {
+        let value = self.revision_at_cursor().or_else(|| self.path_at_cursor());
+        match value {
+            Some(value) => PageOutcome::Yank(value),
+            None => PageOutcome::Consumed,
+        }
+    }
+
+    /// Blame the file the cursor is on, or on one of its hunks: a heading or a
+    /// commit has no single path to run against.
+    fn blame_at_point(&mut self) -> PageOutcome {
+        let Some(root) = self.root.clone() else {
+            return PageOutcome::Consumed;
+        };
+        match self.selected().map(|row| row.item.clone()) {
+            Some(Item::File(file)) => PageOutcome::Job(exec::blame(&root, &file.path)),
+            Some(Item::Hunk(hunk)) => PageOutcome::Job(exec::blame(&root, &hunk.path)),
+            _ => {
+                self.message = Some("no file to blame here".to_string());
+                self.rebuild();
+                PageOutcome::Consumed
+            }
+        }
+    }
+
+    /// Ask for the remote's URL, which the reply turns into a browser page.
+    fn open_in_remote(&self) -> PageOutcome {
+        match &self.root {
+            Some(root) => PageOutcome::Job(exec::remote_url(root, DEFAULT_REMOTE)),
+            None => PageOutcome::Consumed,
+        }
+    }
+
+    /// The search keys, offered to both views before their own keys so that one
+    /// query walks whichever rows are showing. `None` for anything else.
+    fn on_search_key(&mut self, key: &Key) -> Option<PageOutcome> {
+        if key.alt || key.ctrl {
+            return None;
+        }
+        match key.code {
+            KeyCode::Char('/') => Some(self.ask(ASK_SEARCH, "/")),
+            KeyCode::Char('n') => {
+                self.search_step(true);
+                Some(PageOutcome::Consumed)
+            }
+            KeyCode::Char('N') => {
+                self.search_step(false);
+                Some(PageOutcome::Consumed)
+            }
+            _ => None,
+        }
+    }
+
+    /// Keys while output fills the view: move, ask for more, or go back.
+    fn on_output_key(&mut self, key: &Key) -> PageOutcome {
+        if let Some(outcome) = self.on_search_key(key) {
+            return outcome;
+        }
+        let Some(output) = self.output.as_mut() else {
+            return PageOutcome::Consumed;
+        };
+        let last = output.lines.len().saturating_sub(1);
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                output.cursor = (output.cursor + 1).min(last);
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                output.cursor = output.cursor.saturating_sub(1);
+                PageOutcome::Consumed
+            }
+            KeyCode::Home => {
+                output.cursor = 0;
+                PageOutcome::Consumed
+            }
+            KeyCode::End => {
+                output.cursor = last;
+                PageOutcome::Consumed
+            }
+            // The keymap's load-more key, which only a log can answer.
+            KeyCode::Char('+') if output.more => {
+                self.log_count += LOG_PAGE;
+                match self.root.clone() {
+                    Some(root) => {
+                        PageOutcome::Job(exec::log(&root, LogScope::Branch, self.log_count))
+                    }
+                    None => PageOutcome::Consumed,
+                }
+            }
+            KeyCode::Char('y') => {
+                let line = output.lines.get(output.cursor).cloned().unwrap_or_default();
+                let value = line.split_whitespace().next().unwrap_or("").to_string();
+                if value.is_empty() {
+                    PageOutcome::Consumed
+                } else {
+                    PageOutcome::Yank(value)
+                }
+            }
+            KeyCode::Char('q') | KeyCode::Escape => {
+                self.output = None;
+                PageOutcome::Consumed
+            }
+            _ => PageOutcome::Ignored,
+        }
+    }
+
+    /// Show `text` in place of the status view.
+    fn show_output(&mut self, title: &str, text: &str, more: bool) {
+        self.output = Some(Output {
+            cursor: 0,
+            lines: text.lines().map(str::to_string).collect(),
+            more,
+            title: title.to_string(),
+        });
+    }
+
+    /// Act on a choice from the open menu. An unknown key closes the menu
+    /// without doing anything, so a mistyped second key is harmless.
+    fn on_popup_key(&mut self, popup: Popup, code: KeyCode) -> PageOutcome {
+        let KeyCode::Char(choice) = code else {
+            return PageOutcome::Consumed;
+        };
+        let Some(root) = self.root.clone() else {
+            return PageOutcome::Consumed;
+        };
+        match (popup, choice) {
+            (Popup::Branch, 'b') => self.ask(ASK_BRANCH_CHECKOUT, "Checkout: "),
+            (Popup::Branch, 'c') => self.ask(ASK_BRANCH_CREATE, "Create and checkout: "),
+            (Popup::Branch, 'n') => self.ask(ASK_BRANCH_CREATE_HERE, "Create branch: "),
+            (Popup::Branch, 'd') => self.ask(ASK_BRANCH_DELETE, "Delete branch: "),
+            (Popup::Branch, 'D') => self.ask(ASK_BRANCH_DELETE_FORCE, "Delete unmerged branch: "),
+
+            (Popup::Commit, 'c') => self.spawn_git(&root, &["commit"]),
+            (Popup::Commit, 'm') => self.ask_commit_message(),
+            (Popup::Commit, 'a') => self.spawn_git(&root, &["commit", "--amend"]),
+            (Popup::Commit, 'e') => {
+                PageOutcome::Job(exec::custom(&root, "commit --amend --no-edit"))
+            }
+
+            (Popup::Merge, 'm') => self.ask(ASK_MERGE, "Merge: "),
+            (Popup::Merge, 'c') => {
+                PageOutcome::Job(exec::sequence(&root, "merge", SequenceStep::Continue))
+            }
+            (Popup::Merge, 'x') => {
+                PageOutcome::Job(exec::sequence(&root, "merge", SequenceStep::Abort))
+            }
+
+            // Interactive rebase needs a terminal for its todo list, so it goes
+            // to a pane rather than being captured.
+            (Popup::Rebase, 'i') => self.ask(ASK_REBASE, "Rebase interactively onto: "),
+            (Popup::Rebase, 'u') => PageOutcome::Job(exec::rebase(&root, "@{upstream}")),
+            (Popup::Rebase, 'c') => {
+                PageOutcome::Job(exec::sequence(&root, "rebase", SequenceStep::Continue))
+            }
+            (Popup::Rebase, 's') => {
+                PageOutcome::Job(exec::sequence(&root, "rebase", SequenceStep::Skip))
+            }
+            (Popup::Rebase, 'x') => {
+                PageOutcome::Job(exec::sequence(&root, "rebase", SequenceStep::Abort))
+            }
+
+            (Popup::Stash, 'z') => self.ask(ASK_STASH, "Stash message (optional): "),
+            (Popup::Stash, 'p') => PageOutcome::Job(exec::stash(&root, "pop")),
+            (Popup::Stash, 'a') => PageOutcome::Job(exec::stash(&root, "apply")),
+            (Popup::Stash, 'd') => PageOutcome::Job(exec::stash(&root, "drop")),
+            (Popup::Stash, 'l') => PageOutcome::Job(exec::stash_list(&root)),
+
+            (Popup::Tag, 't') => self.ask(ASK_TAG_CREATE, "Tag name: "),
+            (Popup::Tag, 'd') => self.ask(ASK_TAG_DELETE, "Delete tag: "),
+            (Popup::Tag, 'l') => PageOutcome::Job(exec::tag_list(&root)),
+
+            (Popup::Remote, 'v') => PageOutcome::Job(exec::remote_list(&root)),
+            (Popup::Remote, 'a') => self.ask(ASK_REMOTE_ADD, "Remote, as `name url`: "),
+            (Popup::Remote, 'd') => self.ask(ASK_REMOTE_REMOVE, "Remove remote: "),
+            (Popup::Remote, 'p') => self.ask(ASK_REMOTE_PRUNE, "Prune remote: "),
+
+            (Popup::CherryPick, 'a') => self.ask(ASK_CHERRY_PICK, "Cherry-pick: "),
+            (Popup::CherryPick, 'c') => {
+                PageOutcome::Job(exec::sequence(&root, "cherry-pick", SequenceStep::Continue))
+            }
+            (Popup::CherryPick, 'x') => {
+                PageOutcome::Job(exec::sequence(&root, "cherry-pick", SequenceStep::Abort))
+            }
+
+            (Popup::Revert, 'v') => self.ask(ASK_REVERT, "Revert: "),
+            (Popup::Revert, 'c') => {
+                PageOutcome::Job(exec::sequence(&root, "revert", SequenceStep::Continue))
+            }
+            (Popup::Revert, 'x') => {
+                PageOutcome::Job(exec::sequence(&root, "revert", SequenceStep::Abort))
+            }
+
+            (Popup::Reset, 'm') => self.ask(ASK_RESET_MIXED, "Reset (mixed) to: "),
+            (Popup::Reset, 's') => self.ask(ASK_RESET_SOFT, "Reset (soft) to: "),
+            // Hard reset throws away work with no way back, so it asks in the
+            // same words as a delete and takes the revision as the answer.
+            (Popup::Reset, 'h') => self.ask(ASK_RESET_HARD, "Reset HARD, losing everything, to: "),
+
+            (Popup::Diff, 'd') => PageOutcome::Job(exec::diff_all(&root, false, None)),
+            (Popup::Diff, 's') => PageOutcome::Job(exec::diff_all(&root, true, None)),
+            (Popup::Diff, 'r') => self.ask(ASK_DIFF_REV, "Diff against: "),
+
+            (Popup::Log, 'l') => {
+                self.log_count = LOG_PAGE;
+                PageOutcome::Job(exec::log(&root, LogScope::Branch, self.log_count))
+            }
+            (Popup::Log, 'a') => {
+                self.log_count = LOG_PAGE;
+                PageOutcome::Job(exec::log(&root, LogScope::AllRefs, self.log_count))
+            }
+            (Popup::Log, 'f') => match self.path_at_cursor() {
+                Some(path) => {
+                    self.log_count = LOG_PAGE;
+                    PageOutcome::Job(exec::log(&root, LogScope::File(path), self.log_count))
+                }
+                None => PageOutcome::Consumed,
+            },
+
+            (Popup::Ignore, 'i') => self.ignore_path(false),
+            (Popup::Ignore, 'e') => self.ignore_path(true),
+
+            (Popup::Worktree, 'l') => PageOutcome::Job(exec::worktree_list(&root)),
+            (Popup::Worktree, 'a') => self.ask(ASK_WORKTREE_ADD, "Worktree path: "),
+            (Popup::Worktree, 'd') => self.ask(ASK_WORKTREE_REMOVE, "Remove worktree: "),
+
+            (Popup::Bisect, 's') => PageOutcome::Job(exec::bisect(&root, "start")),
+            (Popup::Bisect, 'g') => PageOutcome::Job(exec::bisect(&root, "good")),
+            (Popup::Bisect, 'b') => PageOutcome::Job(exec::bisect(&root, "bad")),
+            (Popup::Bisect, 'r') => PageOutcome::Job(exec::bisect(&root, "reset")),
+
+            _ => PageOutcome::Consumed,
+        }
+    }
+
+    /// Ask a one-line question, tagged so the answer finds its way back.
+    fn ask(&self, tag: &'static str, label: &str) -> PageOutcome {
+        PageOutcome::Prompt(PromptRequest {
+            initial: String::new(),
+            label: label.to_string(),
+            mode: PromptMode::Text,
+            tag,
+        })
+    }
+
+    /// Run git in a pane of its own, for a command that wants a terminal.
+    fn spawn_git(&self, root: &std::path::Path, args: &[&str]) -> PageOutcome {
+        PageOutcome::Spawn(SpawnRequest {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            cwd: root.to_path_buf(),
+            program: "git".to_string(),
+        })
+    }
+
+    /// The path the cursor is on, whatever kind of row it is.
+    fn path_at_cursor(&self) -> Option<String> {
+        match self.selected().map(|row| &row.item) {
+            Some(Item::File(file)) => Some(file.path.clone()),
+            Some(Item::Hunk(hunk)) => Some(hunk.path.clone()),
+            _ => None,
+        }
+    }
+
+    /// The revision the cursor is on, for a command that takes one.
+    fn revision_at_cursor(&self) -> Option<String> {
+        match self.selected().map(|row| &row.item) {
+            Some(Item::Commit(hash)) => Some(hash.clone()),
+            _ => None,
+        }
+    }
+
+    /// Append the path under the cursor to `.gitignore`, by extension when
+    /// asked. Writing the file directly is simpler than any git command for it.
+    fn ignore_path(&mut self, by_extension: bool) -> PageOutcome {
+        let Some(root) = self.root.clone() else {
+            return PageOutcome::Consumed;
+        };
+        let Some(path) = self.path_at_cursor() else {
+            return PageOutcome::Consumed;
+        };
+        let pattern = if by_extension {
+            match path.rsplit_once('.') {
+                Some((_, extension)) => format!("*.{extension}"),
+                None => path.clone(),
+            }
+        } else {
+            path.clone()
+        };
+        match append_line(&root.join(".gitignore"), &pattern) {
+            Ok(()) => {
+                self.message = Some(format!("ignored {pattern}"));
+                self.refresh()
+            }
+            Err(e) => {
+                self.message = Some(format!("failed: {e}"));
+                self.rebuild();
+                PageOutcome::Consumed
+            }
+        }
+    }
+
+    /// Resolve the key after `g`: each names a section to jump to, and
+    /// anything else abandons the sequence.
+    fn jump_to(&mut self, code: KeyCode) -> PageOutcome {
+        match code {
+            KeyCode::Char('t') => self.move_to_section(Some(Section::Untracked)),
+            KeyCode::Char('u') => self.move_to_section(Some(Section::Unstaged)),
+            KeyCode::Char('s') => self.move_to_section(Some(Section::Staged)),
+            KeyCode::Char('r') => self.move_to_section(None),
+            KeyCode::Char('j') => self.move_to_entity(true),
+            KeyCode::Char('k') => self.move_to_entity(false),
+            _ => {}
+        }
+        PageOutcome::Consumed
+    }
+
+    /// Open a repository-relative path for editing.
+    fn open(&self, path: &str) -> PageOutcome {
+        let root = self.root.clone().unwrap_or_default();
+        PageOutcome::OpenPath(OpenTarget::file(root.join(path)))
+    }
+
+    /// What a finished command means for the view.
+    fn on_command(&mut self, output: CommandOutput) -> PageOutcome {
+        if !output.succeeded() {
+            self.message = Some(format!("failed: {}", output.failure()));
+            self.rebuild();
+            return PageOutcome::Consumed;
+        }
+        match output.tag {
+            exec::TAG_ROOT => {
+                let root = PathBuf::from(output.stdout.trim());
+                self.root = Some(root.clone());
+                PageOutcome::Job(exec::status(&root))
+            }
+            exec::TAG_STATUS => {
+                self.status = parse::parse_status(&output.stdout);
+                self.loaded = true;
+                // A diff read before the change is now wrong, and staging a
+                // hunk from a stale diff applies it to the wrong lines.
+                self.diffs.clear();
+                self.forget_unlisted_files();
+                self.rebuild();
+                match &self.root {
+                    Some(root) => PageOutcome::Job(exec::recent_log(root)),
+                    None => PageOutcome::Consumed,
+                }
+            }
+            exec::TAG_DIFF => {
+                if let Some(file) = self.pending_diff.take() {
+                    self.diffs.insert(file, diff::parse_diff(&output.stdout));
+                    self.rebuild();
+                }
+                self.request_stale_diff()
+            }
+            exec::TAG_LOG => {
+                self.commits = parse::parse_log(&output.stdout);
+                self.rebuild();
+                PageOutcome::Consumed
+            }
+            // A blame and a plain read differ only in what the view is called.
+            exec::TAG_BLAME | exec::TAG_READ => {
+                if output.stdout.trim().is_empty() {
+                    self.message = Some("nothing to show".to_string());
+                    self.rebuild();
+                } else {
+                    let title = if output.tag == exec::TAG_BLAME {
+                        "Blame"
+                    } else {
+                        "Output"
+                    };
+                    self.show_output(title, &output.stdout, false);
+                }
+                PageOutcome::Consumed
+            }
+            exec::TAG_LOG_VIEW => {
+                self.show_output("Log", &output.stdout, true);
+                PageOutcome::Consumed
+            }
+            exec::TAG_REMOTE_URL => {
+                let url = browser_url(output.stdout.trim());
+                match url {
+                    Some(url) => PageOutcome::OpenExternal(std::path::PathBuf::from(url)),
+                    None => {
+                        self.message = Some("no web URL for that remote".to_string());
+                        self.rebuild();
+                        PageOutcome::Consumed
+                    }
+                }
+            }
+            // Anything that changed the repository: report it and re-read.
+            tag => {
+                self.message = Some(report_for(tag, &output));
+                self.refresh()
+            }
+        }
+    }
+}
+
+impl Page for GitPage {
+    fn title(&self) -> String {
+        "Git".to_string()
+    }
+
+    fn content(&mut self, rows: usize) -> PageContent {
+        if let Some(output) = &self.output {
+            let visible = rows.saturating_sub(HEADER_ROWS).max(1);
+            let scroll = scroll_to_cursor(self.scroll, output.cursor, output.lines.len(), visible);
+            self.scroll = scroll;
+            let mut header = vec![
+                PageSpan::new(PageStyle::Header, output.title.clone()),
+                PageSpan::new(PageStyle::Dim, "  q to go back".to_string()),
+            ];
+            // The status header is not on screen here, so what a command
+            // reported has to be said in this one or not at all.
+            if let Some(message) = &self.message {
+                header.push(PageSpan::new(PageStyle::Dim, format!("  {message}")));
+            }
+            let mut painted = vec![header];
+            painted.extend(
+                output
+                    .lines
+                    .iter()
+                    .skip(scroll)
+                    .take(visible)
+                    .map(|line| vec![PageSpan::plain(line.clone())]),
+            );
+            return PageContent::new(painted)
+                .with_cursor_line(HEADER_ROWS + output.cursor - scroll);
+        }
+        if self.rows.is_empty() {
+            // A loaded view with no rows means git answered and had nothing
+            // to report, which only happens outside a repository: a clean tree
+            // still has a header row.
+            let note = if self.loaded { NOT_A_REPO } else { LOADING };
+            return PageContent::new(vec![vec![PageSpan::new(PageStyle::Dim, note)]]);
+        }
+        let visible = rows.saturating_sub(HEADER_ROWS);
+        self.scroll = scroll_to_cursor(self.scroll, self.cursor, self.rows.len(), visible);
+        let painted = self
+            .rows
+            .iter()
+            .skip(self.scroll)
+            .take(visible.max(1))
+            .map(|row| row.spans.clone())
+            .collect();
+        let mut painted: Vec<Vec<PageSpan>> = painted;
+        if let Some(popup) = self.popup {
+            painted.extend(popup.rows());
+        }
+        PageContent::new(painted).with_cursor_line(self.cursor - self.scroll)
+    }
+
+    fn on_key(&mut self, key: &Key) -> PageOutcome {
+        self.message = None;
+        if let Some(popup) = self.popup.take() {
+            return self.on_popup_key(popup, key.code);
+        }
+        if self.pending {
+            self.pending = false;
+            return self.jump_to(key.code);
+        }
+        if self.output.is_some() {
+            return self.on_output_key(key);
+        }
+        if key.alt {
+            return match key.code {
+                KeyCode::Char('n') => {
+                    self.move_to_entity(true);
+                    PageOutcome::Consumed
+                }
+                KeyCode::Char('p') => {
+                    self.move_to_entity(false);
+                    PageOutcome::Consumed
+                }
+                KeyCode::Char('y') => match &self.root {
+                    Some(root) => PageOutcome::Job(exec::show_refs(root)),
+                    None => PageOutcome::Consumed,
+                },
+                KeyCode::Char('b') => self.blame_at_point(),
+                KeyCode::Char('g') => self.open_in_remote(),
+                _ => PageOutcome::Ignored,
+            };
+        }
+        if key.ctrl {
+            return match key.code {
+                KeyCode::Char('C') | KeyCode::Char('c') if key.shift => self.ask_commit_message(),
+                KeyCode::Char('l') => self.open_popup(Popup::Log),
+                _ => PageOutcome::Ignored,
+            };
+        }
+        if let Some(outcome) = self.on_search_key(key) {
+            return outcome;
+        }
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                self.move_by(1);
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                self.move_by(-1);
+                PageOutcome::Consumed
+            }
+            KeyCode::Home => {
+                self.cursor = 0;
+                PageOutcome::Consumed
+            }
+            KeyCode::End => {
+                self.cursor = self.rows.len().saturating_sub(1);
+                PageOutcome::Consumed
+            }
+            KeyCode::Tab if key.shift => {
+                self.toggle_fold_all();
+                PageOutcome::Consumed
+            }
+            KeyCode::Tab => self.toggle_fold(),
+            KeyCode::Enter => match self.selected().map(|row| row.item.clone()) {
+                Some(Item::File(file)) => self.open(&file.path),
+                Some(Item::Hunk(hunk)) => self.open(&hunk.path),
+                _ => PageOutcome::Consumed,
+            },
+            KeyCode::Char('g') => {
+                self.pending = true;
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('s') => self.stage(false),
+            KeyCode::Char('S') => self.stage(true),
+            KeyCode::Char('u') => self.unstage(false),
+            KeyCode::Char('U') => self.unstage(true),
+            KeyCode::Char('x') => self.ask_discard(),
+            KeyCode::Char('a') => self.apply_at_point(exec::ApplyTarget::Index),
+            KeyCode::Char('-') => self.apply_at_point(exec::ApplyTarget::IndexReverse),
+            KeyCode::Char('G') => self.refresh(),
+            KeyCode::Char('y') => self.yank_at_point(),
+            // Menus, each opening on the key it does in the configured keymap.
+            KeyCode::Char('b') => self.open_popup(Popup::Branch),
+            KeyCode::Char('c') => self.open_popup(Popup::Commit),
+            KeyCode::Char('d') => self.open_popup(Popup::Diff),
+            KeyCode::Char('i') | KeyCode::Char('I') => self.open_popup(Popup::Ignore),
+            KeyCode::Char('m') => self.open_popup(Popup::Merge),
+            KeyCode::Char('r') => self.open_popup(Popup::Rebase),
+            KeyCode::Char('t') => self.open_popup(Popup::Tag),
+            KeyCode::Char('z') => self.open_popup(Popup::Stash),
+            KeyCode::Char('A') => self.open_popup(Popup::CherryPick),
+            KeyCode::Char('B') => self.open_popup(Popup::Bisect),
+            KeyCode::Char('M') => self.open_popup(Popup::Remote),
+            KeyCode::Char('O') => self.open_popup(Popup::Reset),
+            KeyCode::Char('V') => self.open_popup(Popup::Revert),
+            KeyCode::Char('Z') => self.open_popup(Popup::Worktree),
+            // Reset to a revision, straight from the cursor: the keymap's
+            // direct mixed-reset key.
+            KeyCode::Char('o') => self.reset_at_point(ResetMode::Mixed),
+            KeyCode::Char('!') => self.ask(ASK_CUSTOM, "git "),
+            KeyCode::Char('P') => match &self.root {
+                Some(root) => PageOutcome::Job(exec::push(root)),
+                None => PageOutcome::Consumed,
+            },
+            KeyCode::Char('F') => match &self.root {
+                Some(root) => PageOutcome::Job(exec::pull(root)),
+                None => PageOutcome::Consumed,
+            },
+            KeyCode::Char('f') => match &self.root {
+                Some(root) => PageOutcome::Job(exec::fetch(root)),
+                None => PageOutcome::Consumed,
+            },
+            KeyCode::Char('q') | KeyCode::Escape => PageOutcome::Close,
+            _ => PageOutcome::Ignored,
+        }
+    }
+
+    fn on_prompt(&mut self, reply: PromptReply) -> PageOutcome {
+        let Some(answer) = reply.answer else {
+            self.message = Some("cancelled".to_string());
+            self.rebuild();
+            return PageOutcome::Consumed;
+        };
+        // A search is the one question that asks nothing of git, so it is
+        // answered before the repository is required.
+        if reply.tag == ASK_SEARCH {
+            self.search_for(&answer);
+            return PageOutcome::Consumed;
+        }
+        let Some(root) = self.root.clone() else {
+            return PageOutcome::Consumed;
+        };
+        let answer = answer.trim().to_string();
+        // Every question but the stash message needs an answer to act on.
+        if answer.is_empty() && reply.tag != ASK_STASH {
+            return PageOutcome::Consumed;
+        }
+        match reply.tag {
+            ASK_BRANCH_CHECKOUT => PageOutcome::Job(exec::checkout(&root, &answer)),
+            ASK_BRANCH_CREATE => PageOutcome::Job(exec::branch_create(&root, &answer, true)),
+            ASK_BRANCH_CREATE_HERE => PageOutcome::Job(exec::branch_create(&root, &answer, false)),
+            ASK_BRANCH_DELETE => PageOutcome::Job(exec::branch_delete(&root, &answer, false)),
+            ASK_BRANCH_DELETE_FORCE => PageOutcome::Job(exec::branch_delete(&root, &answer, true)),
+            ASK_CHERRY_PICK => PageOutcome::Job(exec::cherry_pick(&root, &answer)),
+            ASK_COMMIT => PageOutcome::Job(exec::commit(&root, &answer)),
+            ASK_CUSTOM => PageOutcome::Job(exec::custom(&root, &answer)),
+            ASK_DIFF_REV => PageOutcome::Job(exec::diff_all(&root, false, Some(&answer))),
+            ASK_DISCARD => self.discard(),
+            ASK_MERGE => PageOutcome::Job(exec::merge(&root, &answer)),
+            ASK_REBASE => self.spawn_git(&root, &["rebase", "--interactive", &answer]),
+            ASK_REMOTE_ADD => match answer.split_once(char::is_whitespace) {
+                Some((name, url)) => {
+                    PageOutcome::Job(exec::remote_add(&root, name.trim(), url.trim()))
+                }
+                None => {
+                    self.message = Some("failed: expected `name url`".to_string());
+                    self.rebuild();
+                    PageOutcome::Consumed
+                }
+            },
+            ASK_REMOTE_PRUNE => PageOutcome::Job(exec::remote_prune(&root, &answer)),
+            ASK_REMOTE_REMOVE => PageOutcome::Job(exec::remote_remove(&root, &answer)),
+            ASK_RESET_HARD => PageOutcome::Job(exec::reset(&root, ResetMode::Hard, &answer)),
+            ASK_RESET_MIXED => PageOutcome::Job(exec::reset(&root, ResetMode::Mixed, &answer)),
+            ASK_RESET_SOFT => PageOutcome::Job(exec::reset(&root, ResetMode::Soft, &answer)),
+            ASK_REVERT => PageOutcome::Job(exec::revert(&root, &answer)),
+            ASK_STASH => PageOutcome::Job(exec::stash_push(&root, &answer)),
+            ASK_TAG_CREATE => PageOutcome::Job(exec::tag_create(&root, &answer)),
+            ASK_TAG_DELETE => PageOutcome::Job(exec::tag_delete(&root, &answer)),
+            ASK_WORKTREE_ADD => PageOutcome::Job(exec::worktree_add(&root, &answer)),
+            ASK_WORKTREE_REMOVE => PageOutcome::Job(exec::worktree_remove(&root, &answer)),
+            _ => PageOutcome::Consumed,
+        }
+    }
+
+    fn on_job(&mut self, reply: JobReply) -> PageOutcome {
+        match reply {
+            JobReply::Command(output) => self.on_command(output),
+            // The view asks for no directory walks and no searches.
+            JobReply::DirSize { .. } | JobReply::Search(_) => PageOutcome::Consumed,
+        }
+    }
+}
+
+// ========================================================================
+// Helpers
+// ========================================================================
+
+/// Turn a git remote URL into one a browser can open: an `ssh` remote becomes
+/// its `https` form, and anything else is left alone if it already is one.
+fn browser_url(remote: &str) -> Option<String> {
+    if remote.starts_with("http://") || remote.starts_with("https://") {
+        return Some(remote.trim_end_matches(".git").to_string());
+    }
+    // `git@host:owner/repo.git`, the form every forge hands out.
+    let rest = remote.strip_prefix("git@")?;
+    let (host, path) = rest.split_once(':')?;
+    Some(format!("https://{host}/{}", path.trim_end_matches(".git")))
+}
+
+/// Append `line` to a file, creating it and starting a new line first when it
+/// does not already end with one.
+fn append_line(path: &std::path::Path, line: &str) -> std::io::Result<()> {
+    use std::io::Write;
+
+    let existing = std::fs::read_to_string(path).unwrap_or_default();
+    let mut file = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(path)?;
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        file.write_all(b"\n")?;
+    }
+    writeln!(file, "{line}")
+}
+
+/// The diff command for one row: an untracked file has no indexed counterpart,
+/// so it is diffed against nothing at all.
+fn diff_request(root: &std::path::Path, file: &FileRow) -> JobRequest {
+    match file.section {
+        Section::Untracked => exec::diff_untracked(root, &file.path),
+        Section::Staged => exec::diff_file(root, &file.path, true),
+        Section::Unmerged | Section::Unstaged => exec::diff_file(root, &file.path, false),
+    }
+}
+
+/// What to say in the header after a command that changed something.
+fn report_for(tag: &'static str, output: &CommandOutput) -> String {
+    let detail = output
+        .stdout
+        .lines()
+        .chain(output.stderr.lines())
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .unwrap_or("");
+    match tag {
+        exec::TAG_COMMIT => format!("committed: {detail}"),
+        exec::TAG_DISCARD => "discarded".to_string(),
+        exec::TAG_FETCH => "fetched".to_string(),
+        exec::TAG_PULL => format!("pulled: {detail}"),
+        exec::TAG_PUSH => "pushed".to_string(),
+        exec::TAG_STAGE => "staged".to_string(),
+        exec::TAG_UNSTAGE => "unstaged".to_string(),
+        _ => detail.to_string(),
+    }
+}
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::page::CommandRequest;
+
+    const STATUS_OUTPUT: &str = "\
+# branch.head main
+# branch.upstream origin/main
+# branch.ab +1 -0
+1 M. N... 100644 100644 100644 aaa bbb staged.rs
+1 .M N... 100644 100644 100644 aaa bbb working.rs
+? new.rs
+";
+
+    fn press(code: KeyCode) -> Key {
+        Key {
+            alt: false,
+            code,
+            ctrl: false,
+            shift: false,
+        }
+    }
+
+    fn reply(tag: &'static str, stdout: &str) -> JobReply {
+        JobReply::Command(CommandOutput {
+            code: Some(0),
+            stderr: String::new(),
+            stdout: stdout.to_string(),
+            tag,
+        })
+    }
+
+    fn command_of(outcome: &PageOutcome) -> CommandRequest {
+        match outcome {
+            PageOutcome::Job(JobRequest::Command(command)) => command.clone(),
+            other => panic!("expected a command, got {other:?}"),
+        }
+    }
+
+    /// A page that has heard back about its root, its status, and its log.
+    fn loaded_page() -> GitPage {
+        let mut page = GitPage::new(PathBuf::from("/repo/sub"));
+        page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
+        page.on_job(reply(exec::TAG_STATUS, STATUS_OUTPUT));
+        page.on_job(reply(exec::TAG_LOG, "abc1234 do the thing\n"));
+        page
+    }
+
+    fn cursor_on(page: &mut GitPage, path: &str) {
+        let index = page
+            .rows
+            .iter()
+            .position(|row| matches!(&row.item, Item::File(file) if file.path == path))
+            .unwrap_or_else(|| panic!("no row for {path}"));
+        page.cursor = index;
+    }
+
+    #[test]
+    fn test_the_root_lookup_leads_to_a_status_read() {
+        // Every later command runs from the root, so the view cannot do
+        // anything until that answer arrives.
+        let mut page = GitPage::new(PathBuf::from("/repo/sub"));
+        let next = page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
+        let command = command_of(&next);
+        assert_eq!(command.tag, exec::TAG_STATUS);
+        assert_eq!(command.cwd, PathBuf::from("/repo"), "not the subdirectory");
+    }
+
+    #[test]
+    fn test_a_status_read_is_followed_by_the_recent_log() {
+        let mut page = GitPage::new(PathBuf::from("/repo"));
+        page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
+        let next = page.on_job(reply(exec::TAG_STATUS, STATUS_OUTPUT));
+        assert_eq!(command_of(&next).tag, exec::TAG_LOG);
+    }
+
+    #[test]
+    fn test_staging_acts_on_the_path_under_the_cursor() {
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        let command = command_of(&page.on_key(&press(KeyCode::Char('s'))));
+        assert_eq!(command.args, ["add", "--", "working.rs"]);
+    }
+
+    #[test]
+    fn test_staging_on_a_heading_acts_on_that_whole_section() {
+        // The heading stands for its section, which is what makes "stage this
+        // lot" one keystroke.
+        let mut page = loaded_page();
+        page.cursor = page
+            .rows
+            .iter()
+            .position(|row| row.item == Item::Heading(Section::Unstaged))
+            .expect("the unstaged heading");
+        let command = command_of(&page.on_key(&press(KeyCode::Char('s'))));
+        assert_eq!(command.args, ["add", "--", "working.rs"]);
+    }
+
+    #[test]
+    fn test_unstaging_uses_the_staged_copy_of_a_file_changed_on_both_sides() {
+        // `staged.rs` and `working.rs` differ, but a file in both sections must
+        // unstage from the staged row and stage from the unstaged one.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "staged.rs");
+        let command = command_of(&page.on_key(&press(KeyCode::Char('u'))));
+        assert_eq!(command.args, ["restore", "--staged", "--", "staged.rs"]);
+    }
+
+    #[test]
+    fn test_discarding_asks_first_and_names_the_file() {
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        let PageOutcome::Prompt(request) = page.on_key(&press(KeyCode::Char('x'))) else {
+            panic!("expected a confirmation");
+        };
+        assert_eq!(request.mode, PromptMode::Confirm);
+        assert!(
+            request.label.contains("working.rs"),
+            "got {:?}",
+            request.label
+        );
+    }
+
+    #[test]
+    fn test_discarding_an_untracked_file_deletes_it_instead_of_restoring() {
+        // `restore` cannot reach a path that is not in the index, so the view
+        // would report success while leaving the file exactly where it was.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "new.rs");
+        page.on_key(&press(KeyCode::Char('x')));
+        let command = command_of(&page.on_prompt(PromptReply {
+            answer: Some("y".to_string()),
+            tag: ASK_DISCARD,
+        }));
+        assert_eq!(command.args, ["clean", "--force", "-d", "--", "new.rs"]);
+    }
+
+    #[test]
+    fn test_declining_the_confirmation_runs_nothing() {
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        page.on_key(&press(KeyCode::Char('x')));
+        let outcome = page.on_prompt(PromptReply {
+            answer: None,
+            tag: ASK_DISCARD,
+        });
+        assert_eq!(outcome, PageOutcome::Consumed);
+    }
+
+    #[test]
+    fn test_committing_nothing_is_refused_before_it_asks() {
+        // `git commit` with an empty index fails with a wall of advice; not
+        // asking for a message is the better answer.
+        let mut page = GitPage::new(PathBuf::from("/repo"));
+        page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
+        page.on_job(reply(exec::TAG_STATUS, "# branch.head main\n"));
+        let outcome = page.on_key(&Key {
+            alt: false,
+            code: KeyCode::Char('c'),
+            ctrl: true,
+            shift: true,
+        });
+        assert_eq!(outcome, PageOutcome::Consumed);
+    }
+
+    #[test]
+    fn test_a_command_that_changed_the_tree_re_reads_it() {
+        // Without the re-read the view shows the state before the change, and
+        // the next key acts on rows that no longer describe the repository.
+        let mut page = loaded_page();
+        let next = page.on_job(reply(exec::TAG_STAGE, ""));
+        assert_eq!(command_of(&next).tag, exec::TAG_STATUS);
+        assert_eq!(page.message.as_deref(), Some("staged"));
+    }
+
+    #[test]
+    fn test_a_failed_command_reports_and_does_not_re_read() {
+        let mut page = loaded_page();
+        let outcome = page.on_job(JobReply::Command(CommandOutput {
+            code: Some(1),
+            stderr: "error: pathspec 'nope' did not match\n".to_string(),
+            stdout: String::new(),
+            tag: exec::TAG_STAGE,
+        }));
+        assert_eq!(outcome, PageOutcome::Consumed);
+        let message = page.message.clone().unwrap_or_default();
+        assert!(message.starts_with("failed:"), "got {message:?}");
+        assert!(message.contains("pathspec"), "got {message:?}");
+    }
+
+    const DIFF_OUTPUT: &str = "\
+diff --git a/working.rs b/working.rs
+index aaa..bbb 100644
+--- a/working.rs
++++ b/working.rs
+@@ -1,3 +1,3 @@
+ fn main() {
+-    old();
++    new();
+@@ -10,2 +10,3 @@ fn other() {
+     keep();
++    added();
+";
+
+    fn cursor_on_hunk(page: &mut GitPage, index: usize) {
+        let position = page
+            .rows
+            .iter()
+            .position(|row| matches!(&row.item, Item::Hunk(hunk) if hunk.index == index))
+            .unwrap_or_else(|| panic!("no row for hunk {index}"));
+        page.cursor = position;
+    }
+
+    /// A page with `working.rs` expanded and its diff read.
+    fn page_with_diff() -> GitPage {
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        page.on_key(&press(KeyCode::Tab));
+        page.on_job(reply(exec::TAG_DIFF, DIFF_OUTPUT));
+        page
+    }
+
+    #[test]
+    fn test_expanding_a_file_reads_its_diff_from_the_right_side() {
+        // A staged file's diff is the index one; asking for the working-tree
+        // diff there would show changes that are not staged.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "staged.rs");
+        let command = command_of(&page.on_key(&press(KeyCode::Tab)));
+        assert!(
+            command.args.contains(&"--cached".to_string()),
+            "{:?}",
+            command.args
+        );
+
+        cursor_on(&mut page, "working.rs");
+        let command = command_of(&page.on_key(&press(KeyCode::Tab)));
+        assert!(
+            !command.args.contains(&"--cached".to_string()),
+            "{:?}",
+            command.args
+        );
+    }
+
+    #[test]
+    fn test_an_untracked_file_is_diffed_against_nothing() {
+        // git has no indexed copy to compare against, so a plain `diff` prints
+        // nothing at all and the file looks unchanged.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "new.rs");
+        let command = command_of(&page.on_key(&press(KeyCode::Tab)));
+        assert!(
+            command.args.contains(&"--no-index".to_string()),
+            "{:?}",
+            command.args
+        );
+    }
+
+    #[test]
+    fn test_an_expanded_file_lists_its_hunks_and_lines() {
+        let page = page_with_diff();
+        let hunks: Vec<usize> = page
+            .rows
+            .iter()
+            .filter_map(|row| match &row.item {
+                Item::Hunk(hunk) => Some(hunk.index),
+                _ => None,
+            })
+            .collect();
+        assert!(hunks.contains(&0) && hunks.contains(&1), "got {hunks:?}");
+        assert!(hunks.len() > 2, "the lines belong to their hunk too");
+    }
+
+    #[test]
+    fn test_staging_on_a_hunk_applies_that_hunk_alone() {
+        // The whole point of hunk staging: the second hunk must not be in the
+        // patch, and the patch goes in on standard input.
+        let mut page = page_with_diff();
+        cursor_on_hunk(&mut page, 0);
+        let command = command_of(&page.on_key(&press(KeyCode::Char('s'))));
+        assert_eq!(command.args, ["apply", "--unidiff-zero", "--cached", "-"]);
+        let patch = command.stdin.clone().expect("the patch");
+        assert!(patch.contains("-    old();"), "got {patch}");
+        assert!(!patch.contains("added()"), "got {patch}");
+    }
+
+    #[test]
+    fn test_a_key_inside_a_hunk_acts_on_that_hunk() {
+        // Only the header row would be a cruel target; every line of the hunk
+        // stands for it.
+        let mut page = page_with_diff();
+        let line = page
+            .rows
+            .iter()
+            .enumerate()
+            .filter(|(_, row)| matches!(&row.item, Item::Hunk(hunk) if hunk.index == 1))
+            .nth(1)
+            .map(|(index, _)| index)
+            .expect("a line inside the second hunk");
+        page.cursor = line;
+        let command = command_of(&page.on_key(&press(KeyCode::Char('s'))));
+        let patch = command.stdin.clone().expect("the patch");
+        assert!(patch.contains("+    added();"), "got {patch}");
+    }
+
+    #[test]
+    fn test_unstaging_a_hunk_reverses_it_out_of_the_index() {
+        let mut page = page_with_diff();
+        cursor_on_hunk(&mut page, 0);
+        let command = command_of(&page.on_key(&press(KeyCode::Char('u'))));
+        assert_eq!(
+            command.args,
+            ["apply", "--unidiff-zero", "--cached", "--reverse", "-"]
+        );
+    }
+
+    #[test]
+    fn test_discarding_a_hunk_reverses_it_out_of_the_working_tree() {
+        let mut page = page_with_diff();
+        cursor_on_hunk(&mut page, 0);
+        page.on_key(&press(KeyCode::Char('x')));
+        let command = command_of(&page.on_prompt(PromptReply {
+            answer: Some("y".to_string()),
+            tag: ASK_DISCARD,
+        }));
+        assert_eq!(command.args, ["apply", "--unidiff-zero", "--reverse", "-"]);
+    }
+
+    #[test]
+    fn test_a_new_status_drops_the_diffs_it_invalidated() {
+        // Staging a hunk changes the file's diff; applying a patch built from
+        // the old one would hit the wrong lines.
+        let mut page = page_with_diff();
+        assert!(!page.diffs.is_empty());
+        page.on_job(reply(exec::TAG_STATUS, STATUS_OUTPUT));
+        assert!(page.diffs.is_empty(), "the stale diff is gone");
+    }
+
+    #[test]
+    fn test_an_open_file_is_re_read_after_the_tree_changes() {
+        let mut page = page_with_diff();
+        page.on_job(reply(exec::TAG_STATUS, STATUS_OUTPUT));
+        let next = page.on_job(reply(exec::TAG_LOG, ""));
+        // The log is the last of the refresh chain, and the open diff is what
+        // still needs reading.
+        assert_eq!(next, PageOutcome::Consumed);
+        let stale = page.request_stale_diff();
+        assert_eq!(command_of(&stale).tag, exec::TAG_DIFF);
+    }
+
+    #[test]
+    fn test_a_file_the_status_no_longer_lists_stops_being_expanded() {
+        let mut page = page_with_diff();
+        page.on_job(reply(
+            exec::TAG_STATUS,
+            "# branch.head main
+",
+        ));
+        assert!(page.expanded.is_empty());
+    }
+
+    #[test]
+    fn test_folding_an_expanded_file_hides_its_diff_without_re_reading() {
+        let mut page = page_with_diff();
+        cursor_on(&mut page, "working.rs");
+        let outcome = page.on_key(&press(KeyCode::Tab));
+        assert_eq!(outcome, PageOutcome::Consumed, "nothing to run");
+        assert!(!page
+            .rows
+            .iter()
+            .any(|row| matches!(row.item, Item::Hunk(_))));
+    }
+
+    fn shift(code: KeyCode) -> Key {
+        Key {
+            alt: false,
+            code,
+            ctrl: false,
+            shift: true,
+        }
+    }
+
+    fn choose(page: &mut GitPage, opener: char, choice: char) -> PageOutcome {
+        page.on_key(&press_char(opener));
+        page.on_key(&press_char(choice))
+    }
+
+    fn press_char(c: char) -> Key {
+        press(KeyCode::Char(c))
+    }
+
+    fn alt_char(c: char) -> Key {
+        Key {
+            alt: true,
+            code: KeyCode::Char(c),
+            ctrl: false,
+            shift: false,
+        }
+    }
+
+    /// Ask for `text` through the search prompt, the way a key does.
+    fn search(page: &mut GitPage, text: &str) {
+        let outcome = page.on_key(&press_char('/'));
+        let PageOutcome::Prompt(request) = outcome else {
+            panic!("expected a prompt, got {outcome:?}");
+        };
+        assert_eq!(request.tag, ASK_SEARCH);
+        page.on_prompt(PromptReply {
+            answer: Some(text.to_string()),
+            tag: request.tag,
+        });
+    }
+
+    fn row_under_cursor(page: &GitPage) -> String {
+        page.rows
+            .get(page.cursor)
+            .map(|row| row_text(&row.spans))
+            .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_a_menu_key_opens_a_menu_and_draws_it_under_the_view() {
+        let mut page = loaded_page();
+        page.on_key(&press_char('z'));
+        assert_eq!(page.popup, Some(Popup::Stash));
+        let painted = page.content(80);
+        let text: Vec<String> = painted
+            .rows
+            .iter()
+            .map(|row| row.iter().map(|span| span.text.clone()).collect())
+            .collect();
+        assert!(
+            text.iter().any(|line| line.contains("Stash:")),
+            "got {text:?}"
+        );
+    }
+
+    #[test]
+    fn test_an_unknown_second_key_closes_the_menu_without_running_anything() {
+        // A mistyped follow key must not fall through to the view's own keys,
+        // where it could stage or discard something.
+        let mut page = loaded_page();
+        let outcome = choose(&mut page, 'z', '@');
+        assert_eq!(outcome, PageOutcome::Consumed);
+        assert_eq!(page.popup, None);
+    }
+
+    #[test]
+    fn test_stash_choices_run_the_matching_command() {
+        let mut page = loaded_page();
+        assert_eq!(
+            command_of(&choose(&mut page, 'z', 'p')).args,
+            ["stash", "pop"]
+        );
+        assert_eq!(
+            command_of(&choose(&mut page, 'z', 'd')).args,
+            ["stash", "drop"]
+        );
+        assert_eq!(
+            command_of(&choose(&mut page, 'z', 'l')).args,
+            ["stash", "list"]
+        );
+    }
+
+    #[test]
+    fn test_a_branch_choice_asks_for_the_name_then_runs() {
+        let mut page = loaded_page();
+        let PageOutcome::Prompt(request) = choose(&mut page, 'b', 'c') else {
+            panic!("expected a prompt");
+        };
+        let command = command_of(&page.on_prompt(PromptReply {
+            answer: Some("feature".to_string()),
+            tag: request.tag,
+        }));
+        assert_eq!(command.args, ["checkout", "-b", "feature"]);
+    }
+
+    #[test]
+    fn test_an_empty_answer_runs_nothing() {
+        // `git checkout -b ""` fails with a confusing message; not running is
+        // the better answer.
+        let mut page = loaded_page();
+        let PageOutcome::Prompt(request) = choose(&mut page, 'b', 'c') else {
+            panic!("expected a prompt");
+        };
+        let outcome = page.on_prompt(PromptReply {
+            answer: Some("   ".to_string()),
+            tag: request.tag,
+        });
+        assert_eq!(outcome, PageOutcome::Consumed);
+    }
+
+    #[test]
+    fn test_a_stash_message_may_be_empty_because_it_is_optional() {
+        let mut page = loaded_page();
+        let PageOutcome::Prompt(request) = choose(&mut page, 'z', 'z') else {
+            panic!("expected a prompt");
+        };
+        let command = command_of(&page.on_prompt(PromptReply {
+            answer: Some(String::new()),
+            tag: request.tag,
+        }));
+        assert_eq!(command.args, ["stash", "push"], "no empty --message");
+    }
+
+    #[test]
+    fn test_committing_in_an_editor_goes_to_a_pane_not_a_captured_command() {
+        // A captured `git commit` would hang forever waiting on an editor that
+        // has no terminal.
+        let mut page = loaded_page();
+        let outcome = choose(&mut page, 'c', 'c');
+        let PageOutcome::Spawn(request) = outcome else {
+            panic!("expected a spawn, got {outcome:?}");
+        };
+        assert_eq!(request.args, ["commit"]);
+        assert_eq!(request.cwd, PathBuf::from("/repo"));
+    }
+
+    #[test]
+    fn test_an_interactive_rebase_also_goes_to_a_pane() {
+        let mut page = loaded_page();
+        let PageOutcome::Prompt(request) = choose(&mut page, 'r', 'i') else {
+            panic!("expected a prompt");
+        };
+        let outcome = page.on_prompt(PromptReply {
+            answer: Some("HEAD~3".to_string()),
+            tag: request.tag,
+        });
+        let PageOutcome::Spawn(spawn) = outcome else {
+            panic!("expected a spawn, got {outcome:?}");
+        };
+        assert_eq!(spawn.args, ["rebase", "--interactive", "HEAD~3"]);
+    }
+
+    #[test]
+    fn test_a_remote_add_answer_splits_into_name_and_url() {
+        let mut page = loaded_page();
+        let PageOutcome::Prompt(request) = choose(&mut page, 'M', 'a') else {
+            panic!("expected a prompt");
+        };
+        let command = command_of(&page.on_prompt(PromptReply {
+            answer: Some("upstream git@example.com:o/r.git".to_string()),
+            tag: request.tag,
+        }));
+        assert_eq!(
+            command.args,
+            ["remote", "add", "upstream", "git@example.com:o/r.git"]
+        );
+    }
+
+    #[test]
+    fn test_a_malformed_remote_add_reports_instead_of_running() {
+        let mut page = loaded_page();
+        let PageOutcome::Prompt(request) = choose(&mut page, 'M', 'a') else {
+            panic!("expected a prompt");
+        };
+        let outcome = page.on_prompt(PromptReply {
+            answer: Some("justaname".to_string()),
+            tag: request.tag,
+        });
+        assert_eq!(outcome, PageOutcome::Consumed);
+        assert!(page
+            .message
+            .clone()
+            .unwrap_or_default()
+            .starts_with("failed:"));
+    }
+
+    #[test]
+    fn test_reset_on_a_commit_uses_that_commit_without_asking() {
+        let mut page = loaded_page();
+        page.cursor = page
+            .rows
+            .iter()
+            .position(|row| matches!(row.item, Item::Commit(_)))
+            .expect("a commit row");
+        let command = command_of(&page.on_key(&press_char('o')));
+        assert_eq!(command.args, ["reset", "--mixed", "abc1234"]);
+    }
+
+    #[test]
+    fn test_reset_away_from_a_commit_asks_which_one() {
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        let PageOutcome::Prompt(request) = page.on_key(&press_char('o')) else {
+            panic!("expected a prompt");
+        };
+        assert_eq!(request.tag, ASK_RESET_MIXED);
+    }
+
+    #[test]
+    fn test_a_hard_reset_says_what_it_costs() {
+        let mut page = loaded_page();
+        let PageOutcome::Prompt(request) = choose(&mut page, 'O', 'h') else {
+            panic!("expected a prompt");
+        };
+        assert!(request.label.contains("HARD"), "got {:?}", request.label);
+        assert!(
+            request.label.to_lowercase().contains("losing"),
+            "got {:?}",
+            request.label
+        );
+    }
+
+    #[test]
+    fn test_yanking_copies_the_hash_on_a_commit_and_the_path_on_a_file() {
+        let mut page = loaded_page();
+        page.cursor = page
+            .rows
+            .iter()
+            .position(|row| matches!(row.item, Item::Commit(_)))
+            .expect("a commit row");
+        assert_eq!(
+            page.on_key(&press_char('y')),
+            PageOutcome::Yank("abc1234".to_string())
+        );
+
+        cursor_on(&mut page, "working.rs");
+        assert_eq!(
+            page.on_key(&press_char('y')),
+            PageOutcome::Yank("working.rs".to_string())
+        );
+    }
+
+    #[test]
+    fn test_ignoring_by_extension_writes_a_wildcard() {
+        let tree = std::env::temp_dir().join(format!("winter-gitignore-{}", std::process::id()));
+        std::fs::create_dir_all(&tree).expect("temp dir");
+        let mut page = GitPage::new(tree.clone());
+        page.on_job(reply(exec::TAG_ROOT, &format!("{}\n", tree.display())));
+        page.on_job(reply(exec::TAG_STATUS, STATUS_OUTPUT));
+        cursor_on(&mut page, "working.rs");
+
+        choose(&mut page, 'i', 'e');
+        let written = std::fs::read_to_string(tree.join(".gitignore")).unwrap_or_default();
+        assert_eq!(written.trim(), "*.rs");
+        std::fs::remove_dir_all(&tree).ok();
+    }
+
+    #[test]
+    fn test_a_log_fills_the_view_and_can_ask_for_more() {
+        let mut page = loaded_page();
+        choose(&mut page, 'l', 'l');
+        let outcome = page.on_job(reply(exec::TAG_LOG_VIEW, "aaa one\nbbb two\n"));
+        assert_eq!(outcome, PageOutcome::Consumed);
+        assert!(page.output.is_some(), "the log replaced the status view");
+
+        let before = page.log_count;
+        let more = page.on_key(&press_char('+'));
+        assert!(page.log_count > before, "asked for more");
+        assert_eq!(command_of(&more).tag, exec::TAG_LOG_VIEW);
+    }
+
+    #[test]
+    fn test_q_leaves_the_log_for_the_status_view_rather_than_closing() {
+        // Closing the whole tool on `q` from a log would lose the view the user
+        // came from.
+        let mut page = loaded_page();
+        choose(&mut page, 'l', 'l');
+        page.on_job(reply(exec::TAG_LOG_VIEW, "aaa one\n"));
+        let outcome = page.on_key(&press_char('q'));
+        assert_eq!(outcome, PageOutcome::Consumed);
+        assert!(page.output.is_none());
+        assert_eq!(page.on_key(&press_char('q')), PageOutcome::Close);
+    }
+
+    #[test]
+    fn test_read_only_output_with_nothing_in_it_says_so() {
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_READ, "\n"));
+        assert!(page.output.is_none());
+        assert_eq!(page.message.as_deref(), Some("nothing to show"));
+    }
+
+    #[test]
+    fn test_an_ssh_remote_becomes_an_https_url() {
+        assert_eq!(
+            browser_url("git@github.com:owner/repo.git").as_deref(),
+            Some("https://github.com/owner/repo")
+        );
+        assert_eq!(
+            browser_url("https://gitlab.com/owner/repo.git").as_deref(),
+            Some("https://gitlab.com/owner/repo")
+        );
+        assert_eq!(browser_url("/srv/git/bare.git"), None);
+    }
+
+    #[test]
+    fn test_the_keymaps_apply_keys_act_on_a_hunk_only() {
+        // `a` and `-` are hunk keys; on a file row there is no patch to apply,
+        // and guessing one would stage the whole file by surprise.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        assert_eq!(page.on_key(&press_char('a')), PageOutcome::Consumed);
+        assert_eq!(page.on_key(&press_char('-')), PageOutcome::Consumed);
+    }
+
+    #[test]
+    fn test_shift_tab_still_folds_while_a_menu_has_never_opened() {
+        let mut page = loaded_page();
+        page.on_key(&shift(KeyCode::Tab));
+        assert!(!page
+            .rows
+            .iter()
+            .any(|row| matches!(row.item, Item::File(_))));
+    }
+
+    #[test]
+    fn test_the_g_keys_jump_between_sections() {
+        let mut page = loaded_page();
+        page.on_key(&press(KeyCode::Char('g')));
+        page.on_key(&press(KeyCode::Char('s')));
+        assert_eq!(
+            page.selected().map(|row| &row.item),
+            Some(&Item::Heading(Section::Staged))
+        );
+
+        page.on_key(&press(KeyCode::Char('g')));
+        page.on_key(&press(KeyCode::Char('t')));
+        assert_eq!(
+            page.selected().map(|row| &row.item),
+            Some(&Item::Heading(Section::Untracked))
+        );
+    }
+
+    #[test]
+    fn test_entity_motion_skips_the_blank_lines_between_sections() {
+        // Plain `j` walks through the gaps; `Alt-n` is what steps from one
+        // thing to the next thing.
+        let mut page = loaded_page();
+        page.cursor = 0;
+        page.on_key(&Key {
+            alt: true,
+            code: KeyCode::Char('n'),
+            ctrl: false,
+            shift: false,
+        });
+        assert_ne!(page.selected().map(|row| &row.item), Some(&Item::None));
+    }
+
+    #[test]
+    fn test_folding_a_section_hides_its_files_but_not_the_others() {
+        let mut page = loaded_page();
+        page.cursor = page
+            .rows
+            .iter()
+            .position(|row| row.item == Item::Heading(Section::Untracked))
+            .expect("the untracked heading");
+        page.on_key(&press(KeyCode::Tab));
+
+        let listed: Vec<String> = page
+            .rows
+            .iter()
+            .filter_map(|row| match &row.item {
+                Item::File(file) => Some(file.path.clone()),
+                _ => None,
+            })
+            .collect();
+        assert!(!listed.contains(&"new.rs".to_string()), "got {listed:?}");
+        assert!(listed.contains(&"working.rs".to_string()), "got {listed:?}");
+    }
+
+    #[test]
+    fn test_shift_tab_shuts_everything_then_opens_it_again() {
+        let mut page = loaded_page();
+        let shift_tab = Key {
+            alt: false,
+            code: KeyCode::Tab,
+            ctrl: false,
+            shift: true,
+        };
+        page.on_key(&shift_tab);
+        assert!(!page
+            .rows
+            .iter()
+            .any(|row| matches!(row.item, Item::File(_))));
+        page.on_key(&shift_tab);
+        assert!(page
+            .rows
+            .iter()
+            .any(|row| matches!(row.item, Item::File(_))));
+    }
+
+    #[test]
+    fn test_a_push_runs_from_the_repository_root() {
+        let mut page = loaded_page();
+        let command = command_of(&page.on_key(&press(KeyCode::Char('P'))));
+        assert_eq!(command.args, ["push"]);
+        assert_eq!(command.cwd, PathBuf::from("/repo"));
+    }
+
+    #[test]
+    fn test_a_search_moves_the_cursor_to_the_row_holding_the_text() {
+        let mut page = loaded_page();
+        search(&mut page, "working");
+        assert!(row_under_cursor(&page).contains("working.rs"));
+    }
+
+    #[test]
+    fn test_the_repeat_keys_step_through_the_matches_in_both_directions() {
+        let mut page = loaded_page();
+        search(&mut page, ".rs");
+        let first = row_under_cursor(&page);
+
+        page.on_key(&press_char('n'));
+        let second = row_under_cursor(&page);
+        assert_ne!(first, second, "the next match is a different row");
+
+        page.on_key(&press_char('N'));
+        assert_eq!(row_under_cursor(&page), first, "and back again");
+    }
+
+    #[test]
+    fn test_a_search_walks_the_output_view_while_one_is_up() {
+        // The status rows are not on screen here, so searching them would move a
+        // cursor nobody can see and leave the visible one where it was.
+        let mut page = loaded_page();
+        choose(&mut page, 'l', 'l');
+        page.on_job(reply(exec::TAG_LOG_VIEW, "aaa one\nbbb two\nccc three\n"));
+        let before = page.cursor;
+
+        search(&mut page, "ccc");
+        assert_eq!(page.output.as_ref().map(|output| output.cursor), Some(2));
+        assert_eq!(page.cursor, before);
+    }
+
+    #[test]
+    fn test_a_search_that_finds_nothing_reports_it_instead_of_going_quiet() {
+        let mut page = loaded_page();
+        page.on_key(&press_char('n'));
+        assert_eq!(page.message.as_deref(), Some("no search"));
+
+        search(&mut page, "absent");
+        assert_eq!(page.message.as_deref(), Some("not found: absent"));
+    }
+
+    #[test]
+    fn test_a_search_is_answered_before_git_has_said_where_the_root_is() {
+        // Every other question needs a repository and is dropped without one,
+        // which would swallow a search the user typed while the status loaded.
+        let mut page = GitPage::new(PathBuf::from("/repo"));
+        search(&mut page, "anything");
+        assert_eq!(page.message.as_deref(), Some("not found: anything"));
+    }
+
+    #[test]
+    fn test_blame_runs_against_the_file_under_the_cursor() {
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        let command = command_of(&page.on_key(&alt_char('b')));
+        assert_eq!(command.tag, exec::TAG_BLAME);
+        assert_eq!(command.args.last().map(String::as_str), Some("working.rs"));
+        assert_eq!(command.cwd, PathBuf::from("/repo"));
+    }
+
+    #[test]
+    fn test_blame_off_a_file_says_there_is_nothing_to_blame() {
+        // A heading and a commit have no single path, and running blame on the
+        // repository root would report a git error the user did not ask for.
+        let mut page = loaded_page();
+        page.cursor = 0;
+        assert_eq!(page.on_key(&alt_char('b')), PageOutcome::Consumed);
+        assert_eq!(page.message.as_deref(), Some("no file to blame here"));
+    }
+
+    #[test]
+    fn test_a_blame_fills_the_view_under_its_own_title() {
+        let mut page = loaded_page();
+        page.on_job(reply(
+            exec::TAG_BLAME,
+            "abc12345 (me 2026-01-01 1) fn main\n",
+        ));
+        assert_eq!(
+            page.output.as_ref().map(|output| output.title.as_str()),
+            Some("Blame")
+        );
+    }
+
+    #[test]
+    fn test_keys_before_the_root_is_known_do_nothing() {
+        // The view is up as soon as the key is pressed, so every command has to
+        // survive being asked before git has answered.
+        let mut page = GitPage::new(PathBuf::from("/repo"));
+        for code in [
+            KeyCode::Char('s'),
+            KeyCode::Char('u'),
+            KeyCode::Char('P'),
+            KeyCode::Char('F'),
+            KeyCode::Char('f'),
+        ] {
+            assert_eq!(page.on_key(&press(code)), PageOutcome::Consumed);
+        }
+    }
+}
