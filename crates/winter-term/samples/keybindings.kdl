@@ -1,0 +1,146 @@
+// winter default keybindings — embedded in the binary as the built-in
+// defaults (see model::input::WindowKeymap::default), and also installed as
+// a reference copy at ~/.config/winter-term/keybindings.kdl.
+//
+// This is not a "sample with placeholder values" — it IS what ships. Copy it
+// to ~/.config/winter-term/keybindings.kdl (or %APPDATA%\winter-term on
+// Windows) and edit it there; unmentioned actions keep these defaults,
+// mentioned ones are replaced by your version.
+//
+// Each binding is a node whose name is the chord and whose argument is the action:
+//   j "focus_down"
+//   "C+Space" "toggle_mode"
+//
+// Chords use `+`-separated modifier abbreviations followed by the key name,
+// matching Emacs / rightkeys style:
+//   C = Ctrl, S = Shift, M = Meta/Alt
+//   Named keys: Space, Enter, Esc/Escape, Tab, Backspace, Delete, Home, End,
+//     PageUp, PageDown, Up, Down, Left, Right, Insert, F1..F12.
+//   A single character is itself (e.g. j).
+//   Two chords separated by a space form a sequence (e.g. "C+w o"):
+//     the first sets the leader, the follow key (matched by code, modifiers
+//     ignored) selects the action.
+//
+// A single-chord binding whose action isn't one of the names below is looked
+// up against the command palette's names instead (e.g. mux_new_session,
+// export_block_svg, cd_recent) and dispatches the same way selecting that
+// palette entry would. Sequences don't support this yet.
+//
+// The `window` and `editing` blocks are configurable today. `normal`, `insert`,
+// and `visual` use built-in Vim-style defaults.
+//
+// Pane/tab actions targeting one specific index use close_pane_N /
+// focus_pane_N / goto_tab_N (N = 1..9); each binds one exact chord to that
+// one pane/tab, so you can point any key at any index, e.g.:
+//   "M+q" "focus_pane_1"
+
+window {
+    // Split the focused pane.
+    "S+M+-" "split_horizontal"
+    "S+M+\\" "split_vertical"
+
+    // Zoom the focused pane to fill the window (toggle).
+    "S+M+=" "zoom_pane"
+    "C+S+m" "toggle_pane_zoom"
+
+    // Close the focused pane.
+    "C+S+q" "close_pane"
+
+    // Close every pane except the focused one.
+    "S+M+o" "close_other_panes"
+
+    // Move focus between panes.
+    "M+h" "focus_left"
+    "M+j" "focus_down"
+    "M+k" "focus_up"
+    "M+l" "focus_right"
+
+    // Scroll the terminal screen.
+    "S+M+h" "scroll_page_up"
+    "S+M+l" "scroll_page_down"
+    "S+M+k" "scroll_line_up"
+    "S+M+j" "scroll_line_down"
+    "S+M+a" "scroll_to_top"
+    "S+M+e" "scroll_to_bottom"
+    "S+M+," "scroll_to_top"
+    "S+M+." "scroll_to_bottom"
+
+    // Switch active tabs.
+    "C+PageUp" "prev_tab"
+    "C+PageDown" "next_tab"
+    "M+S+[" "prev_tab"
+    "M+S+]" "next_tab"
+    "C+Tab" "next_tab"
+    "C+S+Tab" "prev_tab"
+    "C+S+t" "new_tab"
+    "C+S+w" "close_tab"
+
+    // Close pane N.
+    "C+M+1" "close_pane_1"
+    "C+M+2" "close_pane_2"
+    "C+M+3" "close_pane_3"
+    "C+M+4" "close_pane_4"
+    "C+M+5" "close_pane_5"
+    "C+M+6" "close_pane_6"
+    "C+M+7" "close_pane_7"
+    "C+M+8" "close_pane_8"
+    "C+M+9" "close_pane_9"
+
+    // Focus pane N.
+    "M+1" "focus_pane_1"
+    "M+2" "focus_pane_2"
+    "M+3" "focus_pane_3"
+    "M+4" "focus_pane_4"
+    "M+5" "focus_pane_5"
+    "M+6" "focus_pane_6"
+    "M+7" "focus_pane_7"
+    "M+8" "focus_pane_8"
+    "M+9" "focus_pane_9"
+
+    // Go to tab N.
+    "C+1" "goto_tab_1"
+    "C+2" "goto_tab_2"
+    "C+3" "goto_tab_3"
+    "C+4" "goto_tab_4"
+    "C+5" "goto_tab_5"
+    "C+6" "goto_tab_6"
+    "C+7" "goto_tab_7"
+    "C+8" "goto_tab_8"
+    "C+9" "goto_tab_9"
+
+    // Clipboard.
+    "C+S+v" "paste_from_clipboard"
+    "C+S+c" "copy_selection"
+
+    // Settings and font size.
+    "C+," "open_settings"
+    "C+=" "font_increase"
+    "C++" "font_increase"
+    "C+-" "font_decrease"
+    "C+0" "font_reset"
+
+    // Palettes.
+    "C+S+p" "toggle_command_palette"
+    "M+x" "toggle_command_palette"
+    "C+S+r" "toggle_history_palette"
+    // Opens the pane switcher. Once it's open, pressing the digit shown next
+    // to a pane (1-9) jumps straight to it — no separate binding for that.
+    "C+S+z" "select_pane"
+
+    // Jump between prompt blocks.
+    "C+S+Up" "prev_block"
+    "C+S+Down" "next_block"
+}
+
+// Prompt line edits and undo/redo. Each is one chord.
+//   Line edits (Insert mode): delete_word_backward, delete_word_forward,
+//     delete_to_line_start, delete_to_line_end.
+//   History (Insert, Normal, and the palette): prompt_undo, prompt_redo.
+editing {
+    // Delete the word before the cursor.
+    "C+Backspace" "delete_word_backward"
+
+    // Undo / redo prompt and quickpick edits.
+    "C+/" "prompt_undo"
+    "C+\\" "prompt_redo"
+}

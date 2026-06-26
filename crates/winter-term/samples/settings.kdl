@@ -1,0 +1,183 @@
+// winter sample configuration — ~/.config/winter-term/settings.kdl
+//
+// All options are shown here at their default values.
+// Lines you don't change can be removed; unset options fall back to the default.
+//
+// Keybindings live in a separate file: ~/.config/winter-term/keybindings.kdl
+// User themes live in: ~/.config/winter-term/themes/<name>.kdl
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
+// Built-in values: "dark", "light", "auto" (follows system appearance).
+// Custom: the filename (without .kdl) of a file in ~/.config/winter-term/themes/.
+theme "dark"
+
+// ── Terminal ──────────────────────────────────────────────────────────────────
+// Shell executable. Defaults to the SHELL environment variable.
+// shell "/bin/zsh"
+
+// Maximum scrollback lines per pane. Applied to new panes (default: 10000).
+// scrollback-lines 10000
+
+// ── Font ──────────────────────────────────────────────────────────────────────
+// Font family. Falls back to the system monospace font when not set.
+// font "FiraCode Nerd Font"
+
+// Point size.
+font-size 15
+
+// Named font weight for normal text ("thin", "light", "regular", "medium",
+// "semibold", "bold", "extrabold", "black", or a numeric value like "400").
+// Falls back to the font's default when not set.
+// font-weight "regular"
+
+// Named weight for bold text. Falls back to font-weight when not set.
+// font-weight-bold "bold"
+
+// Enable OpenType ligatures (e.g. -> and => rendered as arrows). Default: true.
+// ligatures #true
+
+// ── Window ────────────────────────────────────────────────────────────────────
+// Background opacity. 1.0 is fully opaque; lower values require a compositor.
+opacity 1
+
+// Title bar presentation.
+//   "modern" — borderless: the tab strip doubles as the title bar with custom
+//              minimize/maximize/close controls.
+//   "system" — native OS window decorations; the tab strip sits inside them.
+title-bar-style "modern"
+
+// Which edge of the title bar carries the window controls.
+//   "left"  — controls on the left (default, macOS-style).
+//   "right" — controls on the right (Windows-style).
+window-controls-side "left"
+
+// Menu presentation in the tab strip.
+//   "modern"  — a single ☰ hamburger button opens a command dropdown.
+//   "classic" — a File / Edit / View / Window menubar row above the tab strip.
+menu-style "modern"
+
+// Underline fuzzy-matched characters in the command palette results list.
+palette-match-underline #false
+
+// Thickness of the line drawn between adjacent split panes, in logical pixels.
+pane-border-width 1
+
+// Right-click pastes from the clipboard instead of opening the context menu.
+paste-on-right-click #false
+
+// Underline auto-detected and OSC 8 hyperlink URLs. Default: false.
+url-underline #false
+
+// Restore the previous tab/pane layout on launch. Default: false.
+restore-session #false
+
+// ── Cursor ────────────────────────────────────────────────────────────────────
+// Per-mode cursor shapes: "block", "bar" (vertical beam), or "underline".
+cursor {
+    // Blink the cursor in the focused pane. Default: true.
+    blink #true
+    insert "bar"
+    normal "block"
+    visual "block"
+    block-focus "bar"
+
+    // Hide the cursor entirely in inactive (non-focused) panes. Default: true.
+    hide-in-inactive #true
+}
+
+// Dim inactive panes by blending their colors toward the background. Default: false.
+dim-inactive #false
+
+// ── Status bar ────────────────────────────────────────────────────────────────
+status-bar {
+    // Show or hide the entire status bar (freeing its reserved row when hidden).
+    show #true
+
+    // Show the current mode label (NORMAL / INSERT / VISUAL …).
+    show-mode #true
+
+    // Nerd Font icons used for each mode. Replace with plain ASCII if you do
+    // not have a Nerd Font installed ("N", "I", "B" are common fallbacks).
+    normal-icon ""
+    insert-icon "󰏫"
+    block-icon "󰒅"
+}
+
+// Which line-editor bindings your shell answers to, for Vim operators on the
+// prompt line (d/c/r/~ and prompt undo/redo in Normal mode). Winter sends the
+// shell the equivalent keystrokes, so it has to know which set to send; it
+// cannot detect this, because no shell reports its editing mode.
+//   "emacs" the readline/ZLE default: Ctrl-A, Ctrl-K, Ctrl-U, Ctrl-W, Alt-d
+//   "none"  do not translate. Use this if your shell is in vi mode
+//           (bindkey -v, set editing-mode vi, fish vi bindings): those chords
+//           mean something else there, and the shell gives you Vim editing on
+//           the prompt line anyway.
+prompt-edit-bindings "emacs"
+
+// ── Security ──────────────────────────────────────────────────────────────────
+// Rich blocks arrive over the PTY, and a PTY authenticates nothing: a `cat` of
+// a downloaded file, output piped from `curl`, or a program on the far side of
+// `ssh` can emit exactly what a first-party tool can. Both settings deny by
+// default; raise them only for tools you actually trust.
+security {
+    // Ceiling applied to the trust tier a block requests on the wire.
+    //   "isolated"   sandboxed, unique origin, no scripts
+    //   "restricted" CSP applied, no scripting, no network  (default)
+    //   "trusted"    full DOM and scripts
+    // Setting this to "trusted" grants scripting to *any* stream that reaches
+    // a pane, not only to the tools you had in mind.
+    block-max-trust "restricted"
+
+    // Let block content load subresources from the network. Required for live
+    // Vega / Vega-Lite charts, whose runtime comes from a CDN; with this off
+    // the chart spec is rendered inline as text instead. Off by default so
+    // that displaying a block never makes a request you did not initiate.
+    block-remote-assets #false
+}
+
+// ── Color overrides ───────────────────────────────────────────────────────────
+// Override individual colors from the active theme preset.
+// All keys are optional; remove the block entirely to use unmodified preset colors.
+//
+// Values shown are the "dark" preset defaults.
+//
+// colors {
+//     background       "#2a2f31"
+//     foreground       "#d8d8d8"
+//     cursor-bg        "#52ad70"
+//     cursor-fg        "#000000"
+//     selection-bg     "#fffacd"
+//     selection-fg     "#000000"
+//     split            "#51554f"   // pane separator line color (see also pane-border-width)
+//     status-bar-border "#3b414f"  // 1px line above the status bar
+//     visual-bell      "#e08020"   // tab-bar flash color on bell (uses built-in default when unset)
+//
+//     // 8 normal ANSI colors, by name. Any name can be omitted.
+//     ansi {
+//         black "#000000"
+//         red "#c22727"
+//         green "#71b312"
+//         yellow "#faa213"
+//         blue "#4fa2fa"
+//         magenta "#bb67b2"
+//         cyan "#21afbf"
+//         white "#c0c0c0"
+//     }
+//
+//     // 8 bright ANSI colors, same names as above.
+//     brights {
+//         black "#7a7a7a"
+//         red "#d43f30"
+//         green "#71b312"
+//         yellow "#ebb909"
+//         blue "#5da2eb"
+//         magenta "#c97df5"
+//         cyan "#04cfe1"
+//         white "#e1ebfa"
+//     }
+//
+//     // Override a single 256-color palette entry (index 0-255).
+//     indexed {
+//         "136" "#af8700"
+//     }
+// }

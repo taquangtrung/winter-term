@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Bundle metadata for Winter.app. `make package` substitutes {{VERSION}} from
+  the workspace version and writes the result into Contents/Info.plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>en</string>
+
+    <key>CFBundleExecutable</key>
+    <string>winter</string>
+
+    <key>CFBundleIconFile</key>
+    <string>winter</string>
+
+    <key>CFBundleIdentifier</key>
+    <string>io.github.taquangtrung.winter-term</string>
+
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+
+    <key>CFBundleName</key>
+    <string>Winter</string>
+
+    <key>CFBundleDisplayName</key>
+    <string>Winter Terminal</string>
+
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+
+    <!-- Marketing version, shown in Finder's Get Info. -->
+    <key>CFBundleShortVersionString</key>
+    <string>{{VERSION}}</string>
+
+    <!-- Build version. Kept equal to the marketing version: Winter has no
+         build number separate from its release. -->
+    <key>CFBundleVersion</key>
+    <string>{{VERSION}}</string>
+
+    <!-- wgpu targets Metal here, which needs 10.13+; WKWebView's modern API
+         needs 10.13 as well. 11.0 is the oldest release still receiving any
+         attention, so that is the floor claimed. -->
+    <key>LSMinimumSystemVersion</key>
+    <string>11.0</string>
+
+    <!-- Without this the window renders at 1x and is upscaled, which on a
+         Retina display makes a text grid look blurry. -->
+    <key>NSHighResolutionCapable</key>
+    <true/>
+
+    <!-- A terminal is not a background agent: it owns a window and belongs in
+         the Dock and the app switcher. -->
+    <key>LSBackgroundOnly</key>
+    <false/>
+
+    <!-- Lets the OS keep Winter on the integrated GPU. A text grid does not
+         need the discrete one, and forcing it costs battery on laptops. -->
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+
+    <key>NSHumanReadableCopyright</key>
+    <string>Licensed under the MIT license.</string>
+</dict>
+</plist>

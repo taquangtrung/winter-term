@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Winter Terminal
+Comment=Web-native terminal emulator with GPU rendering and rich block output
+Exec=winter
+Icon=winter-terminal
+Type=Application
+Terminal=false
+Categories=System;TerminalEmulator;Utility;
+Keywords=terminal;pty;emulator;wgpu;
+StartupNotify=true
+StartupWMClass=winter

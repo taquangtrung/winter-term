@@ -1,0 +1,6 @@
+# Pin the toolchain so `make lint` (clippy -D warnings) and `make fmt` are
+# reproducible across machines and CI. Bump deliberately, re-running
+# `make lint` and `make fmt` after any change.
+[toolchain]
+channel = "1.96.0"
+components = ["rustfmt", "clippy"]

@@ -1,0 +1,855 @@
+//! The split-tree pane layout (§2.1): a tab holds a binary tree of splits whose
+//! leaves are panes. Pure geometry and tree surgery, independent of any renderer.
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+/// Pixel half-width of the invisible hit zone on each side of a split divider.
+/// A pointer within this distance triggers the resize cursor and starts a drag.
+pub const DIVIDER_HIT_MARGIN: f32 = 4.0;
+
+/// Minimum and maximum split ratio, preventing a pane from being squeezed to zero.
+const RATIO_MIN: f32 = 0.1;
+const RATIO_MAX: f32 = 0.9;
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// One tab's pane layout: a binary split tree plus which leaf has focus.
+/// `PaneId`s are allocated by the owner (so they stay unique across tabs) and
+/// passed into [`Tab::with_root`] and [`Tab::split`].
+#[derive(Clone, Debug)]
+pub struct Tab {
+    focused: PaneId,
+    root: Node,
+    /// When true, `rects()` returns only the focused pane at the full viewport;
+    /// cleared when the user calls `toggle_zoom()` again.
+    zoomed: bool,
+}
+
+/// A node in the split tree: a pane leaf or a binary split.
+#[derive(Clone, Debug)]
+enum Node {
+    Leaf(PaneId),
+    Split(SplitNode),
+}
+
+/// An internal split dividing its area between two child nodes.
+#[derive(Clone, Debug)]
+struct SplitNode {
+    direction: Direction,
+    first: Box<Node>,
+    ratio: f32,
+    second: Box<Node>,
+}
+
+/// A rectangular area, in the renderer's coordinate space (origin top-left).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rect {
+    pub height: f32,
+    pub width: f32,
+    pub x: f32,
+    pub y: f32,
+}
+
+/// Which way a split's divider runs.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Direction {
+    /// A horizontal divider: first child on top, second below.
+    Horizontal,
+    /// A vertical divider: first child on the left, second on the right.
+    Vertical,
+}
+
+/// A directional focus move.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FocusDir {
+    Down,
+    Left,
+    Right,
+    Up,
+}
+
+/// Identifies a pane within a tab.
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct PaneId(pub u64);
+
+/// A serializable snapshot of a `Tab`'s split tree. Used by the session module
+/// to persist and restore the pane layout across restarts.
+#[derive(Clone, Debug)]
+pub enum LayoutTree {
+    Pane(PaneId),
+    Split {
+        direction: Direction,
+        ratio: f32,
+        first: Box<LayoutTree>,
+        second: Box<LayoutTree>,
+    },
+}
+
+// ========================================================================
+// Tab
+// ========================================================================
+
+impl Tab {
+    /// A tab whose single full-area pane is `PaneId(0)`, focused.
+    pub fn new() -> Self {
+        Self::with_root(PaneId(0))
+    }
+
+    /// A tab with a single full-area pane `root`, focused.
+    pub fn with_root(root: PaneId) -> Self {
+        Self {
+            focused: root,
+            root: Node::Leaf(root),
+            zoomed: false,
+        }
+    }
+
+    /// Rebuild a `Tab` from a [`LayoutTree`] snapshot, e.g. on session restore.
+    pub fn from_tree(tree: LayoutTree, focused: PaneId) -> Self {
+        Self {
+            focused,
+            root: layout_tree_to_node(tree),
+            zoomed: false,
+        }
+    }
+
+    /// Export the split tree as a [`LayoutTree`] for session persistence.
+    pub fn export_tree(&self) -> LayoutTree {
+        node_to_layout_tree(&self.root)
+    }
+
+    /// The currently focused pane.
+    pub fn focused(&self) -> PaneId {
+        self.focused
+    }
+
+    /// Every pane, left-to-right / top-to-bottom in tree order.
+    pub fn panes(&self) -> Vec<PaneId> {
+        let mut out = Vec::new();
+        collect_panes(&self.root, &mut out);
+        out
+    }
+
+    /// Each pane paired with its area within `viewport`. When zoomed, only the
+    /// focused pane is returned and it occupies the entire viewport.
+    pub fn rects(&self, viewport: Rect) -> Vec<(PaneId, Rect)> {
+        if self.zoomed {
+            return vec![(self.focused, viewport)];
+        }
+        let mut out = Vec::new();
+        collect_rects(&self.root, viewport, &mut out);
+        out
+    }
+
+    /// Return the `Direction` of any split divider that (px, py) is within
+    /// [`DIVIDER_HIT_MARGIN`] pixels of, or `None`. Used to choose the resize
+    /// cursor icon. Returns `None` when zoomed (no dividers are visible).
+    pub fn divider_at(&self, px: f32, py: f32, viewport: Rect) -> Option<Direction> {
+        if self.zoomed || self.panes().len() <= 1 {
+            return None;
+        }
+        divider_hit_in(&self.root, viewport, px, py)
+    }
+
+    /// Find the split divider that contains `(start_x, start_y)` and shift its
+    /// ratio by `(dx, dy)`. Call once per mouse-move event with the delta from
+    /// the previous cursor position. Returns `true` when a divider was found and
+    /// adjusted. No-op when zoomed.
+    pub fn drag_divider(
+        &mut self,
+        start_x: f32,
+        start_y: f32,
+        dx: f32,
+        dy: f32,
+        viewport: Rect,
+    ) -> bool {
+        if self.zoomed {
+            return false;
+        }
+        drag_in(&mut self.root, viewport, start_x, start_y, dx, dy)
+    }
+
+    /// Toggle the focused pane between full-viewport zoom and normal split layout.
+    pub fn toggle_zoom(&mut self) {
+        self.zoomed = !self.zoomed;
+    }
+
+    /// Whether the focused pane is currently expanded to fill the full viewport.
+    pub fn is_zoomed(&self) -> bool {
+        self.zoomed
+    }
+
+    /// Split the focused pane in two, placing the caller-allocated `new_id` as
+    /// the new leaf and focusing it.
+    pub fn split(&mut self, direction: Direction, ratio: f32, new_id: PaneId) {
+        split_at(
+            &mut self.root,
+            self.focused,
+            direction,
+            ratio.clamp(0.0, 1.0),
+            new_id,
+        );
+        self.focused = new_id;
+    }
+
+    /// Close a pane, collapsing its parent split into its sibling. The last pane
+    /// cannot be closed. Returns whether anything changed.
+    pub fn close(&mut self, pane: PaneId) -> bool {
+        if !close_in(&mut self.root, pane) {
+            return false;
+        }
+        if self.focused == pane {
+            self.focused = self.panes().first().copied().unwrap_or(PaneId(0));
+        }
+        true
+    }
+
+    /// Recompute every split's ratio so its two children evenly share that
+    /// split's own axis.
+    ///
+    /// Each split's first child gets a share proportional to its weight along
+    /// the split's own direction (see `axis_weight`): a chain of splits along
+    /// the same direction telescopes into equal slots (three same-direction
+    /// splits give thirds, four give quarters, ...), matching the staircase of
+    /// halves a fixed 0.5 ratio would otherwise produce. Splits are only
+    /// weighed against siblings on their own axis, so splitting or closing a
+    /// pane inside one row/column never resizes a sibling row/column on a
+    /// different axis elsewhere in the tree. No-op for a single pane.
+    pub fn balance(&mut self) {
+        balance_node(&mut self.root);
+    }
+
+    /// Focus a specific pane if it exists.
+    pub fn focus(&mut self, pane: PaneId) -> bool {
+        if self.panes().contains(&pane) {
+            self.focused = pane;
+            return true;
+        }
+        false
+    }
+
+    /// Focus the pane at position `index` in tree order (0-based). Returns
+    /// whether the index was in range.
+    pub fn focus_by_index(&mut self, index: usize) -> bool {
+        let panes = self.panes();
+        match panes.get(index) {
+            Some(&id) => {
+                self.focused = id;
+                true
+            }
+            None => false,
+        }
+    }
+
+    /// Focus the next pane in tree order, wrapping around.
+    pub fn focus_next(&mut self) {
+        let panes = self.panes();
+        if let Some(index) = panes.iter().position(|&p| p == self.focused) {
+            self.focused = panes[(index + 1) % panes.len()];
+        }
+    }
+
+    /// Focus the nearest pane in the given direction within `viewport`, by the
+    /// distance between pane centers. Returns whether focus moved.
+    pub fn focus_in_direction(&mut self, direction: FocusDir, viewport: Rect) -> bool {
+        let rects = self.rects(viewport);
+        let Some(current) = rects.iter().find(|(id, _)| *id == self.focused) else {
+            return false;
+        };
+        let from = current.1.center();
+
+        let best = rects
+            .iter()
+            .filter(|(id, _)| *id != self.focused)
+            .filter(|(_, rect)| is_toward(direction, from, rect.center()))
+            .min_by(|a, b| distance(from, a.1.center()).total_cmp(&distance(from, b.1.center())));
+
+        match best {
+            Some((id, _)) => {
+                self.focused = *id;
+                true
+            }
+            None => false,
+        }
+    }
+}
+
+impl Default for Tab {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ========================================================================
+// Rect
+// ========================================================================
+
+impl Rect {
+    pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
+        Self {
+            height,
+            width,
+            x,
+            y,
+        }
+    }
+
+    fn center(self) -> (f32, f32) {
+        (self.x + self.width / 2.0, self.y + self.height / 2.0)
+    }
+
+    fn split(self, direction: Direction, ratio: f32) -> (Rect, Rect) {
+        match direction {
+            Direction::Vertical => {
+                let width = self.width * ratio;
+                (
+                    Rect::new(self.x, self.y, width, self.height),
+                    Rect::new(self.x + width, self.y, self.width - width, self.height),
+                )
+            }
+            Direction::Horizontal => {
+                let height = self.height * ratio;
+                (
+                    Rect::new(self.x, self.y, self.width, height),
+                    Rect::new(self.x, self.y + height, self.width, self.height - height),
+                )
+            }
+        }
+    }
+}
+
+// ========================================================================
+// Tree helpers
+// ========================================================================
+
+fn collect_panes(node: &Node, out: &mut Vec<PaneId>) {
+    match node {
+        Node::Leaf(id) => out.push(*id),
+        Node::Split(split) => {
+            collect_panes(&split.first, out);
+            collect_panes(&split.second, out);
+        }
+    }
+}
+
+fn collect_rects(node: &Node, area: Rect, out: &mut Vec<(PaneId, Rect)>) {
+    match node {
+        Node::Leaf(id) => out.push((*id, area)),
+        Node::Split(split) => {
+            let (first, second) = area.split(split.direction, split.ratio);
+            collect_rects(&split.first, first, out);
+            collect_rects(&split.second, second, out);
+        }
+    }
+}
+
+fn split_at(
+    node: &mut Node,
+    target: PaneId,
+    direction: Direction,
+    ratio: f32,
+    new_id: PaneId,
+) -> bool {
+    match node {
+        Node::Leaf(id) if *id == target => {
+            *node = Node::Split(SplitNode {
+                direction,
+                first: Box::new(Node::Leaf(target)),
+                ratio,
+                second: Box::new(Node::Leaf(new_id)),
+            });
+            true
+        }
+        Node::Leaf(_) => false,
+        Node::Split(split) => {
+            split_at(&mut split.first, target, direction, ratio, new_id)
+                || split_at(&mut split.second, target, direction, ratio, new_id)
+        }
+    }
+}
+
+fn close_in(node: &mut Node, target: PaneId) -> bool {
+    let replacement = match node {
+        Node::Leaf(_) => return false,
+        Node::Split(split) if leaf_is(&split.first, target) => {
+            std::mem::replace(split.second.as_mut(), Node::Leaf(target))
+        }
+        Node::Split(split) if leaf_is(&split.second, target) => {
+            std::mem::replace(split.first.as_mut(), Node::Leaf(target))
+        }
+        Node::Split(split) => {
+            return close_in(&mut split.first, target) || close_in(&mut split.second, target);
+        }
+    };
+    *node = replacement;
+    true
+}
+
+/// Return the direction of the first split divider within `DIVIDER_HIT_MARGIN`
+/// of `(px, py)` inside `area`, or `None`.
+fn divider_hit_in(node: &Node, area: Rect, px: f32, py: f32) -> Option<Direction> {
+    let Node::Split(split) = node else {
+        return None;
+    };
+    let (first_area, second_area) = area.split(split.direction, split.ratio);
+    let on_divider = match split.direction {
+        Direction::Vertical => {
+            let div_x = area.x + first_area.width;
+            px >= div_x - DIVIDER_HIT_MARGIN
+                && px <= div_x + DIVIDER_HIT_MARGIN
+                && py >= area.y
+                && py < area.y + area.height
+        }
+        Direction::Horizontal => {
+            let div_y = area.y + first_area.height;
+            py >= div_y - DIVIDER_HIT_MARGIN
+                && py <= div_y + DIVIDER_HIT_MARGIN
+                && px >= area.x
+                && px < area.x + area.width
+        }
+    };
+    if on_divider {
+        return Some(split.direction);
+    }
+    divider_hit_in(&split.first, first_area, px, py)
+        .or_else(|| divider_hit_in(&split.second, second_area, px, py))
+}
+
+/// Find the split containing `(start_x, start_y)` and adjust its ratio by
+/// `dx/dy` relative to the node's pixel area. Returns `true` when found.
+fn drag_in(node: &mut Node, area: Rect, start_x: f32, start_y: f32, dx: f32, dy: f32) -> bool {
+    let Node::Split(split) = node else {
+        return false;
+    };
+    let (first_area, second_area) = area.split(split.direction, split.ratio);
+    let on_divider = match split.direction {
+        Direction::Vertical => {
+            let div_x = area.x + first_area.width;
+            start_x >= div_x - DIVIDER_HIT_MARGIN
+                && start_x <= div_x + DIVIDER_HIT_MARGIN
+                && start_y >= area.y
+                && start_y < area.y + area.height
+        }
+        Direction::Horizontal => {
+            let div_y = area.y + first_area.height;
+            start_y >= div_y - DIVIDER_HIT_MARGIN
+                && start_y <= div_y + DIVIDER_HIT_MARGIN
+                && start_x >= area.x
+                && start_x < area.x + area.width
+        }
+    };
+    if on_divider {
+        let delta = match split.direction {
+            Direction::Vertical => {
+                if area.width > 0.0 {
+                    dx / area.width
+                } else {
+                    0.0
+                }
+            }
+            Direction::Horizontal => {
+                if area.height > 0.0 {
+                    dy / area.height
+                } else {
+                    0.0
+                }
+            }
+        };
+        split.ratio = (split.ratio + delta).clamp(RATIO_MIN, RATIO_MAX);
+        return true;
+    }
+    drag_in(&mut split.first, first_area, start_x, start_y, dx, dy)
+        || drag_in(&mut split.second, second_area, start_x, start_y, dx, dy)
+}
+
+fn leaf_is(node: &Node, target: PaneId) -> bool {
+    matches!(node, Node::Leaf(id) if *id == target)
+}
+
+/// Weight of `node` along `axis`: how many equal-sized slots it should claim
+/// when splits on that axis are balanced (see [`Tab::balance`]).
+///
+/// A split whose own direction matches `axis` lays its children out *along*
+/// `axis`, so each child is a separate slot and their weights add. A split
+/// whose direction differs stacks its children *across* `axis` (they share
+/// the same slot on `axis`, e.g. one on top of the other for a horizontal
+/// split when `axis` is vertical), so the pair claims only the larger child's
+/// weight, not the sum.
+fn axis_weight(node: &Node, axis: Direction) -> usize {
+    match node {
+        Node::Leaf(_) => 1,
+        Node::Split(split) if split.direction == axis => {
+            axis_weight(&split.first, axis) + axis_weight(&split.second, axis)
+        }
+        Node::Split(split) => axis_weight(&split.first, axis).max(axis_weight(&split.second, axis)),
+    }
+}
+
+/// Set every split's ratio so its first child gets a share of the split's own
+/// axis proportional to [`axis_weight`] (see [`Tab::balance`]). Descend first
+/// so a subtree's ratios are final before its parent's ratio is set, though
+/// `axis_weight` itself only reads leaf/direction shape and is unaffected by
+/// ratios.
+fn balance_node(node: &mut Node) {
+    if let Node::Split(split) = node {
+        balance_node(&mut split.first);
+        balance_node(&mut split.second);
+        let first = axis_weight(&split.first, split.direction) as f32;
+        let second = axis_weight(&split.second, split.direction) as f32;
+        split.ratio = first / (first + second);
+    }
+}
+
+fn is_toward(direction: FocusDir, from: (f32, f32), to: (f32, f32)) -> bool {
+    match direction {
+        FocusDir::Down => to.1 > from.1,
+        FocusDir::Left => to.0 < from.0,
+        FocusDir::Right => to.0 > from.0,
+        FocusDir::Up => to.1 < from.1,
+    }
+}
+
+fn distance(a: (f32, f32), b: (f32, f32)) -> f32 {
+    let dx = a.0 - b.0;
+    let dy = a.1 - b.1;
+    dx * dx + dy * dy
+}
+
+fn layout_tree_to_node(tree: LayoutTree) -> Node {
+    match tree {
+        LayoutTree::Pane(id) => Node::Leaf(id),
+        LayoutTree::Split {
+            direction,
+            ratio,
+            first,
+            second,
+        } => Node::Split(SplitNode {
+            direction,
+            // In-app mutators (e.g. `Tab::split`) always clamp to [0, 1]; a
+            // deserialized `session.json` isn't guaranteed to, and an
+            // out-of-range ratio produces a negative-width/height rect that
+            // silently misrenders instead of erroring.
+            ratio: ratio.clamp(0.0, 1.0),
+            first: Box::new(layout_tree_to_node(*first)),
+            second: Box::new(layout_tree_to_node(*second)),
+        }),
+    }
+}
+
+fn node_to_layout_tree(node: &Node) -> LayoutTree {
+    match node {
+        Node::Leaf(id) => LayoutTree::Pane(*id),
+        Node::Split(s) => LayoutTree::Split {
+            direction: s.direction,
+            ratio: s.ratio,
+            first: Box::new(node_to_layout_tree(&s.first)),
+            second: Box::new(node_to_layout_tree(&s.second)),
+        },
+    }
+}
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const VIEWPORT: Rect = Rect {
+        height: 100.0,
+        width: 200.0,
+        x: 0.0,
+        y: 0.0,
+    };
+
+    #[test]
+    fn test_new_tab_has_one_focused_pane() {
+        let tab = Tab::new();
+        assert_eq!(tab.panes(), vec![PaneId(0)]);
+        assert_eq!(tab.focused(), PaneId(0));
+    }
+
+    #[test]
+    fn test_from_tree_clamps_an_out_of_range_ratio() {
+        // Regression: in-app split mutators always clamp their ratio to
+        // [0, 1], but a deserialized `session.json` isn't guaranteed to; an
+        // out-of-range ratio produced a negative-width/height rect that
+        // silently misrendered instead of erroring.
+        let too_big = LayoutTree::Split {
+            direction: Direction::Vertical,
+            ratio: 5.0,
+            first: Box::new(LayoutTree::Pane(PaneId(0))),
+            second: Box::new(LayoutTree::Pane(PaneId(1))),
+        };
+        match Tab::from_tree(too_big, PaneId(0)).export_tree() {
+            LayoutTree::Split { ratio, .. } => assert_eq!(ratio, 1.0),
+            LayoutTree::Pane(_) => panic!("expected a split"),
+        }
+
+        let too_small = LayoutTree::Split {
+            direction: Direction::Vertical,
+            ratio: -3.0,
+            first: Box::new(LayoutTree::Pane(PaneId(0))),
+            second: Box::new(LayoutTree::Pane(PaneId(1))),
+        };
+        match Tab::from_tree(too_small, PaneId(0)).export_tree() {
+            LayoutTree::Split { ratio, .. } => assert_eq!(ratio, 0.0),
+            LayoutTree::Pane(_) => panic!("expected a split"),
+        }
+    }
+
+    #[test]
+    fn test_split_adds_a_focused_pane_and_divides_the_area() {
+        let mut tab = Tab::new();
+        let right = PaneId(1);
+        tab.split(Direction::Vertical, 0.5, right);
+        assert_eq!(tab.focused(), right);
+        assert_eq!(tab.panes(), vec![PaneId(0), right]);
+
+        let rects = tab.rects(VIEWPORT);
+        assert_eq!(rects[0], (PaneId(0), Rect::new(0.0, 0.0, 100.0, 100.0)));
+        assert_eq!(rects[1], (right, Rect::new(100.0, 0.0, 100.0, 100.0)));
+    }
+
+    #[test]
+    fn test_close_collapses_split_into_sibling() {
+        let mut tab = Tab::new();
+        let right = PaneId(1);
+        tab.split(Direction::Vertical, 0.5, right);
+        assert!(tab.close(right));
+        assert_eq!(tab.panes(), vec![PaneId(0)]);
+        assert_eq!(tab.focused(), PaneId(0));
+        assert_eq!(tab.rects(VIEWPORT), vec![(PaneId(0), VIEWPORT)]);
+    }
+
+    #[test]
+    fn test_last_pane_cannot_be_closed() {
+        let mut tab = Tab::new();
+        assert!(!tab.close(PaneId(0)));
+        assert_eq!(tab.panes(), vec![PaneId(0)]);
+    }
+
+    #[test]
+    fn test_focus_next_wraps_around() {
+        let mut tab = Tab::new();
+        let right = PaneId(1);
+        tab.split(Direction::Vertical, 0.5, right);
+        tab.focus(PaneId(0));
+        tab.focus_next();
+        assert_eq!(tab.focused(), right);
+        tab.focus_next();
+        assert_eq!(tab.focused(), PaneId(0));
+    }
+
+    #[test]
+    fn test_zoom_returns_full_viewport_for_focused_pane() {
+        let mut tab = Tab::new();
+        let right = PaneId(1);
+        tab.split(Direction::Vertical, 0.5, right);
+        tab.focus(PaneId(0));
+        assert!(!tab.is_zoomed());
+        tab.toggle_zoom();
+        assert!(tab.is_zoomed());
+        let rects = tab.rects(VIEWPORT);
+        assert_eq!(rects.len(), 1, "only focused pane when zoomed");
+        assert_eq!(rects[0], (PaneId(0), VIEWPORT));
+        tab.toggle_zoom();
+        assert!(!tab.is_zoomed());
+        let rects = tab.rects(VIEWPORT);
+        assert_eq!(rects.len(), 2, "both panes restored after unzoom");
+    }
+
+    #[test]
+    fn test_focus_in_direction_moves_to_the_adjacent_pane() {
+        let mut tab = Tab::new();
+        let right = PaneId(1);
+        tab.split(Direction::Vertical, 0.5, right);
+        tab.focus(PaneId(0));
+        assert!(tab.focus_in_direction(FocusDir::Right, VIEWPORT));
+        assert_eq!(tab.focused(), right);
+        assert!(!tab.focus_in_direction(FocusDir::Right, VIEWPORT));
+        assert!(tab.focus_in_direction(FocusDir::Left, VIEWPORT));
+        assert_eq!(tab.focused(), PaneId(0));
+    }
+
+    fn area_of(rects: &[(PaneId, Rect)], id: PaneId) -> f32 {
+        rects
+            .iter()
+            .find(|(pid, _)| *pid == id)
+            .map(|(_, r)| r.width * r.height)
+            .unwrap_or(f32::NAN)
+    }
+
+    #[test]
+    fn test_balance_is_noop_for_a_single_pane() {
+        let mut tab = Tab::new();
+        tab.balance();
+        assert_eq!(tab.rects(VIEWPORT), vec![(PaneId(0), VIEWPORT)]);
+    }
+
+    #[test]
+    fn test_balance_equalizes_three_same_direction_splits() {
+        let mut tab = Tab::new();
+        // Two successive vertical splits of the focused pane build a staircase
+        // (50% / 25% / 25%) without balancing.
+        tab.split(Direction::Vertical, 0.5, PaneId(1));
+        tab.split(Direction::Vertical, 0.5, PaneId(2));
+        tab.balance();
+
+        let rects = tab.rects(VIEWPORT);
+        let third = VIEWPORT.width * VIEWPORT.height / 3.0;
+        for id in [PaneId(0), PaneId(1), PaneId(2)] {
+            assert!(
+                (area_of(&rects, id) - third).abs() < 0.01,
+                "pane {id:?} should occupy a third after balance"
+            );
+        }
+    }
+
+    #[test]
+    fn test_balance_keeps_mixed_directions_local_to_their_own_axis() {
+        let mut tab = Tab::new();
+        tab.split(Direction::Vertical, 0.5, PaneId(1)); // 0 | 1
+        tab.split(Direction::Horizontal, 0.5, PaneId(2)); // 0 | (1 over 2)
+        tab.balance();
+
+        // The horizontal split of 1 shares column space with 0 (its own axis is
+        // vertical, unaffected), so 0 keeps half the width; 1 and 2 split that
+        // remaining column into equal-height quarters.
+        let rects = tab.rects(VIEWPORT);
+        let total = VIEWPORT.width * VIEWPORT.height;
+        assert!((area_of(&rects, PaneId(0)) - total / 2.0).abs() < 0.01);
+        assert!((area_of(&rects, PaneId(1)) - total / 4.0).abs() < 0.01);
+        assert!((area_of(&rects, PaneId(2)) - total / 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_balance_equalizes_four_panes() {
+        let mut tab = Tab::new();
+        tab.split(Direction::Vertical, 0.5, PaneId(1));
+        tab.split(Direction::Vertical, 0.5, PaneId(2));
+        tab.split(Direction::Vertical, 0.5, PaneId(3));
+        tab.balance();
+
+        let rects = tab.rects(VIEWPORT);
+        let quarter = VIEWPORT.width * VIEWPORT.height / 4.0;
+        for id in [PaneId(0), PaneId(1), PaneId(2), PaneId(3)] {
+            assert!(
+                (area_of(&rects, id) - quarter).abs() < 0.01,
+                "pane {id:?} should occupy a quarter after balance"
+            );
+        }
+    }
+
+    #[test]
+    fn test_balance_restores_equality_after_closing_a_pane() {
+        let mut tab = Tab::new();
+        tab.split(Direction::Vertical, 0.5, PaneId(1));
+        tab.split(Direction::Vertical, 0.5, PaneId(2));
+        tab.balance();
+        // Close the middle pane; without rebalancing the survivor of that split
+        // would inherit an oversized share.
+        assert!(tab.close(PaneId(1)));
+        tab.balance();
+
+        let rects = tab.rects(VIEWPORT);
+        let half = VIEWPORT.width * VIEWPORT.height / 2.0;
+        for id in [PaneId(0), PaneId(2)] {
+            assert!(
+                (area_of(&rects, id) - half).abs() < 0.01,
+                "pane {id:?} should occupy half after close + balance"
+            );
+        }
+    }
+
+    /// Count `(horizontal, vertical)` split nodes under `node`.
+    fn direction_counts(node: &Node) -> (usize, usize) {
+        match node {
+            Node::Leaf(_) => (0, 0),
+            Node::Split(s) => {
+                let (mut h, mut v) = direction_counts(&s.first);
+                let (hf, vf) = direction_counts(&s.second);
+                h += hf;
+                v += vf;
+                match s.direction {
+                    Direction::Horizontal => h += 1,
+                    Direction::Vertical => v += 1,
+                }
+                (h, v)
+            }
+        }
+    }
+
+    #[test]
+    fn test_balance_preserves_mixed_split_directions() {
+        let mut tab = Tab::new();
+        // Build a mixed tree: V(0, H(1, 2)).
+        tab.split(Direction::Vertical, 0.5, PaneId(1));
+        tab.split(Direction::Horizontal, 0.5, PaneId(2));
+        let before = direction_counts(&tab.root);
+        assert!(before.0 > 0 && before.1 > 0, "sanity: tree starts mixed");
+
+        tab.balance();
+
+        assert_eq!(
+            direction_counts(&tab.root),
+            before,
+            "balance must not reshape the split tree, only its ratios"
+        );
+    }
+
+    #[test]
+    fn test_balance_leaves_unrelated_columns_untouched_by_a_cross_axis_split() {
+        let mut tab = Tab::new();
+        // Three equal vertical columns: 0 | 1 | 2.
+        tab.split(Direction::Vertical, 0.5, PaneId(1));
+        tab.split(Direction::Vertical, 0.5, PaneId(2));
+        tab.balance();
+
+        // Split column 2 horizontally into 2 (top) and 3 (bottom).
+        tab.split(Direction::Horizontal, 0.5, PaneId(3));
+        tab.balance();
+
+        let rects = tab.rects(VIEWPORT);
+        let third = VIEWPORT.width / 3.0;
+        for id in [PaneId(0), PaneId(1)] {
+            assert!(
+                (rects.iter().find(|(p, _)| *p == id).unwrap().1.width - third).abs() < 0.01,
+                "pane {id:?} width must be untouched by a split on a different axis"
+            );
+        }
+        let col2_width = rects.iter().find(|(p, _)| *p == PaneId(2)).unwrap().1.width;
+        assert!((col2_width - third).abs() < 0.01);
+        assert_eq!(
+            col2_width,
+            rects.iter().find(|(p, _)| *p == PaneId(3)).unwrap().1.width
+        );
+    }
+
+    #[test]
+    fn test_balance_equalizes_a_same_axis_split_into_an_existing_column() {
+        let mut tab = Tab::new();
+        // Three equal vertical columns: 0 | 1 | 2.
+        tab.split(Direction::Vertical, 0.5, PaneId(1));
+        tab.split(Direction::Vertical, 0.5, PaneId(2));
+        tab.balance();
+
+        // Split column 2 on the same (vertical) axis into 2 | 3.
+        tab.split(Direction::Vertical, 0.5, PaneId(3));
+        tab.balance();
+
+        let rects = tab.rects(VIEWPORT);
+        let quarter = VIEWPORT.width / 4.0;
+        for id in [PaneId(0), PaneId(1), PaneId(2), PaneId(3)] {
+            assert!(
+                (rects.iter().find(|(p, _)| *p == id).unwrap().1.width - quarter).abs() < 0.01,
+                "pane {id:?} should occupy a quarter width: a same-axis split still equalizes the whole row"
+            );
+        }
+    }
+}

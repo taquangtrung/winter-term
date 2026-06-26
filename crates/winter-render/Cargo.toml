@@ -1,0 +1,24 @@
+[package]
+name = "winter-render"
+description = "Winter terminal screen model: a VT-driven cell grid (CPU side of the text grid)."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "wgpu", "text-rendering", "vt100", "grid"]
+categories = ["graphics", "rendering"]
+rust-version.workspace = true
+readme = "README.md"
+
+[dependencies]
+glyphon = "0.11"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+pollster = "0.4"
+pulldown-cmark = { version = "0.12", default-features = false }
+resvg = { version = "0.45", default-features = false, features = ["text", "system-fonts"] }
+unicode-normalization = "0.1"
+unicode-width = "0.1"
+vte.workspace = true
+wgpu = "29"
