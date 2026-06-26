@@ -1,0 +1,92 @@
+//! View types the chrome rasterizers are handed.
+
+use glyphon::{Color, TextBounds};
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// One shaped text run of the top tabbar (a tab title, a menu title, a glyph),
+/// plus where to place and clip it. Built fresh each frame and kept alive until
+/// after `glyphon` prepares the text pass.
+pub(crate) struct TabbarText {
+    pub(crate) bounds: TextBounds,
+    pub(crate) buffer: glyphon::Buffer,
+    pub(crate) color: Color,
+    pub(crate) left: f32,
+    pub(crate) top: f32,
+}
+/// A rasterized top-tabbar strip: its pixels and their dimensions. Unlike a
+/// dropdown it carries no position, because the strip always sits at the
+/// surface's top-left corner.
+pub(crate) struct StripImage {
+    pub(crate) height: u32,
+    pub(crate) rgba: Vec<u8>,
+    pub(crate) width: u32,
+}
+
+/// A rasterized dropdown overlay: its pixels and the surface position to place
+/// them at (top-left, already offset to include the shadow margin).
+pub(crate) struct DropdownImage {
+    pub(crate) height: u32,
+    pub(crate) rgba: Vec<u8>,
+    pub(crate) width: u32,
+    pub(crate) x: f32,
+    pub(crate) y: f32,
+}
+/// One entry shown in the command palette results list.
+pub struct PaletteItem {
+    /// Command id dispatched when this entry is chosen.
+    pub action: String,
+    /// Human-readable entry text shown in the list.
+    pub label: String,
+    /// Char indices in `label` that matched the query, used to highlight them.
+    pub match_positions: Vec<usize>,
+    /// Keyboard shortcut hint shown on the right (e.g. `"Ctrl-Shift-T"`).
+    pub shortcut: String,
+}
+/// The command palette state the renderer needs to draw its overlay.
+pub struct PaletteView {
+    /// Whether the palette is docked to the top of the window with 1/2 window height.
+    pub align_top: bool,
+    /// Text shown when the filtered list is empty.
+    pub empty_message: String,
+    /// The entries to draw, already filtered and ranked by the caller.
+    pub items: Vec<PaletteItem>,
+    /// Draw an underline under highlighted match characters.
+    pub match_underline: bool,
+    /// The filter text as typed.
+    pub query: String,
+    /// What the list is of, drawn as a heading above the input line. Empty
+    /// for a palette that needs no naming, which draws no heading at all.
+    pub title: String,
+    /// Index into `items` of the highlighted entry.
+    pub selected: usize,
+}
+/// A question being answered in a floating dialog: what is being asked, what
+/// has been typed so far, and how to answer it.
+#[derive(Clone, Debug)]
+pub struct InputView {
+    /// How many characters of the input sit before the caret, which is drawn
+    /// between them and the rest.
+    pub caret: usize,
+    /// How to answer, drawn under the input in the muted color. Empty draws
+    /// nothing.
+    pub hint: String,
+    /// What has been typed, drawn on an input line with a caret after it.
+    /// `None` for a question answered by one key, which has no line to type
+    /// on.
+    pub input: Option<String>,
+    /// What is being asked, drawn as the dialog's heading.
+    pub label: String,
+}
+
+/// The which-key hint overlay state shown when the user pauses mid-prefix.
+#[derive(Clone, Debug)]
+pub struct WhichKeyView {
+    /// The continuations available from the pending prefix, as
+    /// `(key, description)`.
+    pub items: Vec<(String, String)>,
+    /// The prefix already typed, shown as the popup's heading.
+    pub title: String,
+}

@@ -1,0 +1,1481 @@
+//! Native command palette: a lightweight text-mode overlay activated by
+//! `Alt-X` (or the configured key). Renders as GPU quads at the top
+//! of the focused pane, no WebView required.
+
+use std::collections::HashSet;
+use std::env;
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use super::history::EditHistory;
+use super::input::WindowKeymap;
+use super::path::{clean_path, expand_home};
+use super::units::format_size;
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+const HISTORY_MAX: usize = 500;
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// Whether the palette is showing built-in commands, shell history, or recent dirs.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub enum PaletteMode {
+    /// Choosing a command to run.
+    #[default]
+    Commands,
+    /// Browsing a directory: a row is somewhere to go or something to open,
+    /// and the query filters the one directory being shown rather than the
+    /// tree under it.
+    Files,
+    /// Recalling an earlier query.
+    History,
+    /// Every tool: the ones open somewhere, then the ones closed recently.
+    /// Selecting an open one goes to it, and a closed one comes back as the
+    /// page it was rather than as a fresh tool of its kind.
+    Tools,
+    /// Pane switcher: selecting an entry focuses that pane.
+    Panes,
+    /// `cd` target picker: selecting an entry executes `cd <dir>` immediately.
+    RecentDirs,
+    /// A tool page's own list: the branches to check out, the tags to delete.
+    /// Selecting an entry answers the page's question rather than running a
+    /// command of the host's.
+    PagePick,
+    /// Buffer swoop: fuzzy line search over the active pane's scrollback and grid.
+    Swoop,
+    /// Jump to target in current buffer view (fuzzy completion dialog).
+    Jump,
+    /// Mux session switcher: selecting an entry attaches or switches to that daemon session.
+    MuxSessions,
+    /// Mux session killer: selecting an entry terminates that daemon session.
+    MuxKill,
+    /// Mux session creator: a free-text prompt: the *query* is the payload
+    /// ("name [command]"), never a filter, and `Enter` spawns the session.
+    MuxNew,
+    /// Remote mux attach: a free-text prompt: the *query* is the payload
+    /// ("host [session]"), never a filter, and `Enter` attaches over ssh.
+    MuxAttachRemote,
+}
+
+/// One selectable row: what it shows and the command it runs.
+#[derive(Clone, Debug)]
+pub struct PaletteEntry {
+    /// The command dispatched when this row is chosen.
+    pub action: String,
+    /// The text shown for this row.
+    pub label: String,
+    /// Char indices in `label` that matched the current query (for highlight).
+    pub match_positions: Vec<usize>,
+    /// Keyboard shortcut hint shown on the right (e.g. `"Ctrl-Shift-T"`).
+    pub shortcut: String,
+}
+
+/// The palette's open state: its query, matching entries, and selection.
+#[derive(Clone, Debug, Default)]
+pub struct Palette {
+    /// Whether the palette is currently open.
+    pub active: bool,
+    /// The directory a file browser is showing, and nothing for every other
+    /// mode, which lists something other than a place.
+    pub dir: Option<PathBuf>,
+    /// Every candidate row, before filtering.
+    pub entries: Vec<PaletteEntry>,
+    /// Indices into the entries that match the query, in match order.
+    pub filtered: Vec<usize>,
+    /// Undo/redo stack over `query`, driven by `Ctrl-/` and `Ctrl-\`.
+    pub history: EditHistory<String>,
+    /// Position in `query_history` currently recalled (`0` = most recent).
+    /// `None` indicates the live, uncommitted query is displayed.
+    pub history_index: Option<usize>,
+    /// The live query snapshot saved when history navigation begins.
+    pub live_query: String,
+    /// Whether the palette is listing commands or past queries.
+    pub mode: PaletteMode,
+    /// What the user has typed so far.
+    pub query: String,
+    /// Executed query history (most-recent-first).
+    pub query_history: Vec<String>,
+    /// Index into the filtered rows, not into the entries.
+    pub selected: usize,
+    /// Custom title shown above the palette query, or None to infer from mode.
+    pub title: Option<String>,
+}
+
+// ========================================================================
+// Implementation
+// ========================================================================
+
+impl Palette {
+    /// Open over the command list, labelling entries with their bound chords.
+    pub fn open(keymap: &WindowKeymap) -> Self {
+        let entries = builtin_commands(keymap);
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::Commands,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open over previously entered queries instead of the command list.
+    pub fn open_history() -> Self {
+        let entries = load_history_entries();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::History,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette in recent-dirs mode. `dirs` is a deduplicated list of
+    /// working directories ordered most-recently-used first.
+    pub fn open_recent_dirs(dirs: Vec<String>) -> Self {
+        let entries = dirs
+            .into_iter()
+            .map(|dir| PaletteEntry {
+                action: dir.clone(),
+                label: dir,
+                match_positions: Vec::new(),
+                shortcut: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::RecentDirs,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette over every tool: the ones open somewhere first, then
+    /// the ones closed recently, newest first.
+    ///
+    /// Each entry is `(action, label, hint)`. The action says which pane a
+    /// row goes to or which closed thing it puts back, named rather than
+    /// numbered by position, so a row means the same thing however the list
+    /// has changed since it was drawn.
+    pub fn open_tools(tools: Vec<(String, String, String)>) -> Self {
+        let entries = tools
+            .into_iter()
+            .map(|(action, label, hint)| PaletteEntry {
+                action,
+                label,
+                match_positions: Vec::new(),
+                shortcut: hint,
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::Tools,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette in pane switcher mode.
+    pub fn open_panes(panes: Vec<(super::layout::TabId, String, String)>) -> Self {
+        let entries = panes
+            .into_iter()
+            .map(|(tab_id, label, shortcut)| PaletteEntry {
+                action: tab_id.0.to_string(),
+                label,
+                match_positions: Vec::new(),
+                shortcut,
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::Panes,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette over a tool page's own list, where each entry stands
+    /// for itself: what is chosen is the text of the row.
+    pub fn open_pick(items: Vec<String>) -> Self {
+        let entries = items
+            .into_iter()
+            .map(|item| PaletteEntry {
+                action: item.clone(),
+                label: item,
+                match_positions: Vec::new(),
+                shortcut: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::PagePick,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette in buffer swoop mode over `lines`, which are `(abs_row, text)` pairs.
+    pub fn open_swoop(lines: Vec<(usize, String)>) -> Self {
+        let entries = lines
+            .into_iter()
+            .map(|(abs_row, line)| {
+                let line_num = abs_row + 1;
+                PaletteEntry {
+                    action: abs_row.to_string(),
+                    label: format!("{line_num:>5}  {line}"),
+                    match_positions: Vec::new(),
+                    shortcut: String::new(),
+                }
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::Swoop,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette in jump mode over `targets`, which are `(target_id, label)` pairs.
+    pub fn open_jump(targets: Vec<(usize, String)>, title: Option<String>) -> Self {
+        let entries = targets
+            .into_iter()
+            .map(|(target_id, label)| PaletteEntry {
+                action: target_id.to_string(),
+                label,
+                match_positions: Vec::new(),
+                shortcut: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::Jump,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title,
+        }
+    }
+
+    /// Preselect the entry closest to `target_id` among the filtered items.
+    pub fn preselect_nearest(&mut self, target_id: usize) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        let mut best_index = 0;
+        let mut min_diff = usize::MAX;
+        for (filtered_idx, &entry_idx) in self.filtered.iter().enumerate() {
+            if let Ok(id) = self.entries[entry_idx].action.parse::<usize>() {
+                if id >= target_id {
+                    self.selected = filtered_idx;
+                    return;
+                }
+                let diff = target_id.abs_diff(id);
+                if diff < min_diff {
+                    min_diff = diff;
+                    best_index = filtered_idx;
+                }
+            }
+        }
+        self.selected = best_index;
+    }
+
+    /// Open the palette in mux session switcher mode.
+    pub fn open_mux_sessions(sessions: Vec<String>) -> Self {
+        let entries = sessions
+            .into_iter()
+            .map(|name| PaletteEntry {
+                action: name.clone(),
+                label: name,
+                match_positions: Vec::new(),
+                shortcut: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::MuxSessions,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette in mux session killer mode.
+    pub fn open_mux_kill(sessions: Vec<String>) -> Self {
+        let entries = sessions
+            .into_iter()
+            .map(|name| PaletteEntry {
+                action: name.clone(),
+                label: name,
+                match_positions: Vec::new(),
+                shortcut: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::MuxKill,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette in mux session creator mode: the query is the input
+    /// ("name [command]"), shown against a single static prompt line that
+    /// stays visible no matter what is typed.
+    pub fn open_mux_new() -> Self {
+        let entries = vec![PaletteEntry {
+            action: "spawn".to_string(),
+            label: "new session: name [command]".to_string(),
+            match_positions: Vec::new(),
+            shortcut: String::new(),
+        }];
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::MuxNew,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette in remote mux attach mode: the query is the input
+    /// ("host [session]"), shown against a single static prompt line that
+    /// stays visible no matter what is typed.
+    pub fn open_mux_attach_remote() -> Self {
+        let entries = vec![PaletteEntry {
+            action: "attach".to_string(),
+            label: "attach remote: host [session]".to_string(),
+            match_positions: Vec::new(),
+            shortcut: String::new(),
+        }];
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::MuxAttachRemote,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Open the palette over `dir`'s own entries: a directory is somewhere
+    /// to go, a file is something to open, and `..` is the way back up.
+    pub fn open_files(dir: PathBuf) -> Self {
+        let entries = file_entries(&dir);
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: Some(dir),
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::Files,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title: None,
+        }
+    }
+
+    /// Attach executed query history to this palette instance.
+    pub fn with_query_history(mut self, history: Vec<String>) -> Self {
+        self.query_history = history;
+        self
+    }
+
+    /// Close the palette and discard the current query.
+    pub fn close(&mut self) {
+        self.active = false;
+        self.query.clear();
+        self.history.reset(String::new());
+        self.history_index = None;
+        self.live_query.clear();
+        self.selected = 0;
+    }
+
+    /// Move the selection to the row for `path`, when the listing shows it.
+    pub fn select_path(&mut self, path: &Path) {
+        let position = self
+            .filtered
+            .iter()
+            .position(|&index| Path::new(&self.entries[index].action) == path);
+        if let Some(position) = position {
+            self.selected = position;
+        }
+    }
+
+    /// Append a character to the query and refilter the entries.
+    ///
+    /// In the browser a path separator ends a directory name rather than
+    /// filtering by it: the listing re-roots at the directory typed so far
+    /// (see [`Self::typed_dir`]) with a fresh query, so completion goes on
+    /// from there.
+    pub fn push_char(&mut self, c: char) {
+        if self.mode == PaletteMode::Files && std::path::is_separator(c) {
+            if let Some(dir) = self.typed_dir() {
+                let query_history = std::mem::take(&mut self.query_history);
+                *self = Palette::open_files(dir).with_query_history(query_history);
+                return;
+            }
+        }
+        self.history_index = None;
+        self.query.push(c);
+        self.history.record(self.query.clone());
+        self.update_filter();
+    }
+
+    /// The directory a separator typed after the current query names, for
+    /// the browser to re-root at: the root for an empty query (`/` alone),
+    /// home for `~`, the query as a path (`src`, `..`, `~/notes`, `/etc`)
+    /// against the listed directory when that is a directory, else the
+    /// selected row when it is one (`sr` + `/` enters `src/`). `None` when
+    /// none of these is a directory, which leaves the separator to filter.
+    fn typed_dir(&self) -> Option<PathBuf> {
+        let dir = self.dir.as_ref()?;
+        let candidate = match self.query.as_str() {
+            "" => dir.ancestors().last().map(Path::to_path_buf),
+            query => Some(clean_path(&dir.join(expand_home(query))))
+                .filter(|path| path.is_dir())
+                .or_else(|| self.selected_action().map(PathBuf::from)),
+        };
+        candidate.filter(|path| path.is_dir())
+    }
+
+    /// Delete the query's last character and refilter the entries.
+    pub fn pop_char(&mut self) {
+        self.history_index = None;
+        self.query.pop();
+        self.history.record(self.query.clone());
+        self.update_filter();
+    }
+
+    /// Recall an older executed query (`Alt+P`). Replaces the current query
+    /// and updates filtering. No-op when query history is empty or already at
+    /// the oldest entry.
+    pub fn history_prev(&mut self) {
+        if self.query_history.is_empty() {
+            return;
+        }
+        let next_idx = match self.history_index {
+            None => {
+                self.live_query = self.query.clone();
+                0
+            }
+            Some(i) => {
+                if i + 1 < self.query_history.len() {
+                    i + 1
+                } else {
+                    return;
+                }
+            }
+        };
+        self.history_index = Some(next_idx);
+        self.query = self.query_history[next_idx].clone();
+        self.history.record(self.query.clone());
+        self.update_filter();
+    }
+
+    /// Recall a newer executed query (`Alt+N`), returning to the live typed
+    /// query once the newest entry is passed. No-op when not currently
+    /// navigating history.
+    pub fn history_next(&mut self) {
+        let Some(i) = self.history_index else {
+            return;
+        };
+        if i == 0 {
+            self.history_index = None;
+            self.query = self.live_query.clone();
+        } else {
+            let next_idx = i - 1;
+            self.history_index = Some(next_idx);
+            self.query = self.query_history[next_idx].clone();
+        }
+        self.history.record(self.query.clone());
+        self.update_filter();
+    }
+
+    /// Restore the previous query state (`Ctrl-/`). No-op when nothing to undo.
+    pub fn undo(&mut self) {
+        self.history_index = None;
+        if let Some(query) = self.history.undo() {
+            self.query = query.clone();
+            self.update_filter();
+        }
+    }
+
+    /// Re-apply an undone query state (`Ctrl-\`). No-op when nothing to redo.
+    pub fn redo(&mut self) {
+        self.history_index = None;
+        if let Some(query) = self.history.redo() {
+            self.query = query.clone();
+            self.update_filter();
+        }
+    }
+
+    /// Move the selection one row up, stopping at the first.
+    pub fn move_up(&mut self) {
+        if self.selected > 0 {
+            self.selected -= 1;
+        }
+    }
+
+    /// Move the selection one row down, stopping at the last.
+    pub fn move_down(&mut self) {
+        if self.selected + 1 < self.filtered.len() {
+            self.selected += 1;
+        }
+    }
+
+    /// The command the highlighted row would run, if any row is highlighted.
+    pub fn selected_action(&self) -> Option<&str> {
+        self.filtered
+            .get(self.selected)
+            .map(|&i| self.entries[i].action.as_str())
+    }
+
+    /// The index into `filtered` of the visible entry whose displayed
+    /// shortcut hint exactly matches `shortcut`, if any. Used to jump
+    /// straight to a pane switcher entry by its shown digit.
+    pub fn position_by_shortcut(&self, shortcut: &str) -> Option<usize> {
+        self.filtered
+            .iter()
+            .position(|&i| self.entries[i].shortcut == shortcut)
+    }
+
+    fn update_filter(&mut self) {
+        if matches!(
+            self.mode,
+            PaletteMode::MuxNew | PaletteMode::MuxAttachRemote
+        ) {
+            // The query is the payload (a session spec), not a filter: the
+            // prompt line stays visible no matter what is typed.
+            for entry in &mut self.entries {
+                entry.match_positions.clear();
+            }
+            self.filtered = (0..self.entries.len()).collect();
+            self.selected = 0;
+            return;
+        }
+        let q = self.query.to_lowercase();
+        if q.is_empty() {
+            for entry in &mut self.entries {
+                entry.match_positions.clear();
+            }
+            self.filtered = (0..self.entries.len()).collect();
+            self.selected = 0;
+            return;
+        }
+
+        // Compute score + positions for every entry without mutating them yet.
+        let scored: Vec<Option<(u8, Vec<usize>)>> = self
+            .entries
+            .iter()
+            .map(|e| score_and_positions(&e.label, &q))
+            .collect();
+
+        // Write positions back.
+        for (entry, result) in self.entries.iter_mut().zip(scored.iter()) {
+            entry.match_positions = result.as_ref().map(|(_, p)| p.clone()).unwrap_or_default();
+        }
+
+        let mut filtered: Vec<(usize, u8)> = scored
+            .iter()
+            .enumerate()
+            .filter_map(|(i, r)| r.as_ref().map(|(s, _)| (i, *s)))
+            .collect();
+        filtered.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        self.filtered = filtered.into_iter().map(|(i, _)| i).collect();
+        self.selected = 0;
+    }
+}
+
+// ========================================================================
+// Listings
+// ========================================================================
+
+/// One row per entry of `dir`, directories first and each group by name, with
+/// the hidden ones after the rest: a listing opens on what is usually wanted,
+/// and typing reaches the rest. `..` leads, where there is a parent to reach.
+fn file_entries(dir: &Path) -> Vec<PaletteEntry> {
+    let mut rows: Vec<(bool, bool, String, PaletteEntry)> = Vec::new();
+    let Ok(read) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let meta = entry.metadata().ok();
+        let is_dir = meta.as_ref().is_some_and(|meta| meta.is_dir());
+        let hidden = name.starts_with('.');
+        let label = match is_dir {
+            true => format!("{name}/"),
+            false => name.clone(),
+        };
+        let shortcut = match (is_dir, meta) {
+            (true, _) => "dir".to_string(),
+            (false, Some(meta)) => format_size(meta.len()),
+            (false, None) => String::new(),
+        };
+        rows.push((
+            !is_dir,
+            hidden,
+            name.to_lowercase(),
+            PaletteEntry {
+                action: entry.path().to_string_lossy().to_string(),
+                label,
+                match_positions: Vec::new(),
+                shortcut,
+            },
+        ));
+    }
+    rows.sort_by(|one, other| (one.0, one.1, &one.2).cmp(&(other.0, other.1, &other.2)));
+    let mut entries: Vec<PaletteEntry> = Vec::new();
+    if let Some(parent) = dir.parent() {
+        entries.push(PaletteEntry {
+            action: parent.to_string_lossy().to_string(),
+            label: "../".to_string(),
+            match_positions: Vec::new(),
+            shortcut: "up".to_string(),
+        });
+    }
+    entries.extend(rows.into_iter().map(|row| row.3));
+    entries
+}
+
+// ========================================================================
+// Scoring
+// ========================================================================
+
+/// Score `label` against `query` (already lowercased) and return the match
+/// score plus the char indices in `label` that were matched.
+/// Score levels: 3 = exact, 2 = prefix, 1 = substring, 0 = subsequence.
+fn score_and_positions(label: &str, query: &str) -> Option<(u8, Vec<usize>)> {
+    let label_lower = label.to_lowercase();
+    let qlen = query.chars().count();
+
+    if label_lower == query {
+        return Some((3, (0..label.chars().count()).collect()));
+    }
+    if label_lower.starts_with(query) {
+        return Some((2, (0..qlen).collect()));
+    }
+    if let Some(byte_pos) = label_lower.find(query) {
+        let char_start = label_lower[..byte_pos].chars().count();
+        return Some((1, (char_start..char_start + qlen).collect()));
+    }
+    // Subsequence: greedily find the earliest matching char position.
+    let label_chars: Vec<char> = label_lower.chars().collect();
+    let query_chars: Vec<char> = query.chars().collect();
+    let mut positions = Vec::with_capacity(query_chars.len());
+    let mut qi = 0;
+    for (ci, &lc) in label_chars.iter().enumerate() {
+        if qi < query_chars.len() && lc == query_chars[qi] {
+            positions.push(ci);
+            qi += 1;
+        }
+    }
+    if qi == query_chars.len() {
+        Some((0, positions))
+    } else {
+        None
+    }
+}
+
+// ========================================================================
+// History
+// ========================================================================
+
+fn load_history_entries() -> Vec<PaletteEntry> {
+    let content = try_read_history();
+    parse_history_lines(&content)
+        .into_iter()
+        .map(|cmd| PaletteEntry {
+            action: cmd.clone(),
+            label: cmd,
+            match_positions: Vec::new(),
+            shortcut: String::new(),
+        })
+        .collect()
+}
+
+fn try_read_history() -> String {
+    let candidates: Vec<PathBuf> = [
+        env::var("HISTFILE").ok().map(PathBuf::from),
+        home_dir().map(|h| h.join(".zsh_history")),
+        home_dir().map(|h| h.join(".bash_history")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect();
+
+    for path in candidates {
+        if let Ok(content) = fs::read_to_string(&path) {
+            if !content.is_empty() {
+                return content;
+            }
+        }
+    }
+    String::new()
+}
+
+/// Parse a history file, returning commands in most-recent-first order,
+/// deduplicated. Supports bash (plain lines) and zsh extended format
+/// (`: timestamp:elapsed;command`).
+fn parse_history_lines(content: &str) -> Vec<String> {
+    let raw: Vec<&str> = content
+        .lines()
+        .filter_map(|line| {
+            let line = line.trim();
+            if line.is_empty() || line.starts_with('#') {
+                return None;
+            }
+            // zsh extended history: ": 1234567890:0;command"
+            if let Some(rest) = line.strip_prefix(": ") {
+                return rest
+                    .split_once(';')
+                    .map(|(_, cmd)| cmd.trim())
+                    .filter(|s| !s.is_empty());
+            }
+            Some(line)
+        })
+        .collect();
+
+    let mut seen = HashSet::new();
+    let mut result: Vec<String> = raw
+        .iter()
+        .rev()
+        .filter(|&&cmd| seen.insert(cmd))
+        .map(|&s| s.to_string())
+        .collect();
+    result.truncate(HISTORY_MAX);
+    result
+}
+
+fn home_dir() -> Option<PathBuf> {
+    env::var_os("HOME").map(PathBuf::from)
+}
+
+// ========================================================================
+// Built-in commands
+// ========================================================================
+
+/// Every built-in command, labelled and annotated with the chord `keymap`
+/// binds it to. The one list the palette and the keys page both read.
+pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
+    // (action, label, static shortcut hint: empty means look up from keymap)
+    let entries: &[(&str, &str, &str)] = &[
+        ("cd_recent", "CD: Recent Directory", ""),
+        ("close_pane", "Close Pane", ""),
+        ("close_other_tabs", "Close Other Tabs", ""),
+        ("close_tab", "Close Tab", ""),
+        ("copy_cwd", "Copy: Working Directory", ""),
+        ("copy_scrollback", "Copy: Full Scrollback", ""),
+        ("copy_selection", "Copy Selection", ""),
+        ("export_block_svg", "Export: Focused Block SVG to File", ""),
+        (
+            "export_block_text",
+            "Export: Focused Block Text to Clipboard",
+            "",
+        ),
+        (
+            "export_scrollback_ansi",
+            "Export: Scrollback (ANSI Colors)",
+            "",
+        ),
+        (
+            "export_scrollback_editor",
+            "Export: Scrollback to Editor",
+            "",
+        ),
+        ("export_scrollback_html", "Export: Scrollback to HTML", ""),
+        ("dir_page", "Dir: Open Working Directory", ""),
+        ("next_error", "Errors: Open the Next File Reference in the Last Output", ""),
+        ("prev_error", "Errors: Open the Previous File Reference in the Last Output", ""),
+        ("file_browser", "File: Browse Files", ""),
+        ("focus_down", "Focus Pane Down", ""),
+        ("git_page", "Git: Status", ""),
+        ("grep_page", "Grep: Search Files", ""),
+        ("focus_left", "Focus Pane Left", ""),
+        ("focus_right", "Focus Pane Right", ""),
+        ("focus_up", "Focus Pane Up", ""),
+        ("font_decrease", "Font Size: Decrease", ""),
+        ("font_increase", "Font Size: Increase", ""),
+        ("font_reset", "Font Size: Reset", ""),
+        ("jump", "Navigate: Jump to Target", ""),
+        ("keys_page", "Keys: Show Every Command", ""),
+        ("proc_page", "Processes: Monitor", ""),
+        ("sys_page", "System: Monitor", ""),
+        ("mux_attach_remote", "Mux: Attach Remote Session...", ""),
+        ("mux_detach_session", "Mux: Detach Current Session", ""),
+        ("mux_kill_session", "Mux: Kill Background Session...", ""),
+        (
+            "mux_list_sessions",
+            "Mux: List / Attach Background Sessions",
+            "",
+        ),
+        ("mux_new_session", "Mux: New Session...", ""),
+        ("new_tab", "New Tab", ""),
+        ("next_block", "Next Block", ""),
+        ("next_tab", "Next Tab", ""),
+        ("open_under_cursor", "Open: Path or URL at Point", ""),
+        ("open_settings", "Settings", ""),
+        ("paste_from_clipboard", "Paste from Clipboard", ""),
+        ("prev_block", "Previous Block", ""),
+        ("prev_tab", "Previous Tab", ""),
+        ("quick_select", "Quick Select", ""),
+        ("recent_tab_back", "Recent Tab (Backward)", ""),
+        ("recent_tab_forward", "Recent Tab (Forward)", ""),
+        ("reload", "Reload Window", ""),
+        ("reopen_page", "Tool: Reopen Last Closed", ""),
+        ("reveal_terminal", "Terminal: Reveal Most Recent", ""),
+        ("tool_list", "Tool: Go To or Reopen...", ""),
+        ("search", "Search Blocks", ""),
+        ("select_pane", "Go to Pane", ""),
+        ("scroll_page_up", "Scroll Page Up", ""),
+        ("scroll_page_down", "Scroll Page Down", ""),
+        ("scroll_line_up", "Scroll Line Up", ""),
+        ("scroll_line_down", "Scroll Line Down", ""),
+        ("scroll_to_top", "Scroll to Top", ""),
+        ("scroll_to_bottom", "Scroll to Bottom", ""),
+        ("split_horizontal", "Split Horizontal", ""),
+        ("split_vertical", "Split Vertical", ""),
+        ("swoop", "Navigate: Buffer Swoop", ""),
+        ("theme_auto", "Theme: Auto", ""),
+        ("theme_dark", "Theme: Dark", ""),
+        ("theme_light", "Theme: Light", ""),
+        ("theme_new", "Theme: Create New...", ""),
+        ("toggle_fold", "Toggle Fold", ""),
+        ("toggle_mode", "Toggle Mode (Insert/Normal)", ""),
+        ("toggle_pane_zoom", "Zoom Pane", ""),
+        (
+            "toggle_rainbow_parens",
+            "View: Toggle Rainbow Parentheses",
+            "",
+        ),
+        (
+            "toggle_sentence_highlight",
+            "View: Toggle Sentence Highlight",
+            "",
+        ),
+        ("yank_block", "Yank Block Source", ""),
+    ];
+    entries
+        .iter()
+        .map(|(action, label, static_hint)| {
+            let shortcut = if !static_hint.is_empty() {
+                static_hint.to_string()
+            } else {
+                keymap.chord_hint(action)
+            };
+            PaletteEntry {
+                action: action.to_string(),
+                label: label.to_string(),
+                match_positions: Vec::new(),
+                shortcut,
+            }
+        })
+        .collect()
+}
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A directory holding `names`, removed again when the test ends.
+    struct TempTree(PathBuf);
+
+    impl TempTree {
+        fn new(tag: &str, names: &[&str]) -> Self {
+            let dir = env::temp_dir().join(format!("winter-browser-{tag}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("temp dir");
+            for name in names {
+                match name.ends_with('/') {
+                    true => fs::create_dir_all(dir.join(name.trim_end_matches('/'))),
+                    false => fs::write(dir.join(name), "xy"),
+                }
+                .expect("temp entry");
+            }
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn test_a_browsed_directory_leads_with_the_way_up_then_its_directories() {
+        // A listing that opened on whatever order the filesystem handed back
+        // would put `.git` above `src` as often as not.
+        let tree = TempTree::new("order", &[".hidden", "beta.rs", "alpha/", ".git/"]);
+        let palette = Palette::open_files(tree.0.clone());
+
+        let labels: Vec<&str> = palette
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
+        assert_eq!(labels, ["../", "alpha/", ".git/", "beta.rs", ".hidden"]);
+        assert_eq!(palette.mode, PaletteMode::Files);
+        assert_eq!(
+            palette.dir.as_ref(),
+            Some(&tree.0),
+            "and it says where it is"
+        );
+    }
+
+    #[test]
+    fn test_a_browsed_row_carries_its_path_and_what_it_is() {
+        let tree = TempTree::new("rows", &["src/", "notes.txt"]);
+        let palette = Palette::open_files(tree.0.clone());
+
+        let file = palette
+            .entries
+            .iter()
+            .find(|entry| entry.label == "notes.txt")
+            .expect("the file is listed");
+        assert_eq!(file.action, tree.0.join("notes.txt").to_string_lossy());
+        assert_eq!(file.shortcut, "2B", "its size, where a chord would go");
+
+        let dir = palette
+            .entries
+            .iter()
+            .find(|entry| entry.label == "src/")
+            .expect("the directory is listed");
+        assert_eq!(dir.shortcut, "dir");
+    }
+
+    #[test]
+    fn test_typing_filters_the_directory_being_browsed() {
+        let tree = TempTree::new("filter", &["alpha.rs", "beta.rs"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        palette.push_char('b');
+        let shown: Vec<&str> = palette
+            .filtered
+            .iter()
+            .map(|&i| palette.entries[i].label.as_str())
+            .collect();
+        assert_eq!(shown, ["beta.rs"]);
+    }
+
+    #[test]
+    fn test_palette_open_has_entries() {
+        let p = Palette::open(&WindowKeymap::default());
+        assert!(p.active);
+        assert!(!p.entries.is_empty());
+        assert_eq!(p.filtered.len(), p.entries.len());
+        assert_eq!(p.selected, 0);
+        assert_eq!(p.mode, PaletteMode::Commands);
+    }
+
+    #[test]
+    fn test_history_open_sets_history_mode() {
+        let p = Palette::open_history();
+        assert!(p.active);
+        assert_eq!(p.mode, PaletteMode::History);
+    }
+
+    #[test]
+    fn test_palette_filter_narrows() {
+        let mut p = Palette::open(&WindowKeymap::default());
+        let total = p.entries.len();
+        for c in "split".chars() {
+            p.push_char(c);
+        }
+        assert!(p.filtered.len() < total);
+        assert!(p.filtered.len() >= 2);
+    }
+
+    #[test]
+    fn test_palette_selection_navigates() {
+        let mut p = Palette::open(&WindowKeymap::default());
+        assert_eq!(p.selected, 0);
+        p.move_down();
+        assert_eq!(p.selected, 1);
+        p.move_up();
+        assert_eq!(p.selected, 0);
+    }
+
+    #[test]
+    fn test_palette_close_resets() {
+        let mut p = Palette::open(&WindowKeymap::default());
+        p.push_char('s');
+        p.move_down();
+        p.close();
+        assert!(!p.active);
+        assert!(p.query.is_empty());
+    }
+
+    #[test]
+    fn test_palette_selected_action() {
+        let p = Palette::open(&WindowKeymap::default());
+        let action = p.selected_action().unwrap();
+        assert_eq!(action, "cd_recent");
+    }
+
+    #[test]
+    fn test_position_by_shortcut_finds_matching_pane_entry() {
+        let panes = vec![
+            (
+                crate::model::layout::TabId(1),
+                "1: main".to_string(),
+                "1".to_string(),
+            ),
+            (
+                crate::model::layout::TabId(2),
+                "1: main".to_string(),
+                "2".to_string(),
+            ),
+        ];
+        let p = Palette::open_panes(panes);
+        assert_eq!(p.position_by_shortcut("2"), Some(1));
+        assert_eq!(p.position_by_shortcut("9"), None);
+    }
+
+    #[test]
+    fn test_position_by_shortcut_respects_active_filter() {
+        let panes = vec![
+            (
+                crate::model::layout::TabId(1),
+                "1: main".to_string(),
+                "1".to_string(),
+            ),
+            (
+                crate::model::layout::TabId(2),
+                "2: build".to_string(),
+                "1".to_string(),
+            ),
+        ];
+        let mut p = Palette::open_panes(panes);
+        for c in "build".chars() {
+            p.push_char(c);
+        }
+        // Only the "2: build" entry survives the filter, so its shortcut "1"
+        // resolves to that entry, not the "1: main" one hidden by the query.
+        let pos = p.position_by_shortcut("1").unwrap();
+        assert_eq!(p.entries[p.filtered[pos]].label, "2: build");
+    }
+
+    #[test]
+    fn test_palette_backspace() {
+        let mut p = Palette::open(&WindowKeymap::default());
+        p.push_char('s');
+        p.push_char('p');
+        p.pop_char();
+        assert_eq!(p.query, "s");
+    }
+
+    #[test]
+    fn test_palette_undo_restores_previous_query() {
+        let mut p = Palette::open(&WindowKeymap::default());
+        p.push_char('s');
+        p.push_char('p');
+        p.undo();
+        assert_eq!(p.query, "s");
+        p.undo();
+        assert_eq!(p.query, "");
+        p.undo();
+        assert_eq!(p.query, "", "undo past the start is a no-op");
+    }
+
+    #[test]
+    fn test_palette_redo_reapplies_query() {
+        let mut p = Palette::open(&WindowKeymap::default());
+        p.push_char('s');
+        p.push_char('p');
+        p.undo();
+        p.undo();
+        p.redo();
+        assert_eq!(p.query, "s");
+        p.redo();
+        assert_eq!(p.query, "sp");
+    }
+
+    #[test]
+    fn test_palette_undo_refilters() {
+        let mut p = Palette::open(&WindowKeymap::default());
+        let total = p.entries.len();
+        for c in "split".chars() {
+            p.push_char(c);
+        }
+        assert!(p.filtered.len() < total);
+        for _ in 0.."split".len() {
+            p.undo();
+        }
+        assert_eq!(p.query, "");
+        assert_eq!(
+            p.filtered.len(),
+            total,
+            "empty query shows all entries again"
+        );
+    }
+
+    #[test]
+    fn test_score_and_positions_exact_highlights_all() {
+        let (score, positions) = score_and_positions("Split Vertical", "split vertical").unwrap();
+        assert_eq!(score, 3);
+        assert_eq!(positions.len(), "split vertical".len());
+    }
+
+    #[test]
+    fn test_score_and_positions_substring_returns_contiguous_range() {
+        let (score, positions) = score_and_positions("Split Vertical", "vert").unwrap();
+        assert_eq!(score, 1);
+        assert!(
+            positions.windows(2).all(|w| w[1] == w[0] + 1),
+            "positions must be contiguous"
+        );
+    }
+
+    #[test]
+    fn test_score_and_positions_subsequence_returns_positions() {
+        let (score, positions) = score_and_positions("Split Vertical", "sv").unwrap();
+        assert_eq!(score, 0);
+        assert_eq!(positions.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_sets_match_positions() {
+        let mut p = Palette::open(&WindowKeymap::default());
+        for c in "new tab".chars() {
+            p.push_char(c);
+        }
+        assert!(!p.filtered.is_empty());
+        let top = p.filtered[0];
+        assert!(
+            !p.entries[top].match_positions.is_empty(),
+            "matched entry must have positions"
+        );
+    }
+
+    #[test]
+    fn test_parse_history_lines_deduplicates_most_recent_first() {
+        let input = "ls\npwd\nls\ngit status\n";
+        let result = parse_history_lines(input);
+        assert_eq!(result[0], "git status");
+        assert_eq!(result[1], "ls");
+        assert_eq!(result[2], "pwd");
+        assert_eq!(result.len(), 3, "duplicate 'ls' must be removed");
+    }
+
+    #[test]
+    fn test_parse_history_lines_strips_zsh_timestamps() {
+        let input = ": 1700000000:0;echo hello\n: 1700000001:0;ls\n";
+        let result = parse_history_lines(input);
+        assert_eq!(result[0], "ls");
+        assert_eq!(result[1], "echo hello");
+    }
+
+    #[test]
+    fn test_palette_query_history_navigation_round_trip() {
+        let history = vec!["quit".to_string(), "theme dark".to_string()];
+        let mut p = Palette::open(&WindowKeymap::default()).with_query_history(history);
+
+        for c in "foo".chars() {
+            p.push_char(c);
+        }
+        assert_eq!(p.query, "foo");
+
+        p.history_prev();
+        assert_eq!(p.query, "quit");
+
+        p.history_prev();
+        assert_eq!(p.query, "theme dark");
+
+        p.history_prev();
+        assert_eq!(p.query, "theme dark", "stepping past oldest is a no-op");
+
+        p.history_next();
+        assert_eq!(p.query, "quit");
+
+        p.history_next();
+        assert_eq!(p.query, "foo", "stepping past newest restores live query");
+    }
+
+    #[test]
+    fn test_palette_query_history_empty_is_noop() {
+        let mut p = Palette::open(&WindowKeymap::default());
+        p.push_char('a');
+        p.history_prev();
+        assert_eq!(p.query, "a");
+        p.history_next();
+        assert_eq!(p.query, "a");
+    }
+
+    #[test]
+    fn test_palette_query_history_typing_resets_history_index() {
+        let history = vec!["split".to_string()];
+        let mut p = Palette::open(&WindowKeymap::default()).with_query_history(history);
+        p.history_prev();
+        assert_eq!(p.query, "split");
+        assert_eq!(p.history_index, Some(0));
+
+        p.push_char('s');
+        assert_eq!(p.query, "splits");
+        assert_eq!(p.history_index, None);
+    }
+
+    #[test]
+    fn test_palette_open_swoop_creates_formatted_entries() {
+        let lines = vec![
+            (0, "first line".to_string()),
+            (5, "second line".to_string()),
+        ];
+        let p = Palette::open_swoop(lines);
+        assert_eq!(p.mode, PaletteMode::Swoop);
+        assert_eq!(p.entries.len(), 2);
+        assert_eq!(p.entries[0].action, "0");
+        assert_eq!(p.entries[0].label, "    1  first line");
+        assert_eq!(p.entries[1].action, "5");
+        assert_eq!(p.entries[1].label, "    6  second line");
+    }
+
+    #[test]
+    fn test_palette_open_mux_sessions() {
+        let sessions = vec!["default (80x24)".to_string(), "build (120x40)".to_string()];
+        let p = Palette::open_mux_sessions(sessions);
+        assert_eq!(p.mode, PaletteMode::MuxSessions);
+        assert_eq!(p.entries.len(), 2);
+        assert_eq!(p.entries[0].label, "default (80x24)");
+        assert_eq!(p.entries[1].label, "build (120x40)");
+    }
+
+    #[test]
+    fn test_palette_open_mux_kill() {
+        let sessions = vec!["default (80x24)".to_string(), "build (120x40)".to_string()];
+        let p = Palette::open_mux_kill(sessions);
+        assert_eq!(p.mode, PaletteMode::MuxKill);
+        assert_eq!(p.entries.len(), 2);
+        assert_eq!(p.entries[0].label, "default (80x24)");
+        assert_eq!(p.entries[1].label, "build (120x40)");
+    }
+
+    #[test]
+    fn test_palette_mux_new_keeps_its_prompt_visible_while_typing() {
+        // The MuxNew query is a session spec, not a filter: typing something
+        // that fuzzy-matches nothing must not hide the prompt line, or Enter
+        // would look dead to the user.
+        let mut p = Palette::open_mux_new();
+        assert_eq!(p.mode, PaletteMode::MuxNew);
+        assert_eq!(p.entries.len(), 1);
+        for c in "dev cargo watch -x test".chars() {
+            p.push_char(c);
+        }
+        assert_eq!(p.filtered.len(), 1, "the prompt must never be filtered out");
+        assert_eq!(p.query, "dev cargo watch -x test");
+    }
+
+    #[test]
+    fn test_palette_mux_attach_remote_keeps_its_prompt_visible_while_typing() {
+        let mut p = Palette::open_mux_attach_remote();
+        assert_eq!(p.mode, PaletteMode::MuxAttachRemote);
+        assert_eq!(p.entries.len(), 1);
+        for c in "box.example.com work".chars() {
+            p.push_char(c);
+        }
+        assert_eq!(p.filtered.len(), 1, "the prompt must never be filtered out");
+        assert_eq!(p.query, "box.example.com work");
+    }
+
+    #[test]
+    fn test_palette_open_jump_and_preselect_nearest() {
+        let targets = vec![
+            (10, "   11  first line".to_string()),
+            (25, "   26  second line".to_string()),
+            (50, "   51  third line".to_string()),
+        ];
+        let mut p = Palette::open_jump(targets, Some("Jump: test.rs".to_string()));
+        assert_eq!(p.mode, PaletteMode::Jump);
+        assert_eq!(p.title.as_deref(), Some("Jump: test.rs"));
+        assert_eq!(p.entries.len(), 3);
+        assert_eq!(p.selected, 0);
+
+        // Preselect nearest to line 20 -> picks line 25 (the first >= 20)
+        p.preselect_nearest(20);
+        assert_eq!(p.selected, 1);
+        assert_eq!(p.selected_action(), Some("25"));
+
+        // Preselect nearest to line 100 -> beyond all targets, picks closest (index 2: 50)
+        p.preselect_nearest(100);
+        assert_eq!(p.selected, 2);
+        assert_eq!(p.selected_action(), Some("50"));
+
+        // Fuzzy filter by typing
+        for c in "third".chars() {
+            p.push_char(c);
+        }
+        assert_eq!(p.filtered.len(), 1);
+        assert_eq!(p.selected_action(), Some("50"));
+    }
+
+    #[test]
+    fn test_a_separator_typed_in_the_browser_reroots_at_the_named_directory() {
+        // `src` + `/` names a directory, so the listing moves into it with a
+        // fresh query instead of filtering for a literal `src/`.
+        let tree = TempTree::new("reroot", &["src/", "src/main.rs", "readme.md"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        for ch in "src/".chars() {
+            palette.push_char(ch);
+        }
+        assert_eq!(palette.dir.as_deref(), Some(tree.0.join("src").as_path()));
+        assert_eq!(palette.query, "");
+
+        // `..` + `/` goes back up, resolved rather than kept as `src/..`.
+        for ch in "../".chars() {
+            palette.push_char(ch);
+        }
+        assert_eq!(palette.dir.as_deref(), Some(tree.0.as_path()));
+    }
+
+    #[test]
+    fn test_a_separator_after_a_fuzzy_query_enters_the_selected_directory() {
+        // `sr` names nothing on disk, but it selects `src/`: the separator
+        // completes into it, as the selection says.
+        let tree = TempTree::new("fuzzy", &["src/", "readme.md"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        palette.push_char('s');
+        palette.push_char('r');
+        palette.push_char('/');
+        assert_eq!(palette.dir.as_deref(), Some(tree.0.join("src").as_path()));
+    }
+
+    #[test]
+    fn test_a_separator_naming_no_directory_filters_as_typed() {
+        // `readme.md` is a file and `zz` matches nothing: neither is
+        // somewhere to go, so the separator stays in the query.
+        let tree = TempTree::new("nodir", &["readme.md"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        for ch in "zz/".chars() {
+            palette.push_char(ch);
+        }
+        assert_eq!(palette.dir.as_deref(), Some(tree.0.as_path()));
+        assert_eq!(palette.query, "zz/");
+
+        // An empty query plus a separator is the filesystem root.
+        let mut palette = Palette::open_files(tree.0.clone());
+        palette.push_char('/');
+        assert_eq!(palette.dir.as_deref(), tree.0.ancestors().last());
+    }
+
+    #[test]
+    fn test_select_path_lands_on_the_named_file() {
+        // Find File opens on the file the terminal named, not on `../`.
+        let tree = TempTree::new("select", &["alpha.rs", "beta.rs"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        palette.select_path(&tree.0.join("beta.rs"));
+        assert_eq!(palette.selected_action(), tree.0.join("beta.rs").to_str());
+    }
+}

@@ -1,0 +1,264 @@
+//! Pointer submodule: mouse hit-testing, selection state, clipboard, and
+//! PTY mouse event forwarding.
+
+mod clipboard;
+mod mouse;
+
+use std::time::Instant;
+
+use crate::model::input::VisualKind;
+use crate::model::layout::TabId;
+use winter_render::renderer::PaneRect;
+
+use super::{App, LastVisual, Selection};
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// Transient pointer input: where the pointer is, what it is dragging, and
+/// the timing state that turns clicks into double- and triple-clicks.
+#[derive(Debug)]
+pub(crate) struct PointerState {
+    /// Next instant at which a held-button selection drag near the top/bottom
+    /// viewport edge is allowed to auto-scroll by another line. Throttles
+    /// [`App::auto_scroll_selection`] against the ~16ms `about_to_wait` tick.
+    pub(crate) auto_scroll_next: Instant,
+    pub(crate) cursor_pos: (f32, f32),
+    /// Previous cursor pixel position during a split-divider drag, or `None`
+    /// when no drag is in progress. Cleared on mouse release.
+    pub(crate) divider_drag: Option<(f32, f32)>,
+    /// The URL of the hyperlinked cell currently under the pointer, if any.
+    /// Drives the pointer-cursor icon and Ctrl+click to open.
+    pub(crate) hovered_url: Option<String>,
+    pub(crate) last_click: Option<(Instant, f32, f32)>,
+    pub(crate) mouse_down: bool,
+    /// Where the held left button went down: the pane, and the absolute
+    /// `(row, col)` under the pointer at that instant (see
+    /// [`winter_render::Grid::to_absolute_row`]). `None` when no button is
+    /// held.
+    ///
+    /// A drag's selection is anchored here rather than at the first motion
+    /// event, which is a different cell whenever the pointer has already
+    /// travelled between the press and the first event the compositor
+    /// delivers. A quick flick starts a selection lines away from where the
+    /// click landed.
+    pub(crate) press_cell: Option<(TabId, usize, usize)>,
+    /// Which pane's scrollbar is being dragged, if any. Cleared on mouse release.
+    pub(crate) scrollbar_drag: Option<TabId>,
+}
+
+impl PointerState {
+    /// The absolute `(row, col)` a fresh drag selection should anchor at,
+    /// given the cell `motion` the pointer has just moved onto in `pane`.
+    ///
+    /// The press cell, when the button went down in this same pane: a drag
+    /// starts where you clicked, not where the compositor happened to deliver
+    /// the first motion event, which on a quick flick is already lines away.
+    /// A press in another pane names a row in a different grid, so there the
+    /// motion's own cell is the only meaningful anchor.
+    pub(crate) fn drag_anchor(&self, tab: TabId, motion: (usize, usize)) -> (usize, usize) {
+        match self.press_cell {
+            Some((press_pane, row, col)) if press_pane == tab => (row, col),
+            _ => motion,
+        }
+    }
+}
+
+impl Default for PointerState {
+    fn default() -> Self {
+        Self {
+            auto_scroll_next: Instant::now(),
+            cursor_pos: (0.0, 0.0),
+            divider_drag: None,
+            hovered_url: None,
+            last_click: None,
+            mouse_down: false,
+            press_cell: None,
+            scrollbar_drag: None,
+        }
+    }
+}
+
+/// The active selection and the Visual-mode state behind it. [`Self::span`]
+/// is set either by a mouse drag or by a Visual-mode motion, so it is not
+/// tied to the mode: leaving Visual mode clears it explicitly.
+pub(crate) struct SelectionState {
+    /// The last Visual selection, restored by `gv` (see [`LastVisual`]).
+    pub(crate) last_visual: Option<LastVisual>,
+    pub(crate) span: Option<Selection>,
+    /// Visual-mode anchor: the absolute `(row, col)` the selection was started
+    /// from (see [`winter_render::Grid::to_absolute_row`]), so it keeps naming
+    /// the same text as the view scrolls. Held viewport-relative it slid by the
+    /// scroll distance and the selection detached from where `v` was pressed.
+    /// `Some` only while the focused pane is in Visual mode.
+    pub(crate) visual_anchor: Option<(usize, usize)>,
+    /// The active Visual selection kind (Block, Char, Line).
+    pub(crate) visual_kind: VisualKind,
+}
+
+impl Default for SelectionState {
+    fn default() -> Self {
+        Self {
+            last_visual: None,
+            span: None,
+            visual_anchor: None,
+            visual_kind: VisualKind::Char,
+        }
+    }
+}
+
+// ========================================================================
+// App: pixel hit-testing helpers
+// ========================================================================
+
+impl App {
+    pub(crate) fn pixel_to_cell(&self, x: f32, y: f32, pane_rect: PaneRect) -> (usize, usize) {
+        let (cw, ch) = self
+            .renderer
+            .as_ref()
+            .map(|r| r.cell_size())
+            .unwrap_or((9.0, 20.0));
+        let col = ((x - pane_rect.x) / cw).floor() as usize;
+        let row = ((y - pane_rect.y) / ch).floor() as usize;
+        (row, col)
+    }
+
+    pub(crate) fn pane_at_pixel(&self, x: f32, y: f32) -> Option<(TabId, PaneRect)> {
+        for (id, rect) in self.pane_rects() {
+            let pr = Self::layout_rect_to_pane(rect);
+            if x >= pr.x && x < pr.x + pr.width && y >= pr.y && y < pr.y + pr.height {
+                return Some((id, pr));
+            }
+        }
+        None
+    }
+
+    /// The on-screen rectangle of one shown tab, below its pane's strip.
+    pub(crate) fn pane_rect(&self, tab: TabId) -> Option<PaneRect> {
+        self.pane_rects()
+            .into_iter()
+            .find(|(id, _)| *id == tab)
+            .map(|(_, rect)| Self::layout_rect_to_pane(rect))
+    }
+
+    /// The cell a held drag is pointing at, clamped into the pane the drag
+    /// started in.
+    ///
+    /// Unlike [`Self::pane_at_pixel`], this does not give up once the pointer
+    /// leaves the pane. A drag that runs off the bottom edge selects through
+    /// to the end of the last row, and one that runs off the top selects back
+    /// to the start of the first, which is how a drag past the edge behaves in
+    /// every other terminal. Resolving only the pane under the pointer froze
+    /// the selection at whatever column the pointer happened to cross the edge
+    /// at, so the last (or first) line came out half-selected and dragging
+    /// further did nothing at all.
+    pub(crate) fn drag_cell_at(&self, x: f32, y: f32) -> Option<(TabId, usize, usize)> {
+        if let Some((pane, rect)) = self.pane_at_pixel(x, y) {
+            let (row, col) = self.pixel_to_cell(x, y, rect);
+            return Some((pane, row, col));
+        }
+        // Outside every pane: the drag still belongs to the pane it started
+        // in, named by the press, or by the span already being extended when
+        // the button has been held since before this window had focus.
+        let pane = self
+            .pointer
+            .press_cell
+            .map(|(id, _, _)| id)
+            .or_else(|| self.selection.span.as_ref().map(|sel| sel.tab))?;
+        let rect = self.pane_rect(pane)?;
+        let grid = self.terminals.get(&pane)?.grid();
+        let last_row = grid.rows().saturating_sub(1);
+        let last_col = grid.cols().saturating_sub(1);
+        if y < rect.y {
+            return Some((pane, 0, 0));
+        }
+        if y >= rect.y + rect.height {
+            return Some((pane, last_row, last_col));
+        }
+        // Beside the pane rather than above or below it: the row the pointer
+        // is level with still counts, with the column pinned to the edge.
+        let clamped_x = x.clamp(rect.x, rect.x + rect.width);
+        let (row, col) = self.pixel_to_cell(clamped_x, y, rect);
+        Some((pane, row.min(last_row), col.min(last_col)))
+    }
+
+    /// The hyperlink URL of the cell currently under the pointer, if any.
+    pub(crate) fn hovered_link_at(&self, x: f32, y: f32) -> Option<String> {
+        let (tab_id, pane_rect) = self.pane_at_pixel(x, y)?;
+        let terminal = self.terminals.get(&tab_id)?;
+        let (row, col) = self.pixel_to_cell(x, y, pane_rect);
+        terminal.grid().cell_link(row, col).map(str::to_string)
+    }
+}
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_drag_anchor_starts_at_the_press_not_at_the_first_motion() {
+        // Regression: the anchor was whatever cell the first motion event
+        // landed on. Pointer motion is compressed, so a quick drag's first
+        // event can arrive many rows below the click, and the selection then
+        // started well past the line the user actually clicked on.
+        let pointer = PointerState {
+            press_cell: Some((TabId(1), 40, 3)),
+            ..Default::default()
+        };
+        assert_eq!(pointer.drag_anchor(TabId(1), (57, 12)), (40, 3));
+    }
+
+    #[test]
+    fn test_drag_cell_at_runs_a_drag_off_the_edge_to_the_end_of_the_line() {
+        // Regression: resolving the drag target with `pane_at_pixel` alone
+        // returned `None` the moment the pointer left the pane, so a drag
+        // carried past the bottom edge stopped at whatever column it happened
+        // to cross at and left the last line half-selected. Past the bottom
+        // the drag should reach the end of the last row, and past the top the
+        // start of the first.
+        let mut app = App::new();
+        // The default tab lays out a single pane, `TabId(0)`.
+        let terminal = TabId(0);
+        app.terminals.insert(
+            terminal,
+            crate::terminal::session::Terminal::with_command(
+                40,
+                10,
+                portable_pty::CommandBuilder::new("true"),
+                winter_render::MAX_SCROLLBACK,
+            )
+            .expect("test pane spawn"),
+        );
+        app.pointer.press_cell = Some((terminal, 0, 5));
+        let rect = app.pane_rect(terminal).expect("the pane is laid out");
+        let (cols, rows) = {
+            let grid = app.terminals[&terminal].grid();
+            (grid.cols(), grid.rows())
+        };
+
+        let below = app.drag_cell_at(rect.x + 10.0, rect.y + rect.height + 200.0);
+        assert_eq!(below, Some((terminal, rows - 1, cols - 1)));
+
+        let above = app.drag_cell_at(rect.x + 10.0, rect.y - 200.0);
+        assert_eq!(above, Some((terminal, 0, 0)));
+    }
+
+    #[test]
+    fn test_drag_anchor_falls_back_when_the_press_was_in_another_pane() {
+        // A press in a different pane names a row in a different grid, so it
+        // cannot anchor this pane's selection; nor can a drag with no press
+        // behind it at all (a button held since before the window had focus).
+        let mut pointer = PointerState {
+            press_cell: Some((TabId(2), 40, 3)),
+            ..Default::default()
+        };
+        assert_eq!(pointer.drag_anchor(TabId(1), (57, 12)), (57, 12));
+        pointer.press_cell = None;
+        assert_eq!(pointer.drag_anchor(TabId(1), (57, 12)), (57, 12));
+    }
+}

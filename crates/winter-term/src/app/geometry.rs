@@ -1,0 +1,217 @@
+//! Window geometry: chrome insets, viewports, and pane hit-testing.
+
+use std::time::Instant;
+
+use winit::window::ResizeDirection;
+
+use crate::config::TitleBarStyle;
+use crate::model::layout::Rect;
+use winter_render::renderer::PaneRect;
+use winter_render::MenuStyle;
+
+use super::App;
+use super::{
+    edge_resize_direction_at,
+    AUTO_SCROLL_EDGE_MARGIN, AUTO_SCROLL_INTERVAL, AUTO_SCROLL_MAX_LINES_PER_TICK,
+    WINDOW_RESIZE_BORDER_PX,
+};
+
+// ========================================================================
+// App: geometry
+// ========================================================================
+
+impl App {
+    /// Number of top cell rows reserved for the tabbar/menubar.
+    pub(crate) fn top_chrome_rows(&self) -> usize {
+        winter_render::tabbar_rows(self.config.menu_style)
+    }
+    /// The outer-edge/corner this point should resize when pressed, or `None`
+    /// away from the border. Only the Modern title bar needs this: the System
+    /// style keeps the OS decorations, which already carry a resize border.
+    pub(crate) fn edge_resize_direction(&self, x: f32, y: f32) -> Option<ResizeDirection> {
+        if self.config.title_bar_style != TitleBarStyle::Modern {
+            return None;
+        }
+        let size = self.window.as_ref()?.inner_size();
+        edge_resize_direction_at(
+            x,
+            y,
+            size.width as f32,
+            size.height as f32,
+            WINDOW_RESIZE_BORDER_PX,
+        )
+    }
+    /// Whether the status bar is actually shown this frame: either configured
+    /// on, or forced on for the duration of a live `/` search, which is the
+    /// only place search feedback (query text, match position) is displayed.
+    /// Shared by `viewport_rect`/`resize_all_panes` (pane geometry and PTY
+    /// size) and `render_frame` (what's drawn), so they always agree on how
+    /// much space is reserved at the bottom of the window.
+    pub(crate) fn status_bar_visible(&self) -> bool {
+        self.config.status_bar.enabled || self.search.query.is_some()
+    }
+    pub(crate) fn viewport_rect(&self) -> PaneRect {
+        let (w, h) = match (&self.window, &self.renderer) {
+            (Some(win), _) => {
+                let size = win.inner_size();
+                (size.width as f32, size.height as f32)
+            }
+            (None, Some(r)) => {
+                let (cols, rows) = r.grid_size();
+                let (cw, ch) = r.cell_size();
+                (cols as f32 * cw, rows as f32 * ch)
+            }
+            (None, None) => (800.0, 600.0),
+        };
+        // Reserve the status bar row at the bottom (when enabled) and the
+        // tabbar/menubar rows at the top, so pane hit-testing and focus geometry
+        // match the area actually drawn to panes; the grid is centered in
+        // whatever space remains below the tabbar (must match `render_frame`).
+        let ch = self
+            .renderer
+            .as_ref()
+            .map(|r| r.cell_size().1)
+            .unwrap_or(0.0);
+        let top_rows = self.top_chrome_rows();
+        let status_enabled = self.status_bar_visible();
+
+        let top_h_on_screen = if self.config.menu_style == MenuStyle::Modern {
+            winter_render::modern_titlebar_height_px(ch)
+        } else {
+            top_rows as f32 * ch
+        };
+        let status_h = if status_enabled {
+            winter_render::STATUS_BAR_HEIGHT * ch
+        } else {
+            0.0
+        };
+
+        // Every pixel between the title bar and the status bar belongs to the
+        // pane band, so split dividers and pane backgrounds reach both. Panes
+        // floor their own row counts, so a sub-row remainder is just padding at
+        // the foot of the lowest panes.
+        PaneRect {
+            x: 0.0,
+            y: top_h_on_screen,
+            width: w,
+            height: (h - top_h_on_screen - status_h).max(1.0),
+        }
+    }
+    /// The pane area as a layout `Rect` (same coordinates as [`PaneRect`]).
+    pub(crate) fn content_viewport(&self) -> Rect {
+        let vp = self.viewport_rect();
+        Rect::new(vp.x, vp.y, vp.width, vp.height)
+    }
+    /// While a selection drag is held near the top/bottom edge of the content
+    /// viewport, scroll the selection's pane one line into (or back out of)
+    /// history and extend the drag's live end to the new edge row, so text
+    /// outside the current page can be reached, and pulled into the
+    /// selection, without the pointer leaving the window. Because `Selection`
+    /// rows are absolute ([`winter_render::Grid::to_absolute_row`]),
+    /// re-deriving the edge row from each post-scroll view grows `end_row`
+    /// further each time rather than snapping back to a fixed viewport
+    /// position. Scrolling itself is throttled to one line per
+    /// [`AUTO_SCROLL_INTERVAL`] via `pointer.auto_scroll_next`; a no-op when the
+    /// button isn't held, there's no active selection, or the pointer isn't
+    /// within [`AUTO_SCROLL_EDGE_MARGIN`] of an edge.
+    ///
+    /// Extending the selection is a *consequence* of scrolling, so it happens
+    /// only on a tick that actually moved the view. A tick that scrolled
+    /// nothing leaves the span alone and lets the pointer's own motion own the
+    /// live end: otherwise, with no history left to consume, this would pin
+    /// `end` to the edge cell ~60 times a second and the drag could never grow
+    /// past the cell it started on. That is the common case on the alternate
+    /// screen, which has no history at all, so a drag over the top row of any
+    /// full-screen app collapsed to a single cell.
+    pub(crate) fn auto_scroll_selection(&mut self) {
+        if !self.pointer.mouse_down {
+            return;
+        }
+        let Some(tab_id) = self.selection.span.as_ref().map(|sel| sel.tab) else {
+            return;
+        };
+        let vp = self.viewport_rect();
+        let (_, y) = self.pointer.cursor_pos;
+        let scroll_up = if y < vp.y + AUTO_SCROLL_EDGE_MARGIN {
+            true
+        } else if y > vp.y + vp.height - AUTO_SCROLL_EDGE_MARGIN {
+            false
+        } else {
+            return;
+        };
+        let Some(terminal) = self.terminals.get_mut(&tab_id) else {
+            return;
+        };
+
+        // Speed scales with how deep into the edge margin the pointer sits:
+        // just inside crawls, at the margin's full depth (the viewport's own
+        // edge) hits AUTO_SCROLL_MAX_LINES_PER_TICK. A pointer past the margin
+        // (above the viewport entirely) clamps at that same cap.
+        let depth = if scroll_up {
+            vp.y + AUTO_SCROLL_EDGE_MARGIN - y
+        } else {
+            y - (vp.y + vp.height - AUTO_SCROLL_EDGE_MARGIN)
+        };
+        let extra = (depth / AUTO_SCROLL_EDGE_MARGIN * (AUTO_SCROLL_MAX_LINES_PER_TICK - 1) as f32)
+            .floor() as usize;
+        let lines = (1 + extra).min(AUTO_SCROLL_MAX_LINES_PER_TICK);
+
+        let now = Instant::now();
+        if now < self.pointer.auto_scroll_next {
+            return;
+        }
+        self.pointer.auto_scroll_next = now + AUTO_SCROLL_INTERVAL;
+        let grid = terminal.grid_mut();
+        let before = grid.scroll_offset();
+        if scroll_up {
+            grid.scroll_up_history(lines);
+        } else {
+            grid.scroll_down_history(lines);
+        }
+        if grid.scroll_offset() == before {
+            return;
+        }
+
+        let grid = terminal.grid();
+        let (edge_row, edge_col) = if scroll_up {
+            (0, 0)
+        } else {
+            (grid.rows().saturating_sub(1), grid.cols().saturating_sub(1))
+        };
+        let abs_edge_row = grid.to_absolute_row(edge_row);
+        if let Some(sel) = &mut self.selection.span {
+            sel.end_row = abs_edge_row;
+            sel.end_col = edge_col;
+        }
+        // The view scrolls under a held pointer during edge auto-scroll, so the
+        // traversal cursor must move to the drag's live end too: otherwise it
+        // would freeze mid-screen while the selection grows past it.
+        self.track_nav_cursor_to_mouse(tab_id, edge_row, edge_col);
+        self.dirty = true;
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+    pub(crate) fn layout_rect_to_pane(rect: Rect) -> PaneRect {
+        // Snap the pane to the pixel grid by rounding its top-left AND
+        // bottom-right corners, then deriving width/height from the rounded
+        // corners. Rounding width/height independently (the obvious
+        // alternative) lets two siblings of a split disagree about their shared
+        // edge by 1 px, because `round(x) + round(w) != round(x + w)`, which
+        // both drops the divider between them (the shared edge no longer
+        // coincides) and opens a 1 px gap at divider crossings. Corner-rounding
+        // keeps the shared edge exact: a split produces
+        // `first.x + first.width == second.x` in the unrounded tree, so rounding
+        // that same value for both panes gives identical pixel edges.
+        let x = rect.x.round();
+        let y = rect.y.round();
+        let right = (rect.x + rect.width).round();
+        let bottom = (rect.y + rect.height).round();
+        PaneRect {
+            x,
+            y,
+            width: right - x,
+            height: bottom - y,
+        }
+    }
+}

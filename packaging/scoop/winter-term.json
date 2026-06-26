@@ -1,0 +1,30 @@
+{
+    "version": "0.1.0",
+    "description": "Web-native terminal emulator with GPU rendering and rich MIME-typed block output",
+    "homepage": "https://github.com/taquangtrung/winter-term",
+    "license": "MIT",
+    "architecture": {
+        "64bit": {
+            "url": "https://github.com/taquangtrung/winter-term/releases/download/v0.1.0/winter-terminal-0.1.0-setup.exe#/setup.exe",
+            "hash": "REPLACE_WITH_SHA256_OF_THE_RELEASE_ASSET"
+        }
+    },
+    "innosetup": true,
+    "shortcuts": [
+        [
+            "winter.exe",
+            "Winter Terminal"
+        ]
+    ],
+    "bin": "winter.exe",
+    "checkver": {
+        "github": "https://github.com/taquangtrung/winter-term"
+    },
+    "autoupdate": {
+        "architecture": {
+            "64bit": {
+                "url": "https://github.com/taquangtrung/winter-term/releases/download/v$version/winter-terminal-$version-setup.exe#/setup.exe"
+            }
+        }
+    }
+}

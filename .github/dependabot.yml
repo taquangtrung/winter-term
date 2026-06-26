@@ -1,0 +1,22 @@
+# Dependency updates. Cargo is weekly because that is where the untrusted-input
+# parsers live; actions are monthly because they move slowly and a stale action
+# is a smaller problem than a stale parser.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: "/"
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    groups:
+      # One pull request for the routine bumps, so that reviewing them is a
+      # single decision. Major versions stay separate: each needs its own look.
+      compatible:
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 3
