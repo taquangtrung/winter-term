@@ -1,0 +1,1425 @@
+//! Normal mode: resolving motions, counts, and operator sequences.
+
+use super::{Action, Key, KeyCode, Mods};
+use super::{
+    BlockNav, CursorMove, FindChar, GotoMark, InsertAt, Keymap, PendingPrefix, TextObject,
+    TextObjectSpec, VisualKind,
+};
+use crate::model::vim::grammar::{
+    is_register_name, is_settable_mark, mark_name, push_count_digit, table_entry, GOTO_MOTIONS,
+    LINE_PLACEMENTS,
+};
+
+// ========================================================================
+// Normal mode: motion and operator resolution
+// ========================================================================
+
+/// Accumulate a count digit into `pending` (`5` before `j`). A consumed
+/// digit returns `Some(Action::Ignore)`: the count rides in the prefix until
+/// the motion that spends it resolves. What counts as a digit, and how large
+/// a count may grow, is the shared grammar's ([`push_count_digit`]). Digits
+/// typed while any other sequence is open (a `/` query, a quick-select label,
+/// an operator) pass through untouched.
+pub(super) fn accumulate_count(key: &Key, pending: &mut PendingPrefix) -> Option<Action> {
+    let count = match *pending {
+        PendingPrefix::None => None,
+        PendingPrefix::Count(n) => Some(n),
+        _ => return None,
+    };
+    *pending = PendingPrefix::Count(push_count_digit(key, count)?);
+    Some(Action::Ignore)
+}
+/// The motions a count repeats (`5j`, `3w`). Whole-viewport jumps (`gg`, `G`,
+/// `H`/`M`/`L`), line positioning (`0`/`$`/`^`), and scroll re-centering
+/// (`z`-family) have no meaningful repetition, so they drop the count instead.
+pub(super) fn count_repeats(mv: CursorMove) -> bool {
+    matches!(
+        mv,
+        CursorMove::Left
+            | CursorMove::Right
+            | CursorMove::Up
+            | CursorMove::Down
+            | CursorMove::WordForward
+            | CursorMove::WordBack
+            | CursorMove::WordEnd
+            | CursorMove::WordForwardBig
+            | CursorMove::WordBackBig
+            | CursorMove::WordEndBig
+            | CursorMove::WordEndBack
+            | CursorMove::WordEndBackBig
+            | CursorMove::ParagraphBack
+            | CursorMove::ParagraphForward
+    )
+}
+/// Build the char-search action for the key that follows `f`/`F`/`t`/`T`. A
+/// printable character is the search target; anything else cancels the search.
+pub(super) fn find_char_action(key: &Key, forward: bool, till: bool) -> Action {
+    match key.glyph() {
+        KeyCode::Char(ch) => Action::FindChar(FindChar { ch, forward, till }),
+        _ => Action::Ignore,
+    }
+}
+/// Resolve `key` as a Vim motion, shared by Normal and Visual mode so the two can
+/// never drift apart: a motion added here works in both, extending the selection
+/// in Visual (see `App::handle_action`'s `MoveCursor` arm).
+///
+/// `prev` is the prefix in effect for this key (the caller has already taken and
+/// cleared it); `pending` lets a motion open its own prefix (`g`, `z`,
+/// `f`/`F`/`t`/`T`). `None` means "not a motion": the caller's own mode-specific
+/// keys (`i`, `y`, `v`, `za`, `gt`, ...) get their turn.
+pub(super) fn motion_action(
+    key: &Key,
+    prev: PendingPrefix,
+    pending: &mut PendingPrefix,
+) -> Option<Action> {
+    match prev {
+        PendingPrefix::G => return table_entry(GOTO_MOTIONS, key).map(Action::MoveCursor),
+        PendingPrefix::Z => return table_entry(LINE_PLACEMENTS, key).map(Action::MoveCursor),
+        PendingPrefix::FindForward => return Some(find_char_action(key, true, false)),
+        PendingPrefix::FindBackward => return Some(find_char_action(key, false, false)),
+        PendingPrefix::TillForward => return Some(find_char_action(key, true, true)),
+        PendingPrefix::TillBackward => return Some(find_char_action(key, false, true)),
+        // The `f`/`t` overlay is showing: a label key jumps, anything else dismisses
+        // it (so `Esc` and a mistyped key both get out of the way).
+        PendingPrefix::FindLabel => {
+            return Some(match key.glyph() {
+                KeyCode::Char(c) if c.is_ascii_lowercase() => Action::FindJump(c),
+                _ => Action::FindCancel,
+            });
+        }
+        PendingPrefix::GotoMark { exact } => {
+            return Some(match key.glyph() {
+                KeyCode::Char(c) => match mark_name(c) {
+                    Some(mark) => Action::GotoMark(GotoMark::new(mark, exact)),
+                    None => Action::Ignore,
+                },
+                _ => Action::Ignore,
+            });
+        }
+        PendingPrefix::None | PendingPrefix::Count(_) => {}
+        // Any other prefix belongs to the caller (`]b`, `dw`, quick-select, ...).
+        _ => return None,
+    }
+
+    let action = match crate::model::vim::nav::bare_motion(key) {
+        // The bare motions resolve through the shared layer, so a motion key
+        // means the same thing here as it does over a dir listing or a git
+        // view; this resolver keeps only what is not a motion — the repeat
+        // keys and the prefix openers it owns.
+        Some(mv) => Action::MoveCursor(mv),
+        None => match key.glyph() {
+            KeyCode::Char(';') => Action::FindRepeat { reverse: false },
+            KeyCode::Char(',') => Action::FindRepeat { reverse: true },
+            KeyCode::Char('`') => {
+                *pending = PendingPrefix::GotoMark { exact: true };
+                Action::Ignore
+            }
+            KeyCode::Char('\'') => {
+                *pending = PendingPrefix::GotoMark { exact: false };
+                Action::Ignore
+            }
+            KeyCode::Char('f') => {
+                *pending = PendingPrefix::FindForward;
+                Action::Ignore
+            }
+            KeyCode::Char('F') => {
+                *pending = PendingPrefix::FindBackward;
+                Action::Ignore
+            }
+            KeyCode::Char('t') => {
+                *pending = PendingPrefix::TillForward;
+                Action::Ignore
+            }
+            KeyCode::Char('T') => {
+                *pending = PendingPrefix::TillBackward;
+                Action::Ignore
+            }
+            // `g` and `z` open sequences this function owns the motion half of; the
+            // caller's own follow keys (`gt`, `za`, ...) still resolve from the prefix.
+            KeyCode::Char('g') => {
+                *pending = PendingPrefix::G;
+                Action::Ignore
+            }
+            KeyCode::Char('z') => {
+                *pending = PendingPrefix::Z;
+                Action::Ignore
+            }
+            _ => return None,
+        },
+    };
+    // A pending count repeats motions where repetition is meaningful; anything
+    // else (`gg`, `0`, a follow-key opener like `f`) drops it.
+    if let PendingPrefix::Count(count) = prev {
+        if let Action::MoveCursor(mv) = action {
+            if count_repeats(mv) {
+                return Some(Action::MoveCursorN { count, mv });
+            }
+        }
+    }
+    Some(action)
+}
+/// Chords that resolve before any pending sequence gets a look: window
+/// commands, prompt undo/redo, and the bare `Ctrl`/`Alt` chords. Window
+/// sequences (`M-g M-h`) never get here: the app resolves them first.
+///
+/// Each of these clears `pending`, because none of them can ever be the second
+/// key of a sequence. `None` means the key is not a chord and the caller should
+/// carry on resolving it as part of a sequence.
+fn resolve_chord(key: &Key, pending: &mut PendingPrefix, window: &Keymap) -> Option<Action> {
+    // A direct window chord (C-h/j/k/l focus motions by default). Normal
+    // mode is Winter's own navigation mode, so scroll bindings always apply
+    // here (pass `false` for is_alt_screen).
+    if let Some(action) = window.direct_action(key, false) {
+        *pending = PendingPrefix::None;
+        return Some(action);
+    }
+
+    if let Some(a) = window.specific_index_action(key) {
+        *pending = PendingPrefix::None;
+        return Some(a);
+    }
+
+    // Prompt undo/redo (default `C-/` / `C-\`) also work in Normal mode.
+    // Line-edit bindings are Insert-only, so they fall through here.
+    if let Some(binding) = window.edit_binding(key) {
+        if binding.is_history() {
+            *pending = PendingPrefix::None;
+            return Some(binding.to_action());
+        }
+    }
+
+    if key.sup {
+        // Super chords are the window's alone, and nothing here binds one.
+        *pending = PendingPrefix::None;
+        return Some(Action::Ignore);
+    }
+
+    if key.ctrl {
+        // Non-window control chords resolve immediately and clear any prefix.
+        *pending = PendingPrefix::None;
+        return Some(match (key.mods(), key.glyph()) {
+            (Mods::CTRL, KeyCode::Char('d')) => Action::MoveCursor(CursorMove::HalfPageDown),
+            (Mods::CTRL, KeyCode::Char('u')) => Action::MoveCursor(CursorMove::HalfPageUp),
+            (Mods::CTRL, KeyCode::Char('v')) => Action::EnterVisual(VisualKind::Block),
+            // `C-o`/`C-i` walk the jumplist (vim's own binding).
+            (Mods::CTRL, KeyCode::Char('o')) => Action::JumpOlder,
+            (Mods::CTRL, KeyCode::Char('i')) => Action::JumpNewer,
+            (Mods::CTRL, KeyCode::Home) => Action::MoveCursor(CursorMove::Top),
+            (Mods::CTRL, KeyCode::End) => Action::MoveCursor(CursorMove::Bottom),
+            _ => Action::Ignore,
+        });
+    }
+
+    if key.alt {
+        // Alt chords resolve immediately too, clearing any prefix.
+        *pending = PendingPrefix::None;
+        return Some(match (key.mods(), key.glyph()) {
+            (Mods::ALT, KeyCode::Escape) => Action::EnterInsert(InsertAt::Cursor),
+            // `M-i`: vim's `vip` in a single chord.
+            (Mods::ALT, KeyCode::Char('i')) => Action::SelectParagraph,
+            _ => Action::Ignore,
+        });
+    }
+    None
+}
+
+/// A key typed into the `/` search line: `Enter` searches, `Esc` and `C-g`
+/// put it away, and every other key edits the query, the line staying open.
+fn resolve_search_input(key: &Key, pending: &mut PendingPrefix) -> Action {
+    let cancels = key.glyph() == KeyCode::Escape
+        || (key.mods() == Mods::CTRL && key.glyph() == KeyCode::Char('g'));
+    if cancels {
+        *pending = PendingPrefix::None;
+        return Action::SearchCancel;
+    }
+    if key.glyph() == KeyCode::Enter {
+        *pending = PendingPrefix::None;
+        return Action::SearchExecute;
+    }
+    Action::SearchEdit(*key)
+}
+
+/// Resolve a key typed with no sequence open: the operators, motions, and
+/// mode switches that start from a bare Normal-mode keystroke. Keys that open
+/// a multi-key sequence set `pending` and yield [`Action::Ignore`].
+fn resolve_bare_key(key: &Key, pending: &mut PendingPrefix) -> Action {
+    match key.glyph() {
+        KeyCode::Char('i') => Action::EnterInsert(InsertAt::Cursor),
+        KeyCode::Char('a') => Action::EnterInsert(InsertAt::After),
+        KeyCode::Char('o') => Action::EnterInsert(InsertAt::LineEnd),
+        // Tab is `C-i`'s unmodified twin on most terminals (same byte
+        // without the kitty protocol), so it walks the jumplist forward.
+        KeyCode::Tab => Action::JumpNewer,
+        // `Esc` does not leave Normal (see `ModeEvent::Escape`); it clears the
+        // transient search state, vim's `:nohlsearch`.
+        KeyCode::Escape => Action::SearchCancel,
+        KeyCode::Char('v') => Action::EnterVisual(VisualKind::Char),
+        KeyCode::Char('V') => Action::EnterVisual(VisualKind::Line),
+        KeyCode::Char('p') => Action::Paste,
+        KeyCode::Char('x') => Action::DeleteCharForward,
+        KeyCode::Char('.') => Action::RepeatLastChange,
+        KeyCode::Char('D') => Action::DeleteToLineEnd,
+        KeyCode::Char('d') => {
+            *pending = PendingPrefix::Delete;
+            Action::Ignore
+        }
+        KeyCode::Char('C') => Action::ChangeToLineEnd,
+        KeyCode::Char('c') => {
+            *pending = PendingPrefix::Change;
+            Action::Ignore
+        }
+        KeyCode::Char('s') => Action::SubstituteChar,
+        KeyCode::Char('S') => Action::ChangeLine,
+        KeyCode::Char('r') => {
+            *pending = PendingPrefix::ReplaceChar;
+            Action::Ignore
+        }
+        KeyCode::Char('~') => Action::ToggleCaseChar,
+        KeyCode::Char('m') => {
+            *pending = PendingPrefix::SetMark;
+            Action::Ignore
+        }
+        KeyCode::Char('"') => {
+            *pending = PendingPrefix::Register;
+            Action::Ignore
+        }
+        KeyCode::Char('/') => {
+            *pending = PendingPrefix::SearchInput;
+            Action::SearchStart
+        }
+        KeyCode::Char('?') => {
+            *pending = PendingPrefix::SearchInput;
+            Action::SearchStartBackward
+        }
+        KeyCode::Char('*') => Action::SearchWord { forward: true },
+        KeyCode::Char('#') => Action::SearchWord { forward: false },
+        KeyCode::Char('n') => Action::SearchNext,
+        KeyCode::Char('N') => Action::SearchPrevious,
+        KeyCode::Char('y') => {
+            *pending = PendingPrefix::Yank { register: None };
+            Action::Ignore
+        }
+        KeyCode::Char('Y') => Action::YankMotion {
+            motion: CursorMove::LineEnd,
+            register: None,
+        },
+        KeyCode::Char(']') => {
+            *pending = PendingPrefix::BracketClose;
+            Action::Ignore
+        }
+        KeyCode::Char('[') => {
+            *pending = PendingPrefix::BracketOpen;
+            Action::Ignore
+        }
+        KeyCode::Char('q') => {
+            *pending = PendingPrefix::QuickSelect;
+            Action::QuickSelect
+        }
+        _ => Action::Ignore,
+    }
+}
+
+pub(super) fn resolve_normal(key: &Key, pending: &mut PendingPrefix, window: &Keymap) -> Action {
+    // The search line being typed is a field, and takes every key a field
+    // does, chords included, ahead of what they mean in Normal mode.
+    if *pending == PendingPrefix::SearchInput {
+        return resolve_search_input(key, pending);
+    }
+    if let Some(action) = resolve_chord(key, pending, window) {
+        return action;
+    }
+
+    // Count digits accumulate while no other sequence is open (`5j`, `3w`).
+    if let Some(action) = accumulate_count(key, pending) {
+        return action;
+    }
+
+    let prev = *pending;
+    *pending = PendingPrefix::None;
+
+    // Motions come from the table Normal shares with Visual, so a motion added
+    // once works in both modes. Mode-specific keys and the sequences Normal owns
+    // (`gt`, `za`, `dw`, `]b`, the search input, ...) fall through to the match
+    // below, which `motion_action` declines by returning `None`.
+    if let Some(action) = motion_action(key, prev, pending) {
+        return action;
+    }
+
+    match prev {
+        PendingPrefix::BracketClose => match key.glyph() {
+            KeyCode::Char('b') => Action::FocusBlock(BlockNav::Next),
+            _ => Action::Ignore,
+        },
+        PendingPrefix::BracketOpen => match key.glyph() {
+            KeyCode::Char('b') => Action::FocusBlock(BlockNav::Previous),
+            _ => Action::Ignore,
+        },
+        // The leader sequence is resolved at the top of this function.
+        PendingPrefix::Change => match key.glyph() {
+            KeyCode::Char('c') => Action::ChangeLine,
+            KeyCode::Char('s') => {
+                *pending = PendingPrefix::ChangeSurroundTarget;
+                Action::Ignore
+            }
+            KeyCode::Char('g') => {
+                *pending = PendingPrefix::ChangeG;
+                Action::Ignore
+            }
+            KeyCode::Char('w') | KeyCode::Char('e') => Action::ChangeWordForward,
+            KeyCode::Char('b') => Action::ChangeWordBack,
+            KeyCode::Char('$') => Action::ChangeToLineEnd,
+            KeyCode::Char('0') => Action::ChangeToLineStart,
+            KeyCode::Char('i') => {
+                *pending = PendingPrefix::ChangeObject { around: false };
+                Action::Ignore
+            }
+            KeyCode::Char('a') => {
+                *pending = PendingPrefix::ChangeObject { around: true };
+                Action::Ignore
+            }
+            _ => Action::Ignore,
+        },
+        PendingPrefix::ChangeG => match key.glyph() {
+            KeyCode::Char('n') => Action::ChangeSearchMatch { forward: true },
+            KeyCode::Char('N') => Action::ChangeSearchMatch { forward: false },
+            _ => Action::Ignore,
+        },
+        PendingPrefix::ChangeObject { around } => match TextObject::of_key(key.glyph()) {
+            Some(object) => Action::ChangeTextObject(TextObjectSpec::new(around, object)),
+            None => Action::Ignore,
+        },
+        PendingPrefix::Yank { register } => match key.glyph() {
+            KeyCode::Char('y') => Action::YankLine { register },
+            KeyCode::Char('s') => {
+                *pending = PendingPrefix::YieldSurround { around: false };
+                Action::Ignore
+            }
+            KeyCode::Char('w') | KeyCode::Char('e') => Action::YankMotion {
+                motion: CursorMove::WordEnd,
+                register,
+            },
+            KeyCode::Char('W') | KeyCode::Char('E') => Action::YankMotion {
+                motion: CursorMove::WordEndBig,
+                register,
+            },
+            KeyCode::Char('b') => Action::YankMotion {
+                motion: CursorMove::WordBack,
+                register,
+            },
+            KeyCode::Char('B') => Action::YankMotion {
+                motion: CursorMove::WordBackBig,
+                register,
+            },
+            KeyCode::Char('$') => Action::YankMotion {
+                motion: CursorMove::LineEnd,
+                register,
+            },
+            KeyCode::Char('0') => Action::YankMotion {
+                motion: CursorMove::LineStart,
+                register,
+            },
+            KeyCode::Char('i') => {
+                *pending = PendingPrefix::YankObject {
+                    around: false,
+                    register,
+                };
+                Action::Ignore
+            }
+            KeyCode::Char('a') => {
+                *pending = PendingPrefix::YankObject {
+                    around: true,
+                    register,
+                };
+                Action::Ignore
+            }
+            _ => Action::Ignore,
+        },
+        PendingPrefix::YankObject { around, register } => match TextObject::of_key(key.glyph()) {
+            Some(object) => Action::YankTextObject {
+                spec: TextObjectSpec::new(around, object),
+                register,
+            },
+            None => Action::Ignore,
+        },
+        PendingPrefix::Delete => match key.glyph() {
+            KeyCode::Char('d') => Action::DeleteLine,
+            KeyCode::Char('s') => {
+                *pending = PendingPrefix::DeleteSurround;
+                Action::Ignore
+            }
+            KeyCode::Char('g') => {
+                *pending = PendingPrefix::DeleteG;
+                Action::Ignore
+            }
+            KeyCode::Char('w') => Action::DeleteWordForward,
+            KeyCode::Char('b') => Action::DeleteWordBack,
+            KeyCode::Char('$') => Action::DeleteToLineEnd,
+            KeyCode::Char('0') => Action::DeleteToLineStart,
+            KeyCode::Char('i') => {
+                *pending = PendingPrefix::DeleteObject { around: false };
+                Action::Ignore
+            }
+            KeyCode::Char('a') => {
+                *pending = PendingPrefix::DeleteObject { around: true };
+                Action::Ignore
+            }
+            _ => Action::Ignore,
+        },
+        PendingPrefix::DeleteG => match key.glyph() {
+            KeyCode::Char('n') => Action::DeleteSearchMatch { forward: true },
+            KeyCode::Char('N') => Action::DeleteSearchMatch { forward: false },
+            _ => Action::Ignore,
+        },
+        PendingPrefix::DeleteObject { around } => match TextObject::of_key(key.glyph()) {
+            Some(object) => Action::DeleteTextObject(TextObjectSpec::new(around, object)),
+            None => Action::Ignore,
+        },
+        // GotoMark and char-search prefixes (including the jump overlay's label key)
+        // are resolved by `motion_action` above, for both Normal and Visual.
+        PendingPrefix::FindForward
+        | PendingPrefix::FindBackward
+        | PendingPrefix::TillForward
+        | PendingPrefix::TillBackward
+        | PendingPrefix::FindLabel
+        | PendingPrefix::GotoMark { .. }
+        | PendingPrefix::TextObject { .. } => Action::Ignore,
+        // `gg`, `g_`, `ge`/`gE` are motions (see `motion_action`); these are the
+        // tab commands Normal adds to the same prefix, plus `gv` restoring the
+        // last Visual selection.
+        PendingPrefix::G => match key.glyph() {
+            KeyCode::Char('v') => Action::RestoreVisual,
+            KeyCode::Char('<') => Action::MoveTabLeft,
+            KeyCode::Char('>') => Action::MoveTabRight,
+            KeyCode::Char('t') => Action::NextTab,
+            KeyCode::Char('T') => Action::PrevTab,
+            KeyCode::Char(';') => Action::ChangeOlder,
+            KeyCode::Char(',') => Action::ChangeNewer,
+            KeyCode::Char('x') => Action::OpenUnderCursor,
+            // The block yank `y` gave up when it became an operator. It lives
+            // with the other keys that act on what Winter knows and Vim does
+            // not: the prompt, the swoop, the block under the cursor.
+            KeyCode::Char('y') => Action::YankBlock,
+            KeyCode::Char('s') => Action::ToggleSwoop,
+            KeyCode::Char('p') => Action::JumpToPrompt,
+            KeyCode::Char('P') => Action::JumpToPreviousPrompt,
+            KeyCode::Char('n') => Action::SelectSearchMatch { forward: true },
+            KeyCode::Char('N') => Action::SelectSearchMatch { forward: false },
+            _ => Action::Ignore,
+        },
+        PendingPrefix::SetMark => match key.glyph() {
+            KeyCode::Char(c) if is_settable_mark(c) => Action::SetMark(c),
+            _ => Action::Ignore,
+        },
+        PendingPrefix::Register => match key.glyph() {
+            KeyCode::Char(c) if is_register_name(c) => {
+                *pending = PendingPrefix::WithRegister(c);
+                Action::Ignore
+            }
+            _ => Action::Ignore,
+        },
+        PendingPrefix::WithRegister(reg) => match key.glyph() {
+            KeyCode::Char('y') => {
+                *pending = PendingPrefix::Yank {
+                    register: Some(reg),
+                };
+                Action::Ignore
+            }
+            KeyCode::Char('p') => Action::PasteRegister {
+                register: reg,
+                after: true,
+            },
+            KeyCode::Char('P') => Action::PasteRegister {
+                register: reg,
+                after: false,
+            },
+            KeyCode::Char('d') => {
+                *pending = PendingPrefix::Delete;
+                Action::Ignore
+            }
+            KeyCode::Char('c') => {
+                *pending = PendingPrefix::Change;
+                Action::Ignore
+            }
+            _ => Action::Ignore,
+        },
+        PendingPrefix::ChangeSurroundTarget => match key.glyph() {
+            KeyCode::Char(c) => {
+                *pending = PendingPrefix::ChangeSurroundReplacement { target: c };
+                Action::Ignore
+            }
+            _ => Action::Ignore,
+        },
+        PendingPrefix::ChangeSurroundReplacement { target } => match key.glyph() {
+            KeyCode::Char(r) => Action::ChangeSurround {
+                target,
+                replacement: r,
+            },
+            _ => Action::Ignore,
+        },
+        PendingPrefix::DeleteSurround => match key.glyph() {
+            KeyCode::Char(c) => Action::DeleteSurround(c),
+            _ => Action::Ignore,
+        },
+        PendingPrefix::YieldSurround { around } => match key.glyph() {
+            // `ysi`/`ysa` re-enter this state to set the inner/around flag;
+            // any object key then hands off to the delimiter prompt.
+            KeyCode::Char('i') => {
+                *pending = PendingPrefix::YieldSurround { around: false };
+                Action::Ignore
+            }
+            KeyCode::Char('a') => {
+                *pending = PendingPrefix::YieldSurround { around: true };
+                Action::Ignore
+            }
+            code => {
+                if let Some(object) = TextObject::of_key(code) {
+                    *pending = PendingPrefix::YieldSurroundDelimiter {
+                        spec: TextObjectSpec::new(around, object),
+                    };
+                }
+                Action::Ignore
+            }
+        },
+        PendingPrefix::YieldSurroundDelimiter { spec } => match key.glyph() {
+            KeyCode::Char(d) => Action::SurroundTextObject { spec, delimiter: d },
+            _ => Action::Ignore,
+        },
+        PendingPrefix::ReplaceChar => match key.glyph() {
+            KeyCode::Char(c) => Action::ReplaceChar(c),
+            _ => Action::Ignore,
+        },
+        // `zz`/`zt`/`zb` are motions; `za` is Normal's fold toggle.
+        PendingPrefix::Z => match key.glyph() {
+            KeyCode::Char('a') => Action::ToggleFold,
+            _ => Action::Ignore,
+        },
+        PendingPrefix::QuickSelect => match key.glyph() {
+            KeyCode::Escape => Action::QuickCancel,
+            KeyCode::Char(c) if c.is_ascii_alphabetic() => Action::QuickJump(c),
+            _ => Action::QuickCancel,
+        },
+        // Taken ahead of everything else (see `resolve_search_input`).
+        PendingPrefix::SearchInput => Action::Ignore,
+        // A count applies only to motions (already resolved by
+        // `motion_action` above); any other key treats it as no prefix, so
+        // e.g. `3d` opens the delete operator with the count dropped.
+        PendingPrefix::None | PendingPrefix::Count(_) => resolve_bare_key(key, pending),
+    }
+}
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::super::{resolve, Direction, SequenceStep};
+    use super::*;
+    use crate::model::input::test_support::*;
+    use crate::model::mode::Mode;
+
+    #[test]
+    fn test_leading_zero_is_the_zero_motion_not_a_count() {
+        // Vim's `0` goes to column zero when no count is open; making it a
+        // count would strand the line-start motion behind an unreachable
+        // prefix (`00j` is not a thing anyone types on purpose).
+        let mut pending = PendingPrefix::None;
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('0')), &mut pending, 0),
+            Action::MoveCursor(CursorMove::LineStart)
+        );
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_zero_extends_an_accumulated_count() {
+        // `10w` is ten words, not "1 then the zero motion then w".
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('1')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('0')), &mut pending, 0),
+            Action::Ignore
+        );
+        assert_eq!(pending, PendingPrefix::Count(10));
+    }
+    #[test]
+    fn test_count_is_dropped_for_non_motion_keys() {
+        // `3i` enters Insert once: the count has no meaning for mode
+        // switches and must not swallow the key (the bug this catches:
+        // digits resolving EnterInsert to Ignore and locking the keyboard).
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('3')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('i')), &mut pending, 0),
+            Action::EnterInsert(InsertAt::Cursor)
+        );
+    }
+    #[test]
+    fn test_g_semicolon_and_comma_walk_the_changelist() {
+        // `g;`/`g,` share the `g` prefix with the motions and tab commands;
+        // the semicolon walks back through recorded change positions, the
+        // comma forward.
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char(';')), &mut pending, 0),
+            Action::ChangeOlder
+        );
+        // Each pair spends the prefix, so `g,` opens its own.
+        resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char(',')), &mut pending, 0),
+            Action::ChangeNewer
+        );
+    }
+    #[test]
+    fn test_dot_resolves_to_repeat_last_change() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('.'))),
+            Action::RepeatLastChange
+        );
+    }
+    #[test]
+    fn test_gx_resolves_to_open_under_cursor() {
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('x')), &mut pending, 0),
+            Action::OpenUnderCursor
+        );
+    }
+    #[test]
+    fn test_gv_resolves_to_restore_visual() {
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('v')), &mut pending, 0),
+            Action::RestoreVisual
+        );
+    }
+    #[test]
+    fn test_set_mark_and_goto_mark_key_resolution() {
+        let mut pending = PendingPrefix::None;
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('m')), &mut pending, 0),
+            Action::Ignore
+        );
+        assert_eq!(pending, PendingPrefix::SetMark);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('a')), &mut pending, 0),
+            Action::SetMark('a')
+        );
+        assert_eq!(pending, PendingPrefix::None);
+
+        // Exact mark jump (`)
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('`')), &mut pending, 0),
+            Action::Ignore
+        );
+        assert_eq!(pending, PendingPrefix::GotoMark { exact: true });
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('z')), &mut pending, 0),
+            Action::GotoMark(GotoMark::new('z', true))
+        );
+        assert_eq!(pending, PendingPrefix::None);
+
+        // First non-blank mark jump (')
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('\'')), &mut pending, 0),
+            Action::Ignore
+        );
+        assert_eq!(pending, PendingPrefix::GotoMark { exact: false });
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('k')), &mut pending, 0),
+            Action::GotoMark(GotoMark::new('k', false))
+        );
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_invalid_mark_character_cancels_cleanly() {
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('m')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('1')), &mut pending, 0),
+            Action::Ignore
+        );
+        assert_eq!(
+            pending,
+            PendingPrefix::None,
+            "invalid mark digit cancels prefix"
+        );
+
+        resolve(Mode::Normal, &key(KeyCode::Char('`')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Escape), &mut pending, 0),
+            Action::Ignore
+        );
+        assert_eq!(pending, PendingPrefix::None, "Esc cancels goto mark prefix");
+    }
+    #[test]
+    fn test_normal_keeps_its_own_g_and_z_sequences_alongside_the_motions() {
+        // Sharing the prefix with the motion table must not swallow `gt`/`gT`/
+        // `g<`/`g>` or `za`.
+        for (follow, expected) in [
+            ('t', Action::NextTab),
+            ('T', Action::PrevTab),
+            ('<', Action::MoveTabLeft),
+            ('>', Action::MoveTabRight),
+        ] {
+            let mut pending = PendingPrefix::None;
+            resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+            assert_eq!(
+                resolve(Mode::Normal, &key(KeyCode::Char(follow)), &mut pending, 0),
+                expected
+            );
+        }
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('z')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('a')), &mut pending, 0),
+            Action::ToggleFold
+        );
+    }
+    #[test]
+    fn test_motions_do_not_hijack_the_search_input_or_delete_sequences() {
+        // Characters typed into `/` must reach the query, and `dw`/`d0` stay
+        // deletes even though `w`/`0` are motion keys.
+        let mut pending = PendingPrefix::SearchInput;
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('w')), &mut pending, 0),
+            Action::SearchEdit(Key::plain(KeyCode::Char('w')))
+        );
+        let mut pending = PendingPrefix::Delete;
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('w')), &mut pending, 0),
+            Action::DeleteWordForward
+        );
+        let mut pending = PendingPrefix::Delete;
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('0')), &mut pending, 0),
+            Action::DeleteToLineStart
+        );
+    }
+    #[test]
+    fn test_normal_navigation_and_mode_exits() {
+        // `i`/`a`/`o` are the only ways back to Insert, each with its own landing
+        // spot; `Esc` clears the search instead of leaving Normal.
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('i'))),
+            Action::EnterInsert(InsertAt::Cursor)
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('a'))),
+            Action::EnterInsert(InsertAt::After)
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('o'))),
+            Action::EnterInsert(InsertAt::LineEnd)
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Escape)),
+            Action::SearchCancel
+        );
+    }
+    #[test]
+    fn test_normal_hjkl_moves_the_cursor() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('h'))),
+            Action::MoveCursor(CursorMove::Left)
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('j'))),
+            Action::MoveCursor(CursorMove::Down)
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('k'))),
+            Action::MoveCursor(CursorMove::Up)
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('l'))),
+            Action::MoveCursor(CursorMove::Right)
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('G'))),
+            Action::MoveCursor(CursorMove::Bottom)
+        );
+    }
+    #[test]
+    fn test_home_end_move_within_the_line() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Home)),
+            Action::MoveCursor(CursorMove::LineStart)
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::End)),
+            Action::MoveCursor(CursorMove::LineEnd)
+        );
+    }
+    #[test]
+    fn test_ctrl_home_end_jump_to_buffer_top_and_bottom() {
+        let ctrl_home = Key {
+            ctrl: true,
+            ..key(KeyCode::Home)
+        };
+        let ctrl_end = Key {
+            ctrl: true,
+            ..key(KeyCode::End)
+        };
+        assert_eq!(
+            resolve_simple(Mode::Normal, &ctrl_home),
+            Action::MoveCursor(CursorMove::Top)
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &ctrl_end),
+            Action::MoveCursor(CursorMove::Bottom)
+        );
+    }
+    #[test]
+    fn test_gg_jumps_to_top_of_buffer() {
+        let mut pending = PendingPrefix::None;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(action, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::G);
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(action, Action::MoveCursor(CursorMove::Top));
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_char_search_sets_prefix_then_resolves_target() {
+        let mut pending = PendingPrefix::None;
+        // `t` opens a forward-till search rather than acting immediately.
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('t')), &mut pending, 0);
+        assert_eq!(action, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::TillForward);
+        // The next key is the search target.
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('x')), &mut pending, 0);
+        assert_eq!(
+            action,
+            Action::FindChar(FindChar {
+                ch: 'x',
+                forward: true,
+                till: true,
+            })
+        );
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_find_repeat_keys() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char(';'))),
+            Action::FindRepeat { reverse: false }
+        );
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char(','))),
+            Action::FindRepeat { reverse: true }
+        );
+    }
+    #[test]
+    fn test_gt_switches_tabs() {
+        let mut pending = PendingPrefix::None;
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0),
+            Action::Ignore
+        );
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('t')), &mut pending, 0),
+            Action::NextTab
+        );
+        resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('T')), &mut pending, 0),
+            Action::PrevTab
+        );
+    }
+    #[test]
+    fn test_ctrl_d_scrolls_half_page() {
+        let ctrl_d = Key {
+            ctrl: true,
+            ..key(KeyCode::Char('d'))
+        };
+        assert_eq!(
+            resolve_simple(Mode::Normal, &ctrl_d),
+            Action::MoveCursor(CursorMove::HalfPageDown)
+        );
+    }
+    #[test]
+    fn test_unbound_normal_key_is_ignored() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('z'))),
+            Action::Ignore
+        );
+    }
+    #[test]
+    fn test_bracket_close_b_navigates_next_block() {
+        let mut pending = PendingPrefix::None;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char(']')), &mut pending, 0);
+        assert_eq!(action, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::BracketClose);
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('b')), &mut pending, 0);
+        assert_eq!(action, Action::FocusBlock(BlockNav::Next));
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_bracket_open_b_navigates_previous_block() {
+        let mut pending = PendingPrefix::None;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('[')), &mut pending, 0);
+        assert_eq!(action, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::BracketOpen);
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('b')), &mut pending, 0);
+        assert_eq!(action, Action::FocusBlock(BlockNav::Previous));
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_bracket_prefix_cancelled_by_ctrl() {
+        let mut pending = PendingPrefix::BracketClose;
+        let ctrl_h = Key {
+            ctrl: true,
+            ..key(KeyCode::Char('h'))
+        };
+        // C-h is not a window chord anymore (it would steal backspace from the
+        // shell), so in Normal mode it merely cancels the pending prefix.
+        let action = resolve(Mode::Normal, &ctrl_h, &mut pending, 0);
+        assert_eq!(action, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_bracket_prefix_with_unknown_key_is_ignored() {
+        let mut pending = PendingPrefix::BracketClose;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('x')), &mut pending, 0);
+        assert_eq!(action, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_slash_starts_search() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('/'))),
+            Action::SearchStart
+        );
+    }
+    #[test]
+    fn test_question_mark_starts_backward_search() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('?'))),
+            Action::SearchStartBackward
+        );
+    }
+    #[test]
+    fn test_question_mark_arms_search_input_like_slash() {
+        let mut pending = PendingPrefix::None;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('?')), &mut pending, 0);
+        assert_eq!(action, Action::SearchStartBackward);
+        assert_eq!(pending, PendingPrefix::SearchInput);
+    }
+    #[test]
+    fn test_star_searches_word_under_cursor_forward() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('*'))),
+            Action::SearchWord { forward: true }
+        );
+    }
+    #[test]
+    fn test_hash_searches_word_under_cursor_backward() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('#'))),
+            Action::SearchWord { forward: false }
+        );
+    }
+    #[test]
+    fn test_n_goes_to_next_search_match() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('n'))),
+            Action::SearchNext
+        );
+    }
+    #[test]
+    fn test_shift_y_yanks_from_the_cursor_to_the_end_of_the_line() {
+        let mut pending = PendingPrefix::None;
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('Y')), &mut pending, 0),
+            Action::YankMotion {
+                motion: CursorMove::LineEnd,
+                register: None
+            }
+        );
+    }
+
+    #[test]
+    fn test_y_opens_the_yank_operator_and_gy_yanks_the_block() {
+        // `y` is an operator now, so the block yank it used to be moved to the
+        // `g` keys, where the rest of Winter's own commands live.
+        let mut pending = PendingPrefix::None;
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('y')), &mut pending, 0),
+            Action::Ignore
+        );
+        assert_eq!(pending, PendingPrefix::Yank { register: None });
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('y')), &mut pending, 0),
+            Action::YankLine { register: None }
+        );
+
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('y')), &mut pending, 0),
+            Action::YankBlock
+        );
+    }
+
+    #[test]
+    fn test_the_yank_operator_takes_a_motion_an_object_and_a_register() {
+        let yank = |keys: &str| -> Action {
+            let mut pending = PendingPrefix::None;
+            let mut action = Action::Ignore;
+            for ch in keys.chars() {
+                action = resolve(Mode::Normal, &key(KeyCode::Char(ch)), &mut pending, 0);
+            }
+            action
+        };
+        assert_eq!(
+            yank("yw"),
+            Action::YankMotion {
+                motion: CursorMove::WordEnd,
+                register: None
+            }
+        );
+        assert_eq!(
+            yank("y$"),
+            Action::YankMotion {
+                motion: CursorMove::LineEnd,
+                register: None
+            }
+        );
+        assert_eq!(
+            yank("yip"),
+            Action::YankTextObject {
+                spec: TextObjectSpec::new(false, TextObject::Paragraph),
+                register: None
+            }
+        );
+        assert_eq!(
+            yank("yis"),
+            Action::YankTextObject {
+                spec: TextObjectSpec::new(false, TextObject::Sentence),
+                register: None
+            }
+        );
+        assert_eq!(
+            yank("\"ayaw"),
+            Action::YankTextObject {
+                spec: TextObjectSpec::new(true, TextObject::Word),
+                register: Some('a')
+            },
+            "a register named before the operator follows it through"
+        );
+    }
+    #[test]
+    fn test_ys_reaches_the_surround_prompt() {
+        // `ys` had no way in at all while `y` resolved straight to a block
+        // yank: the surround state it opens was documented but unreachable.
+        let mut pending = PendingPrefix::None;
+        for ch in "ysiw".chars() {
+            resolve(Mode::Normal, &key(KeyCode::Char(ch)), &mut pending, 0);
+        }
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('"')), &mut pending, 0),
+            Action::SurroundTextObject {
+                spec: TextObjectSpec::new(false, TextObject::Word),
+                delimiter: '"'
+            }
+        );
+    }
+
+    #[test]
+    fn test_za_toggles_fold() {
+        let mut pending = PendingPrefix::None;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('z')), &mut pending, 0);
+        assert_eq!(action, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::Z);
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('a')), &mut pending, 0);
+        assert_eq!(action, Action::ToggleFold);
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_z_followed_by_unknown_is_ignored() {
+        let mut pending = PendingPrefix::Z;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('x')), &mut pending, 0);
+        assert_eq!(action, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_q_enters_quick_select() {
+        let mut pending = PendingPrefix::None;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('q')), &mut pending, 0);
+        assert_eq!(action, Action::QuickSelect);
+        assert_eq!(pending, PendingPrefix::QuickSelect);
+    }
+    #[test]
+    fn test_quick_select_label_jumps() {
+        let mut pending = PendingPrefix::QuickSelect;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('s')), &mut pending, 0);
+        assert_eq!(action, Action::QuickJump('s'));
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_quick_select_escape_cancels() {
+        let mut pending = PendingPrefix::QuickSelect;
+        let action = resolve(Mode::Normal, &key(KeyCode::Escape), &mut pending, 0);
+        assert_eq!(action, Action::QuickCancel);
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_quick_select_non_alpha_cancels() {
+        let mut pending = PendingPrefix::QuickSelect;
+        let action = resolve(Mode::Normal, &key(KeyCode::Enter), &mut pending, 0);
+        assert_eq!(action, Action::QuickCancel);
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_slash_enters_search_input() {
+        let mut pending = PendingPrefix::None;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('/')), &mut pending, 0);
+        assert_eq!(action, Action::SearchStart);
+        assert_eq!(pending, PendingPrefix::SearchInput);
+    }
+    #[test]
+    fn test_search_input_collects_chars() {
+        let mut pending = PendingPrefix::SearchInput;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('h')), &mut pending, 0);
+        assert_eq!(action, Action::SearchEdit(Key::plain(KeyCode::Char('h'))));
+        assert_eq!(pending, PendingPrefix::SearchInput);
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('i')), &mut pending, 0);
+        assert_eq!(action, Action::SearchEdit(Key::plain(KeyCode::Char('i'))));
+        assert_eq!(pending, PendingPrefix::SearchInput);
+    }
+    #[test]
+    fn test_search_input_enter_executes() {
+        let mut pending = PendingPrefix::SearchInput;
+        let action = resolve(Mode::Normal, &key(KeyCode::Enter), &mut pending, 0);
+        assert_eq!(action, Action::SearchExecute);
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_search_input_escape_cancels() {
+        let mut pending = PendingPrefix::SearchInput;
+        let action = resolve(Mode::Normal, &key(KeyCode::Escape), &mut pending, 0);
+        assert_eq!(action, Action::SearchCancel);
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_a_chord_edits_the_search_line_rather_than_acting_in_normal_mode() {
+        // Regression: Ctrl and Alt chords ended the search being typed, so
+        // `C-d` scrolled half a page instead of deleting a character.
+        let ctrl = |c| Key {
+            ctrl: true,
+            ..key(KeyCode::Char(c))
+        };
+        let mut pending = PendingPrefix::SearchInput;
+        let action = resolve(Mode::Normal, &ctrl('d'), &mut pending, 0);
+        assert_eq!(action, Action::SearchEdit(ctrl('d')));
+        assert_eq!(pending, PendingPrefix::SearchInput, "the line stays open");
+        let action = resolve(Mode::Normal, &ctrl('g'), &mut pending, 0);
+        assert_eq!(action, Action::SearchCancel, "C-g puts it away as Esc does");
+        assert_eq!(pending, PendingPrefix::None);
+    }
+
+    #[test]
+    fn test_search_input_backspace() {
+        let mut pending = PendingPrefix::SearchInput;
+        let action = resolve(Mode::Normal, &key(KeyCode::Backspace), &mut pending, 0);
+        assert_eq!(action, Action::SearchEdit(Key::plain(KeyCode::Backspace)));
+        assert_eq!(pending, PendingPrefix::SearchInput);
+    }
+    #[test]
+    fn test_v_enters_charwise_visual() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('v'))),
+            Action::EnterVisual(VisualKind::Char)
+        );
+    }
+    #[test]
+    fn test_shift_v_enters_linewise_visual() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('V'))),
+            Action::EnterVisual(VisualKind::Line)
+        );
+    }
+    #[test]
+    fn test_p_pastes_in_normal() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('p'))),
+            Action::Paste
+        );
+    }
+    #[test]
+    fn test_ctrl_w_with_no_sequence_bound_does_not_swallow_the_next_key() {
+        // C-w used to open an empty leader that ate the key after it.
+        let mut pending = PendingPrefix::None;
+        let ctrl_w = Key {
+            ctrl: true,
+            ..key(KeyCode::Char('w'))
+        };
+        resolve(Mode::Normal, &ctrl_w, &mut pending, 0);
+        assert_eq!(pending, PendingPrefix::None);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('p')), &mut pending, 0),
+            Action::Paste
+        );
+    }
+    #[test]
+    fn test_x_deletes_char_on_prompt() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('x'))),
+            Action::DeleteCharForward
+        );
+    }
+    #[test]
+    fn test_shift_d_deletes_to_line_end() {
+        assert_eq!(
+            resolve_simple(Mode::Normal, &key(KeyCode::Char('D'))),
+            Action::DeleteToLineEnd
+        );
+    }
+    #[test]
+    fn test_dd_deletes_line() {
+        let mut pending = PendingPrefix::None;
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('d')), &mut pending, 0);
+        assert_eq!(action, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::Delete);
+        let action = resolve(Mode::Normal, &key(KeyCode::Char('d')), &mut pending, 0);
+        assert_eq!(action, Action::DeleteLine);
+        assert_eq!(pending, PendingPrefix::None);
+    }
+    #[test]
+    fn test_dw_deletes_word() {
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('d')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('w')), &mut pending, 0),
+            Action::DeleteWordForward
+        );
+    }
+    #[test]
+    fn test_ctrl_shift_q_closes_tab() {
+        let ctrl_shift_q = Key {
+            alt: false,
+            code: KeyCode::Char('q'),
+            ctrl: true,
+            shift: true,
+            sup: false,
+        };
+        // Closing a tab is a global action, resolved ahead of the overlays.
+        assert_eq!(
+            Keymap::default().global_action(&ctrl_shift_q),
+            Some(Action::CloseTab(None))
+        );
+    }
+    #[test]
+    fn test_default_split_bindings() {
+        // M-S-- splits horizontally; M-S-\ splits vertically.
+        let shift_alt = |c: char| Key {
+            alt: true,
+            code: KeyCode::Char(c),
+            ctrl: false,
+            shift: true,
+            sup: false,
+        };
+        let mut pending = PendingPrefix::None;
+        assert_eq!(
+            resolve(Mode::Normal, &shift_alt('-'), &mut pending, 0),
+            Action::SplitPane(Direction::Horizontal)
+        );
+        let mut pending = PendingPrefix::None;
+        assert_eq!(
+            resolve(Mode::Normal, &shift_alt('\\'), &mut pending, 0),
+            Action::SplitPane(Direction::Vertical)
+        );
+        // The old C-w v/s no longer trigger splits by default.
+        let win = Keymap::default();
+        let ctrl_w = Key {
+            ctrl: true,
+            ..key(KeyCode::Char('w'))
+        };
+        for code in [KeyCode::Char('v'), KeyCode::Char('s')] {
+            assert_eq!(
+                win.resolve_sequence(&[ctrl_w, key(code)], None),
+                SequenceStep::Miss
+            );
+        }
+    }
+    #[test]
+    fn test_zoom_binds_shift_alt_equals_only() {
+        let shift_alt_equals = Key {
+            alt: true,
+            shift: true,
+            sup: false,
+            ..key(KeyCode::Char('='))
+        };
+        let ctrl_shift_m = Key {
+            ctrl: true,
+            shift: true,
+            sup: false,
+            ..key(KeyCode::Char('m'))
+        };
+        assert_eq!(
+            resolve_simple(Mode::Normal, &shift_alt_equals),
+            Action::ZoomPane
+        );
+        // C-S-m used to be an alternative zoom chord; it is not one now.
+        assert_ne!(
+            resolve_simple(Mode::Normal, &ctrl_shift_m),
+            Action::ZoomPane
+        );
+    }
+    #[test]
+    fn test_shift_alt_o_closes_other_panes() {
+        let shift_alt_o = Key {
+            alt: true,
+            code: KeyCode::Char('o'),
+            ctrl: false,
+            shift: true,
+            sup: false,
+        };
+        let mut pending = PendingPrefix::None;
+        assert_eq!(
+            resolve(Mode::Normal, &shift_alt_o, &mut pending, 0),
+            Action::CloseOtherPanes
+        );
+    }
+    #[test]
+    fn test_g_angle_bracket_moves_tab() {
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('<')), &mut pending, 0),
+            Action::MoveTabLeft,
+        );
+        resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('>')), &mut pending, 0),
+            Action::MoveTabRight,
+        );
+    }
+
+    #[test]
+    fn test_alt_escape_in_normal_returns_to_insert() {
+        let alt_esc = Key {
+            alt: true,
+            ..key(KeyCode::Escape)
+        };
+        assert_eq!(
+            resolve_simple(Mode::Normal, &alt_esc),
+            Action::EnterInsert(InsertAt::Cursor)
+        );
+    }
+
+    #[test]
+    fn test_ctrl_shift_o_is_not_the_jumplist_walk_in_normal_mode() {
+        // Unbound here, it falls to Ignore rather than the plain C-o walk.
+        let chord = Key {
+            shift: true,
+            sup: false,
+            ..Key::with_ctrl(KeyCode::Char('o'))
+        };
+        assert_eq!(resolve_simple(Mode::Normal, &chord), Action::Ignore);
+    }
+}

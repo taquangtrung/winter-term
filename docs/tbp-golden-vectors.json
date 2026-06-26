@@ -1,0 +1,89 @@
+{
+  "description": "TBP v1 golden vectors: for each message, the exact escape every client must write, which the reference codec must decode back to that message. Emit ids are as written here; a client that derives ids from its process (see BlockId::process_scoped) is checked with its own id put in place of this one. Checked by crates/winter-proto/tests/golden_vectors.rs (the Rust codec and clients/client.sh) and clients/client-py/tests/test_vectors.py.",
+  "vectors": [
+    {
+      "name": "emit-svg",
+      "verb": "emit",
+      "id": 1,
+      "trust": "restricted",
+      "bundle": {
+        "mime": {
+          "image/svg+xml": "<svg/>",
+          "text/plain": "[svg image]"
+        }
+      },
+      "escape": "\u001b]9001;emit;v=1,id=1,trust=restricted;eyJtaW1lIjp7ImltYWdlL3N2Zyt4bWwiOiI8c3ZnLz4iLCJ0ZXh0L3BsYWluIjoiW3N2ZyBpbWFnZV0ifX0=\u001b\\"
+    },
+    {
+      "name": "emit-markdown-with-escapes",
+      "verb": "emit",
+      "id": 2,
+      "trust": "restricted",
+      "bundle": {
+        "mime": {
+          "text/markdown": "# hello\n\"world\" \\ done",
+          "text/plain": "# hello\n\"world\" \\ done"
+        }
+      },
+      "escape": "\u001b]9001;emit;v=1,id=2,trust=restricted;eyJtaW1lIjp7InRleHQvbWFya2Rvd24iOiIjIGhlbGxvXG5cIndvcmxkXCIgXFwgZG9uZSIsInRleHQvcGxhaW4iOiIjIGhlbGxvXG5cIndvcmxkXCIgXFwgZG9uZSJ9fQ==\u001b\\"
+    },
+    {
+      "name": "emit-with-meta",
+      "verb": "emit",
+      "id": 3,
+      "trust": "trusted",
+      "bundle": {
+        "meta": {
+          "height_hint": 4,
+          "title": "Report"
+        },
+        "mime": {
+          "text/html": "<b>hi</b>",
+          "text/plain": "hi"
+        }
+      },
+      "escape": "\u001b]9001;emit;v=1,id=3,trust=trusted;eyJtZXRhIjp7ImhlaWdodF9oaW50Ijo0LCJ0aXRsZSI6IlJlcG9ydCJ9LCJtaW1lIjp7InRleHQvaHRtbCI6IjxiPmhpPC9iPiIsInRleHQvcGxhaW4iOiJoaSJ9fQ==\u001b\\"
+    },
+    {
+      "name": "open-markdown",
+      "verb": "open",
+      "id": 4,
+      "mime": "text/markdown",
+      "spec": "# v0",
+      "escape": "\u001b]9001;open;id=4,mime=text/markdown;IiMgdjAi\u001b\\"
+    },
+    {
+      "name": "open-mime-with-framing-bytes",
+      "verb": "open",
+      "id": 5,
+      "mime": "text/html;charset=utf-8",
+      "spec": {
+        "a": [
+          1,
+          2
+        ],
+        "b": "x"
+      },
+      "escape": "\u001b]9001;open;id=5,mime=text/html%3Bcharset%3Dutf-8;eyJhIjpbMSwyXSwiYiI6IngifQ==\u001b\\"
+    },
+    {
+      "name": "patch-root-add",
+      "verb": "patch",
+      "id": 4,
+      "patch": [
+        {
+          "op": "add",
+          "path": "",
+          "value": "# v1"
+        }
+      ],
+      "escape": "\u001b]9001;patch;id=4;W3sib3AiOiJhZGQiLCJwYXRoIjoiIiwidmFsdWUiOiIjIHYxIn1d\u001b\\"
+    },
+    {
+      "name": "close",
+      "verb": "close",
+      "id": 4,
+      "escape": "\u001b]9001;close;id=4\u001b\\"
+    }
+  ]
+}

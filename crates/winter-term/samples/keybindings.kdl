@@ -1,0 +1,214 @@
+// winter default keybindings: embedded in the binary as the built-in
+// defaults (see model::input::Keymap::default), and also installed as
+// a reference copy at ~/.config/winter-term/keybindings.kdl.
+//
+// This is not a "sample with placeholder values": it IS what ships. Copy it
+// to ~/.config/winter-term/keybindings.kdl (or %APPDATA%\winter-term on
+// Windows) and edit it there; unmentioned actions keep these defaults,
+// mentioned ones are replaced by your version.
+//
+// Each binding is a node whose name is the chord and whose argument is the action:
+//   j "focus_down"
+//   "C-SPC" "toggle_mode"
+//
+// Chords are written the way Emacs writes them: modifier prefixes, then the key.
+//   C- = Ctrl, M- = Alt (Meta), S- = Shift, s- = Super (the logo key), always in
+//     that order: "C-M-S-s-n".
+//   Named keys: RET, TAB, SPC, ESC, DEL (Backspace), <delete>, <insert>,
+//     <home>, <end>, <prior> (PageUp), <next> (PageDown), <up>, <down>,
+//     <left>, <right>, <f1>..<f12>.
+//   A single character is itself (e.g. j); a letter is always lowercase, so
+//     S-s is "S-s", never "S".
+//   Up to four chords separated by spaces form a sequence (e.g. "M-g M-h"),
+//     each matched as a whole chord. Several sequences may share a first chord,
+//     and a chord that opens one cannot also be bound on its own. After the
+//     first chord a hint lists what can follow; ESC, or any key that continues
+//     nothing, drops the sequence.
+//   The older "C+S+Space" spelling is still read.
+//
+// A single-chord binding whose action isn't one of the names below is looked
+// up against the command palette's names instead (e.g. mux_new_session,
+// export_block_svg, cd_recent) and dispatches the same way selecting that
+// palette entry would. Sequences resolve names the same way.
+//
+// The `window` and `editing` blocks are configurable today, and so is a block
+// per tool (`git`, ...) naming that tool's own commands; a tool's bindings
+// apply only while it has focus, ahead of the window's. `normal`, `insert`,
+// and `visual` use built-in Vim-style defaults.
+//
+// Pane/tab actions targeting one specific index use close_pane_N /
+// focus_pane_N / goto_tab_N (N = 1..9); each binds one exact chord to that
+// one pane/tab, so you can point any key at any index, e.g.:
+//   "M-q" "focus_pane_1"
+
+window {
+    // Split the focused pane.
+    "M-S--" "split_horizontal"
+    "M-S-\\" "split_vertical"
+
+    // Zoom the focused pane to fill the window (toggle).
+    "M-S-=" "zoom_pane"
+
+    // Close the focused pane, with every tab in it.
+    "M-S-w" "close_pane"
+
+    // Close every pane except the focused one.
+    "M-S-o" "close_other_panes"
+
+    // Move focus between panes.
+    "M-h" "focus_left"
+    "M-j" "focus_down"
+    "M-k" "focus_up"
+    "M-l" "focus_right"
+
+    // Move the current tab to an adjacent pane.
+    "M-g M-h" "move_tab_left"
+    "M-g M-j" "move_tab_down"
+    "M-g M-k" "move_tab_up"
+    "M-g M-l" "move_tab_right"
+
+    // Scroll the terminal screen.
+    "M-S-h" "scroll_page_up"
+    "M-S-l" "scroll_page_down"
+    "M-S-k" "scroll_line_up"
+    "M-S-j" "scroll_line_down"
+    "M-S-a" "scroll_to_top"
+    "M-S-e" "scroll_to_bottom"
+    "M-S-," "scroll_to_top"
+    "M-S-." "scroll_to_bottom"
+
+    // Switch active tabs. C-[ / Ctrl-] claim the chords a terminal
+    // would otherwise send as the Esc (0x1b) and GS (0x1d) control bytes;
+    // the Esc key itself still reaches the terminal.
+    "C-<prior>" "prev_tab"
+    "C-<next>" "next_tab"
+    "C-[" "prev_tab"
+    "C-]" "next_tab"
+    "C-S-n" "new_tab"
+    "C-M-S-n" "new_window"
+    "C-S-w" "close_tab"
+    "C-S-q" "close_tab"
+
+    // Close every other tab in the focused pane.
+    "M-S-q" "close_other_tabs"
+
+    // Walk the file:line references the last command printed (compiler
+    // errors, test failures), opening each in the editor.
+    "<f8>" "next_error"
+    "S-<f8>" "prev_error"
+
+    // Close pane N.
+    "C-M-1" "close_pane_1"
+    "C-M-2" "close_pane_2"
+    "C-M-3" "close_pane_3"
+    "C-M-4" "close_pane_4"
+    "C-M-5" "close_pane_5"
+    "C-M-6" "close_pane_6"
+    "C-M-7" "close_pane_7"
+    "C-M-8" "close_pane_8"
+    "C-M-9" "close_pane_9"
+
+    // Focus pane N.
+    "M-1" "focus_pane_1"
+    "M-2" "focus_pane_2"
+    "M-3" "focus_pane_3"
+    "M-4" "focus_pane_4"
+    "M-5" "focus_pane_5"
+    "M-6" "focus_pane_6"
+    "M-7" "focus_pane_7"
+    "M-8" "focus_pane_8"
+    "M-9" "focus_pane_9"
+
+    // Go to tab N.
+    "C-1" "goto_tab_1"
+    "C-2" "goto_tab_2"
+    "C-3" "goto_tab_3"
+    "C-4" "goto_tab_4"
+    "C-5" "goto_tab_5"
+    "C-6" "goto_tab_6"
+    "C-7" "goto_tab_7"
+    "C-8" "goto_tab_8"
+    "C-9" "goto_tab_9"
+
+    // Clipboard.
+    "C-S-v" "paste_from_clipboard"
+    "C-S-c" "copy_selection"
+    "M-'" "copy_cwd"
+    // Open the path or URL the terminal points at: the Normal-mode cursor,
+    // the selection, the shell's cursor, or else the last line printed.
+    "M-." "open_under_cursor"
+
+    // Settings and font size.
+    "C-," "open_settings"
+    "C-=" "font_increase"
+    "C-+" "font_increase"
+    "C--" "font_decrease"
+    "C-0" "font_reset"
+
+    // Palettes.
+    "M-x" "toggle_command_palette"
+    "C-S-r" "toggle_history_palette"
+    "C-M-S-r" "reload"
+    // Back to the most recently used terminal tab of the focused pane.
+    "C-S-m" "reveal_terminal"
+    "C-j" "jump"
+    // Every tab open now, then the files and directories opened lately, as
+    // one list to go back to any of them from. The pane switcher
+    // (`select_pane`) is still in the command palette as "Go to Pane".
+    "C-S-z" "recent_list"
+    // Every file in the focused tab's project (its git repository, else its
+    // directory), to fuzzy-find one and open it. Held by the window, so it
+    // never reaches the shell, where C-M-z would arrive as ESC C-z and
+    // suspend the job just as C-z does.
+    "C-M-z" "project_files"
+    // Every file under the focused tab's working directory, to fuzzy-find
+    // one and open it: the same picker, kept to where the tab is.
+    "M-S-z" "find_file"
+    // Search the project as you type, the lines found streaming in; a `*`
+    // stands for anything, and ` @ <file>` after the pattern filters by path.
+    "C-M-g" "live_search"
+    // The keys of the focused tab: a tool's own keys, else the window's.
+    "<f1> h" "tab_keys"
+
+    // Tools: a pane holding a tool page instead of a terminal.
+    "C-S-d" "dir_page"
+    "C-S-f" "file_browser"
+    "C-S-g" "git_page"
+    "C-S-s" "grep_page"
+    "C-S-," "proc_page"
+    // Put back the last tool page closed, whether it was closed on its own or
+    // went with the pane or tab it was on. Press again for the one before it.
+    "C-S-u" "reopen_page"
+    // Every tool as a list to pick from in the fuzzy panel: the ones open
+    // somewhere, then the ones closed recently.
+    "C-S-e" "tool_list"
+    // Open the focused tab's file in another tool that can show it: an SVG
+    // in the editor drawn as a picture, or the picture back as its markup.
+    "C-M-S-e" "open_with"
+    // The notifications the status bar has shown this session, newest first.
+    "C-M-m" "notifications"
+
+    // Jump between prompt blocks.
+    "C-S-<up>" "prev_block"
+    "C-S-<down>" "next_block"
+}
+
+// Prompt line edits and undo/redo. Each is one chord.
+//   Line edits (Insert mode): delete_word_backward, delete_word_forward,
+//     delete_to_line_start, delete_to_line_end.
+//   History (Insert, Normal, and the palette): prompt_undo, prompt_redo.
+editing {
+    // Delete the word before the cursor.
+    "C-DEL" "delete_word_backward"
+
+    // Undo / redo prompt and quickpick edits.
+    "C-/" "prompt_undo"
+    "C-\\" "prompt_redo"
+}
+
+// The Git tool's own commands. Its single-key commands (s, c, b, ...) are
+// built in; these are the ones bound here.
+//   open_remote: open the repository's remote in a browser.
+git {
+    "M-g r" "open_remote"
+}

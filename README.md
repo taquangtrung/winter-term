@@ -1,0 +1,144 @@
+# Winter Term
+
+A modal terminal emulator written in Rust with native-class speed, full Vim editing across any shell or remote session, a built-in multiplexer, and structured command blocks powered by the Terminal Block Protocol.
+
+![Winter Terminal with modal Vim navigation, tabs, split panes, and rich command blocks](screenshots/winter-term.png)
+
+See the [usage guide](docs/usage-guide.md) for how to drive Winter, and the [protocol specification](docs/terminal-block-protocol-spec.md) for the Terminal Block Protocol (TBP).
+
+## Key features
+
+- **Vim modal editing everywhere:** Normal mode, motions, operators, registers, marks, and text objects live directly inside the terminal layer. They work identically in bash, zsh, fish, Python or Node REPLs, and over remote `ssh` sessions without configuring anything on the remote host.
+- **Built-in multiplexer:** Split panes horizontally (`M-S--`) or vertically (`M-S-\`), move between them with `M-h/j/k/l`, zoom active panes, and cycle tabs with `gt`/`gT`. Panes track independent modes while sharing global Vim registers.
+- **Structured command blocks:** OSC 133 shell integration organizes your session into discrete, foldable units with exit codes and durations clearly marked. Jump between blocks with `]b`/`[b`, yank block output with `y`, or target blocks with quick-select (`q`).
+- **Rich inline MIME blocks (TBP):** Programs print images, SVG, Vega-Lite charts, Markdown, HTML, and tables inline via the Terminal Block Protocol, all drawn natively on the GPU, with automatic plain-text fallbacks. Nothing in a block is ever run or fetched.
+- **Prompt-line integration:** Normal-mode operators (`dw`, `ci"`, `x`) act directly on your active shell prompt line, accompanied by which-key hints that display pending keybindings dynamically.
+- **Tool tabs:** `C-S-d` opens a tree-style directory listing with marks, file operations, and background directory sizes; `C-S-g` opens the working tree, where hunks stage and discard one at a time and transient menus drive branch, commit, merge, rebase, stash, tag, log, and blame; `C-S-s` searches the tree for text and opens any match at its line; `C-S-f` walks the working directory in the command palette, a directory at a time, and opens the file you land on; a `.pdf` opens in a viewer that renders it inline and offline, read with vim's own motions: counts, `gg`/`G`, `zt`/`zz`/`zb`, and `i` for a cursor in the text with `w`/`b`/`e`, `f`/`t`, visual selection, and the `y` operator. Each opens as a tab of its own in the focused pane's strip, beside the terminal it was opened from, which keeps running and is one tab away; `/`, `n`, and `N` search whichever tool is up.
+
+## Core keybindings
+
+A Winter window is split into panes, each a strip of tabs, and every tab is a terminal or a tool. A terminal tab is always in one of three modes: **Insert** (owns the PTY), **Normal** (owns the keyboard for navigation and operators), or **Visual** (extends selections). A tool tab is in no mode: it owns the keys it binds, and the status bar shows it as `P`.
+
+| Mode / Area | Keys | Action |
+|---|---|---|
+| **Modes** | `Esc` | Enter Normal mode (`Esc Esc` if running vim or less) |
+| | `i`, `a`, `o` | Return to Insert mode (active shell prompt) |
+| | `v`, `V`, `C-v` | Characterwise, linewise, or blockwise Visual mode |
+| **Motions** | `h` `j` `k` `l` | Left, down, up, right |
+| | `w` `b` `e` / `W` `B` `E` | Word forward, backward, word end |
+| | `0` / `^` / `$` | Start of line, first non-blank character, end of line |
+| | `gg` / `G` | Jump to first line, last line of scrollback |
+| | `C-u` / `C-d` | Scroll half page up, half page down |
+| **Operators** | `d` `c` `y` | Delete, change, yank (with motion or text object) |
+| | `iw`, `i"`, `i(`, `i[` | Inner word, quotes, parentheses, brackets |
+| | `p` / `P` | Paste from register (shared across all panes) |
+| | `.` | Repeat the last change |
+| **Search** | `/` / `?` | Search forward, search backward |
+| | `n` / `N` | Next match, previous match |
+| **Blocks** | `]b` / `[b` | Next command block, previous command block |
+| | `y` | Yank the command block output under the cursor |
+| | `q` | Quick-select: overlay labels to target any block |
+| **Panes** | `M-S-\` | Split pane vertically |
+| | `M-S--` | Split pane horizontally |
+| | `M-h/j/k/l` | Move focus between panes |
+| | `M-S-=` | Zoom or restore focused pane (toggle) |
+| | `C-S-q` | Close focused pane |
+| **Window** | `C-M-S-n` | New window |
+| **Tabs** | `C-S-n` / `C-S-w` | New tab, close tab |
+| | `gt` / `gT` | Next tab, previous tab |
+| **Tools** | `C-S-d` / `C-S-g` | Directory listing, git status |
+| | `C-S-f` | Browse files in the palette, and open one |
+| | `C-S-s` | Search the tree for text |
+| | `/` then `n` / `N` | Search an open tool, next and previous match |
+| **Palette** | `M-x` | Open command palette |
+
+See the [keybinding reference](docs/usage-guide.md#keybinding-reference) in the usage guide for the complete keymap.
+
+## Install
+
+Every release publishes pre-compiled packages and installers to its [GitHub Releases](https://github.com/taquangtrung/winter-term/releases) page.
+
+| Platform | Installation method |
+|---|---|
+| **Debian/Ubuntu** | Download `.deb` and run `sudo dpkg -i <file>.deb` |
+| **Arch Linux** | Install from AUR: `yay -S winter-term` |
+| **Windows** | Run setup `.exe`, Scoop, or winget |
+| **macOS** | Download `.dmg` and drag `Winter.app` to Applications |
+
+Rust developers can also install via `cargo install winter-term`. Building from source requires Rust 1.96+; no web engine or GTK libraries are needed.
+
+### macOS setup notes
+
+The pre-built `.dmg` is built for Apple silicon (**arm64**); Intel Macs require a source build. Because the binary is not yet notarized, bypass Gatekeeper on first launch via right-click > Open, or run:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/Winter.app
+```
+
+To expose the `winter` command on your `PATH`:
+
+```bash
+sudo ln -sf /Applications/Winter.app/Contents/MacOS/winter /usr/local/bin/winter
+```
+
+## Platform support
+
+| Platform | Status | Packaging |
+|---|---|---|
+| Linux (X11/Wayland) | Primary development target, fully tested | `.deb`, AUR |
+| Windows | Supported, tested in CI | Inno Setup `.exe`, Scoop, winget |
+| macOS | Builds and tested in CI | `.dmg` (Apple silicon, arm64) |
+
+Flatpak packaging is planned. A sandboxed terminal needs to spawn host shells rather than container shells (`flatpak-spawn --host`), which requires an internal application change.
+
+## Shell integration
+
+Command blocks, exit codes, and directory tracking rely on OSC 133 and OSC 7 marks emitted by your shell. Winter runs without them, but the entire session remains a single rolling buffer. Enable full block functionality by adding one line to your shell configuration:
+
+```bash
+# In ~/.bashrc (or winter.zsh in ~/.zshrc, winter.fish in ~/.config/fish/config.fish)
+[ -r /usr/share/winter-term/shell-integration/winter.bash ] && \
+    . /usr/share/winter-term/shell-integration/winter.bash
+```
+
+The script no-ops outside Winter and re-sources safely. If you already use OSC 133 integration from kitty, WezTerm, or iTerm2, Winter recognizes those marks automatically.
+
+Integration scripts are located in `/Applications/Winter.app/Contents/Resources/shell-integration/` on macOS, `<install dir>\shell-integration` on Windows, and `clients/shell-integration/` in a source checkout.
+
+## Configuration
+
+Configuration files use the [KDL](https://kdl.dev/) format and live in `~/.config/winter-term/` (`%APPDATA%\winter-term` on Windows):
+
+- `settings.kdl`: Window appearance, typography, themes, cursor styles, and the clipboard policy.
+- `keybindings.kdl`: Custom key chords for window, tab, and pane operations.
+
+Settings reload immediately upon file save without restarting the terminal. You can also trigger a manual reload with `winter --reload`, which after you install a new binary replaces the window with it while keeping your programs running (Unix; see the usage guide).
+
+## Security model for rich blocks
+
+Any program writing to the PTY can emit a TBP block: a `cat` of an untrusted file, output piped from `curl`, or remote SSH output. Because wire streams carry no caller identity, Winter treats every block as untrusted, and draws it natively rather than handing it to a web engine: an image is decoded, an SVG drawn, a chart laid out from its spec, and HTML turned into text with its scripts and styles dropped. Nothing in a block is ever run, and nothing is fetched from the network, so the trust tier a block asks for has no effect.
+
+Clipboard reading via OSC 52 is opt-in (`clipboard-read`). See the [usage guide](docs/usage-guide.md) for the complete configuration reference.
+
+## Documentation
+
+| Document | Contents |
+|---|---|
+| [Usage guide](docs/usage-guide.md) | Modes, full keymaps, settings, multiplexer |
+| [TBP spec](docs/terminal-block-protocol-spec.md) | TBP v1 protocol framing and tiers |
+| [Architecture](docs/architecture.md) | Crate structure and rendering pipeline |
+| [Contributing](CONTRIBUTING.md) | Development setup, test suite, PR guidelines |
+| [Release guide](docs/releasing.md) | Maintainer runbook for cutting a release |
+| [Security policy](SECURITY.md) | Threat model and vulnerability disclosure |
+
+## Contributing
+
+Run `make lint` and `make test` before opening a pull request. See [CONTRIBUTING.md](CONTRIBUTING.md) for development workflows and [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for community guidelines.
+
+## Security
+
+Report security vulnerabilities privately according to [SECURITY.md](SECURITY.md). All bytes arriving from a PTY are treated as attacker-controlled; crashes and sandbox escapes are treated as security issues.
+
+## License
+
+Winter is licensed under the [MIT License](LICENSE).

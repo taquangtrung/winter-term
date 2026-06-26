@@ -1,0 +1,272 @@
+// winter sample configuration: ~/.config/winter-term/settings.kdl
+//
+// All options are shown here at their default values.
+// Lines you don't change can be removed; unset options fall back to the default.
+//
+// Keybindings live in a separate file: ~/.config/winter-term/keybindings.kdl
+// User themes live in: ~/.config/winter-term/themes/<name>.kdl
+
+// ── Theme ─────────────────────────────────────────────────────────────────────
+// Built-in values: "dark", "light", "auto" (follows system appearance).
+// Custom: the filename (without .kdl) of a file in ~/.config/winter-term/themes/.
+theme "dark"
+
+// ── Terminal ──────────────────────────────────────────────────────────────────
+// Shell executable. Defaults to the SHELL environment variable.
+// shell "/bin/zsh"
+
+// Per-platform override, which wins over `shell` on that OS. Useful for one
+// config file shared across machines.
+// shell-linux "/bin/zsh"
+// shell-macos "/opt/homebrew/bin/fish"
+// shell-windows "pwsh.exe"
+
+// Maximum scrollback lines per pane. Applied to new panes (default: 10000).
+// scrollback-lines 10000
+
+// ── Font ──────────────────────────────────────────────────────────────────────
+// Font family. Falls back to the system monospace font when not set.
+// font "FiraCode Nerd Font"
+
+// Point size.
+font-size 15
+
+// Named font weight for normal text ("thin", "light", "regular", "medium",
+// "semibold", "bold", "extrabold", "black", or a numeric value like "400").
+// Falls back to the font's default when not set.
+// font-weight "regular"
+
+// Named weight for bold text. Falls back to font-weight when not set.
+// font-weight-bold "bold"
+
+// Enable OpenType ligatures (e.g. -> and => rendered as arrows). Default: false:
+// like most terminals, winter keeps every glyph at its nominal cell position, so
+// contextual shaping never shifts a character out of the monospace grid.
+// ligatures #false
+
+// ── Window ────────────────────────────────────────────────────────────────────
+// Background opacity. 1.0 is fully opaque; lower values require a compositor.
+opacity 1
+
+// Title bar presentation.
+//   "modern": borderless: the tab strip doubles as the title bar with custom
+//              minimize/maximize/close controls.
+//   "system": native OS window decorations; the tab strip sits inside them.
+title-bar-style "modern"
+
+// Which edge of the title bar carries the window controls.
+//   "left": controls on the left (default, macOS-style).
+//   "right": controls on the right (Windows-style).
+window-controls-side "left"
+
+// Which edge of a listing's rows the gutter stands at: the narrow column of
+// git states and marks the file browser draws.
+//   "left": at the left edge, ahead of the names (default).
+//   "right": at the right edge.
+gutter-side "left"
+
+// Menu presentation in the tab strip.
+//   "modern": a single ☰ hamburger button opens a command dropdown.
+//   "classic": a File / Edit / View / Window menubar row above the tab strip.
+menu-style "modern"
+
+// Window title. `{{ ... }}` placeholders expand to the active pane's program and
+// directory; everything else is literal text.
+//   {{ title }}      what the tab strip shows for the active tab
+//   {{ app_name }}   the foreground program's name
+//   {{ pane_title }} the title the program set for itself
+//   {{ cwd }}        the pane's working directory, abbreviated
+window-title-template "Winter - {{ title }}"
+
+// Underline fuzzy-matched characters in the command palette results list.
+palette-match-underline #false
+
+// Thickness of the line drawn between adjacent split panes, in logical pixels.
+pane-border-width 1
+
+// Right-click pastes from the clipboard instead of opening the context menu.
+paste-on-right-click #false
+
+// Underline auto-detected and OSC 8 hyperlink URLs. Default: false.
+url-underline #false
+
+// Restore the previous tab/pane layout on launch. Default: false.
+restore-session #false
+
+// ── Reading aids ──────────────────────────────────────────────────────────
+// Color brackets by nesting depth, so a deep expression reads at a glance.
+rainbow-parens #false
+
+// Band alternating sentences, as a reading aid over long paragraphs of output.
+sentence-highlight #false
+
+// Hang the continuation of a soft-wrapped line under where the line started,
+// instead of at column zero. Like wrap-words, applied to the scrollback when a
+// width change settles. Default: true.
+wrap-indent #true
+
+// Break soft wraps at word boundaries (the partial word after the last space on
+// a full row moves down with the wrap) instead of exactly at the margin
+// mid-word. Applied to the scrollback when a pane's width change settles: the
+// visible screen always wraps at the margin, because programs redraw it
+// assuming that. Default: true.
+wrap-words #true
+
+// ── Cursor ────────────────────────────────────────────────────────────────────
+// Per-mode cursor shapes: "block", "bar" (vertical beam), or "underline".
+cursor {
+    // Blink the cursor in the focused pane. Default: true.
+    blink #true
+    insert "bar"
+    normal "block"
+    visual "block"
+
+    // Inactive (non-focused) panes show their cursor as a hollow outline, so
+    // you can see where each one stands; set this to hide it there entirely.
+    // Default: false.
+    hide-in-inactive #false
+}
+
+// Dim inactive panes by blending their colors toward the background. Default: false.
+dim-inactive #false
+
+// ── Status bar ────────────────────────────────────────────────────────────────
+status-bar {
+    // Show or hide the entire status bar (freeing its reserved row when hidden).
+    // Default: shown.
+    show #true
+
+    // Show the current mode label (N / I / V / B).
+    // Default: hidden (#false).
+    show-mode #false
+
+    // What the right side shows, in order from the left; the first ones are
+    // dropped when short of room. Leave a name out to hide it, or write a bare
+    // `segments` to show none. The bell always stays at the right edge.
+    //   antigravity, claude, zai  each AI provider's quota, under its logo
+    //   tool                      where the focused tool's keys stand (12:5, 340 lines),
+    //                             then its icon
+    // Default: all, in the order below.
+    segments "antigravity" "claude" "zai" "tool"
+}
+
+notifications {
+    // Show warnings and errors as cards stacked in the window's top-right
+    // corner; confirmations are said in the status bar. With #false every
+    // notice is said in the status bar. While the bar is hidden, every notice
+    // is a card. All are kept: the bell at the status bar's right edge opens
+    // the history.
+    // Default: shown (#true).
+    toasts #true
+}
+
+// Which line-editor bindings your shell answers to, for Vim operators on the
+// prompt line (d/c/r/~ and prompt undo/redo in Normal mode). Winter sends the
+// shell the equivalent keystrokes, so it has to know which set to send; it
+// cannot detect this, because no shell reports its editing mode.
+//   "emacs" the readline/ZLE default: C-a, C-k, C-u, C-w, M-d
+//   "none"  do not translate. Use this if your shell is in vi mode
+//           (bindkey -v, set editing-mode vi, fish vi bindings): those chords
+//           mean something else there, and the shell gives you Vim editing on
+//           the prompt line anyway.
+prompt-edit-bindings "emacs"
+
+// ── Security ──────────────────────────────────────────────────────────────────
+// Let programs read the clipboard through OSC 52 (`ESC ] 52 ; c ; ?`). Off by
+// default because the query is silent and unconditional on the querying side:
+// any program in the pane, including one behind `ssh`, could pull what you last
+// copied. Replies are capped at 64 KiB of text.
+clipboard-read #false
+
+// ── Color overrides ───────────────────────────────────────────────────────────
+// Override individual colors from the active theme preset.
+// All keys are optional; remove the block entirely to use unmodified preset colors.
+//
+// Values shown are the "dark" preset defaults, which are magic-vscode's One Color theme.
+//
+// colors {
+//     background       "#262a32"
+//     foreground       "#bbc2cf"
+//     cursor-bg        "#51afef"
+//     cursor-fg        "#000000"
+//     selection-bg     "#2257a0"
+//     selection-fg     "#ffffff"
+//     split            "#51554f"   // pane separator line color (see also pane-border-width)
+//     status-bar-border "#3a3f45"  // 1px line above the status bar
+//     visual-bell      "#e08020"   // tab-bar flash color on bell (uses built-in default when unset)
+//     active-indicator "#1d4ed8"   // the active tab's top bar
+//     active-pane-border "#7d8590" // thin line under the focused pane when several are shown
+//
+//     // The git views, defaulting (on the dark preset) to magic-vscode's palette. Any name
+//     // can be omitted; one the theme sets none for is derived from its ANSI colors.
+//     git {
+//         modified "#8fb1f5"
+//         added "#91af22"
+//         deleted "#da5f59"
+//         renamed "#d1b32f"
+//         unmerged "#a75abe"
+//         header-staged "#1bb1b1"
+//         header-unstaged "#da8548"
+//         header-untracked "#63b417"
+//         header "#51afef"
+//         ref-head "#cf81f5"
+//         ref-local "#cf81f5"
+//         ref-remote "#cf81f5"
+//         ref-tag "#2d9574"
+//         unpushed "#7bdd0b"
+//         file-staged "#1bb1b1"
+//         file-unstaged "#da8548"
+//         file-untracked "#63b417"
+//         file-conflict "#f14c4c"
+//         file-band "#14708acc"
+//         hunk-band "#1f3e4e"
+//         inserted-line "#23372dfb"
+//         inserted-text "#215714df"
+//         removed-line "#512b3299"
+//         removed-text "#8f3f3fdf"
+//     }
+//
+//     // Any color may end in an alpha byte ("#rrggbbaa"). A color is blended over the
+//     // background once, when the config loads. The background's own alpha makes the
+//     // window see-through (multiplied with the top-level `opacity`); the tab bar,
+//     // menus and status bar stay solid.
+//
+//     // Source in the built-in editor, defaulting (on the dark preset) to magic-vscode's
+//     // palette. Any name can be omitted; one the theme sets none for uses its ANSI colors.
+//     syntax {
+//         comment "#718b9f"
+//         keyword "#51afef"
+//         number "#da8548"
+//         string "#2d9574"
+//         type "#cf517a"
+//     }
+//
+//     // 8 normal ANSI colors, by name. Any name can be omitted.
+//     ansi {
+//         black "#1b2229"
+//         red "#c22727"
+//         green "#71b312"
+//         yellow "#faa213"
+//         blue "#4fa2fa"
+//         magenta "#bb67b2"
+//         cyan "#21afbf"
+//         white "#bbc2cf"
+//     }
+//
+//     // 8 bright ANSI colors, same names as above.
+//     brights {
+//         black "#7a7a7a"
+//         red "#d43f30"
+//         green "#71b312"
+//         yellow "#ebb909"
+//         blue "#5da2eb"
+//         magenta "#c97df5"
+//         cyan "#04cfe1"
+//         white "#e1ebfa"
+//     }
+//
+//     // Override a single 256-color palette entry (index 0-255).
+//     indexed {
+//         "136" "#af8700"
+//     }
+// }
