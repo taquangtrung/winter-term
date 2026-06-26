@@ -1,0 +1,70 @@
+# Maintainer: Quang Trung Ta <taquangtrungvn@gmail.com>
+#
+# Builds from the release tarball rather than a -bin package: Arch users
+# expect a source build, and the dependency set below is exactly what the
+# Linux CI job installs, so a break here shows up in CI first.
+#
+# Publishing checklist:
+#   1. Update pkgver, and set pkgrel back to 1.
+#   2. updpkgsums                    # rewrites sha256sums from the tarball
+#   3. makepkg --printsrcinfo > .SRCINFO
+#   4. Commit PKGBUILD and .SRCINFO to the AUR repo.
+
+pkgname=winter-term
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Web-native terminal emulator with GPU rendering and rich MIME-typed block output"
+arch=('x86_64' 'aarch64')
+url="https://github.com/taquangtrung/winter-term"
+license=('MIT')
+depends=('gtk3' 'webkit2gtk-4.1' 'libsoup3' 'gcc-libs' 'glibc')
+makedepends=('cargo' 'pkgconf')
+provides=('winter')
+conflicts=('winter')
+source=("$pkgname-$pkgver.tar.gz::$url/archive/refs/tags/v$pkgver.tar.gz")
+sha256sums=('SKIP')
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    # Vendor up front so build() runs with --offline, which is what makepkg
+    # expects and what makes the build reproducible.
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --locked --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --frozen --release -p winter-term
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    # Headless: the suite covers the parser, grid, config, and mux, none of
+    # which need a display.
+    cargo test --frozen --workspace
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    install -Dm755 "target/release/winter" "$pkgdir/usr/bin/winter"
+    install -Dm644 "winter-terminal.desktop" \
+        "$pkgdir/usr/share/applications/winter-terminal.desktop"
+    install -Dm644 "crates/winter-term/assets/icons/winter-terminal.png" \
+        "$pkgdir/usr/share/pixmaps/winter-terminal.png"
+    install -Dm644 "crates/winter-term/assets/icons/winter-terminal-64.png" \
+        "$pkgdir/usr/share/icons/hicolor/64x64/apps/winter-terminal.png"
+    install -Dm644 "LICENSE" "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+
+    for shell in bash zsh fish; do
+        install -Dm644 "clients/shell-integration/winter.$shell" \
+            "$pkgdir/usr/share/winter-term/shell-integration/winter.$shell"
+    done
+    install -Dm644 "crates/winter-term/samples/settings.kdl" \
+        "$pkgdir/usr/share/doc/$pkgname/examples/settings.kdl"
+    install -Dm644 "crates/winter-term/samples/keybindings.kdl" \
+        "$pkgdir/usr/share/doc/$pkgname/examples/keybindings.kdl"
+}

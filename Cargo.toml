@@ -1,0 +1,45 @@
+[workspace]
+members = [
+    "crates/winter-term",
+    "crates/winter-core",
+    "crates/winter-proto",
+    "crates/winter-render",
+    "clients/client-rs",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Quang Trung Ta <taquangtrungvn@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/taquangtrung/winter-term"
+homepage = "https://github.com/taquangtrung/winter-term"
+keywords = ["terminal", "pty", "multiplexer", "terminal-emulator", "vim"]
+categories = ["command-line-interface", "command-line-utilities"]
+readme = "README.md"
+# The verified floor, not an aspiration: `rust-toolchain.toml` pins 1.96.0 and
+# CI builds the MSRV job against exactly this value. The dependency graph
+# already forces most of it (kdl declares 1.95, cosmic-text 1.89), so a lower
+# number here would be a claim that cannot build. Bump deliberately, and only
+# after the MSRV CI job passes at the new value.
+rust-version = "1.96"
+
+[workspace.dependencies]
+anyhow = "1"
+base64 = "0.22"
+winter-core = { version = "0.1.0", path = "crates/winter-core" }
+winter-proto = { version = "0.1.0", path = "crates/winter-proto" }
+winter-render = { version = "0.1.0", path = "crates/winter-render" }
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+regex = "1"
+# Default features deliberately left on: `std` is what gives the unbounded
+# OSC buffer. vte 0.13 defaulted to `no_std` (a fixed 1 KiB ArrayVec) and so
+# needed `default-features = false` to get the same thing; 0.15 inverted that,
+# so disabling defaults now silently truncates any TBP escape over 1 KiB.
+vte = "0.15"
+wgpu = "30"
+winresource = "0.1"

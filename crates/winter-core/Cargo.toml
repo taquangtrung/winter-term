@@ -1,0 +1,22 @@
+[package]
+name = "winter-core"
+description = "Winter core: PTY-driven terminal that parses a session into a block list."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "pty", "scrollback", "shell", "osc133"]
+categories = ["command-line-interface", "os"]
+rust-version.workspace = true
+readme = "README.md"
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+winter-proto.workspace = true
+portable-pty.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+vte.workspace = true

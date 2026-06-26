@@ -1,0 +1,19 @@
+[package]
+name = "winter-proto"
+description = "Terminal Block Protocol (TBP) v1: wire types and codec."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "protocol", "mime", "osc", "jupyter"]
+categories = ["encoding", "parser-implementations"]
+rust-version.workspace = true
+readme = "README.md"
+
+[dependencies]
+base64.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

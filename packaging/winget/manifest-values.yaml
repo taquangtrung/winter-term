@@ -1,0 +1,29 @@
+# Stable metadata for the winget submission. Everything here is
+# version-independent; the version, installer URL, and SHA256 come from the
+# published release asset at submission time. See README.md in this directory.
+PackageIdentifier: QuangTrungTa.WinterTerminal
+PackageName: Winter Terminal
+Publisher: Quang Trung Ta
+PublisherUrl: https://github.com/taquangtrung
+PackageUrl: https://github.com/taquangtrung/winter-term
+License: MIT
+LicenseUrl: https://github.com/taquangtrung/winter-term/blob/main/LICENSE
+ShortDescription: Web-native terminal emulator with GPU rendering and rich MIME-typed block output
+Description: >-
+  Winter is a terminal emulator that models command output as a sequence of
+  typed, MIME-tagged blocks a web engine can render inline (tables, charts,
+  math, PDFs, images), with a text/plain fallback everywhere else. It is modal
+  in the vim sense: an Insert mode that forwards to the PTY, and a Normal mode
+  with operators, text objects, registers, marks, and search over the whole
+  scrollback, working with any shell.
+Moniker: winter
+Tags:
+  - terminal
+  - terminal-emulator
+  - pty
+  - multiplexer
+  - vim
+InstallerType: inno
+InstallerLocale: en-US
+Installers:
+  - Architecture: x64

@@ -1,0 +1,55 @@
+name: Bug report
+description: Something in Winter behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a security issue (a crash reachable from terminal output, a rich block
+        escaping its trust tier), please use the private channel in `SECURITY.md`
+        instead of a public issue.
+  - type: input
+    id: version
+    attributes:
+      label: Winter version
+      description: Output of `winter --version`.
+      placeholder: "0.1.0"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options: [Linux, macOS, Windows]
+    validations:
+      required: true
+  - type: input
+    id: shell
+    attributes:
+      label: Shell
+      placeholder: "zsh 5.9, with shell integration sourced"
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what you expected instead
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: |
+        The smallest steps that trigger it. For a rendering or parsing bug, the byte
+        stream matters most: a `printf` of the escape sequence, or a file to `cat`,
+        is the single most useful thing you can include.
+      render: shell
+    validations:
+      required: true
+  - type: textarea
+    id: config
+    attributes:
+      label: Relevant config
+      description: Anything non-default from `settings.kdl` or `keybindings.kdl`.
+      render: kdl
