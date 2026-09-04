@@ -5171,7 +5171,7 @@ dependencies = [
 name = "winter-client"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "serde",
  "serde_json",
  "winter-proto",
@@ -5182,7 +5182,7 @@ name = "winter-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "base64 0.22.1",
+ "base64 0.23.1",
  "portable-pty",
  "serde",
  "serde_json",
@@ -5194,7 +5194,7 @@ dependencies = [
 name = "winter-proto"
 version = "0.1.0"
 dependencies = [
- "base64 0.22.1",
+ "base64 0.23.1",
  "serde",
  "serde_json",
  "thiserror 2.0.20",
@@ -5221,7 +5221,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "arboard",
- "base64 0.22.1",
+ "base64 0.23.1",
  "gtk",
  "image",
  "kdl",

@@ -27,7 +27,7 @@ rust-version = "1.96"
 
 [workspace.dependencies]
 anyhow = "1"
-base64 = "0.22"
+base64 = "0.23"
 winter-core = { version = "0.1.0", path = "crates/winter-core" }
 winter-proto = { version = "0.1.0", path = "crates/winter-proto" }
 winter-render = { version = "0.1.0", path = "crates/winter-render" }
