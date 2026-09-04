@@ -31,7 +31,7 @@ jobs:
             libjavascriptcoregtk-4.1-dev libxdo-dev
       - run: cargo install cargo-deb --locked
       - run: make package
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: linux-deb
           path: target/debian/*.deb
@@ -47,7 +47,7 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - run: make package
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: macos-dmg
           path: target/*.dmg
@@ -75,7 +75,7 @@ jobs:
         env:
           WINTER_VERSION: ${{ steps.version.outputs.value }}
         run: '"C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /Q packaging\windows\installer.iss'
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: windows-installer
           path: target/*.exe
