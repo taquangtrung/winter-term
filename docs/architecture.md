@@ -109,11 +109,41 @@ The default ceiling is `Restricted`, so nothing arriving from a PTY can reach `T
 
 `crates/winter-term/src/model/` is a pure layer: modes, split-tree geometry, key resolution, the command palette, and the settings page, with std-only dependencies and no side effects. This is what makes the vim layer testable without a window, and it is where most of the 967 test functions live.
 
-There are three per-pane modes. Insert encodes keys to bytes for the PTY. Normal intercepts keys as motions, operators, and layout actions, which is what lets the vim vocabulary work against any shell without shell-side configuration. Block-Focus forwards keys to a rich block until `Esc`.
+The mode machine is per pane and has four states. Insert encodes keys to bytes for the PTY. Normal intercepts them as motions, operators, and layout actions. Visual is Normal with motions extending a selection. Block-Focus forwards keys to a rich block until `Esc`.
+
+One transition is deliberately asymmetric: `Esc` in Normal stays in Normal. Only `i`, `a`, or `o` return to Insert, so the key that means "stop what I am doing" everywhere else cannot drop the next keystroke into the shell mid-navigation.
 
 Layout is a binary split tree per tab (`crates/winter-term/src/model/layout.rs`): leaves are panes, internal nodes are splits with a ratio clamped to `[0.1, 0.9]` so a pane can never be squeezed to zero. `PaneId`s are allocated by the owner so they stay unique across tabs.
 
 `crates/winter-term/src/app/mod.rs` wires this to `winit`, with submodules splitting the `App` by concern: `init` for GPU bootstrap, `actions` for dispatch, `render` for frame composition, `navigation` for motions and search, `pointer` for mouse and clipboard, `blocks` for fold and yank.
+
+## Normal mode
+
+Normal mode is what lets the vim vocabulary work against any shell without shell-side configuration: Winter owns the keyboard while it is active, so those keys never reach the PTY and nothing has to be installed on the far end of an `ssh`. It is also the largest subsystem in the application, roughly 12,000 lines across the key resolver, the mode machine, and the navigation submodules.
+
+### Resolving a key
+
+`resolve_with` takes the pane's mode, the key event, and a mutable `PendingPrefix`, and returns an `Action`; Insert, Normal, and Visual each have their own resolver behind it. The pending prefix is what makes multi-key sequences work without a parser. It is an explicit state machine holding what has been typed but not yet spent, so `d`, `i`, `w` arrives as three separate key events that leave `Delete`, then `DeleteObject { around: false }`, then a resolved action.
+
+Counts live in the same enum (`Count(usize)`, accumulating digits until a motion spends them), alongside the operator-pending states, the `[` and `]` bracket prefixes, and `Ctrl-W` for window commands. Because the prefix is a value rather than hidden control flow, a half-typed sequence can be rendered: the which-key popup is a view over it.
+
+### Motions and text objects
+
+The motion primitives are pure functions over a `&Grid` with no `App` state involved, which is why they are cheap to test. Word classification follows vim's: blanks separate words, and small-word motions (`w`, `b`, `e`) treat keyword runs and punctuation runs as different classes, while big-word motions (`W`, `B`, `E`) treat every non-blank as one class.
+
+A text object pairs a kind (word, big word, a quote character, or a bracket pair) with an `around` flag, which is the `i` versus `a` distinction. Visual mode carries a selection kind so characterwise, linewise, and blockwise selections share one code path.
+
+### What persists, and where
+
+Most of this state is per pane, keyed by `PaneId`: the jumplist, the changelist, the last change that `.` replays, and marks. Registers are the deliberate exception, one `char`-keyed map shared across every pane, so a yank in one pane pastes in another.
+
+The jumplist keeps 100 origins and forks like undo history when you jump after stepping back. The changelist reuses that structure but is append-only, because a changelist is a log of historical facts rather than a tree to navigate, and consecutive duplicate positions collapse so repeated edits at one spot do not fill it with noise.
+
+### Editing the shell's prompt line
+
+Normal mode never forwards keys to the PTY, which is a problem for operators aimed at the command line the shell is currently editing, because the shell owns that text and Winter cannot edit it directly. So a prompt-line delete is translated into the readline keystrokes that produce the same result: arrow keys to move the line editor's cursor under the vim cursor, then a kill.
+
+That translation assumes the shell's default emacs-mode bindings. A shell already in vi mode has those chords bound elsewhere, which is what the `prompt-edit-bindings "none"` setting exists for: it tells Winter to decline prompt-line operators and leave the line to the shell, which provides vim editing there anyway. Undo delegates to readline's own undo rather than replaying the edit backwards, so line-editor plugins that redraw on every keystroke repaint once instead of flashing through a rebuild.
 
 ## Multiplexer
 

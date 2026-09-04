@@ -213,3 +213,210 @@ pub(super) const ANSI_COLORS: [(u8, u8, u8); 16] = [
     (0, 255, 255),
     (255, 255, 255),
 ];
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::grid::Style;
+
+    #[test]
+    fn test_xterm_256_first_16_are_ansi() {
+        assert_eq!(xterm_256_to_rgb(0), (0, 0, 0));
+        assert_eq!(xterm_256_to_rgb(1), (128, 0, 0));
+        assert_eq!(xterm_256_to_rgb(7), (192, 192, 192));
+        assert_eq!(xterm_256_to_rgb(15), (255, 255, 255));
+    }
+    #[test]
+    fn test_xterm_256_cube() {
+        let (r, g, b) = xterm_256_to_rgb(16 + 36 + 6 + 1);
+        assert!(r > 0);
+        assert!(g > 0);
+        assert!(b > 0);
+    }
+    #[test]
+    fn test_xterm_256_grey_ramp() {
+        let (r, g, b) = xterm_256_to_rgb(232);
+        assert_eq!(r, g);
+        assert_eq!(g, b);
+        assert!(r >= 8);
+    }
+    #[test]
+    fn test_grid_color_default() {
+        let theme = Theme::default();
+        let (r, g, b) = grid_color_to_rgb(&GridColor::Default, &theme);
+        assert_eq!((r, g, b), theme.background.as_linear());
+    }
+    #[test]
+    fn test_cell_text_fg_keeps_the_cells_own_rgb_foreground() {
+        // Regression: selected text used to be repainted with a fixed
+        // `theme.selection_fg`, so a cell's own ANSI/RGB color (e.g.
+        // syntax-highlighted output) changed when selected. Selection
+        // should only add a background highlight.
+        let theme = Theme::default();
+        let cell = Cell {
+            style: Style {
+                foreground: GridColor::Rgb(RgbColor {
+                    r: 10,
+                    g: 200,
+                    b: 30,
+                }),
+                ..Style::default()
+            },
+            ..Cell::default()
+        };
+        assert_eq!(cell_text_fg(Some(&cell), &theme), (10, 200, 30));
+    }
+    #[test]
+    fn test_cell_text_fg_swaps_on_reverse_video() {
+        let theme = Theme::default();
+        let cell = Cell {
+            style: Style {
+                foreground: GridColor::Rgb(RgbColor {
+                    r: 10,
+                    g: 200,
+                    b: 30,
+                }),
+                background: GridColor::Rgb(RgbColor { r: 5, g: 5, b: 5 }),
+                reversed: true,
+                ..Style::default()
+            },
+            ..Cell::default()
+        };
+        assert_eq!(cell_text_fg(Some(&cell), &theme), (5, 5, 5));
+    }
+    #[test]
+    fn test_cell_text_fg_falls_back_to_theme_foreground_for_default_color() {
+        let theme = Theme::default();
+        let cell = Cell::default();
+        assert_eq!(
+            cell_text_fg(Some(&cell), &theme),
+            (theme.foreground.r, theme.foreground.g, theme.foreground.b)
+        );
+        assert_eq!(
+            cell_text_fg(None, &theme),
+            (theme.foreground.r, theme.foreground.g, theme.foreground.b)
+        );
+    }
+    #[test]
+    fn test_resolve_fg_linear_default() {
+        let theme = Theme::default();
+        let (r, g, b) = resolve_fg_linear(GridColor::Default, &theme);
+        assert_eq!((r, g, b), theme.foreground.as_linear());
+    }
+    #[test]
+    fn test_grid_color_rgb() {
+        let theme = Theme::default();
+        let (r, g, b) = grid_color_to_rgb(
+            &GridColor::Rgb(RgbColor {
+                r: 255,
+                g: 128,
+                b: 0,
+            }),
+            &theme,
+        );
+        assert!((r - 1.0).abs() < 0.01);
+        assert!((g - 0.5).abs() < 0.01);
+        assert!((b - 0.0).abs() < 0.01);
+    }
+    #[test]
+    fn test_needs_dark_on_light_bold_flags_black_on_bright_highlight() {
+        // A dark badge foreground (e.g. an SGR-colored log-level tag) on a
+        // bright background is exactly the case the sRGB linear-light blend
+        // thins out, so it must be flagged for the synthetic-bold fix.
+        assert!(needs_dark_on_light_bold((0, 0, 0), (93, 162, 235)));
+        // The default theme's selection colors are also dark-on-light.
+        let theme = Theme::default();
+        assert!(needs_dark_on_light_bold(
+            (
+                theme.selection_fg.r,
+                theme.selection_fg.g,
+                theme.selection_fg.b
+            ),
+            (
+                theme.selection_bg.r,
+                theme.selection_bg.g,
+                theme.selection_bg.b
+            ),
+        ));
+    }
+    #[test]
+    fn test_needs_dark_on_light_bold_ignores_light_on_dark_and_close_luminance() {
+        // Light text on a dark background is the case linear-light blending
+        // already renders crisp; it must not also get bolded.
+        assert!(!needs_dark_on_light_bold((255, 255, 255), (0, 0, 0)));
+        // Two colors within the margin are too close in luminance for the
+        // thinning artifact to be visible, so no compensation is needed.
+        assert!(!needs_dark_on_light_bold((100, 100, 100), (110, 110, 110)));
+    }
+    #[test]
+    fn test_cursor_contrast_fg_repaints_only_text_that_clashes_with_the_cursor() {
+        let theme = Theme::dark();
+        let cursor = (theme.cursor_bg.r, theme.cursor_bg.g, theme.cursor_bg.b);
+
+        // Text in (or near) the cursor's own color would be invisible inside the
+        // block, so it's repainted in something that stands out.
+        let fixed = cursor_contrast_fg(cursor, &theme).expect("identical color needs a repaint");
+        assert!(color_distance(fixed, cursor) >= CURSOR_CONTRAST_MIN);
+
+        // Ordinary text already contrasts and keeps its own color.
+        let fg = (theme.foreground.r, theme.foreground.g, theme.foreground.b);
+        assert_eq!(cursor_contrast_fg(fg, &theme), None);
+    }
+    #[test]
+    fn test_cursor_contrast_fg_falls_back_when_cursor_fg_also_clashes() {
+        // A theme whose cursor_fg is as lost in the cursor fill as the text is
+        // still has to produce something readable.
+        let mut theme = Theme::dark();
+        theme.cursor_bg = Rgb::new(0, 0, 0);
+        theme.cursor_fg = Rgb::new(4, 4, 4);
+        assert_eq!(cursor_contrast_fg((0, 0, 0), &theme), Some((255, 255, 255)));
+
+        theme.cursor_bg = Rgb::new(255, 255, 255);
+        theme.cursor_fg = Rgb::new(250, 250, 250);
+        assert_eq!(cursor_contrast_fg((255, 255, 255), &theme), Some((0, 0, 0)));
+    }
+    #[test]
+    fn test_block_cursor_cell_follows_the_shell_cursor_without_a_nav_cursor() {
+        // Insert mode has no nav cursor, so the covered cell tracks the shell's
+        // own caret (shifted by the scroll offset, as the drawn quad is).
+        assert_eq!(
+            block_cursor_cell(CursorShape::Block, false, None, true, (3, 7), 0),
+            Some((3, 7))
+        );
+        assert_eq!(
+            block_cursor_cell(CursorShape::Block, false, None, true, (3, 7), 5),
+            Some((8, 7))
+        );
+        // Normal/Visual: the traversal cursor wins.
+        assert_eq!(
+            block_cursor_cell(CursorShape::Block, false, Some((1, 2)), true, (3, 7), 0),
+            Some((1, 2))
+        );
+    }
+    #[test]
+    fn test_block_cursor_cell_is_none_for_thin_hidden_or_hollow_cursors() {
+        // A bar or underline leaves the glyph's ink visible, a hidden cursor
+        // covers nothing, and a hollow cursor's fill doesn't cover the glyph
+        // either, so none of these need a repaint.
+        assert_eq!(
+            block_cursor_cell(CursorShape::Bar, false, None, true, (0, 0), 0),
+            None
+        );
+        assert_eq!(
+            block_cursor_cell(CursorShape::Underline, false, None, true, (0, 0), 0),
+            None
+        );
+        assert_eq!(
+            block_cursor_cell(CursorShape::Block, false, None, false, (0, 0), 0),
+            None
+        );
+        assert_eq!(
+            block_cursor_cell(CursorShape::Block, true, None, true, (0, 0), 0),
+            None
+        );
+    }
+}

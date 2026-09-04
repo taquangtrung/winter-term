@@ -2334,3 +2334,156 @@ pub(super) fn which_key_rgba(
         y: (tip_y - margin).round(),
     }
 }
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::test_support::*;
+
+    #[test]
+    fn test_which_key_rgba_is_centered_card() {
+        let mut font_system = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let surface_w = 1000.0;
+        let surface_h = 800.0;
+
+        let view = WhichKeyView {
+            title: "g + ...".to_string(),
+            items: vec![
+                ("g".to_string(), "top of buffer".to_string()),
+                ("v".to_string(), "restore visual".to_string()),
+            ],
+        };
+
+        let image = which_key_rgba(
+            &mut font_system,
+            &mut swash,
+            &ctx,
+            &theme,
+            &view,
+            surface_w,
+            surface_h,
+        );
+
+        // Centered horizontally: left margin plus card width / 2 is close to surface_w / 2
+        let card_center_x = image.x + image.width as f32 / 2.0;
+        assert!(
+            (card_center_x - surface_w / 2.0).abs() < 50.0,
+            "which-key card is roughly centered"
+        );
+        // Body is non-empty and opaque
+        assert!(image.width > 100);
+        assert!(image.height > 50);
+        let center_idx = ((image.height / 2 * image.width + image.width / 2) * 4) as usize;
+        assert_eq!(image.rgba[center_idx + 3], 255, "card interior is opaque");
+    }
+    #[test]
+    fn test_dropdown_rgba_is_an_elevated_rounded_card() {
+        let mut font_system = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let tabbar = sample_menu_chrome(None);
+
+        let image = dropdown_rgba(&mut font_system, &mut swash, &ctx, &theme, &tabbar, 1000.0)
+            .expect("menu is open");
+        let pixel = |x: u32, y: u32| {
+            let i = ((y * image.width + x) * 4) as usize;
+            (
+                image.rgba[i],
+                image.rgba[i + 1],
+                image.rgba[i + 2],
+                image.rgba[i + 3],
+            )
+        };
+        let margin = DROPDOWN_SHADOW as u32;
+
+        // The outer corner is fully transparent: the panel does not fill the
+        // shadow margin (this is a floating card, not a full-bleed rectangle).
+        assert_eq!(pixel(0, 0).3, 0);
+        // The panel's own top-left corner is rounded away (not fully opaque)...
+        assert!(pixel(margin, margin).3 < 255);
+        // ...while the top padding band is the opaque elevated surface color,
+        // proving both the lighter menu_bg and the vertical padding are applied.
+        let (r, g, b, a) = pixel(image.width / 2, margin + 2);
+        assert_eq!(
+            (r, g, b, a),
+            (theme.menu_bg.r, theme.menu_bg.g, theme.menu_bg.b, 255)
+        );
+    }
+    #[test]
+    fn test_toast_rgba_is_a_top_right_pill_below_the_tabbar() {
+        let mut font_system = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let surface_w = 1000.0;
+        let top_inset = 40.0;
+
+        let image = toast_rgba(
+            &mut font_system,
+            &mut swash,
+            &ctx,
+            &theme,
+            "Copied to clipboard",
+            theme.ansi[4],
+            surface_w,
+            top_inset,
+        );
+
+        // Anchored to the right: the pill's right edge is near the surface edge,
+        // sitting in the right half of the surface rather than centered.
+        assert!(image.x > surface_w / 2.0, "toast sits in the right half");
+        assert!(
+            image.x + image.width as f32 <= surface_w,
+            "not clipped right"
+        );
+        // Dropped below the tab bar: its top is at or beneath the tab-bar height.
+        assert!(image.y >= top_inset - ctx.line_height, "below the tabbar");
+        // The panel's padding band is the opaque elevated surface color.
+        let i = ((image.height / 2 * image.width + image.width / 2) * 4) as usize;
+        assert_eq!(image.rgba[i + 3], 255, "pill body is opaque");
+    }
+    #[test]
+    fn test_dropdown_overlay_is_pixel_snapped() {
+        // Real displays have fractional cell metrics; without snapping, the
+        // overlay lands on sub-pixel boundaries and the linear sampler blurs it.
+        let mut font_system = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let theme = Theme::dark();
+        let ctx = FontCtx {
+            cell_h: 19.4,
+            cell_w: 9.6,
+            family: None,
+            font_has_bold: true,
+            font_size: 14.0,
+            line_height: 19.4,
+            normal_weight: None,
+            bold_weight: None,
+        };
+        let tabbar = sample_menu_chrome(None);
+        let image = dropdown_rgba(&mut font_system, &mut swash, &ctx, &theme, &tabbar, 1003.0)
+            .expect("menu is open");
+        assert_eq!(image.x.fract(), 0.0, "overlay x must be whole pixels");
+        assert_eq!(image.y.fract(), 0.0, "overlay y must be whole pixels");
+    }
+    #[test]
+    fn test_rounded_rect_sdf_signs() {
+        let rect = (0.0, 0.0, 100.0, 100.0);
+        let radius = 20.0;
+        // The center is well inside (negative distance).
+        assert!(rounded_rect_sdf(50.0, 50.0, rect, radius) < 0.0);
+        // A point far outside is positive.
+        assert!(rounded_rect_sdf(150.0, 50.0, rect, radius) > 0.0);
+        // The very corner of the bounding box lies outside the rounded shape...
+        assert!(rounded_rect_sdf(1.0, 1.0, rect, radius) > 0.0);
+        // ...while the middle of an edge, the same depth in, is inside.
+        assert!(rounded_rect_sdf(1.0, 50.0, rect, radius) < 0.0);
+    }
+}
