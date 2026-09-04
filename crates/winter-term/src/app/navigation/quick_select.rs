@@ -26,7 +26,7 @@ fn block_containing(offsets: &[usize], target: usize) -> Option<usize> {
 }
 
 // ========================================================================
-// App — quick-select
+// App: quick-select
 // ========================================================================
 
 impl App {

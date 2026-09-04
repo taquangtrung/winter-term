@@ -1,9 +1,11 @@
 //! Printing text into the grid: graphemes, wide cells, and auto-wrap.
 
-use super::*;
+use super::Grid;
+use super::{Cell, CellWidth, Style};
+use unicode_width::UnicodeWidthChar;
 
 // ========================================================================
-// Items
+// Grid: printing text
 // ========================================================================
 
 impl Grid {

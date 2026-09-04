@@ -1,9 +1,19 @@
 //! GPU surface and device setup, resizing, and renderer configuration.
 
-use super::*;
+use super::background::*;
+use super::glyphs::*;
+use super::GpuRenderer;
+use super::PaneRect;
+use crate::glyph_quad::GlyphQuadPass;
+use crate::image::ImagePass;
+use crate::theme::Theme;
+use glyphon::{Cache, ColorMode, SwashCache, TextAtlas, TextRenderer, Viewport};
+use wgpu::{
+    BufferUsages, DeviceDescriptor, MultisampleState, Surface, SurfaceConfiguration, TextureFormat,
+};
 
 // ========================================================================
-// Items
+// GpuRenderer: surface and configuration
 // ========================================================================
 
 impl GpuRenderer {

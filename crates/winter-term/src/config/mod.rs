@@ -104,6 +104,7 @@ pub(crate) const DEFAULT_WINDOW_TITLE_TEMPLATE: &str = "Winter - {{ title }}";
 // Data Structures
 // ========================================================================
 
+/// Which glyphs the status bar draws for each indicator.
 #[derive(Clone, Debug)]
 pub struct StatusBarIconsConfig {
     pub normal: String,
@@ -140,6 +141,7 @@ impl Default for StatusBarConfig {
     }
 }
 
+/// Everything the configuration files can set.
 #[derive(Clone, Debug)]
 pub struct Config {
     /// Let programs read the clipboard through OSC 52 (`ESC ] 52 ; c ; ?`).
@@ -573,6 +575,7 @@ impl Config {
         }
     }
 
+    /// Read a config file, falling back to defaults when it is absent or unreadable.
     pub fn load_from(path: &PathBuf) -> Self {
         let text = match std::fs::read_to_string(path) {
             Ok(t) => t,
@@ -598,6 +601,7 @@ impl Config {
         (config, error)
     }
 
+    /// Parse configuration text, falling back to defaults for anything malformed.
     pub fn parse(text: &str) -> Self {
         Self::parse_checked(text).0
     }

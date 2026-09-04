@@ -45,7 +45,7 @@ const SETTINGS_FIRST_ROW: usize = 3;
 const SETTINGS_HINT: &str = "↑/↓ Move     ←/→ Change     Space Toggle     Enter/Esc Close";
 
 // ========================================================================
-// App — rendering
+// App: rendering
 // ========================================================================
 
 impl App {

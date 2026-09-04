@@ -1,7 +1,7 @@
 //! Cursor motions and the text objects operators act on.
 
 // ========================================================================
-// Items
+// Data Structures
 // ========================================================================
 
 /// A vim char-search within the current line. `forward` is `f`/`t`; `till`
@@ -30,6 +30,7 @@ pub struct GotoMark {
     pub mark: char,
 }
 impl GotoMark {
+    /// A jump to a mark; `exact` restores the column as well as the line.
     pub fn new(mark: char, exact: bool) -> Self {
         Self { exact, mark }
     }
@@ -49,6 +50,7 @@ pub struct TextObjectSpec {
     pub object: TextObject,
 }
 impl TextObjectSpec {
+    /// A text object; `around` selects the `a` form rather than the `i` form.
     pub fn new(around: bool, object: TextObject) -> Self {
         Self { around, object }
     }

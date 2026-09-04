@@ -10,7 +10,7 @@ use winter_render::renderer::PaneRect;
 use super::App;
 
 // ========================================================================
-// App — pixel hit-testing helpers
+// App: pixel hit-testing helpers
 // ========================================================================
 
 impl App {

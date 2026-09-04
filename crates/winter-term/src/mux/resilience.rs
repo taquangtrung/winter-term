@@ -27,6 +27,7 @@ enum Transport {
     Remote(RemoteClient),
 }
 
+/// A mux client that reconnects on its own when the server goes away.
 pub struct ResilientClient {
     backoff: Duration,
     connected: bool,
@@ -101,6 +102,7 @@ impl Transport {
 }
 
 impl ResilientClient {
+    /// A client for one session on the server at `path`, connected on first use.
     pub fn new(path: &str, session: &str) -> Self {
         Self::build(
             Endpoint::Local {
@@ -138,6 +140,7 @@ impl ResilientClient {
         }
     }
 
+    /// Forward bytes, reconnecting first when the connection is down.
     pub fn send_input(&mut self, bytes: &[u8]) -> anyhow::Result<()> {
         if let Some(ref mut client) = self.inner {
             let result = client.send_input(&self.session, bytes);
@@ -149,6 +152,7 @@ impl ResilientClient {
         Ok(())
     }
 
+    /// Report geometry, reconnecting first when the connection is down.
     pub fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
         self.last_resize = Some((cols, rows));
         if let Some(ref mut client) = self.inner {
@@ -161,6 +165,7 @@ impl ResilientClient {
         Ok(())
     }
 
+    /// The next message from the server, or `None` when none is pending.
     pub fn recv(&mut self) -> Option<ServerMessage> {
         if let Some(ref mut client) = self.inner {
             match client.recv() {
@@ -190,6 +195,7 @@ impl ResilientClient {
         None
     }
 
+    /// Whether a live connection to the server is currently held.
     pub fn is_connected(&self) -> bool {
         self.connected
     }

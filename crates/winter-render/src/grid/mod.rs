@@ -16,9 +16,7 @@ pub use scroll::MAX_SCROLLBACK;
 use screen::AltBuffer;
 // The DEC private-mode flags are read by every module that touches grid state.
 
-use std::time::{Duration, Instant};
-
-use unicode_width::UnicodeWidthChar;
+use std::time::Instant;
 
 // ========================================================================
 // Data Structures

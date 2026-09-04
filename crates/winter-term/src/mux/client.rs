@@ -23,6 +23,7 @@ const POLL_INTERVAL: Duration = Duration::from_millis(10);
 // Data Structures
 // ========================================================================
 
+/// A connection to a mux server over a Unix domain socket.
 pub struct MuxClient {
     /// Set when the server closed its end of the connection: every further
     /// read returns EOF, so "nothing available right now" and "never
@@ -38,6 +39,7 @@ pub struct MuxClient {
 // ========================================================================
 
 impl MuxClient {
+    /// Connect to the server listening on the socket at `path`.
     pub fn connect(path: &str) -> anyhow::Result<Self> {
         let stream = UnixStream::connect(path)?;
         stream.set_nonblocking(true)?;
@@ -49,16 +51,19 @@ impl MuxClient {
         })
     }
 
+    /// Attach to a session, which the server creates if it is absent.
     pub fn attach(&mut self, session: &str) -> anyhow::Result<()> {
         self.send(&ClientMessage::Attach {
             session: session.to_string(),
         })
     }
 
+    /// Detach from the current session without killing it.
     pub fn detach(&mut self) -> anyhow::Result<()> {
         self.send(&ClientMessage::Detach)
     }
 
+    /// Forward bytes to a session's PTY.
     pub fn send_input(&mut self, session: &str, bytes: &[u8]) -> anyhow::Result<()> {
         self.send(&ClientMessage::Input {
             session: session.to_string(),
@@ -66,6 +71,7 @@ impl MuxClient {
         })
     }
 
+    /// Report this client's geometry; the server arbitrates the session's size.
     pub fn resize(&mut self, session: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
         self.send(&ClientMessage::Resize {
             session: session.to_string(),
@@ -74,10 +80,12 @@ impl MuxClient {
         })
     }
 
+    /// Ask for the session list; the reply arrives as a later message.
     pub fn list_sessions(&mut self) -> anyhow::Result<()> {
         self.send(&ClientMessage::ListSessions)
     }
 
+    /// Terminate a session and the process it is running.
     pub fn kill(&mut self, session: &str) -> anyhow::Result<()> {
         self.send(&ClientMessage::Kill {
             session: session.to_string(),

@@ -289,6 +289,7 @@ impl Default for Tab {
 // ========================================================================
 
 impl Rect {
+    /// A rectangle in physical pixels, measured from the top-left corner.
     pub fn new(x: f32, y: f32, width: f32, height: f32) -> Self {
         Self {
             height,

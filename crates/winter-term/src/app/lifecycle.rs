@@ -23,6 +23,7 @@ use super::CURSOR_BLINK_PERIOD;
 // ========================================================================
 
 impl App {
+    /// An app holding its first tab and pane, before any window or GPU exists.
     pub fn new() -> Self {
         let mut modes = HashMap::new();
         modes.insert(PaneId(0), Mode::default());

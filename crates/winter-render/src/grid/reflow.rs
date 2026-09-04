@@ -1,9 +1,10 @@
 //! Resizing the grid and reflowing wrapped rows to the new width.
 
-use super::*;
+use super::{Cell, CellWidth, Style};
+use super::{Cursor, Grid};
 
 // ========================================================================
-// Items
+// Grid: resize and reflow
 // ========================================================================
 
 impl Grid {
@@ -265,6 +266,7 @@ impl Grid {
 
 #[cfg(test)]
 mod tests {
+    use super::super::EraseMode;
     use super::*;
     use crate::grid::test_support::*;
 

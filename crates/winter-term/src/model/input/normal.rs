@@ -1,9 +1,14 @@
 //! Normal mode: resolving motions, counts, and operator sequences.
 
-use super::*;
+use super::{Action, Key, KeyCode};
+use super::{
+    BlockNav, CursorMove, FindChar, GotoMark, InsertAt, PendingPrefix, TextObject, TextObjectSpec,
+    VisualKind, WindowAction, WindowKeymap,
+};
+use crate::model::mode::{Mode, ModeEvent};
 
 // ========================================================================
-// Items
+// Normal mode: motion and operator resolution
 // ========================================================================
 
 /// The largest count a `5j`-style prefix accumulates; further digits clamp
@@ -643,6 +648,7 @@ pub(super) fn resolve_normal(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{resolve, Direction};
     use super::*;
     use crate::model::input::test_support::*;
 

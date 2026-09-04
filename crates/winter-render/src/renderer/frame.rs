@@ -1,9 +1,20 @@
 //! Drawing one frame: composing every pass into the surface texture.
 
-use super::*;
+use super::background::*;
+use super::chrome::*;
+use super::colors::*;
+use super::glyphs::*;
+use super::GpuRenderer;
+use super::{NoticeKind, PaneView, StatusBar, StatusNotice};
+use crate::glyph_quad::GlyphQuadPlacement;
+use crate::grid::{CellWidth, Color as GridColor, CursorShape};
+use crate::image::ImagePlacement;
+use crate::tabbar::TopTabbar;
+use glyphon::{Attrs, BufferLine, Color, Shaping, TextArea, TextBounds};
+use wgpu::{LoadOp, RenderPassColorAttachment, RenderPassDescriptor, StoreOp};
 
 // ========================================================================
-// Items
+// GpuRenderer: frame composition
 // ========================================================================
 
 impl GpuRenderer {

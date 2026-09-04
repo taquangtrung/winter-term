@@ -1,9 +1,10 @@
 //! The alternate screen buffer and the DEC private modes.
 
-use super::*;
+use super::{Cell, Style};
+use super::{Cursor, Grid};
 
 // ========================================================================
-// Items
+// Grid: alternate screen and DEC modes
 // ========================================================================
 
 impl Grid {
@@ -149,6 +150,7 @@ pub(crate) const MODE_SAVE_CURSOR: u16 = 1048;
 
 #[cfg(test)]
 mod tests {
+    use super::super::CursorShape;
     use super::*;
 
     #[test]

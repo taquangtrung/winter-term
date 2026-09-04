@@ -1,9 +1,10 @@
 //! Scrolling, the scroll region, and the scrollback history.
 
-use super::*;
+use super::Cell;
+use super::Grid;
 
 // ========================================================================
-// Items
+// Grid: scrolling and scrollback
 // ========================================================================
 
 impl Grid {
@@ -274,6 +275,7 @@ pub const MAX_SCROLLBACK: usize = 10_000;
 
 #[cfg(test)]
 mod tests {
+    use super::super::{Color, Style};
     use super::*;
     use crate::grid::test_support::*;
 

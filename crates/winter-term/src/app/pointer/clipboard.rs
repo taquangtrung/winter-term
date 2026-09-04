@@ -29,7 +29,7 @@ fn copy_confirmation(text: &str) -> String {
 }
 
 // ========================================================================
-// App — clipboard & selection
+// App: clipboard & selection
 // ========================================================================
 
 impl App {

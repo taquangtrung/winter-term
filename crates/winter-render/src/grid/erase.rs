@@ -1,9 +1,10 @@
 //! Erasing regions and inserting or deleting characters in place.
 
-use super::*;
+use super::Grid;
+use super::{Cell, CellWidth, EraseMode, Style};
 
 // ========================================================================
-// Items
+// Grid: erasing and in-place edits
 // ========================================================================
 
 impl Grid {
@@ -131,6 +132,7 @@ impl Grid {
 
 #[cfg(test)]
 mod tests {
+    use super::super::Color;
     use super::*;
 
     #[test]

@@ -25,10 +25,8 @@ use insert::{resolve_block_focus, resolve_insert};
 use normal::resolve_normal;
 use visual::resolve_visual;
 
-use std::collections::{HashMap, HashSet};
-
 use super::layout::{Direction, FocusDir};
-use super::mode::{Mode, ModeEvent};
+use super::mode::Mode;
 
 // ========================================================================
 // Data Structures

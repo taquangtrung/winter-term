@@ -1,9 +1,19 @@
 //! The unified vte performer driving both the cell grid and the block parser.
 
-use super::*;
+use super::shell::is_safe_url_scheme;
+use super::{
+    BACKSPACE, BELL, BLOCK_RESERVE_ROWS, CARRIAGE_RETURN, HORIZONTAL_TAB, LINE_FEED,
+    MAX_IMAGE_ROWS, RIS,
+};
+use base64::Engine;
+use std::io::Cursor;
+use vte::{Params, Perform};
+use winter_core::winter_proto::EmitBlock;
+use winter_core::{Performer, Scrollback, Segment};
+use winter_render::Grid;
 
 // ========================================================================
-// Items
+// CombinedPerformer
 // ========================================================================
 
 /// Maximum APC payload size to accumulate before aborting (guards against
@@ -809,7 +819,40 @@ impl Perform for CombinedPerformer {
 
 #[cfg(test)]
 mod tests {
+    use super::super::MAX_SCROLLBACK;
     use super::*;
+
+    /// Each control byte must reach its own grid operation. A refactor that
+    /// left these constants unimported turned every arm into a catch-all
+    /// binding, so every control byte ran `line_feed`, and the whole suite
+    /// still passed.
+    #[test]
+    fn test_execute_dispatches_each_control_byte_distinctly() {
+        let mut cp = CombinedPerformer::new(10, 3, MAX_SCROLLBACK);
+        for c in "abc".chars() {
+            cp.print(c);
+        }
+
+        // Carriage return returns to column 0 without changing row.
+        cp.execute(CARRIAGE_RETURN);
+        assert_eq!(cp.grid().cursor().1, 0, "CR must not move the row");
+        assert_eq!(cp.grid().cursor().0, 0, "CR must not line-feed");
+
+        // Tab advances within the row rather than feeding a line.
+        cp.execute(HORIZONTAL_TAB);
+        assert!(cp.grid().cursor().1 > 0, "tab must advance the column");
+        assert_eq!(cp.grid().cursor().0, 0, "tab must not line-feed");
+
+        // Backspace steps back one column, still on the same row.
+        let before = cp.grid().cursor().1;
+        cp.execute(BACKSPACE);
+        assert_eq!(cp.grid().cursor().1, before - 1, "backspace moves left one");
+        assert_eq!(cp.grid().cursor().0, 0, "backspace must not line-feed");
+
+        // Only line feed advances the row.
+        cp.execute(LINE_FEED);
+        assert_eq!(cp.grid().cursor().0, 1, "line feed must advance the row");
+    }
 
     #[test]
     fn test_combined_performer_print_feeds_both() {

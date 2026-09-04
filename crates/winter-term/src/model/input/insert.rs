@@ -1,9 +1,11 @@
 //! Insert mode: encoding key events into the bytes the PTY expects.
 
-use super::*;
+use super::WindowKeymap;
+use super::{Action, Key, KeyCode};
+use crate::model::mode::{Mode, ModeEvent};
 
 // ========================================================================
-// Items
+// Insert mode: key-to-byte encoding
 // ========================================================================
 
 pub(super) const CONTROL_MASK: u8 = 0x1f;
@@ -379,6 +381,7 @@ pub(super) fn ss3(final_byte: u8) -> Vec<u8> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::{resolve, FocusDir, PendingPrefix};
     use super::*;
     use crate::model::input::test_support::*;
 

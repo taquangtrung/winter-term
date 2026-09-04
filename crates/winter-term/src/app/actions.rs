@@ -13,7 +13,7 @@ use super::prompt_edit::{
 use super::{App, LastVisual, FONT_SIZE_STEP};
 
 // ========================================================================
-// App — action handling
+// App: action handling
 // ========================================================================
 
 impl App {

@@ -8,19 +8,15 @@ mod shell;
 
 use performer::{ApcDecision, CombinedPerformer};
 pub(crate) use shell::osc52_read_response;
-use shell::{is_safe_url_scheme, parse_foreground_process, resolve_shell};
+use shell::{parse_foreground_process, resolve_shell};
 
 use std::io::Write;
 use std::sync::mpsc;
 use std::thread;
 
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
-use std::io::Cursor;
 
-use base64::Engine;
-use vte::{Params, Perform};
-use winter_core::winter_proto::EmitBlock;
-use winter_core::{Performer, Scrollback, Segment};
+use winter_core::Scrollback;
 use winter_render::Grid;
 #[cfg(test)]
 use winter_render::MAX_SCROLLBACK;

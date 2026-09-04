@@ -2,7 +2,17 @@
 //! command palette, which-key hints, toasts, and URL tooltips, painted
 //! into RGBA buffers for the image pass.
 
-use super::*;
+use super::colors::*;
+use super::glyphs::*;
+use super::GpuRenderer;
+use super::{NoticeKind, StatusNotice};
+use crate::image::ImagePlacement;
+use crate::tabbar::{
+    self, layout as tabbar_layout, DropdownLayout, MenuItem, Region, TabbarHit, TabbarLayout,
+    TopTabbar, HOVER_PILL_H_PAD_CELLS, NEW_TAB_BOTTOM_INSET_RATIO, TAB_H_PAD_CELLS, ZOOM_CELLS,
+};
+use crate::theme::{Rgb, Theme};
+use glyphon::{Attrs, BufferLine, Color, Family, FontSystem, Shaping, SwashCache, TextBounds};
 
 // ========================================================================
 // Constants

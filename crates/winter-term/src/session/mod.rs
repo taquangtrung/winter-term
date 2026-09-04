@@ -19,6 +19,7 @@ use crate::model::layout::{Direction, LayoutTree, PaneId, Tab};
 /// `PaneId -> (command, cwd)`.
 pub type PaneMetaMap = HashMap<PaneId, (Option<String>, Option<String>)>;
 
+/// A restart snapshot: every tab, its layout, and the panes inside it.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Session {
     /// Index of the tab that was active when the session was saved.
@@ -41,6 +42,7 @@ pub struct TabSnapshot {
     pub layout: SessionTree,
 }
 
+/// One pane's snapshot: the command it ran and the directory it ran in.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PaneSession {
     pub command: Option<String>,
@@ -68,6 +70,7 @@ pub enum SessionTree {
 // ========================================================================
 
 impl Session {
+    /// Write a snapshot of the current layout to the state directory.
     pub fn save(
         tabs: &[Tab],
         active_tab: usize,
@@ -83,12 +86,14 @@ impl Session {
         }
     }
 
+    /// Read the stored snapshot, or `None` when there is none to read.
     pub fn load() -> Option<Self> {
         let path = session_path();
         let text = std::fs::read_to_string(&path).ok()?;
         serde_json::from_str(&text).ok()
     }
 
+    /// Delete the stored snapshot.
     pub fn remove() {
         let path = session_path();
         if path.exists() {

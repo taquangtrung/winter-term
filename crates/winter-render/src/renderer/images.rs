@@ -1,7 +1,9 @@
 //! Image and rich-content uploads: decoded rasters, SVG, markdown, and
 //! text, cached as GPU textures.
 
-use super::*;
+use super::glyphs::*;
+use super::GpuRenderer;
+use glyphon::{Attrs, Family, Shaping};
 
 // ========================================================================
 // Constants

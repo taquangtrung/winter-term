@@ -17,6 +17,7 @@ const SECS_PER_DAY: u64 = SECS_PER_HOUR * 24;
 // Data Structures
 // ========================================================================
 
+/// A request sent from an attached client to the mux server.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// Attach to an existing session (or create if absent).
@@ -47,6 +48,7 @@ pub enum ClientMessage {
     },
 }
 
+/// A message the mux server sends out to its attached clients.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
     /// PTY output batch.
@@ -79,6 +81,7 @@ pub enum ServerMessage {
     Error { message: String },
 }
 
+/// One session's summary, as reported in a session listing.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SessionInfo {
     /// Clients currently attached to the session.
@@ -104,6 +107,7 @@ pub struct FrameBuffer {
 // Frame encoding
 // ========================================================================
 
+/// Frame a message as a four-byte big-endian length followed by JSON.
 pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {
     let json = serde_json::to_vec(msg).unwrap_or_default();
     let len = json.len() as u32;
@@ -112,6 +116,7 @@ pub fn encode<T: Serialize>(msg: &T) -> Vec<u8> {
     out
 }
 
+/// Decode one framed message, or `None` when the bytes are not valid.
 pub fn decode<T: serde::de::DeserializeOwned>(buf: &[u8]) -> Option<T> {
     if buf.len() < 4 {
         return None;
@@ -123,6 +128,7 @@ pub fn decode<T: serde::de::DeserializeOwned>(buf: &[u8]) -> Option<T> {
     serde_json::from_slice(&buf[4..4 + len]).ok()
 }
 
+/// Total length of the frame at the front of the buffer, prefix included.
 pub fn frame_len(buf: &[u8]) -> Option<usize> {
     if buf.len() < 4 {
         return None;
@@ -136,6 +142,7 @@ pub fn frame_len(buf: &[u8]) -> Option<usize> {
 // ========================================================================
 
 impl FrameBuffer {
+    /// An empty buffer, ready to accumulate frames read off a socket.
     pub fn new() -> Self {
         Self::default()
     }

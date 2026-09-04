@@ -103,7 +103,7 @@ impl Default for Terminal {
 }
 
 // ============================================================================
-// Performer — vte callbacks
+// Performer: vte callbacks
 // ============================================================================
 
 impl Default for Performer {

@@ -1,10 +1,14 @@
 //! Visual mode: Normal-mode resolution with motions extending a selection.
 
 use super::normal::{accumulate_count, motion_action};
-use super::*;
+use super::{Action, Key, KeyCode};
+use super::{
+    CursorMove, InsertAt, PendingPrefix, TextObject, TextObjectSpec, VisualKind, WindowKeymap,
+};
+use crate::model::mode::{Mode, ModeEvent};
 
 // ========================================================================
-// Items
+// Visual mode: selection-extending resolution
 // ========================================================================
 
 /// Resolve a key in Visual mode: the same motions as Normal extend the
@@ -151,6 +155,7 @@ pub(super) fn resolve_visual(
 
 #[cfg(test)]
 mod tests {
+    use super::super::{resolve, GotoMark};
     use super::*;
     use crate::model::input::test_support::*;
 

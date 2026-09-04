@@ -20,7 +20,7 @@ fn sgr_mouse_bytes(btn_code: u8, col: usize, row: usize, pressed: bool) -> Vec<u
 }
 
 // ========================================================================
-// App — PTY mouse forwarding
+// App: PTY mouse forwarding
 // ========================================================================
 
 impl App {

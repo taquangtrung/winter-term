@@ -44,6 +44,7 @@ pub enum PaletteMode {
     MuxAttachRemote,
 }
 
+/// One selectable row: what it shows and the command it runs.
 #[derive(Clone, Debug)]
 pub struct PaletteEntry {
     pub action: String,
@@ -54,6 +55,7 @@ pub struct PaletteEntry {
     pub shortcut: String,
 }
 
+/// The palette's open state: its query, matching entries, and selection.
 #[derive(Clone, Debug, Default)]
 pub struct Palette {
     pub active: bool,
@@ -78,6 +80,7 @@ pub struct Palette {
 // ========================================================================
 
 impl Palette {
+    /// Open over the command list, labelling entries with their bound chords.
     pub fn open(keymap: &WindowKeymap) -> Self {
         let entries = builtin_commands(keymap);
         let filtered = (0..entries.len()).collect();
@@ -95,6 +98,7 @@ impl Palette {
         }
     }
 
+    /// Open over previously entered queries instead of the command list.
     pub fn open_history() -> Self {
         let entries = load_history_entries();
         let filtered = (0..entries.len()).collect();
@@ -302,6 +306,7 @@ impl Palette {
         self
     }
 
+    /// Close the palette and discard the current query.
     pub fn close(&mut self) {
         self.active = false;
         self.query.clear();
@@ -311,6 +316,7 @@ impl Palette {
         self.selected = 0;
     }
 
+    /// Append a character to the query and refilter the entries.
     pub fn push_char(&mut self, c: char) {
         self.history_index = None;
         self.query.push(c);
@@ -318,6 +324,7 @@ impl Palette {
         self.update_filter();
     }
 
+    /// Delete the query's last character and refilter the entries.
     pub fn pop_char(&mut self) {
         self.history_index = None;
         self.query.pop();
@@ -388,18 +395,21 @@ impl Palette {
         }
     }
 
+    /// Move the selection one row up, stopping at the first.
     pub fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
         }
     }
 
+    /// Move the selection one row down, stopping at the last.
     pub fn move_down(&mut self) {
         if self.selected + 1 < self.filtered.len() {
             self.selected += 1;
         }
     }
 
+    /// The command the highlighted row would run, if any row is highlighted.
     pub fn selected_action(&self) -> Option<&str> {
         self.filtered
             .get(self.selected)

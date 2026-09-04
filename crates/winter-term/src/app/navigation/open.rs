@@ -253,7 +253,7 @@ fn enclosed_quote_span(line: &[char], idx: usize) -> Option<(usize, usize)> {
 }
 
 // ========================================================================
-// App — open under cursor, copy cwd
+// App: open under cursor, copy cwd
 // ========================================================================
 
 impl App {

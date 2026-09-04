@@ -1,7 +1,10 @@
 //! Glyph machinery: font configuration and loading, cell metrics,
 //! fallback glyphs, and shaping helpers.
 
-use super::*;
+use super::background::*;
+use super::GpuRenderer;
+use crate::glyph_quad::GlyphTexture;
+use glyphon::{Attrs, Color, Family, FontSystem, Shaping, SwashContent};
 
 // ========================================================================
 // Constants

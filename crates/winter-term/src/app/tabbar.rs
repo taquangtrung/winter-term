@@ -146,7 +146,7 @@ fn menu_item(item: &ItemDef) -> MenuItem {
 }
 
 // ========================================================================
-// App — tabbar model and interaction
+// App: tabbar model and interaction
 // ========================================================================
 
 impl App {

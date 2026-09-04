@@ -6,7 +6,7 @@ use crate::model::layout::PaneId;
 use super::App;
 
 // ========================================================================
-// App — block operations
+// App: block operations
 // ========================================================================
 
 impl App {

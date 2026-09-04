@@ -64,6 +64,7 @@ const PATCH_MIN_INTERVAL: Duration = Duration::from_millis(100);
 // Data Structures
 // ========================================================================
 
+/// Everything a tile needs in order to be created and positioned.
 pub struct TileParams {
     pub grid_row: usize,
     pub height: u32,
@@ -125,6 +126,7 @@ struct TileSlot {
 // ========================================================================
 
 impl WebViewManager {
+    /// A manager owning no tiles yet.
     pub fn new() -> Self {
         let (report_tx, report_rx) = mpsc::channel();
         Self {
@@ -134,6 +136,7 @@ impl WebViewManager {
         }
     }
 
+    /// Create a tile for a block and place it over the grid.
     pub fn create_block_tile(
         &mut self,
         pane_id: crate::model::layout::PaneId,

@@ -1,9 +1,10 @@
 //! Cursor motion, saved-cursor state, and cursor presentation.
 
-use super::*;
+use super::CursorShape;
+use super::Grid;
 
 // ========================================================================
-// Items
+// Grid: cursor motion
 // ========================================================================
 
 impl Grid {

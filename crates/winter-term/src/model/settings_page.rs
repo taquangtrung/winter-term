@@ -100,6 +100,7 @@ impl Control {
 // ========================================================================
 
 impl SettingsField {
+    /// A field cycling through named options, starting on the one at `index`.
     pub fn choice(key: &str, label: &str, options: Vec<ChoiceOption>, index: usize) -> Self {
         Self::new(
             key,
@@ -108,6 +109,7 @@ impl SettingsField {
         )
     }
 
+    /// A numeric field clamped to `min..=max` and stepped by `step`.
     pub fn number(
         key: &str,
         label: &str,
@@ -130,10 +132,12 @@ impl SettingsField {
         )
     }
 
+    /// A free-text field.
     pub fn text(key: &str, label: &str, value: String) -> Self {
         Self::new(key, label, Control::Text(TextControl { value }))
     }
 
+    /// A field toggling between on and off.
     pub fn toggle(key: &str, label: &str, on: bool) -> Self {
         Self::new(key, label, Control::Toggle(ToggleControl { on }))
     }
@@ -166,6 +170,7 @@ impl SettingsField {
 // ========================================================================
 
 impl SettingsPage {
+    /// A page over these fields, with the first one selected.
     pub fn new(fields: Vec<SettingsField>) -> Self {
         Self {
             fields,
@@ -173,12 +178,14 @@ impl SettingsPage {
         }
     }
 
+    /// Move the selection to the previous field, stopping at the first.
     pub fn move_up(&mut self) {
         if self.selected > 0 {
             self.selected -= 1;
         }
     }
 
+    /// Move the selection to the next field, stopping at the last.
     pub fn move_down(&mut self) {
         if self.selected + 1 < self.fields.len() {
             self.selected += 1;

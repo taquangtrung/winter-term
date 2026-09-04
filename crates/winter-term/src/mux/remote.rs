@@ -22,6 +22,7 @@ const RECV_BUFFER_BYTES: usize = 8192;
 // Data Structures
 // ========================================================================
 
+/// A mux client whose transport is an SSH tunnel to another host.
 pub struct RemoteClient {
     child: Child,
     /// Set by the reader thread once the bridge's stdout closes: the
@@ -82,6 +83,7 @@ impl RemoteClient {
         })
     }
 
+    /// Send one request over the tunnel.
     pub fn send(&mut self, msg: &ClientMessage) -> anyhow::Result<()> {
         let encoded = protocol::encode(msg);
         self.stdin.write_all(&encoded)?;
@@ -89,6 +91,7 @@ impl RemoteClient {
         Ok(())
     }
 
+    /// Forward bytes to a remote session's PTY.
     pub fn send_input(&mut self, session: &str, bytes: &[u8]) -> anyhow::Result<()> {
         self.send(&ClientMessage::Input {
             session: session.to_string(),
@@ -96,6 +99,7 @@ impl RemoteClient {
         })
     }
 
+    /// Report this client's geometry to the remote session.
     pub fn resize(&mut self, session: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
         self.send(&ClientMessage::Resize {
             session: session.to_string(),

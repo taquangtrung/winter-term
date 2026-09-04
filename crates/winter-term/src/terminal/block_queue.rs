@@ -22,6 +22,7 @@ pub struct BlockQueue {
     scanned_segments: Vec<usize>,
 }
 
+/// One rich block together with where it was anchored in the grid.
 #[derive(Clone, Debug)]
 pub struct BlockEntry {
     pub block_index: usize,
@@ -67,6 +68,7 @@ fn live_emit(live: &LiveBlock) -> EmitBlock {
 // ========================================================================
 
 impl BlockQueue {
+    /// An empty queue.
     pub fn new() -> Self {
         Self::default()
     }
@@ -140,6 +142,7 @@ impl BlockQueue {
         }
     }
 
+    /// Every queued block, in the order it was emitted.
     pub fn entries(&self) -> &[BlockEntry] {
         &self.entries
     }

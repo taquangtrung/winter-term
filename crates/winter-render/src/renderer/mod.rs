@@ -10,27 +10,12 @@
 //! Multi-pane rendering is supported: pass a slice of [`PaneView`] items, each
 //! with a viewport rect and a grid reference. Each pane is clipped to its rect.
 
-use glyphon::{
-    Attrs, BufferLine, Cache, Color, ColorMode, Family, FontSystem, Shaping, SwashCache,
-    SwashContent, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport,
-};
-use wgpu::{
-    BufferUsages, ColorTargetState, ColorWrites, Device, DeviceDescriptor, FragmentState,
-    FrontFace, LoadOp, MultisampleState, PipelineLayoutDescriptor, PolygonMode, PrimitiveState,
-    PrimitiveTopology, Queue, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
-    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, StoreOp, Surface,
-    SurfaceConfiguration, TextureFormat, VertexAttribute, VertexBufferLayout, VertexFormat,
-    VertexState, VertexStepMode,
-};
+use glyphon::{Cache, FontSystem, SwashCache, TextAtlas, TextRenderer, Viewport};
+use wgpu::{Device, Queue, RenderPipeline, Surface, SurfaceConfiguration};
 
-use crate::glyph_quad::{GlyphQuadPass, GlyphQuadPlacement, GlyphTexture};
-use crate::grid::{Cell, CellWidth, Color as GridColor, CursorShape, Grid, RgbColor};
-use crate::image::{ImagePass, ImagePlacement};
-use crate::tabbar::{
-    self, layout as tabbar_layout, DropdownLayout, MenuItem, Region, TabbarHit, TabbarLayout,
-    TopTabbar, HOVER_PILL_H_PAD_CELLS, NEW_TAB_BOTTOM_INSET_RATIO, TAB_H_PAD_CELLS, ZOOM_CELLS,
-};
-use crate::theme::{Rgb, Theme};
+use crate::glyph_quad::GlyphQuadPass;
+use crate::image::ImagePass;
+use crate::theme::Theme;
 mod frame;
 mod surface;
 mod view;
@@ -42,10 +27,7 @@ mod colors;
 mod glyphs;
 mod images;
 
-use background::*;
-use chrome::*;
 pub use chrome::{PaletteItem, PaletteView, WhichKeyView};
-use colors::*;
 use glyphs::*;
 pub use glyphs::{start_font_load, FontConfig, FontLoad};
 

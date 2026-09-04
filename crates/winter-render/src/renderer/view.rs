@@ -1,9 +1,10 @@
 //! The view types a caller fills in to describe one frame's contents.
 
-use super::*;
+use crate::grid::{CursorShape, Grid};
+use crate::theme::Rgb;
 
 // ========================================================================
-// Items
+// Data Structures
 // ========================================================================
 
 /// A viewport rect for one pane, in pixels from the surface top-left.

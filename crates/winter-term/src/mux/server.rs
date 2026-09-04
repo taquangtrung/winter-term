@@ -70,6 +70,7 @@ struct Client {
     wanted: HashMap<String, (u16, u16)>,
 }
 
+/// The mux server: owns every PTY session and routes output to clients.
 pub struct MuxServer {
     path: String,
 }
@@ -145,12 +146,14 @@ impl Client {
 }
 
 impl MuxServer {
+    /// A server that will listen on the socket at `path`.
     pub fn new(path: &str) -> Self {
         MuxServer {
             path: path.to_string(),
         }
     }
 
+    /// Serve connections until the process is asked to stop.
     pub fn run(self) -> anyhow::Result<()> {
         let listener = bind_socket(&self.path)?;
         listener.set_nonblocking(true)?;
@@ -657,6 +660,7 @@ fn is_socket_live(path: &str) -> bool {
     }
 }
 
+/// The socket path used when the user names no other.
 pub fn default_socket_path() -> String {
     match crate::paths::runtime_dir() {
         Some(dir) => format!("{dir}/winter-mux.sock"),

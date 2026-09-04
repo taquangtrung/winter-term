@@ -1,9 +1,9 @@
 //! The pending-prefix state machine backing multi-key sequences.
 
-use super::*;
+use super::TextObjectSpec;
 
 // ========================================================================
-// Items
+// PendingPrefix
 // ========================================================================
 
 /// Tracks a pending prefix awaiting the second key in a vim-style multi-key

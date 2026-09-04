@@ -1,7 +1,8 @@
 //! Color resolution: grid colors, the indexed palettes, and blending
 //! math shared by every pass.
 
-use super::*;
+use crate::grid::{Cell, Color as GridColor, CursorShape, RgbColor};
+use crate::theme::{Rgb, Theme};
 
 // ========================================================================
 // Constants

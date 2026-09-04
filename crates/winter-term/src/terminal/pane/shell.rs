@@ -1,9 +1,9 @@
 //! Shell resolution and the small OSC/process helpers a pane needs.
 
-use super::*;
+use base64::Engine;
 
 // ========================================================================
-// Items
+// Shell resolution and OSC helpers
 // ========================================================================
 
 /// Resolve a bare shell name (e.g. `zsh`, `fish`) to a full path by searching

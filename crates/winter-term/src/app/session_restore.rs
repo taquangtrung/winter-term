@@ -10,7 +10,7 @@ use crate::terminal::pane::{Pane, MUX_COMMAND_PREFIX, MUX_REMOTE_COMMAND_PREFIX}
 use super::{content_rows, App, APPROX_CELL_HEIGHT, APPROX_CELL_WIDTH, DEFAULT_COLS, DEFAULT_ROWS};
 
 // ========================================================================
-// App — session restore
+// App: session restore
 // ========================================================================
 
 impl App {

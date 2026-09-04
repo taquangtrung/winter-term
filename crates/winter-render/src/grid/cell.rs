@@ -1,7 +1,7 @@
 //! Cell contents and the value types describing how a cell is drawn.
 
 // ========================================================================
-// Items
+// Data Structures
 // ========================================================================
 
 /// One screen cell: a character, its styling, and its display width role.

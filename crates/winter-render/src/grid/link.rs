@@ -1,9 +1,11 @@
 //! OSC 8 hyperlinks and the URL scanner that finds bare links.
 
-use super::*;
+use super::Cell;
+use super::Grid;
+use std::time::{Duration, Instant};
 
 // ========================================================================
-// Items
+// Grid: hyperlinks and URL scanning
 // ========================================================================
 
 impl Grid {

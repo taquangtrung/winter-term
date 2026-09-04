@@ -52,6 +52,7 @@ struct Session {
     writer: Box<dyn Write + Send>,
 }
 
+/// Owns every live PTY session and publishes what they write.
 pub struct SessionManager {
     next_id: u64,
     sessions: HashMap<String, Session>,
@@ -97,6 +98,7 @@ impl ScrollbackRing {
 }
 
 impl SessionManager {
+    /// A manager that publishes session output on the given channel.
     pub fn new(output_tx: mpsc::Sender<ServerMessage>) -> Self {
         SessionManager {
             next_id: 1,
@@ -105,6 +107,7 @@ impl SessionManager {
         }
     }
 
+    /// Spawn a session under this name; an existing name is an error.
     pub fn create(&mut self, name: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
         self.create_with(
             name,
@@ -212,6 +215,7 @@ impl SessionManager {
         Ok(())
     }
 
+    /// Forward bytes to a session's PTY.
     pub fn write(&mut self, name: &str, bytes: &[u8]) -> anyhow::Result<()> {
         if let Some(session) = self.sessions.get_mut(name) {
             session.writer.write_all(bytes)?;
@@ -236,6 +240,7 @@ impl SessionManager {
             .map(|s| s.history.snapshot().to_vec())
     }
 
+    /// Set a session's PTY geometry.
     pub fn resize(&mut self, name: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
         if let Some(session) = self.sessions.get_mut(name) {
             session.master.resize(PtySize {
@@ -293,14 +298,17 @@ impl SessionManager {
         defs
     }
 
+    /// Terminate a session and drop its PTY.
     pub fn kill(&mut self, name: &str) {
         self.sessions.remove(name);
     }
 
+    /// The names of every live session.
     pub fn session_names(&self) -> Vec<String> {
         self.sessions.keys().cloned().collect()
     }
 
+    /// Whether a session by this name is live.
     pub fn has(&self, name: &str) -> bool {
         self.sessions.contains_key(name)
     }

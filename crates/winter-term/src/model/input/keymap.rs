@@ -1,9 +1,12 @@
 //! Configurable bindings: parsing chords and resolving them to actions.
 
-use super::*;
+use super::BlockNav;
+use super::{Action, Key, KeyCode};
+use crate::model::layout::{Direction, FocusDir};
+use std::collections::{HashMap, HashSet};
 
 // ========================================================================
-// Items
+// Keymap: bindings and chord parsing
 // ========================================================================
 
 /// A configurable Insert-mode line edit at the shell prompt. Each is realized by
@@ -695,6 +698,7 @@ pub(super) fn parse_function_key(name: &str) -> Option<KeyCode> {
 #[cfg(test)]
 mod tests {
     use super::super::insert::encode;
+    use super::super::{resolve_with, Mode, PendingPrefix, TextObject, TextObjectSpec};
     use super::*;
     use crate::model::input::test_support::*;
 

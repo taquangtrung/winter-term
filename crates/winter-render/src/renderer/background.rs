@@ -1,7 +1,18 @@
 //! Background pass: cell, cursor, selection, and scrollbar quads, plus
 //! the wgpu pipelines that draw them.
 
-use super::*;
+use super::chrome::*;
+use super::colors::*;
+use super::glyphs::*;
+use super::PaneRect;
+use crate::grid::{Color as GridColor, CursorShape, Grid};
+use crate::theme::Theme;
+use wgpu::{
+    ColorTargetState, ColorWrites, Device, FragmentState, FrontFace, MultisampleState,
+    PipelineLayoutDescriptor, PolygonMode, PrimitiveState, PrimitiveTopology, RenderPipeline,
+    RenderPipelineDescriptor, ShaderModuleDescriptor, ShaderSource, TextureFormat, VertexAttribute,
+    VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
+};
 
 // ========================================================================
 // Constants
@@ -1049,6 +1060,7 @@ pub(super) fn quad_vertices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::RgbColor;
 
     #[test]
     fn test_bg_vertex_bytes_roundtrip() {
