@@ -869,7 +869,7 @@ mod tests {
         cp.print('c');
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[1;1HX" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.grid().cell(0, 0).map(|c| c.ch), Some('X'));
         assert_eq!(cp.grid().cell(0, 1).map(|c| c.ch), Some('b'));
@@ -909,7 +909,7 @@ mod tests {
             trust: TrustTier::Restricted,
         }));
         for &b in emit_escape.as_bytes() {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         let after_image = cp.grid().cursor().0;
         assert_eq!(
@@ -923,7 +923,7 @@ mod tests {
             spec: serde_json::json!("# live"),
         }));
         for &b in open_escape.as_bytes() {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(
             cp.grid().cursor().0 - after_image,
@@ -952,7 +952,7 @@ mod tests {
         }));
         let mut parser = vte::Parser::new();
         for &b in escape.as_bytes() {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         let anchors = cp.take_block_anchors();
         let scrolled = cp.grid().scrollback_len();
@@ -975,13 +975,13 @@ mod tests {
         let mut cp = CombinedPerformer::new(20, 10, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b]52;c;?\x07" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert!(cp.take_clipboard_read());
         assert!(!cp.take_clipboard_read(), "the flag is edge-triggered");
 
         for &b in b"\x1b]52;p;?\x07" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert!(
             !cp.take_clipboard_read(),
@@ -991,7 +991,7 @@ mod tests {
         let payload = base64::engine::general_purpose::STANDARD.encode("hi");
         let write = format!("\x1b]52;c;{payload}\x07");
         for &b in write.as_bytes() {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert!(!cp.take_clipboard_read(), "a write is not a read");
         assert_eq!(cp.take_clipboard_write().as_deref(), Some("hi"));
@@ -1066,13 +1066,13 @@ mod tests {
         let mut parser = vte::Parser::new();
         // A TUI pushes the disambigulate flag, then crashes without popping it.
         for &b in b"\x1b[>1u" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.kitty_flags(), 1);
         // `reset` sends RIS (ESC c); legacy xterm encoding must return so shell
         // editing keys (Ctrl+W, Ctrl+C, ...) reach the PTY as raw control bytes.
         for &b in b"\x1bc" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.kitty_flags(), 0);
     }
@@ -1084,13 +1084,13 @@ mod tests {
         assert_eq!(cp.kitty_flags(), 0);
         // A full-screen app enters the alt screen and pushes the disambiguate flag.
         for &b in b"\x1b[?1049h\x1b[>1u" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.kitty_flags(), 1);
         // Returning to the main screen must expose the shell's own (empty) stack,
         // not the flags the alt-screen app left behind.
         for &b in b"\x1b[?1049l" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.kitty_flags(), 0);
     }
@@ -1105,11 +1105,11 @@ mod tests {
         let mut cp = CombinedPerformer::new(120, 40, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[>7u" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.kitty_flags(), 7);
         for &b in b"\x1b[<u" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.kitty_flags(), 0);
     }
@@ -1120,7 +1120,7 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[c" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         let resp = cp.take_pending_responses();
         assert!(
@@ -1137,7 +1137,7 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[>c" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         let resp = cp.take_pending_responses();
         assert!(
@@ -1152,7 +1152,7 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[=c" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         let resp = cp.take_pending_responses();
         assert!(
@@ -1166,7 +1166,7 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[>q" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         let resp = cp.take_pending_responses();
         let text = String::from_utf8_lossy(&resp);
@@ -1186,7 +1186,7 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[2 q" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         let resp = cp.take_pending_responses();
         assert!(
@@ -1202,7 +1202,7 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[5n" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.take_pending_responses(), b"\x1b[0n");
     }
@@ -1214,7 +1214,7 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 5, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[3;5H\x1b[6n" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.take_pending_responses(), b"\x1b[3;5R");
     }
@@ -1224,7 +1224,7 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[>4;2m" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.modify_other_keys(), Some(2));
     }
@@ -1234,11 +1234,11 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[>4;2m" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.modify_other_keys(), Some(2));
         for &b in b"\x1b[>4m" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.modify_other_keys(), None);
     }
@@ -1248,11 +1248,11 @@ mod tests {
         let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
         let mut parser = vte::Parser::new();
         for &b in b"\x1b[>4;2m" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.modify_other_keys(), Some(2));
         for &b in b"\x1bc" {
-            parser.advance(&mut cp, b);
+            parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.modify_other_keys(), None);
     }

@@ -80,9 +80,7 @@ impl Terminal {
 
     /// Consume a chunk of PTY output, updating the scrollback.
     pub fn feed(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.parser.advance(&mut self.performer, byte);
-        }
+        self.parser.advance(&mut self.performer, bytes);
     }
 
     /// The scrollback parsed so far.

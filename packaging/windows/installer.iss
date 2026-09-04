@@ -44,12 +44,12 @@ ArchitecturesInstallIn64BitMode=x64compatible
 CloseApplications=yes
 RestartApplications=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
-SetupIconFile=..\..\assets\icons\winter-terminal.ico
+SetupIconFile=..\..\crates\winter-term\assets\icons\winter-terminal.ico
 
 [Files]
 Source: "..\..\target\release\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
-Source: "..\..\samples\settings.kdl"; DestDir: "{app}\examples"; Flags: ignoreversion
-Source: "..\..\samples\keybindings.kdl"; DestDir: "{app}\examples"; Flags: ignoreversion
+Source: "..\..\crates\winter-term\samples\settings.kdl"; DestDir: "{app}\examples"; Flags: ignoreversion
+Source: "..\..\crates\winter-term\samples\keybindings.kdl"; DestDir: "{app}\examples"; Flags: ignoreversion
 ; Shell integration for shells reachable on Windows (Git Bash, MSYS2, WSL
 ; mounts). Winter's own ConPTY sessions use whatever shell the user configures.
 Source: "..\..\clients\shell-integration\winter.bash"; DestDir: "{app}\shell-integration"; Flags: ignoreversion

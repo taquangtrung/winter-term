@@ -353,11 +353,11 @@ impl Pane {
                 match self.combined.apc_filter(byte) {
                     ApcDecision::Drop => {}
                     ApcDecision::Pass => {
-                        self.parser.advance(&mut self.combined, byte);
+                        self.parser.advance(&mut self.combined, &[byte]);
                     }
                     ApcDecision::ReplayEscThenByte(b) => {
-                        self.parser.advance(&mut self.combined, b'\x1b');
-                        self.parser.advance(&mut self.combined, b);
+                        self.parser.advance(&mut self.combined, b"\x1b");
+                        self.parser.advance(&mut self.combined, &[b]);
                     }
                 }
             }

@@ -28,7 +28,7 @@ base64.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 kdl = { version = "6", features = ["serde"] }
 miette = "7"
-notify = "6"
+notify = "8"
 regex.workspace = true
 winter-core.workspace = true
 

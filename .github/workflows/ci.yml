@@ -117,6 +117,21 @@ jobs:
       - working-directory: clients/client-py
         run: uv run --with mypy mypy src
 
+  # Advisories are published without anyone touching this repository, so the
+  # weekly schedule above is what makes this job useful; a push-triggered run
+  # alone would only ever check code that just changed. The workspace exists to
+  # parse bytes it does not trust and the lockfile pulls in over 500 crates, so
+  # an unreviewed advisory is the most likely way a problem arrives here.
+  audit:
+    name: security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A prebuilt binary; building cargo-audit from source on every run costs
+      # more minutes than the check itself.
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit
+
   # Catches the crates.io rejections that only surface at publish time:
   # a missing description, an unreadable readme path, an excluded file.
   #
@@ -135,6 +150,10 @@ jobs:
       # path above the crate root resolves in the workspace and breaks only
       # for someone installing from the registry.
       - run: python3 scripts/check-embedded-paths.py
+      # The installers copy files in by relative path, so a file that moves
+      # in the repository breaks them silently until someone builds on the
+      # matching OS.
+      - run: python3 scripts/check-packaging-paths.py
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux GUI dependencies

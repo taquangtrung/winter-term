@@ -41,11 +41,9 @@ impl Screen {
 
     /// Consume a chunk of terminal output, updating the grid.
     pub fn feed(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.parser.advance(&mut self.grid, byte);
-            if byte == BELL {
-                self.bell = true;
-            }
+        self.parser.advance(&mut self.grid, bytes);
+        if bytes.contains(&BELL) {
+            self.bell = true;
         }
     }
 
