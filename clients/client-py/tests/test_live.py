@@ -6,8 +6,6 @@ import base64
 import io
 import json
 
-import pytest
-
 import winter
 
 
@@ -56,7 +54,9 @@ def test_update_emits_a_root_replace_patch(monkeypatch):
 def test_patch_ops_pass_through(monkeypatch):
     monkeypatch.setenv("WINTER", "1")
     out = io.StringIO()
-    block = winter.live_block("application/vnd.vega-lite+json", {"values": [1]}, stream=out)
+    block = winter.live_block(
+        "application/vnd.vega-lite+json", {"values": [1]}, stream=out
+    )
     out.seek(0)
     out.truncate(0)
 

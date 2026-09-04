@@ -10,24 +10,31 @@ use super::TextObjectSpec;
 /// sequence (e.g. `]b`, `[b`, `za`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PendingPrefix {
+    /// Awaiting the second key of a `]` sequence (next block, prompt, and so on).
     BracketClose,
+    /// Awaiting the second key of a `[` sequence (previous block, prompt, and so on).
     BracketOpen,
     /// A count typed before a motion (`5` before `j`), accumulating further
     /// digits until the motion that spends it resolves.
     Count(usize),
+    /// Awaiting a window command after `Ctrl-W`.
     CtrlW,
+    /// The change operator `c`, awaiting the motion or object it applies to.
     Change,
     /// Awaiting the search match direction after `cg` (`cgn`/`cgN`).
     ChangeG,
     /// Awaiting the object key of a change operator (`ci`/`ca`).
     ChangeObject {
+        /// True for the `a` (around) form, false for `i` (inner).
         around: bool,
     },
+    /// The delete operator `d`, awaiting the motion or object it applies to.
     Delete,
     /// Awaiting the search match direction after `dg` (`dgn`/`dgN`).
     DeleteG,
     /// Awaiting the object key of a delete operator (`di`/`da`).
     DeleteObject {
+        /// True for the `a` (around) form, false for `i` (inner).
         around: bool,
     },
     /// Awaiting the target char of a backward find (`F`).
@@ -36,12 +43,16 @@ pub enum PendingPrefix {
     FindLabel,
     /// Awaiting the target char of a forward find (`f`).
     FindForward,
+    /// Awaiting the second key of a `g` sequence (`gg`, `gx`, `g;`).
     G,
     /// Awaiting the letter after `` ` `` (`exact: true`) or `'` (`exact: false`).
     GotoMark {
+        /// True after `` ` `` (restore line and column), false after `'` (line only).
         exact: bool,
     },
+    /// No prefix pending; the next key stands alone.
     None,
+    /// Awaiting a label key from the quick-select overlay.
     QuickSelect,
     /// Awaiting a register name after `"` (`"a`..`"z`, `"0`..`"9`, `"+`, `"*`, `""`).
     Register,
@@ -51,18 +62,22 @@ pub enum PendingPrefix {
     ChangeSurroundTarget,
     /// Awaiting replacement delimiter after `cs<target>`.
     ChangeSurroundReplacement {
+        /// The delimiter being replaced.
         target: char,
     },
     /// Awaiting target delimiter after `ds` (delete surround).
     DeleteSurround,
     /// Awaiting target text object or motion after `ys`.
     YieldSurround {
+        /// True for the `a` (around) form, false for `i` (inner).
         around: bool,
     },
     /// Awaiting delimiter after `ys<object>`.
     YieldSurroundDelimiter {
+        /// The object the surround will wrap.
         spec: TextObjectSpec,
     },
+    /// Collecting the query for `/` or `?`; keys append until Enter or Escape.
     SearchInput,
     /// Awaiting the replacement char after `r`.
     ReplaceChar,
@@ -70,12 +85,14 @@ pub enum PendingPrefix {
     SetMark,
     /// Awaiting the object key of a visual text object (`i`/`a` in Visual mode).
     TextObject {
+        /// True for the `a` (around) form, false for `i` (inner).
         around: bool,
     },
     /// Awaiting the target char of a backward till (`T`).
     TillBackward,
     /// Awaiting the target char of a forward till (`t`).
     TillForward,
+    /// Awaiting the second key of a `z` sequence (fold and scroll commands).
     Z,
 }
 impl PendingPrefix {

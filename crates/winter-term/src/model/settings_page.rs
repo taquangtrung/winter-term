@@ -12,16 +12,22 @@
 /// The editable control behind one settings row.
 #[derive(Clone, Debug)]
 pub enum Control {
+    /// A field cycling through named options.
     Choice(ChoiceControl),
+    /// A numeric field with a range and step.
     Number(NumberControl),
+    /// A free-text field.
     Text(TextControl),
+    /// A field that is either on or off.
     Toggle(ToggleControl),
 }
 
 /// A cycling enum control (theme, menu style): the chosen `index` into `options`.
 #[derive(Clone, Debug)]
 pub struct ChoiceControl {
+    /// Index of the currently selected option.
     pub index: usize,
+    /// Every option this field can take.
     pub options: Vec<ChoiceOption>,
 }
 
@@ -29,7 +35,9 @@ pub struct ChoiceControl {
 /// `value` written to the config. They differ for e.g. "Modern" -> "modern".
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ChoiceOption {
+    /// What the option shows in the UI.
     pub label: String,
+    /// The value written to the config file.
     pub value: String,
 }
 
@@ -37,10 +45,15 @@ pub struct ChoiceOption {
 /// `decimals` controls how the value is formatted for both display and config.
 #[derive(Clone, Debug)]
 pub struct NumberControl {
+    /// How many decimal places to display.
     pub decimals: usize,
+    /// Largest accepted value.
     pub max: f32,
+    /// Smallest accepted value.
     pub min: f32,
+    /// How much one adjustment moves the value.
     pub step: f32,
+    /// The current value.
     pub value: f32,
 }
 
@@ -49,29 +62,38 @@ pub struct NumberControl {
 /// this row; `note` is an optional dim one-line description (VSCode-style).
 #[derive(Clone, Debug)]
 pub struct SettingsField {
+    /// The control this field renders as.
     pub control: Control,
+    /// The config key this field writes.
     pub key: String,
+    /// The field's label in the UI.
     pub label: String,
+    /// Extra explanation shown alongside the field.
     pub note: Option<String>,
+    /// Heading this field is grouped under.
     pub section: Option<String>,
 }
 
 /// The open settings page: an ordered list of `fields` and the `selected` row.
 #[derive(Clone, Debug)]
 pub struct SettingsPage {
+    /// Every field on the page, in display order.
     pub fields: Vec<SettingsField>,
+    /// Index of the field the cursor is on.
     pub selected: usize,
 }
 
 /// A free-text control (font family).
 #[derive(Clone, Debug)]
 pub struct TextControl {
+    /// The current text.
     pub value: String,
 }
 
 /// An on/off control (status-bar visibility flags).
 #[derive(Clone, Debug)]
 pub struct ToggleControl {
+    /// Whether the setting is enabled.
     pub on: bool,
 }
 

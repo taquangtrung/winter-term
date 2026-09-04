@@ -510,4 +510,25 @@ mod tests {
         // A row with no printed content reports column 0.
         assert_eq!(grid.visible_line_end(1), 0);
     }
+
+    /// Used to place the cursor at the first real character of a row.
+    #[test]
+    fn test_first_non_blank_col_skips_leading_blanks() {
+        let mut grid = Grid::new(8, 2);
+        grid.move_to(0, 3);
+        grid.print('x');
+        assert_eq!(grid.first_non_blank_col(0), 3);
+        assert_eq!(grid.first_non_blank_col(1), 0, "a blank row reports 0");
+    }
+
+    /// A combining mark must land on the wide character's own cell, not on the
+    /// spacer that occupies its right half.
+    #[test]
+    fn test_last_glyph_cell_index_steps_back_over_a_wide_spacer() {
+        let mut grid = Grid::new(8, 2);
+        grid.print('世');
+        let idx = grid.last_glyph_cell_index().expect("a glyph was printed");
+        assert_eq!(idx, grid.index(0, 0).unwrap(), "must skip the spacer half");
+        assert_eq!(grid.cell(0, 1).unwrap().width, CellWidth::Spacer);
+    }
 }

@@ -25,13 +25,18 @@ pub struct BlockQueue {
 /// One rich block together with where it was anchored in the grid.
 #[derive(Clone, Debug)]
 pub struct BlockEntry {
+    /// Index of the command block this content belongs to.
     pub block_index: usize,
     /// Set once the live block's `close` has been seen; always `false` for
     /// a one-shot `Content` block.
     pub closed: bool,
+    /// The block as the emitter sent it.
     pub emit: EmitBlock,
+    /// Grid row the block was anchored to when it arrived.
     pub grid_row: usize,
+    /// Whether the block is finished or still accepting patches.
     pub kind: BlockKind,
+    /// Index of the segment within the command block.
     pub segment_index: usize,
     /// The tier this block is actually granted: already clamped against the
     /// configured policy ceiling. Consumers may act on this directly.
@@ -44,7 +49,9 @@ pub struct BlockEntry {
 /// Distinguishes one-shot content blocks from live blocks that accept patches.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum BlockKind {
+    /// A one-shot block, complete when it arrives.
     Content,
+    /// A block still open to patches.
     Live,
 }
 

@@ -522,4 +522,17 @@ mod tests {
         assert!(grid.absolute_row_wraps(0));
         assert_eq!(grid.absolute_row_wrap_indent(1), 2);
     }
+
+    /// Hanging indent is opt-in; the accessor must report what was configured.
+    #[test]
+    fn test_wrap_indent_reflects_the_configured_setting() {
+        assert!(Grid::new(8, 2).wrap_indent(), "on by default");
+        assert!(!Grid::new(8, 2).with_wrap_indent(false).wrap_indent());
+        let mut grid = Grid::new(8, 2);
+        grid.set_wrap_indent(false);
+        assert!(
+            !grid.wrap_indent(),
+            "the setter must agree with the builder"
+        );
+    }
 }

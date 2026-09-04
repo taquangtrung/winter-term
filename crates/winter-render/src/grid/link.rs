@@ -252,4 +252,17 @@ mod tests {
             assert_eq!(grid.cells[i].style.link, 0);
         }
     }
+
+    /// Id 0 means "no hyperlink", so an interned URL must never receive it.
+    #[test]
+    fn test_find_link_id_is_zero_until_the_url_is_interned() {
+        let mut grid = Grid::new(8, 2);
+        assert_eq!(grid.find_link_id("https://example.com"), 0);
+
+        grid.set_active_link(Some("https://example.com"));
+        grid.print('x');
+        let id = grid.find_link_id("https://example.com");
+        assert_ne!(id, 0, "0 is reserved for cells with no link");
+        assert_eq!(grid.link_url(id), Some("https://example.com"));
+    }
 }

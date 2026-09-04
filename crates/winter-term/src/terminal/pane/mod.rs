@@ -543,14 +543,17 @@ impl Pane {
         self.combined.take_bell()
     }
 
+    /// The rich blocks this pane has emitted.
     pub fn block_queue(&self) -> &BlockQueue {
         &self.block_queue
     }
 
+    /// Mutable access to the emitted block list.
     pub fn block_queue_mut(&mut self) -> &mut BlockQueue {
         &mut self.block_queue
     }
 
+    /// Indices of live blocks patched since the last drain.
     pub fn drain_live_patches(&mut self) -> Vec<usize> {
         let blocks = self.combined.scrollback().blocks().to_vec();
         self.block_queue.drain_patched_live(&blocks)

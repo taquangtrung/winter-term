@@ -87,18 +87,32 @@
 //! }
 //! ```
 
+pub(crate) mod diagnostics;
+pub(crate) mod schema;
+pub(crate) mod state;
+pub(crate) mod theme;
+pub(crate) mod title;
 pub(crate) mod watch;
+
+use schema::{
+    color_named_block_kdl, color_overrides_from_kdl, controls_side_as_value,
+    controls_side_from_value, cursor_config_from_kdl, kdl_bool, kdl_string, parse_keys,
+    security_config_from_kdl, KdlConfig,
+};
+
+// Keep the flat `crate::config::<name>` paths the rest of the app already uses.
+pub(crate) use diagnostics::config_problems;
+pub(crate) use state::{config_dir, load_state, save_state, AppState};
+pub(crate) use theme::{available_themes, is_valid_theme_name, load_named_theme, save_named_theme};
+pub(crate) use title::{
+    expand_window_title_template, WindowTitleVars, DEFAULT_WINDOW_TITLE_TEMPLATE,
+};
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
 use winter_core::winter_proto::TrustTier;
 use winter_render::{ControlsSide, CursorShape, MenuStyle, Theme, ThemeRgb};
-
-/// The window title template used when `window-title-template` is unset (or set
-/// to empty). `{{ title }}` is the active tab's resolved title, so the default
-/// keeps the long-standing `"Winter - <title>"` look.
-pub(crate) const DEFAULT_WINDOW_TITLE_TEMPLATE: &str = "Winter - {{ title }}";
 
 // ========================================================================
 // Data Structures
@@ -107,8 +121,11 @@ pub(crate) const DEFAULT_WINDOW_TITLE_TEMPLATE: &str = "Winter - {{ title }}";
 /// Which glyphs the status bar draws for each indicator.
 #[derive(Clone, Debug)]
 pub struct StatusBarIconsConfig {
+    /// Glyph shown while the pane is in Normal mode.
     pub normal: String,
+    /// Glyph shown while the pane is in Insert mode.
     pub insert: String,
+    /// Glyph shown while the pane is in Block-Focus mode.
     pub block: String,
 }
 
@@ -126,8 +143,11 @@ impl Default for StatusBarIconsConfig {
 /// also frees its reserved row); `show_mode` toggles the mode indicator.
 #[derive(Clone, Debug)]
 pub struct StatusBarConfig {
+    /// Whether the status bar is drawn at all.
     pub enabled: bool,
+    /// Glyphs used for each mode indicator.
     pub icons: StatusBarIconsConfig,
+    /// Whether the current mode is named in the bar.
     pub show_mode: bool,
 }
 
@@ -150,14 +170,21 @@ pub struct Config {
     /// the clipboard's contents. Responses are capped (64 KiB of text).
     /// Default: `false`.
     pub clipboard_read: bool,
+    /// Per-color overrides layered over the selected theme.
     pub colors: ColorOverrides,
+    /// Cursor shape for each interaction mode.
     pub cursor: CursorConfig,
     /// Dim inactive panes by blending their colors toward the background. Default: `false`.
     pub dim_inactive: bool,
+    /// Font family name; the system default is used when absent.
     pub font_family: Option<String>,
+    /// Font size in points.
     pub font_size: f32,
+    /// Weight used for regular text.
     pub font_weight: Option<String>,
+    /// Weight used for bold text.
     pub font_weight_bold: Option<String>,
+    /// User keybindings, keyed by mode and then by chord.
     pub keybindings: HashMap<String, HashMap<String, String>>,
     /// Enable OpenType ligatures in the font renderer. Defaults to `false`:
     /// like most terminals, winter keeps each cell's glyph at its nominal
@@ -166,6 +193,7 @@ pub struct Config {
     pub ligatures: bool,
     /// Tabbar menu presentation: a modern hamburger dropdown or a classic menubar.
     pub menu_style: MenuStyle,
+    /// Window opacity, from 0.0 (transparent) to 1.0 (opaque).
     pub opacity: f32,
     /// Draw an underline under fuzzy-matched characters in the command palette.
     pub palette_match_underline: bool,
@@ -186,12 +214,19 @@ pub struct Config {
     pub security: SecurityConfig,
     /// Alternating background bands per sentence. Default: `false`.
     pub sentence_highlight: bool,
+    /// Shell to launch, overriding the platform-specific settings below.
     pub shell: Option<String>,
+    /// Shell to launch on Windows.
     pub shell_windows: Option<String>,
+    /// Shell to launch on Linux.
     pub shell_linux: Option<String>,
+    /// Shell to launch on macOS.
     pub shell_macos: Option<String>,
+    /// Status bar appearance.
     pub status_bar: StatusBarConfig,
+    /// Which theme to load.
     pub theme: ThemeSetting,
+    /// How the window's title bar is drawn.
     pub title_bar_style: TitleBarStyle,
     /// Underline `http://`/`https://` URLs (auto-detected and OSC 8
     /// hyperlinks alike). Default: `false`.
@@ -256,11 +291,15 @@ pub struct SecurityConfig {
 pub struct CursorConfig {
     /// Whether the cursor blinks. Applies only to the focused pane.
     pub blink: bool,
+    /// Cursor shape while a rich block has focus.
     pub block_focus: CursorShape,
     /// Hide the cursor entirely in inactive (non-focused) panes. Default: `true`.
     pub hide_in_inactive: bool,
+    /// Cursor shape in Insert mode.
     pub insert: CursorShape,
+    /// Cursor shape in Normal mode.
     pub normal: CursorShape,
+    /// Cursor shape in Visual mode.
     pub visual: CursorShape,
 }
 
@@ -284,19 +323,31 @@ pub struct ColorOverrides {
     /// The 8 standard ANSI colors, indexed in [`ANSI_COLOR_NAMES`] order. A
     /// `None` slot leaves that color at the active preset's value.
     pub ansi: [Option<ThemeRgb>; 8],
+    /// Terminal background.
     pub background: Option<ThemeRgb>,
+    /// Flash color used for the visual bell.
     pub bell: Option<ThemeRgb>,
     /// The 8 bright ANSI colors, same slot order as [`Self::ansi`].
     pub brights: [Option<ThemeRgb>; 8],
+    /// Cursor body color.
     pub cursor_bg: Option<ThemeRgb>,
+    /// Color of the glyph under the cursor.
     pub cursor_fg: Option<ThemeRgb>,
+    /// Line drawn between split panes.
     pub divider: Option<ThemeRgb>,
+    /// Default text color.
     pub foreground: Option<ThemeRgb>,
+    /// Scrollbar thumb color.
     pub scrollbar: Option<ThemeRgb>,
+    /// Border drawn along the status bar.
     pub status_bar_border: Option<ThemeRgb>,
+    /// Overrides for individual ANSI palette slots, by index.
     pub indexed: Vec<(u8, ThemeRgb)>,
+    /// Background of selected text.
     pub selection_bg: Option<ThemeRgb>,
+    /// Foreground of selected text.
     pub selection_fg: Option<ThemeRgb>,
+    /// Border drawn around the window.
     pub window_border: Option<ThemeRgb>,
 }
 
@@ -391,10 +442,14 @@ impl TitleBarStyle {
 /// user theme file `themes/<name>.kdl` referenced by name.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum ThemeSetting {
+    /// Follow the system light or dark preference.
     Auto,
+    /// Always use the built-in dark theme.
     #[default]
     Dark,
+    /// Always use the built-in light theme.
     Light,
+    /// Load the named theme file from the themes directory.
     Named(String),
 }
 
@@ -424,102 +479,6 @@ impl ThemeSetting {
 // ========================================================================
 // KDL schema (KDL v2, deserialized via serde)
 // ========================================================================
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct KdlConfig {
-    colors: Option<KdlColors>,
-    cursor: Option<KdlCursor>,
-    dim_inactive: Option<bool>,
-    font: Option<String>,
-    font_size: Option<f32>,
-    font_weight: Option<String>,
-    font_weight_bold: Option<String>,
-    keybindings: Option<HashMap<String, HashMap<String, String>>>,
-    menu_style: Option<String>,
-    scrollback_lines: Option<u64>,
-    security: Option<KdlSecurity>,
-    shell: Option<String>,
-    shell_windows: Option<String>,
-    shell_linux: Option<String>,
-    shell_macos: Option<String>,
-    title_bar_style: Option<String>,
-    ligatures: Option<bool>,
-    clipboard_read: Option<bool>,
-    palette_match_underline: Option<bool>,
-    pane_border_width: Option<f32>,
-    paste_on_right_click: Option<bool>,
-    prompt_edit_bindings: Option<String>,
-    rainbow_parens: Option<bool>,
-    restore_session: Option<bool>,
-    sentence_highlight: Option<bool>,
-    url_underline: Option<bool>,
-    window_controls_side: Option<String>,
-    window_title_template: Option<String>,
-    wrap_indent: Option<bool>,
-    opacity: Option<f32>,
-    theme: Option<String>,
-    status_bar: Option<KdlStatusBar>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct KdlCursor {
-    blink: Option<bool>,
-    block_focus: Option<String>,
-    hide_in_inactive: Option<bool>,
-    insert: Option<String>,
-    normal: Option<String>,
-    visual: Option<String>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct KdlSecurity {
-    block_max_trust: Option<String>,
-    block_remote_assets: Option<bool>,
-}
-
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct KdlStatusBar {
-    normal_icon: Option<String>,
-    insert_icon: Option<String>,
-    block_icon: Option<String>,
-    show: Option<bool>,
-    show_mode: Option<bool>,
-}
-
-#[derive(serde::Deserialize, Default)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct KdlColors {
-    background: Option<String>,
-    foreground: Option<String>,
-    cursor_bg: Option<String>,
-    cursor_fg: Option<String>,
-    scrollbar: Option<String>,
-    selection_bg: Option<String>,
-    selection_fg: Option<String>,
-    split: Option<String>,
-    status_bar_border: Option<String>,
-    visual_bell: Option<String>,
-    window_border: Option<String>,
-    // Nested blocks: ansi { red "#c22727" }, brights { red "#d43f30" }
-    ansi: Option<HashMap<String, String>>,
-    brights: Option<HashMap<String, String>>,
-    // Nested block: indexed { "136" "#af8700" }
-    indexed: Option<HashMap<String, String>>,
-}
-
-/// A `themes/<name>.kdl` file: an optional `base` preset (`dark`/`light`) plus a
-/// `colors` block layered over it, reusing the same color schema as the main
-/// config.
-#[derive(serde::Deserialize)]
-#[serde(rename_all = "kebab-case", deny_unknown_fields)]
-struct KdlThemeFile {
-    base: Option<String>,
-    colors: Option<KdlColors>,
-}
 
 // ========================================================================
 // Implementation
@@ -1001,489 +960,6 @@ impl Default for Config {
 // Window title template
 // ========================================================================
 
-/// Values the `window-title-template` placeholders expand to, describing the
-/// app running in the active pane. Fields default to empty when the running
-/// program provides none (e.g. `app_name` while sitting at a shell prompt).
-pub struct WindowTitleVars {
-    /// The active tab's resolved title — the OSC 0/2 title set by the running
-    /// app, else its process name and cwd, else `Terminal N`. Same string the
-    /// tab strip shows.
-    pub title: String,
-    /// Name of the foreground process in the active pane (e.g. `butterfly`).
-    pub app_name: String,
-    /// The OSC 0/2 title exactly as the running app set it (cleaned of a
-    /// `user@host:` prefix).
-    pub pane_title: String,
-    /// The active pane's working directory, abbreviated like the tab strip
-    /// shows it (e.g. `~/W/a/winter-term`).
-    pub cwd: String,
-}
-
-/// Expand the `{{ name }}` placeholders of a window-title template
-/// (`window-title-template`). Surrounding whitespace inside the braces is
-/// allowed (`{{title}}`, `{{ title }}`); an unknown name is left as literal
-/// text so a typo stays visible instead of silently vanishing.
-pub fn expand_window_title_template(template: &str, vars: &WindowTitleVars) -> String {
-    let mut out = String::with_capacity(template.len());
-    let mut rest = template;
-    while let Some(start) = rest.find("{{") {
-        out.push_str(&rest[..start]);
-        let after = &rest[start + 2..];
-        let Some(end) = after.find("}}") else {
-            // An unclosed `{{` has no placeholder; keep it literally.
-            out.push_str(&rest[start..]);
-            return out;
-        };
-        let value = match after[..end].trim() {
-            "title" => Some(&vars.title),
-            "app_name" => Some(&vars.app_name),
-            "pane_title" => Some(&vars.pane_title),
-            "cwd" => Some(&vars.cwd),
-            _ => None,
-        };
-        match value {
-            Some(v) => out.push_str(v),
-            None => {
-                out.push_str("{{");
-                out.push_str(&after[..end]);
-                out.push_str("}}");
-            }
-        }
-        rest = &after[end + 2..];
-    }
-    out.push_str(rest);
-    out
-}
-
-/// Names (filename without `.kdl`) of the theme files in `themes/`, sorted. An
-/// absent or unreadable directory yields an empty list.
-pub fn available_themes() -> Vec<String> {
-    let mut names: Vec<String> = std::fs::read_dir(themes_dir())
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter_map(|entry| {
-            let path = entry.path();
-            if path.extension()?.to_str()? != "kdl" {
-                return None;
-            }
-            path.file_stem()?.to_str().map(str::to_string)
-        })
-        .collect();
-    names.sort();
-    names
-}
-
-/// Load and resolve `themes/<name>.kdl` into a full [`Theme`] (its `base` preset
-/// with its `colors` layered on top), or `None` if the file is missing or
-/// unparseable.
-pub fn load_named_theme(name: &str) -> Option<Theme> {
-    let text = std::fs::read_to_string(named_theme_path(name)).ok()?;
-    parse_theme_file(&text)
-}
-
-/// The file path a named theme's colors are read from and saved to:
-/// `themes/<name>.kdl`.
-pub fn named_theme_path(name: &str) -> PathBuf {
-    themes_dir().join(format!("{name}.kdl"))
-}
-
-/// Resolve a theme file's text into a [`Theme`]: start from the named `base`
-/// preset (defaulting to dark) and apply its color overrides.
-fn parse_theme_file(text: &str) -> Option<Theme> {
-    let kdl: KdlThemeFile = kdl::de::from_str(text).ok()?;
-    let mut theme = match kdl.base.as_deref() {
-        Some("light") => Theme::light(),
-        _ => Theme::dark(),
-    };
-    if let Some(colors) = kdl.colors {
-        color_overrides_from_kdl(colors).apply(&mut theme);
-    }
-    Some(theme)
-}
-
-/// The user theme directory: `<config_dir>/themes`.
-fn themes_dir() -> PathBuf {
-    config_dir().join("themes")
-}
-
-/// Whether `name` is safe to use as a `themes/<name>.kdl` file stem: non-empty
-/// and restricted to characters that can't escape `themes_dir()` (no `/`, `.`,
-/// or other path-traversal characters).
-pub fn is_valid_theme_name(name: &str) -> bool {
-    !name.is_empty()
-        && name
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
-}
-
-/// Write a new `themes/<name>.kdl` seeded with `theme`'s full resolved colors,
-/// so the file is immediately usable as a starting point for hand-editing.
-/// Errors if `name` is invalid or a theme with that name already exists (never
-/// overwrites a file the user may have edited).
-pub fn save_named_theme(name: &str, theme: &Theme) -> std::io::Result<()> {
-    if !is_valid_theme_name(name) {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "theme name must be non-empty and contain only letters, numbers, - or _",
-        ));
-    }
-    std::fs::create_dir_all(themes_dir())?;
-    let path = named_theme_path(name);
-    if path.exists() {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::AlreadyExists,
-            format!("a theme named \"{name}\" already exists"),
-        ));
-    }
-    std::fs::write(path, theme_kdl(theme))
-}
-
-/// Whether `bg` reads as a light surface color (perceptual luminance above
-/// the midpoint), used to pick the closer built-in preset as a theme's `base`.
-fn is_light_background(bg: ThemeRgb) -> bool {
-    let luma = 0.299 * bg.r as f32 + 0.587 * bg.g as f32 + 0.114 * bg.b as f32;
-    luma > 127.0
-}
-
-/// Serialize `theme`'s full resolved colors as theme-file KDL text: a `base`
-/// matching the theme's overall brightness, plus a fully populated `colors`
-/// block. `base` isn't purely informational: chrome colors outside the
-/// `colors` schema (menu/tab surfaces) come from the base preset, not from
-/// `colors`, so picking the closer preset keeps those parts consistent too.
-fn theme_kdl(theme: &Theme) -> String {
-    let base = if is_light_background(theme.background) {
-        "light"
-    } else {
-        "dark"
-    };
-    let mut out = format!("base {}\n\ncolors {{\n", kdl_string(base));
-    let scalars: [(&str, ThemeRgb); 11] = [
-        ("background", theme.background),
-        ("foreground", theme.foreground),
-        ("cursor-bg", theme.cursor_bg),
-        ("cursor-fg", theme.cursor_fg),
-        ("scrollbar", theme.scrollbar),
-        ("selection-bg", theme.selection_bg),
-        ("selection-fg", theme.selection_fg),
-        ("split", theme.divider),
-        ("status-bar-border", theme.status_bar_border),
-        ("visual-bell", theme.bell.unwrap_or(theme.cursor_bg)),
-        ("window-border", theme.window_border),
-    ];
-    for (name, rgb) in scalars {
-        out.push_str(&format!("    {name} {}\n", kdl_string(&rgb.to_hex())));
-    }
-    let ansi: [Option<ThemeRgb>; 8] = std::array::from_fn(|i| Some(theme.ansi[i]));
-    let brights: [Option<ThemeRgb>; 8] = std::array::from_fn(|i| Some(theme.ansi[8 + i]));
-    if let Some(line) = color_named_block_kdl("ansi", &ansi) {
-        out.push_str(&line);
-    }
-    if let Some(line) = color_named_block_kdl("brights", &brights) {
-        out.push_str(&line);
-    }
-    if !theme.indexed.is_empty() {
-        out.push_str("    indexed {\n");
-        for (index, rgb) in &theme.indexed {
-            out.push_str(&format!(
-                "        {} {}\n",
-                kdl_string(&index.to_string()),
-                kdl_string(&rgb.to_hex())
-            ));
-        }
-        out.push_str("    }\n");
-    }
-    out.push_str("}\n");
-    out
-}
-
-/// Persistent runtime state stored in `<state_dir>/state.json`.
-#[derive(Clone, Debug, Default, serde::Deserialize, serde::Serialize)]
-pub struct AppState {
-    /// Previously executed palette queries, ordered most-recent first.
-    #[serde(default)]
-    pub palette_history: Vec<String>,
-    /// Last known window dimensions in physical pixels.
-    pub window_size: Option<(u32, u32)>,
-}
-
-/// Load state from `<state_dir>/state.json`, returning a default on any error.
-pub fn load_state() -> AppState {
-    let path = state_dir().join("state.json");
-    std::fs::read_to_string(path)
-        .ok()
-        .and_then(|s| serde_json::from_str(&s).ok())
-        .unwrap_or_default()
-}
-
-/// Persist state to `<state_dir>/state.json`, silently ignoring write errors.
-pub fn save_state(state: &AppState) {
-    let dir = state_dir();
-    if std::fs::create_dir_all(&dir).is_ok() {
-        if let Ok(json) = serde_json::to_string(state) {
-            let _ = std::fs::write(dir.join("state.json"), json);
-        }
-    }
-}
-
-/// Parse a KDL boolean-ish string (`"true"`/`"false"`), falling back to `default`.
-/// Quote `s` as a KDL string argument, escaping backslashes and double quotes.
-fn kdl_string(s: &str) -> String {
-    format!("\"{}\"", s.replace('\\', "\\\\").replace('"', "\\\""))
-}
-
-fn kdl_bool(value: bool) -> &'static str {
-    if value {
-        "#true"
-    } else {
-        "#false"
-    }
-}
-
-/// The 8 standard ANSI color names, in SGR order (index 0 = black, ...,
-/// index 7 = white). `brights` reuses the same names for its own 8 slots.
-const ANSI_COLOR_NAMES: [&str; 8] = [
-    "black", "red", "green", "yellow", "blue", "magenta", "cyan", "white",
-];
-
-/// A `colors` sub-block (`ansi`/`brights`) of named hex-color nodes (e.g.
-/// `ansi { red "#c22727" }`), or `None` when every entry is unset.
-fn color_named_block_kdl(name: &str, colors: &[Option<ThemeRgb>; 8]) -> Option<String> {
-    if colors.iter().all(Option::is_none) {
-        return None;
-    }
-    let mut out = format!("    {name} {{\n");
-    for (color_name, value) in ANSI_COLOR_NAMES.iter().zip(colors) {
-        if let Some(rgb) = value {
-            out.push_str(&format!(
-                "        {color_name} {}\n",
-                kdl_string(&rgb.to_hex())
-            ));
-        }
-    }
-    out.push_str("    }\n");
-    Some(out)
-}
-
-fn color_overrides_from_kdl(kdl: KdlColors) -> ColorOverrides {
-    fn hex(s: Option<String>) -> Option<ThemeRgb> {
-        s.and_then(|v| ThemeRgb::parse_hex(&v))
-    }
-    /// Look each ANSI color name up in `map`, in [`ANSI_COLOR_NAMES`] order, so
-    /// a name absent from `map` leaves that slot unset rather than shifting the
-    /// rest into the wrong position.
-    fn hex_named(map: Option<HashMap<String, String>>) -> [Option<ThemeRgb>; 8] {
-        let map = map.unwrap_or_default();
-        let mut out = [None; 8];
-        for (slot, name) in out.iter_mut().zip(ANSI_COLOR_NAMES) {
-            *slot = map.get(name).and_then(|s| ThemeRgb::parse_hex(s));
-        }
-        out
-    }
-
-    ColorOverrides {
-        background: hex(kdl.background),
-        foreground: hex(kdl.foreground),
-        cursor_bg: hex(kdl.cursor_bg),
-        cursor_fg: hex(kdl.cursor_fg),
-        scrollbar: hex(kdl.scrollbar),
-        selection_bg: hex(kdl.selection_bg),
-        selection_fg: hex(kdl.selection_fg),
-        divider: hex(kdl.split),
-        status_bar_border: hex(kdl.status_bar_border),
-        window_border: hex(kdl.window_border),
-        bell: hex(kdl.visual_bell),
-        ansi: hex_named(kdl.ansi),
-        brights: hex_named(kdl.brights),
-        indexed: kdl
-            .indexed
-            .unwrap_or_default()
-            .into_iter()
-            .filter_map(|(k, v)| {
-                let index = k.parse::<u8>().ok()?;
-                let color = ThemeRgb::parse_hex(&v)?;
-                Some((index, color))
-            })
-            .collect(),
-    }
-}
-
-/// Interpret a `window-controls-side` config value: `"left"` (the default)
-/// or `"right"`. Unknown values fall back to the default left side.
-fn controls_side_from_value(value: &str) -> ControlsSide {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "right" => ControlsSide::Right,
-        _ => ControlsSide::Left,
-    }
-}
-
-/// The canonical config value for a [`ControlsSide`] (round-trips through
-/// [`controls_side_from_value`]).
-fn controls_side_as_value(side: ControlsSide) -> &'static str {
-    match side {
-        ControlsSide::Left => "left",
-        ControlsSide::Right => "right",
-    }
-}
-
-/// Apply the `security` block on top of the deny-by-default policy.
-///
-/// An unparseable tier keeps the default rather than failing the whole config:
-/// a typo in `block-max-trust` must never silently *raise* the ceiling, and
-/// dropping the entire settings file over one bad word would be worse.
-fn security_config_from_kdl(kdl: KdlSecurity) -> SecurityConfig {
-    let defaults = SecurityConfig::default();
-    SecurityConfig {
-        block_max_trust: kdl
-            .block_max_trust
-            .as_deref()
-            .and_then(|value| value.parse().ok())
-            .unwrap_or(defaults.block_max_trust),
-        block_remote_assets: kdl
-            .block_remote_assets
-            .unwrap_or(defaults.block_remote_assets),
-    }
-}
-
-/// Apply the `cursor` block on top of the default per-mode shapes; any unset
-/// entry keeps its default. Unknown shape strings fall back to `Block` via
-/// [`CursorShape::from_value`].
-fn cursor_config_from_kdl(kdl: KdlCursor) -> CursorConfig {
-    let defaults = CursorConfig::default();
-    CursorConfig {
-        blink: kdl.blink.unwrap_or(defaults.blink),
-        block_focus: kdl
-            .block_focus
-            .as_deref()
-            .map(CursorShape::from_value)
-            .unwrap_or(defaults.block_focus),
-        hide_in_inactive: kdl.hide_in_inactive.unwrap_or(defaults.hide_in_inactive),
-        insert: kdl
-            .insert
-            .as_deref()
-            .map(CursorShape::from_value)
-            .unwrap_or(defaults.insert),
-        normal: kdl
-            .normal
-            .as_deref()
-            .map(CursorShape::from_value)
-            .unwrap_or(defaults.normal),
-        visual: kdl
-            .visual
-            .as_deref()
-            .map(CursorShape::from_value)
-            .unwrap_or(defaults.visual),
-    }
-}
-
-/// Parse a standalone `keybindings.kdl` into the mode -> (key -> action) map. An empty
-/// or unparseable file yields an empty map (callers keep their defaults).
-fn parse_keys(text: &str) -> HashMap<String, HashMap<String, String>> {
-    if text.trim().is_empty() {
-        return HashMap::new();
-    }
-    kdl::de::from_str::<HashMap<String, HashMap<String, String>>>(text).unwrap_or_default()
-}
-
-/// The configuration directory: `%APPDATA%\winter-term` on Windows;
-/// `$XDG_CONFIG_HOME/winter-term` or `~/.config/winter-term` elsewhere.
-fn config_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        match std::env::var("APPDATA") {
-            Ok(appdata) => PathBuf::from(appdata).join("winter-term"),
-            Err(_) => PathBuf::from("."),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
-            PathBuf::from(xdg).join("winter-term")
-        } else if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home).join(".config/winter-term")
-        } else {
-            PathBuf::from(".")
-        }
-    }
-}
-
-/// The state directory: `%LOCALAPPDATA%\winter-term` on Windows (machine-local,
-/// non-roaming — matching `state.json`'s regenerable, per-machine nature);
-/// `$XDG_STATE_HOME/winter-term` or `~/.local/state/winter-term` elsewhere.
-fn state_dir() -> PathBuf {
-    #[cfg(windows)]
-    {
-        match std::env::var("LOCALAPPDATA") {
-            Ok(local_appdata) => PathBuf::from(local_appdata).join("winter-term"),
-            Err(_) => PathBuf::from("."),
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        if let Ok(xdg) = std::env::var("XDG_STATE_HOME") {
-            PathBuf::from(xdg).join("winter-term")
-        } else if let Ok(home) = std::env::var("HOME") {
-            PathBuf::from(home).join(".local/state/winter-term")
-        } else {
-            PathBuf::from(".")
-        }
-    }
-}
-
-/// One problem found in a config file: its 1-based `line` and a human `message`.
-struct ConfigProblem {
-    line: usize,
-    message: String,
-}
-
-/// Pull the individual problems out of a KDL parse error so each can be
-/// reported on its own line. The KDL parser collects every issue as a "related"
-/// diagnostic with span info; this surfaces them with 1-based line numbers
-/// located against `text`. Falls back to the top-level message when no related
-/// diagnostics are available.
-fn config_problems(err: &kdl::de::Error, text: &str) -> Vec<ConfigProblem> {
-    use miette::Diagnostic;
-
-    let related: Vec<&dyn Diagnostic> = err
-        .related()
-        .map(|problems| problems.collect())
-        .unwrap_or_default();
-
-    // No related diagnostics means the file failed to tokenize at all; report the
-    // whole error as a single problem rather than dropping it silently.
-    if related.is_empty() {
-        return vec![ConfigProblem {
-            line: 1,
-            message: err.to_string(),
-        }];
-    }
-
-    related
-        .into_iter()
-        .map(|problem| {
-            let offset = problem
-                .labels()
-                .and_then(|mut labels| labels.next())
-                .map(|label| label.offset())
-                .unwrap_or(0);
-            ConfigProblem {
-                line: line_number(text, offset),
-                message: problem.to_string(),
-            }
-        })
-        .collect()
-}
-
-/// The 1-based line number containing byte `offset` within `text`.
-fn line_number(text: &str, offset: usize) -> usize {
-    let end = offset.min(text.len());
-    text.as_bytes()[..end]
-        .iter()
-        .filter(|&&b| b == b'\n')
-        .count()
-        + 1
-}
-
 // ========================================================================
 // Tests
 // ========================================================================
@@ -1510,19 +986,6 @@ mod tests {
         let config = Config::parse("font-size 18\nopacity 0.9");
         assert_eq!(config.font_size, 18.0);
         assert_eq!(config.opacity, 0.9);
-    }
-
-    #[test]
-    fn test_config_problems_report_unknown_key() {
-        let text = "theme \"dark\"\nfont-weigth \"300\"\n";
-        let err = kdl::de::from_str::<KdlConfig>(text)
-            .err()
-            .expect("unknown key should fail to parse");
-        let problems = config_problems(&err, text);
-        assert!(
-            !problems.is_empty(),
-            "unknown key produces at least one problem"
-        );
     }
 
     #[test]
@@ -1649,37 +1112,6 @@ colors {
             Config::parse(&config.to_kdl()).window_title_template,
             "{{ app_name }}".to_string()
         );
-    }
-
-    #[test]
-    fn test_expand_window_title_template() {
-        let vars = WindowTitleVars {
-            title: "Terminal 1".into(),
-            app_name: "butterfly".into(),
-            pane_title: "butterfly — notes.md".into(),
-            cwd: "~/N/notes".into(),
-        };
-        // Every placeholder, with and without inner spaces.
-        assert_eq!(
-            expand_window_title_template("{{title}}", &vars),
-            "Terminal 1"
-        );
-        assert_eq!(
-            expand_window_title_template("{{ app_name }}: {{ pane_title }}", &vars),
-            "butterfly: butterfly — notes.md"
-        );
-        assert_eq!(
-            expand_window_title_template("{{ cwd }}", &vars),
-            "~/N/notes"
-        );
-        // Unknown placeholders and unclosed braces stay literal.
-        assert_eq!(
-            expand_window_title_template("{{ bogus }}", &vars),
-            "{{ bogus }}"
-        );
-        assert_eq!(expand_window_title_template("a {{ b", &vars), "a {{ b");
-        // Text without placeholders passes through unchanged.
-        assert_eq!(expand_window_title_template("Winter", &vars), "Winter");
     }
 
     #[test]
@@ -2019,65 +1451,6 @@ cursor {
         assert_eq!(config.theme, ThemeSetting::Named("dracula".to_string()));
         let parsed = Config::parse(&config.to_kdl());
         assert_eq!(parsed.theme, ThemeSetting::Named("dracula".to_string()));
-    }
-
-    #[test]
-    fn test_parse_theme_file_applies_base_and_colors() {
-        let theme = parse_theme_file(
-            r##"
-base "light"
-colors {
-    background "#282a36"
-    foreground "#f8f8f2"
-}
-"##,
-        )
-        .expect("theme file parses");
-        // Base preset is light, then the two colors override it.
-        assert_eq!(theme.background, ThemeRgb::parse_hex("#282a36").unwrap());
-        assert_eq!(theme.foreground, ThemeRgb::parse_hex("#f8f8f2").unwrap());
-        // An unspecified color keeps the light base.
-        assert_eq!(theme.cursor_bg, Theme::light().cursor_bg);
-    }
-
-    #[test]
-    fn test_parse_theme_file_defaults_base_to_dark() {
-        let theme = parse_theme_file("colors {\n    background \"#000000\"\n}").unwrap();
-        assert_eq!(theme.cursor_bg, Theme::dark().cursor_bg);
-    }
-
-    #[test]
-    fn test_is_valid_theme_name_accepts_and_rejects() {
-        assert!(is_valid_theme_name("dracula"));
-        assert!(is_valid_theme_name("Solarized-Dark_2"));
-        assert!(!is_valid_theme_name(""));
-        assert!(!is_valid_theme_name("../evil"));
-        assert!(!is_valid_theme_name("has/slash"));
-        assert!(!is_valid_theme_name("has.dot"));
-        assert!(!is_valid_theme_name("has space"));
-    }
-
-    #[test]
-    fn test_is_light_background() {
-        assert!(!is_light_background(Theme::dark().background));
-        assert!(is_light_background(Theme::light().background));
-    }
-
-    #[test]
-    fn test_theme_kdl_round_trips_through_parse_theme_file() {
-        for theme in [Theme::dark(), Theme::light()] {
-            let restored =
-                parse_theme_file(&theme_kdl(&theme)).expect("generated theme kdl parses");
-            assert_eq!(restored, theme);
-        }
-    }
-
-    #[test]
-    fn test_save_named_theme_rejects_invalid_name() {
-        // Validation happens before any filesystem access, so this is safe to
-        // run without touching the real theme directory.
-        let err = save_named_theme("../evil", &Theme::dark()).unwrap_err();
-        assert_eq!(err.kind(), std::io::ErrorKind::InvalidInput);
     }
 
     #[test]

@@ -125,7 +125,8 @@ def frame_open(block_id: int, mime: str, spec: object) -> str:
 
 def frame_patch(block_id: int, patch: list) -> str:
     """The escape applying an RFC 6902 operation array to a live block."""
-    return f"{_OSC_START}{_OSC_NUMBER};{_VERB_PATCH};id={block_id};{_b64_json(patch)}{_ST}"
+    body = f"{_VERB_PATCH};id={block_id};{_b64_json(patch)}"
+    return f"{_OSC_START}{_OSC_NUMBER};{body}{_ST}"
 
 
 def frame_close(block_id: int) -> str:

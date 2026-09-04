@@ -66,19 +66,29 @@ const PATCH_MIN_INTERVAL: Duration = Duration::from_millis(100);
 
 /// Everything a tile needs in order to be created and positioned.
 pub struct TileParams {
+    /// Grid row the tile is anchored to.
     pub grid_row: usize,
+    /// Tile height in physical pixels.
     pub height: u32,
+    /// The document to load into the tile.
     pub html: String,
+    /// Tile width in physical pixels.
     pub width: u32,
+    /// Tile position from the window's left edge, in physical pixels.
     pub x: i32,
+    /// Tile position from the window's top edge, in physical pixels.
     pub y: i32,
 }
 
 /// A tile's rendered content height, reported by its own JS.
 pub struct HeightReport {
+    /// Index of the command block this tile renders.
     pub block_index: usize,
+    /// The height the content reported after layout.
     pub height_px: f32,
+    /// The pane the tile belongs to.
     pub pane_id: crate::model::layout::PaneId,
+    /// Index of the segment within the command block.
     pub segment_index: usize,
 }
 
@@ -446,6 +456,7 @@ impl WebViewManager {
         dispatched
     }
 
+    /// How many tiles are currently alive.
     #[cfg(test)]
     pub fn tile_count(&self) -> usize {
         self.tiles.len()
@@ -492,6 +503,7 @@ fn sandboxed_html(content_html: &str, trust: TrustTier) -> String {
     }
 }
 
+/// Wrap a block's chosen representation in the sandboxed HTML shell.
 pub fn render_block_html(
     emit: &EmitBlock,
     theme: &winter_render::Theme,

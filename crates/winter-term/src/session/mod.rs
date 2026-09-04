@@ -27,6 +27,7 @@ pub struct Session {
     pub active_tab: usize,
     /// Focused pane id within the active tab (legacy single-tab field).
     pub focused: usize,
+    /// Every pane in the snapshot, across all tabs.
     pub panes: Vec<PaneSession>,
     /// Layout of the active tab (legacy single-tab field).
     pub layout: SessionTree,
@@ -38,15 +39,20 @@ pub struct Session {
 /// Snapshot of one tab for multi-tab session persistence.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct TabSnapshot {
+    /// Index of the pane focused in this tab.
     pub focused: usize,
+    /// This tab's split tree.
     pub layout: SessionTree,
 }
 
 /// One pane's snapshot: the command it ran and the directory it ran in.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PaneSession {
+    /// The command the pane ran; `None` means the default shell.
     pub command: Option<String>,
+    /// The pane's working directory when the snapshot was taken.
     pub cwd: Option<String>,
+    /// Identifier tying this pane to a leaf of the layout tree.
     pub id: usize,
 }
 
@@ -54,13 +60,20 @@ pub struct PaneSession {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "t")]
 pub enum SessionTree {
+    /// A leaf holding one pane.
     Pane {
+        /// The pane this leaf refers to.
         id: usize,
     },
+    /// A split of two child trees.
     Split {
+        /// Split direction, stored as text so the file stays readable.
         dir: String,
+        /// Fraction of the space given to the first child.
         ratio: f32,
+        /// The child above or to the left.
         first: Box<SessionTree>,
+        /// The child below or to the right.
         second: Box<SessionTree>,
     },
 }

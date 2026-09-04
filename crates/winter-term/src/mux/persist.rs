@@ -14,14 +14,18 @@ use serde::{Deserialize, Serialize};
 /// A session's respawn recipe: name, command, and working directory.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct SessionDef {
+    /// The command the session runs; `None` means the default shell.
     pub command: Option<String>,
+    /// Directory the session starts in.
     pub cwd: Option<String>,
+    /// The session's name, unique on this server.
     pub name: String,
 }
 
 /// The full set of session definitions persisted to disk.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 pub struct SessionDefs {
+    /// Every session the server should restore on start.
     #[serde(default)]
     pub sessions: Vec<SessionDef>,
 }

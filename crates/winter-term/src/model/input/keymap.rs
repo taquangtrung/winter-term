@@ -14,9 +14,13 @@ use std::collections::{HashMap, HashSet};
 /// and folding the same change into the prompt undo shadow.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum EditAction {
+    /// Kill from the cursor to the end of the line.
     DeleteToLineEnd,
+    /// Kill from the cursor to the start of the line.
     DeleteToLineStart,
+    /// Kill the word before the cursor.
     DeleteWordBackward,
+    /// Kill the word after the cursor.
     DeleteWordForward,
 }
 impl EditAction {
@@ -36,8 +40,11 @@ impl EditAction {
 /// undo/redo apply in Insert, Normal, and the palette.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum EditBinding {
+    /// Apply a line edit to the shell's current prompt line.
     Edit(EditAction),
+    /// Redo the last undone prompt-line edit.
     Redo,
+    /// Undo the last prompt-line edit.
     Undo,
 }
 impl EditBinding {
@@ -70,36 +77,67 @@ impl EditBinding {
 /// Each maps to a layout-affecting [`Action`].
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum WindowAction {
+    /// Close the focused pane.
     Close,
+    /// Close every pane except the focused one.
     CloseOthers,
+    /// Move focus to the pane below.
     FocusDown,
+    /// Move focus to the pane on the left.
     FocusLeft,
+    /// Move focus to the pane on the right.
     FocusRight,
+    /// Move focus to the pane above.
     FocusUp,
+    /// Split the focused pane into upper and lower halves.
     SplitHorizontal,
+    /// Split the focused pane into left and right halves.
     SplitVertical,
+    /// Toggle the focused pane filling the whole tab.
     Zoom,
+    /// Scroll the focused pane up one screen.
     ScrollPageUp,
+    /// Scroll the focused pane down one screen.
     ScrollPageDown,
+    /// Scroll the focused pane up one line.
     ScrollLineUp,
+    /// Scroll the focused pane down one line.
     ScrollLineDown,
+    /// Jump to the oldest retained scrollback.
     ScrollToTop,
+    /// Jump back to the live output.
     ScrollToBottom,
+    /// Activate the tab to the left.
     PrevTab,
+    /// Activate the tab to the right.
     NextTab,
+    /// Copy the current selection to the clipboard.
     Copy,
+    /// Paste the clipboard into the PTY.
     Paste,
+    /// Open a new tab.
     NewTab,
+    /// Close the active tab.
     CloseTab,
+    /// Open the settings page.
     OpenSettings,
+    /// Increase the font size one step.
     FontIncrease,
+    /// Decrease the font size one step.
     FontDecrease,
+    /// Return the font size to the configured value.
     FontReset,
+    /// Show or hide the command palette.
     TogglePalette,
+    /// Show or hide the palette over past queries.
     ToggleHistoryPalette,
+    /// Show or hide the pane switcher.
     TogglePaneSwitcher,
+    /// Show or hide buffer swoop.
     ToggleSwoop,
+    /// Move to the next command block.
     NextBlock,
+    /// Move to the previous command block.
     PrevBlock,
 }
 impl WindowAction {

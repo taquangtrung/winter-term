@@ -7,6 +7,7 @@
 //! version if you depend on it.
 
 #![forbid(unsafe_code)]
+#![deny(missing_docs)]
 
 pub mod app;
 pub mod config;

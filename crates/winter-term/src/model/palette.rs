@@ -23,8 +23,10 @@ const HISTORY_MAX: usize = 500;
 /// Whether the palette is showing built-in commands, shell history, or recent dirs.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub enum PaletteMode {
+    /// Choosing a command to run.
     #[default]
     Commands,
+    /// Recalling an earlier query.
     History,
     /// Pane switcher: selecting an entry focuses that pane.
     Panes,
@@ -47,7 +49,9 @@ pub enum PaletteMode {
 /// One selectable row: what it shows and the command it runs.
 #[derive(Clone, Debug)]
 pub struct PaletteEntry {
+    /// The command dispatched when this row is chosen.
     pub action: String,
+    /// The text shown for this row.
     pub label: String,
     /// Char indices in `label` that matched the current query (for highlight).
     pub match_positions: Vec<usize>,
@@ -58,8 +62,11 @@ pub struct PaletteEntry {
 /// The palette's open state: its query, matching entries, and selection.
 #[derive(Clone, Debug, Default)]
 pub struct Palette {
+    /// Whether the palette is currently open.
     pub active: bool,
+    /// Every candidate row, before filtering.
     pub entries: Vec<PaletteEntry>,
+    /// Indices into the entries that match the query, in match order.
     pub filtered: Vec<usize>,
     /// Undo/redo stack over `query`, driven by `Ctrl-/` and `Ctrl-\`.
     pub history: EditHistory<String>,
@@ -68,10 +75,13 @@ pub struct Palette {
     pub history_index: Option<usize>,
     /// The live query snapshot saved when history navigation begins.
     pub live_query: String,
+    /// Whether the palette is listing commands or past queries.
     pub mode: PaletteMode,
+    /// What the user has typed so far.
     pub query: String,
     /// Executed query history (most-recent-first).
     pub query_history: Vec<String>,
+    /// Index into the filtered rows, not into the entries.
     pub selected: usize,
 }
 

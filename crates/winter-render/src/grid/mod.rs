@@ -358,4 +358,34 @@ mod tests {
         let grid = Grid::new(10, 4);
         assert_eq!(grid.last_content_row(), 0);
     }
+
+    /// The pen reported by `style` is the one printed cells receive.
+    #[test]
+    fn test_style_reports_the_pen_installed_by_set_style() {
+        let mut grid = Grid::new(4, 2);
+        let pen = Style {
+            bold: true,
+            foreground: Color::Indexed(3),
+            ..Style::default()
+        };
+        grid.set_style(pen);
+        assert_eq!(grid.style(), pen);
+        grid.print('x');
+        assert_eq!(grid.cell(0, 0).unwrap().style, pen);
+    }
+
+    /// The builder's cap actually bounds retained history; without it a long
+    /// session grows the scrollback without limit.
+    #[test]
+    fn test_with_max_scrollback_caps_retained_history() {
+        let mut grid = Grid::new(4, 2).with_max_scrollback(3);
+        for _ in 0..40 {
+            grid.line_feed();
+        }
+        assert!(
+            grid.scrollback_len() <= 3,
+            "history grew past the cap: {}",
+            grid.scrollback_len()
+        );
+    }
 }

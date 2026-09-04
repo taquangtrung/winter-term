@@ -21,29 +21,48 @@ const SECS_PER_DAY: u64 = SECS_PER_HOUR * 24;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ClientMessage {
     /// Attach to an existing session (or create if absent).
-    Attach { session: String },
+    Attach {
+        /// Name of the session to attach to.
+        session: String,
+    },
     /// Detach without killing the session.
     Detach,
     /// Send bytes to the PTY.
-    Input { session: String, bytes: Vec<u8> },
+    Input {
+        /// Session the bytes are for.
+        session: String,
+        /// Raw bytes to write to the PTY.
+        bytes: Vec<u8>,
+    },
     /// Resize the PTY.
     Resize {
+        /// Session being resized.
         session: String,
+        /// This client's column count.
         cols: u16,
+        /// This client's row count.
         rows: u16,
     },
     /// List active sessions.
     ListSessions,
     /// Kill a session.
-    Kill { session: String },
+    Kill {
+        /// Name of the session to terminate.
+        session: String,
+    },
     /// Create a session running `command` (a missing/empty command means
     /// the default shell) in `cwd`, then attach to it. Errors when a
     /// session with this name already exists.
     Spawn {
+        /// Name for the new session.
         session: String,
+        /// Initial column count.
         cols: u16,
+        /// Initial row count.
         rows: u16,
+        /// Directory to start in.
         cwd: Option<String>,
+        /// Command to run; `None` means the default shell.
         command: Option<String>,
     },
 }
@@ -52,33 +71,60 @@ pub enum ClientMessage {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ServerMessage {
     /// PTY output batch.
-    Output { session: String, bytes: Vec<u8> },
+    Output {
+        /// Session that produced the bytes.
+        session: String,
+        /// Raw bytes read from the PTY.
+        bytes: Vec<u8>,
+    },
     /// Session list response.
-    SessionList { sessions: Vec<SessionInfo> },
+    SessionList {
+        /// One entry per live session.
+        sessions: Vec<SessionInfo>,
+    },
     /// Attach confirmed.
     Attached {
+        /// Session now attached.
         session: String,
+        /// The session's current column count.
         cols: u16,
+        /// The session's current row count.
         rows: u16,
     },
     /// Session output buffered before this client attached; sent once
     /// right after `Attached` so a fresh client rebuilds its screen and
     /// scrollback before live output resumes.
-    Scrollback { session: String, bytes: Vec<u8> },
+    Scrollback {
+        /// Session the buffered output belongs to.
+        session: String,
+        /// Output produced before this client attached.
+        bytes: Vec<u8>,
+    },
     /// Session exited.
-    Exit { session: String, code: Option<i32> },
+    Exit {
+        /// Session that ended.
+        session: String,
+        /// Exit status, absent when the process was signalled.
+        code: Option<i32>,
+    },
     /// The session's PTY geometry changed (server-arbitrated). Sent to every
     /// attached client whenever the effective size — the smallest geometry
     /// among attached clients — changes, so a pane whose layout is larger
     /// than the session can letterbox its grid instead of rendering a
     /// stream wrapped for a width it doesn't have.
     Resized {
+        /// Session whose geometry changed.
         session: String,
+        /// The new effective column count.
         cols: u16,
+        /// The new effective row count.
         rows: u16,
     },
-    /// Error.
-    Error { message: String },
+    /// The server could not carry out a request.
+    Error {
+        /// What went wrong, for display to the user.
+        message: String,
+    },
 }
 
 /// One session's summary, as reported in a session listing.
@@ -87,9 +133,13 @@ pub struct SessionInfo {
     /// Clients currently attached to the session.
     #[serde(default)]
     pub attach_count: usize,
+    /// The session's column count.
     pub cols: u16,
+    /// Creation time, as seconds since the Unix epoch.
     pub created: u64,
+    /// The session's name.
     pub name: String,
+    /// The session's row count.
     pub rows: u16,
     /// The command line the session runs, for listings.
     pub command: String,

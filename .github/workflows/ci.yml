@@ -110,6 +110,12 @@ jobs:
       - uses: astral-sh/setup-uv@v5
       - working-directory: clients/client-py
         run: uv run --with pytest python -m pytest -q
+      # ruff and mypy are declared dev dependencies and ruff is configured
+      # in pyproject.toml, but nothing ran them, so violations accumulated.
+      - working-directory: clients/client-py
+        run: uv run --with ruff ruff check .
+      - working-directory: clients/client-py
+        run: uv run --with mypy mypy src
 
   # Catches the crates.io rejections that only surface at publish time:
   # a missing description, an unreadable readme path, an excluded file.

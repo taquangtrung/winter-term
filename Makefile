@@ -16,7 +16,7 @@ else
 endif
 
 .PHONY: help build release package install uninstall desktop dev test rust-test \
-        py-test lint fmt demo clean macos-icon
+        py-test lint rust-lint py-lint fmt demo clean macos-icon
 
 help:
 	@echo "winter targets:"
@@ -33,7 +33,9 @@ help:
 	@echo "  make test                Run every test (Rust + Python)"
 	@echo "  make rust-test           Run Rust workspace tests"
 	@echo "  make py-test             Run the Python client tests"
-	@echo "  make lint                clippy (deny warnings) + rustfmt check"
+	@echo "  make lint                everything: rust-lint + py-lint"
+	@echo "  make rust-lint           clippy (deny warnings) + rustfmt check"
+	@echo "  make py-lint             ruff + mypy on the Python client"
 	@echo "  make fmt                 Format Rust"
 	@echo "  make demo CMD='ls -la'   Run the integrated winter pipeline on a command"
 	@echo "  make clean               Remove build artifacts"
@@ -204,9 +206,15 @@ py-test:
 
 test: rust-test py-test
 
-lint:
+rust-lint:
 	cargo clippy --workspace --all-targets -- -D warnings
 	cargo fmt --all -- --check
+
+py-lint:
+	cd clients/client-py && uv run --with ruff ruff check .
+	cd clients/client-py && uv run --with mypy mypy src
+
+lint: rust-lint py-lint
 
 fmt:
 	cargo fmt --all

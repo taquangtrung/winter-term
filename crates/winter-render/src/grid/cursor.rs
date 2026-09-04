@@ -140,6 +140,7 @@ pub(super) const TAB_WIDTH: usize = 8;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::test_support::*;
 
     #[test]
     fn test_move_to_column_sets_absolute_column_and_clamps() {
@@ -242,5 +243,41 @@ mod tests {
         assert_eq!(grid.reported_cursor_shape(), None);
         grid.set_cursor_shape(CursorShape::Bar);
         assert_eq!(grid.reported_cursor_shape(), Some(CursorShape::Bar));
+    }
+
+    /// CUB must clamp at the left edge rather than wrapping or underflowing.
+    #[test]
+    fn test_move_left_clamps_at_column_zero() {
+        let mut grid = Grid::new(10, 3);
+        grid.move_to(0, 4);
+        grid.move_left(2);
+        assert_eq!(grid.cursor(), (0, 2));
+        grid.move_left(99);
+        assert_eq!(grid.cursor(), (0, 0));
+    }
+
+    /// CUF must clamp at the last column, never past the right edge.
+    #[test]
+    fn test_move_right_clamps_at_the_last_column() {
+        let mut grid = Grid::new(10, 3);
+        grid.move_right(3);
+        assert_eq!(grid.cursor(), (0, 3));
+        grid.move_right(99);
+        assert_eq!(grid.cursor(), (0, 9));
+    }
+
+    /// RI steps up while there is room, and scrolls the region down at the top
+    /// margin instead of moving the cursor above it.
+    #[test]
+    fn test_reverse_index_moves_up_then_scrolls_at_the_region_top() {
+        let mut grid = Grid::new(4, 3);
+        fill_rows(&mut grid, &['a', 'b', 'c']);
+        grid.move_to(1, 0);
+        grid.reverse_index();
+        assert_eq!(grid.cursor().0, 0, "RI moves up when there is room");
+
+        grid.reverse_index();
+        assert_eq!(grid.cursor().0, 0, "RI must not move above the top margin");
+        assert_eq!(row_text(&grid, 1), "aaaa", "the old top row shifted down");
     }
 }

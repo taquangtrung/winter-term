@@ -48,9 +48,13 @@ struct SplitNode {
 /// A rectangular area, in the renderer's coordinate space (origin top-left).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Rect {
+    /// Height in physical pixels.
     pub height: f32,
+    /// Width in physical pixels.
     pub width: f32,
+    /// Distance from the left edge, in physical pixels.
     pub x: f32,
+    /// Distance from the top edge, in physical pixels.
     pub y: f32,
 }
 
@@ -66,9 +70,13 @@ pub enum Direction {
 /// A directional focus move.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FocusDir {
+    /// Toward the bottom of the screen.
     Down,
+    /// Toward the left of the screen.
     Left,
+    /// Toward the right of the screen.
     Right,
+    /// Toward the top of the screen.
     Up,
 }
 
@@ -80,11 +88,17 @@ pub struct PaneId(pub u64);
 /// to persist and restore the pane layout across restarts.
 #[derive(Clone, Debug)]
 pub enum LayoutTree {
+    /// A leaf holding one pane.
     Pane(PaneId),
+    /// A split of two child trees.
     Split {
+        /// Whether the children sit side by side or stacked.
         direction: Direction,
+        /// Fraction of the space given to the first child.
         ratio: f32,
+        /// The child above or to the left.
         first: Box<LayoutTree>,
+        /// The child below or to the right.
         second: Box<LayoutTree>,
     },
 }
