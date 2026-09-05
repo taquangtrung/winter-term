@@ -9,8 +9,8 @@ mod view;
 pub(crate) use view::TabbarText;
 pub use view::{PaletteItem, PaletteView, WhichKeyView};
 
-use super::colors::*;
-use super::glyphs::*;
+use super::colors::mix_rgb;
+use super::glyphs::FontCtx;
 use super::GpuRenderer;
 use super::{NoticeKind, StatusNotice};
 use crate::image::ImagePlacement;
@@ -32,26 +32,26 @@ use paint::{fill_line_segment, fill_rounded_rect, shape_chrome_line, text_bounds
 
 /// Reserved image-pass texture ids for the rasterized menu overlays. Set to the
 /// top of the id space so they never collide with block image ids.
-pub(super) const DROPDOWN_TEXTURE_ID: u64 = u64::MAX;
+const DROPDOWN_TEXTURE_ID: u64 = u64::MAX;
 
-pub(super) const SUBMENU_TEXTURE_ID: u64 = u64::MAX - 1;
+const SUBMENU_TEXTURE_ID: u64 = u64::MAX - 1;
 
-pub(super) const CONTEXT_MENU_TEXTURE_ID: u64 = u64::MAX - 5;
+const CONTEXT_MENU_TEXTURE_ID: u64 = u64::MAX - 5;
 
 /// Reserved id for the rasterized top-tabbar strip (band + rounded tab pills).
-pub(super) const TABBAR_STRIP_TEXTURE_ID: u64 = u64::MAX - 2;
+const TABBAR_STRIP_TEXTURE_ID: u64 = u64::MAX - 2;
 
 /// Reserved id for the rasterized command-palette overlay.
-pub(super) const PALETTE_TEXTURE_ID: u64 = u64::MAX - 3;
+const PALETTE_TEXTURE_ID: u64 = u64::MAX - 3;
 
 /// Reserved id for the rasterized URL hover tooltip.
-pub(super) const URL_TOOLTIP_TEXTURE_ID: u64 = u64::MAX - 6;
+const URL_TOOLTIP_TEXTURE_ID: u64 = u64::MAX - 6;
 
 /// Reserved id for the rasterized transient toast pill.
-pub(super) const TOAST_TEXTURE_ID: u64 = u64::MAX - 7;
+const TOAST_TEXTURE_ID: u64 = u64::MAX - 7;
 
 /// Reserved id for the rasterized which-key hint popup.
-pub(super) const WHICH_KEY_TEXTURE_ID: u64 = u64::MAX - 8;
+const WHICH_KEY_TEXTURE_ID: u64 = u64::MAX - 8;
 
 /// Maximum number of command results visible in the palette at once.
 pub(super) const PALETTE_MAX_ITEMS: usize = 8;
@@ -91,54 +91,54 @@ pub(super) const MENU_HOVER_INSET: f32 = 6.0;
 pub(super) const MENU_BORDER_MIX: f32 = 0.14;
 
 /// Corner radius of the rounded tab tops, as a fraction of the cell height.
-pub(super) const TAB_CORNER_RADIUS_RATIO: f32 = 0.34;
+const TAB_CORNER_RADIUS_RATIO: f32 = 0.34;
 
 /// Flat pixels the close button (× glyph and its hover pill) is shifted
 /// right of its horizontally-centered position within its close slot.
-pub(super) const TAB_CLOSE_SHIFT_RIGHT_PX: f32 = 3.0;
+const TAB_CLOSE_SHIFT_RIGHT_PX: f32 = 3.0;
 
 /// Flat pixels the per-tab close button (× glyph and its hover pill) is
 /// shifted up from its vertically-centered position within its close slot.
-pub(super) const TAB_CLOSE_SHIFT_UP_PX: f32 = 1.0;
+const TAB_CLOSE_SHIFT_UP_PX: f32 = 1.0;
 
 /// Flat pixels the tab title label is shifted up from its vertically-
 /// centered position on the tab shape.
-pub(super) const TAB_LABEL_SHIFT_UP_PX: f32 = 1.0;
+const TAB_LABEL_SHIFT_UP_PX: f32 = 1.0;
 
 /// Flat pixels trimmed off the top of the hamburger/minimize/maximize/close
 /// control buttons' shared hover pill, shrinking its height from the top
 /// edge only (the bottom edge is unchanged).
-pub(super) const CONTROL_HOVER_PILL_TOP_TRIM_PX: f32 = 2.0;
+const CONTROL_HOVER_PILL_TOP_TRIM_PX: f32 = 2.0;
 
 /// Flat pixels the hamburger/minimize/maximize/close control buttons (icons
 /// and their shared hover pill) are shifted up, as a group, from their
 /// vertically-centered position on the tab shape.
-pub(super) const CONTROL_SHIFT_UP_PX: f32 = 0.5;
+const CONTROL_SHIFT_UP_PX: f32 = 0.5;
 
 /// Flat pixels the new-tab `+` glyph is shifted down from its vertically-
 /// centered position on the tab shape.
-pub(super) const NEW_TAB_GLYPH_SHIFT_DOWN_PX: f32 = 1.0;
+const NEW_TAB_GLYPH_SHIFT_DOWN_PX: f32 = 1.0;
 
 /// Flat pixels trimmed off the top of the new-tab button's own hover pill
 /// (the small pill behind the `+` glyph), shrinking its height from the top
 /// edge only (the bottom edge is unchanged).
-pub(super) const NEW_TAB_HOVER_PILL_TOP_TRIM_PX: f32 = 2.0;
+const NEW_TAB_HOVER_PILL_TOP_TRIM_PX: f32 = 2.0;
 
 /// How far the active tab's background is mixed toward `theme.foreground`
 /// from `theme.tab_active_bg`, so it reads as clearly highlighted rather
 /// than blending into the content view below it.
-pub(super) const TAB_ACTIVE_HIGHLIGHT: f32 = 0.06;
+const TAB_ACTIVE_HIGHLIGHT: f32 = 0.06;
 
 /// Opacity of the hairline separating the tab band from the content below.
-pub(super) const TABBAR_BORDER_ALPHA: f32 = 0.5;
+const TABBAR_BORDER_ALPHA: f32 = 0.5;
 
 /// Font-size multiplier for the tab close (`×`) and zoom glyphs, so they read
 /// larger than the title text against the taller tab band.
-pub(super) const TAB_BUTTON_GLYPH_RATIO: f32 = 1.25;
+const TAB_BUTTON_GLYPH_RATIO: f32 = 1.25;
 
 /// Glyph drawn left of the close button when a tab's pane is zoomed to fill the
 /// viewport. Matches the window-control maximize glyph (U+25A1).
-pub(super) const TAB_ZOOM_GLYPH: &str = "\u{25a1}";
+const TAB_ZOOM_GLYPH: &str = "\u{25a1}";
 
 /// Color of the dropdown drop shadow (alpha is applied per pixel).
 pub(super) const SHADOW_COLOR: Rgb = Rgb::new(0, 0, 0);
@@ -1067,7 +1067,7 @@ impl GpuRenderer {
     /// Shape a single line of tabbar text into a reusable buffer. With
     /// `proportional` set, it uses a sans-serif UI font (for the dropdown menu)
     /// rather than the terminal's monospace family.
-    pub(super) fn tabbar_line_buffer(
+    fn tabbar_line_buffer(
         &mut self,
         text: &str,
         color: Color,
@@ -1092,12 +1092,7 @@ impl GpuRenderer {
     /// monospace family is used (matching the window-control glyphs) so each
     /// glyph's advance is exactly one scaled cell, keeping the cw-based
     /// centering exact and preventing overflow into a neighbour's clip rect.
-    pub(super) fn tabbar_button_buffer(
-        &mut self,
-        glyph: &str,
-        color: Color,
-        ratio: f32,
-    ) -> glyphon::Buffer {
+    fn tabbar_button_buffer(&mut self, glyph: &str, color: Color, ratio: f32) -> glyphon::Buffer {
         let scaled_line_h = (self.line_height * ratio).round();
         let ctx = FontCtx {
             cell_h: self.cell_height,

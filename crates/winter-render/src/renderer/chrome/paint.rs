@@ -1,6 +1,8 @@
 //! Low-level pixel work shared by every chrome surface.
 
-use crate::renderer::glyphs::*;
+use crate::renderer::glyphs::{
+    base_family, effective_bold_weight, parse_weight, FontCtx, DEFAULT_BOLD_WEIGHT,
+};
 use crate::theme::Rgb;
 use glyphon::{Attrs, BufferLine, Color, Family, FontSystem, Shaping, SwashCache, TextBounds};
 
@@ -168,7 +170,7 @@ pub(super) fn shape_chrome_line(
         font_system,
         glyphon::Metrics::new(ctx.font_size, ctx.line_height),
     );
-    buffer.set_size(font_system, Some(f32::MAX), Some(ctx.line_height));
+    buffer.set_size(Some(f32::MAX), Some(ctx.line_height));
     let family = if proportional {
         Family::SansSerif
     } else {
@@ -184,7 +186,7 @@ pub(super) fn shape_chrome_line(
             glyphon::cosmic_text::Weight::NORMAL,
         ));
     }
-    buffer.set_text(font_system, text, &attrs, Shaping::Advanced, None);
+    buffer.set_text(text, &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
     buffer
 }
@@ -195,7 +197,7 @@ pub(super) fn composite_buffer(
     swash_cache: &mut SwashCache,
     rgba: &mut [u8],
     canvas: (u32, u32),
-    buffer: &glyphon::Buffer,
+    buffer: &mut glyphon::Buffer,
     offset: (i32, i32),
     default_color: Color,
 ) {
@@ -280,7 +282,7 @@ pub(super) fn draw_highlighted_label(
         font_system,
         glyphon::Metrics::new(ctx.font_size, ctx.line_height),
     );
-    buffer.set_size(font_system, Some(f32::MAX), Some(ctx.line_height));
+    buffer.set_size(Some(f32::MAX), Some(ctx.line_height));
     buffer.lines.clear();
     buffer.lines.push(BufferLine::new(
         text,
@@ -294,7 +296,7 @@ pub(super) fn draw_highlighted_label(
         swash_cache,
         rgba,
         canvas,
-        &buffer,
+        &mut buffer,
         offset,
         base_color,
     );

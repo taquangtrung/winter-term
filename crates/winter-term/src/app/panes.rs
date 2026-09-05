@@ -158,11 +158,11 @@ impl App {
         self.panes.remove(&pane_id);
         self.modes.remove(&pane_id);
         self.nav_cursors.remove(&pane_id);
-        self.jump_lists.remove(&pane_id);
-        self.change_lists.remove(&pane_id);
-        self.last_changes.remove(&pane_id);
-        self.insert_sessions.remove(&pane_id);
-        self.marks.retain(|(p, _), _| *p != pane_id);
+        self.vim.jump_lists.remove(&pane_id);
+        self.vim.change_lists.remove(&pane_id);
+        self.vim.last_changes.remove(&pane_id);
+        self.vim.insert_sessions.remove(&pane_id);
+        self.vim.marks.retain(|(p, _), _| *p != pane_id);
         self.pane_titles.remove(&pane_id);
         self.webview_mgr.remove_tiles_for_pane(pane_id);
         self.image_blocks.retain(|img| img.pane_id != pane_id);

@@ -129,7 +129,7 @@ impl App {
     /// ([`Self::recent_tab`]).
     pub(crate) fn activate_tab(&mut self, index: usize) {
         self.active_tab = index;
-        self.selection = None;
+        self.selection.span = None;
         // Force a tile reposition so background-tab WebViews are hidden and the
         // new tab's are shown (the layout key alone may not have changed).
         self.last_tile_layout = None;

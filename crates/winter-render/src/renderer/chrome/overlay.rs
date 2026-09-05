@@ -10,8 +10,8 @@ use super::{
     PALETTE_ITEM_PAD_X, PALETTE_ITEM_PAD_Y, PALETTE_MAX_ITEMS, PALETTE_TOP_RATIO,
     PALETTE_WIDTH_RATIO, SHADOW_COLOR,
 };
-use crate::renderer::colors::*;
-use crate::renderer::glyphs::*;
+use crate::renderer::colors::mix_rgb;
+use crate::renderer::glyphs::FontCtx;
 use crate::tabbar::{
     layout as tabbar_layout, DropdownLayout, MenuItem, Region, TabbarLayout, TopTabbar,
 };
@@ -44,7 +44,8 @@ pub(super) fn toast_rgba(
     /// Gap from the right edge and from the bottom of the tab bar, in pixels.
     const EDGE_GAP: f32 = 16.0;
 
-    let label_buf = shape_chrome_line(font_system, ctx, text, text_color.to_glyphon(), true, true);
+    let mut label_buf =
+        shape_chrome_line(font_system, ctx, text, text_color.to_glyphon(), true, true);
     let text_w = buffer_width(&label_buf).ceil();
     let text_h = ctx.line_height;
 
@@ -114,7 +115,7 @@ pub(super) fn toast_rgba(
         swash_cache,
         &mut rgba,
         canvas,
-        &label_buf,
+        &mut label_buf,
         (
             (SHADOW_MARGIN + PAD_X) as i32,
             (SHADOW_MARGIN + PAD_Y) as i32,
@@ -158,7 +159,7 @@ pub(super) fn url_tooltip_rgba(
     };
 
     let text_color = theme.foreground.to_glyphon();
-    let label_buf = shape_chrome_line(font_system, ctx, &display_url, text_color, false, true);
+    let mut label_buf = shape_chrome_line(font_system, ctx, &display_url, text_color, false, true);
     let text_w = buffer_width(&label_buf).ceil();
     let text_h = ctx.line_height;
 
@@ -251,7 +252,7 @@ pub(super) fn url_tooltip_rgba(
         swash_cache,
         &mut rgba,
         canvas,
-        &label_buf,
+        &mut label_buf,
         (
             (SHADOW_MARGIN + PAD_X) as i32,
             (SHADOW_MARGIN + PAD_Y) as i32,
@@ -343,7 +344,7 @@ pub(super) fn context_menu_rgba(
 /// Rasterize one menu panel (`items` at `layout`) into an elevated, rounded,
 /// shadowed card. `selected` is the hover-highlighted row. A submenu parent
 /// (an item with children) gets a `›` chevron instead of a shortcut.
-pub(super) fn panel_rgba(
+fn panel_rgba(
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
     ctx: &FontCtx,
@@ -442,14 +443,14 @@ pub(super) fn panel_rgba(
             continue;
         }
         let text_y = row_y + text_dy;
-        let label = shape_chrome_line(font_system, ctx, &item.label, foreground, false, true);
+        let mut label = shape_chrome_line(font_system, ctx, &item.label, foreground, false, true);
         let pos = (origin + pad, text_y);
         composite_buffer(
             font_system,
             swash_cache,
             &mut rgba,
             canvas,
-            &label,
+            &mut label,
             pos,
             foreground,
         );
@@ -463,7 +464,7 @@ pub(super) fn panel_rgba(
             None
         };
         if let Some(text) = trailing {
-            let buf = shape_chrome_line(font_system, ctx, &text, muted, false, true);
+            let mut buf = shape_chrome_line(font_system, ctx, &text, muted, false, true);
             let buf_w = buffer_width(&buf).ceil() as i32;
             let pos = (origin + panel_w as i32 - buf_w - pad, text_y);
             composite_buffer(
@@ -471,7 +472,7 @@ pub(super) fn panel_rgba(
                 swash_cache,
                 &mut rgba,
                 canvas,
-                &buf,
+                &mut buf,
                 pos,
                 muted,
             );
@@ -603,14 +604,14 @@ pub(super) fn palette_rgba(
     let input_top = (margin + inner_pad) as i32;
 
     // "❯" prompt.
-    let prompt_buf = shape_chrome_line(font_system, ctx, "\u{276f} ", accent, false, true);
+    let mut prompt_buf = shape_chrome_line(font_system, ctx, "\u{276f} ", accent, false, true);
     let prompt_w = buffer_width(&prompt_buf).ceil() as i32;
     composite_buffer(
         font_system,
         swash_cache,
         &mut rgba,
         canvas,
-        &prompt_buf,
+        &mut prompt_buf,
         (origin + pad_x, input_top + input_text_dy),
         accent,
     );
@@ -618,14 +619,14 @@ pub(super) fn palette_rgba(
     // Query text.
     let query_text = view.query.clone();
     let query_color = foreground;
-    let query_buf = shape_chrome_line(font_system, ctx, &query_text, query_color, true, true);
+    let mut query_buf = shape_chrome_line(font_system, ctx, &query_text, query_color, true, true);
     let query_w = buffer_width(&query_buf).ceil() as i32;
     composite_buffer(
         font_system,
         swash_cache,
         &mut rgba,
         canvas,
-        &query_buf,
+        &mut query_buf,
         (origin + pad_x + prompt_w, input_top + input_text_dy),
         query_color,
     );
@@ -646,13 +647,14 @@ pub(super) fn palette_rgba(
 
     // Result rows.
     if display_count == 0 {
-        let no_match = shape_chrome_line(font_system, ctx, &view.empty_message, muted, false, true);
+        let mut no_match =
+            shape_chrome_line(font_system, ctx, &view.empty_message, muted, false, true);
         composite_buffer(
             font_system,
             swash_cache,
             &mut rgba,
             canvas,
-            &no_match,
+            &mut no_match,
             (origin + pad_x, results_top as i32 + item_text_dy),
             muted,
         );
@@ -662,14 +664,14 @@ pub(super) fn palette_rgba(
             let row_y = (results_top + i as f32 * item_h) as i32 + item_text_dy;
 
             if item.match_positions.is_empty() || view.query.is_empty() {
-                let label_buf =
+                let mut label_buf =
                     shape_chrome_line(font_system, ctx, &item.label, foreground, true, true);
                 composite_buffer(
                     font_system,
                     swash_cache,
                     &mut rgba,
                     canvas,
-                    &label_buf,
+                    &mut label_buf,
                     (origin + pad_x + item_pad, row_y),
                     foreground,
                 );
@@ -698,14 +700,14 @@ pub(super) fn palette_rgba(
                 ""
             };
             if !hint.is_empty() {
-                let hint_buf = shape_chrome_line(font_system, ctx, hint, muted, false, true);
+                let mut hint_buf = shape_chrome_line(font_system, ctx, hint, muted, false, true);
                 let hint_w = buffer_width(&hint_buf).ceil() as i32;
                 composite_buffer(
                     font_system,
                     swash_cache,
                     &mut rgba,
                     canvas,
-                    &hint_buf,
+                    &mut hint_buf,
                     (origin + panel_w as i32 - hint_w - pad_x - item_pad, row_y),
                     muted,
                 );
@@ -813,13 +815,13 @@ pub(super) fn which_key_rgba(
     let muted = theme.ansi[8].to_glyphon();
 
     // Draw Title.
-    let title_buf = shape_chrome_line(font_system, ctx, &view.title, accent, true, true);
+    let mut title_buf = shape_chrome_line(font_system, ctx, &view.title, accent, true, true);
     composite_buffer(
         font_system,
         swash_cache,
         &mut rgba,
         canvas,
-        &title_buf,
+        &mut title_buf,
         ((margin + pad_x) as i32, (margin + pad_y) as i32),
         accent,
     );
@@ -832,36 +834,36 @@ pub(super) fn which_key_rgba(
         let item_x = margin + pad_x + col as f32 * col_w;
         let item_y = items_top + row as f32 * item_h;
 
-        let key_buf = shape_chrome_line(font_system, ctx, key, accent, true, true);
+        let mut key_buf = shape_chrome_line(font_system, ctx, key, accent, true, true);
         composite_buffer(
             font_system,
             swash_cache,
             &mut rgba,
             canvas,
-            &key_buf,
+            &mut key_buf,
             (item_x as i32, item_y as i32),
             accent,
         );
 
-        let arrow_buf = shape_chrome_line(font_system, ctx, "→", muted, false, true);
+        let mut arrow_buf = shape_chrome_line(font_system, ctx, "→", muted, false, true);
         let key_w = ctx.cell_w * 7.0;
         composite_buffer(
             font_system,
             swash_cache,
             &mut rgba,
             canvas,
-            &arrow_buf,
+            &mut arrow_buf,
             ((item_x + key_w) as i32, item_y as i32),
             muted,
         );
 
-        let label_buf = shape_chrome_line(font_system, ctx, label, foreground, false, true);
+        let mut label_buf = shape_chrome_line(font_system, ctx, label, foreground, false, true);
         composite_buffer(
             font_system,
             swash_cache,
             &mut rgba,
             canvas,
-            &label_buf,
+            &mut label_buf,
             ((item_x + key_w + ctx.cell_w * 2.0) as i32, item_y as i32),
             foreground,
         );

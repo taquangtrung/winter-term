@@ -1,9 +1,9 @@
 //! Background pass: cell, cursor, selection, and scrollbar quads, plus
 //! the wgpu pipelines that draw them.
 
-use super::chrome::*;
-use super::colors::*;
-use super::glyphs::*;
+use super::chrome::DIM_FACTOR;
+use super::colors::{grid_color_to_rgb, resolve_fg_linear};
+use super::glyphs::{is_braille, push_braille_dots};
 use super::PaneRect;
 use crate::grid::{Color as GridColor, CursorShape, Grid};
 use crate::theme::Theme;
@@ -18,18 +18,18 @@ use wgpu::{
 // Constants
 // ========================================================================
 
-pub(super) const BG_SHADER: &str = include_str!("../bg.wgsl");
+const BG_SHADER: &str = include_str!("../bg.wgsl");
 
-pub(super) const DOT_SHADER: &str = include_str!("../dot.wgsl");
+const DOT_SHADER: &str = include_str!("../dot.wgsl");
 
-pub(super) const CURSOR_UNDERLINE_HEIGHT_RATIO: f32 = 0.2;
+const CURSOR_UNDERLINE_HEIGHT_RATIO: f32 = 0.2;
 
 /// Width in pixels of a `Bar` (I-beam) cursor's vertical stroke.
-pub(super) const CURSOR_BAR_WIDTH: f32 = 2.0;
+const CURSOR_BAR_WIDTH: f32 = 2.0;
 
 /// Offset in pixels applied to a `Bar` cursor's left position to keep it clear
 /// of the glyph's ink at the left edge of a cell.
-pub(super) const CURSOR_BAR_OFFSET: f32 = -0.5;
+const CURSOR_BAR_OFFSET: f32 = -0.5;
 
 /// Width in pixels of a hollow cursor's outline stroke (see [`cursor_outline_quads`]),
 /// matching the window's own 1px [`Theme::window_border`] hairline.
@@ -45,15 +45,15 @@ pub(super) const DOT_BUFFER_SIZE: u64 = 8 * 1024 * 1024;
 /// others, which sit further back.
 pub(super) const SEARCH_CURRENT_ALPHA: f32 = 0.8;
 
-pub(super) const SEARCH_MATCH_ALPHA: f32 = 0.6;
+const SEARCH_MATCH_ALPHA: f32 = 0.6;
 
 /// Opacities of the two alternating sentence-highlight tones, blended over the
 /// cell's own background like the search tints. Kept low and close together so
 /// the bands read as a subtle rhythm, not a zebra stripe; tone parity is the
 /// signal, not brightness.
-pub(super) const SENTENCE_TINT_ALPHA_EVEN: f32 = 0.28;
+const SENTENCE_TINT_ALPHA_EVEN: f32 = 0.28;
 
-pub(super) const SENTENCE_TINT_ALPHA_ODD: f32 = 0.14;
+const SENTENCE_TINT_ALPHA_ODD: f32 = 0.14;
 
 // ========================================================================
 // Implementation
@@ -87,7 +87,7 @@ pub(super) struct DotVertex {
 // Background vertex construction
 // ========================================================================
 
-pub(super) const QUICK_SELECT_BG: (f32, f32, f32) = (0.6, 0.45, 0.1);
+const QUICK_SELECT_BG: (f32, f32, f32) = (0.6, 0.45, 0.1);
 
 impl BgVertex {
     pub(super) fn to_bytes(self) -> [u8; 20] {
@@ -165,7 +165,7 @@ pub(super) struct BgParams<'a> {
 /// trailing blank cells. `last_col` is the row's final column index, used for
 /// rows that run to the line's end. Returns `None` when `abs_row` is outside
 /// the selection or no content falls within the selected span.
-pub(super) fn selection_span_on_row(
+fn selection_span_on_row(
     sel_norm: Option<(usize, usize, usize, usize)>,
     block: bool,
     abs_row: usize,
@@ -643,26 +643,26 @@ pub(super) fn build_bg_vertices_offset(
     verts
 }
 
-pub(super) const SCROLLBAR_WIDTH: f32 = 2.0;
+const SCROLLBAR_WIDTH: f32 = 2.0;
 /// Saturation multiplier for the scrollbar thumb (>1 pushes channels away from
 /// gray for a more vivid color); applied in every pane.
-pub(super) const SCROLLBAR_SATURATE: f32 = 1.8;
+const SCROLLBAR_SATURATE: f32 = 1.8;
 /// How far the scrollbar thumb is lerped toward pure blue, applied in every pane.
-pub(super) const SCROLLBAR_BLUE: f32 = 0.18;
+const SCROLLBAR_BLUE: f32 = 0.18;
 /// How far the scrollbar thumb is lerped toward white, lifting its brightness a
 /// touch in every pane.
-pub(super) const SCROLLBAR_BRIGHTEN: f32 = 0.15;
+const SCROLLBAR_BRIGHTEN: f32 = 0.15;
 /// How far an unfocused pane's scrollbar is lerped toward the background
 /// (0 = unchanged, 1 = fully background). Stronger than the content dim so the
 /// active pane's scrollbar clearly stands out.
-pub(super) const SCROLLBAR_DIM_FACTOR: f32 = 0.5;
-pub(super) const SCROLLBAR_MIN_THUMB: f32 = 6.0;
+const SCROLLBAR_DIM_FACTOR: f32 = 0.5;
+const SCROLLBAR_MIN_THUMB: f32 = 6.0;
 
 pub(super) const DIVIDER_THICKNESS: f32 = 1.0;
 /// Height of the underline bar drawn for SGR 4 and OSC 8 hyperlink cells.
-pub(super) const UNDERLINE_THICKNESS: f32 = 1.0;
+const UNDERLINE_THICKNESS: f32 = 1.0;
 /// Distance from the bottom of a cell to the top of its underline bar.
-pub(super) const UNDERLINE_BOTTOM_OFFSET: f32 = 2.0;
+const UNDERLINE_BOTTOM_OFFSET: f32 = 2.0;
 
 pub(super) fn lerp_to_bg(c: (f32, f32, f32), bg: (f32, f32, f32)) -> (f32, f32, f32) {
     (
@@ -675,11 +675,7 @@ pub(super) fn lerp_to_bg(c: (f32, f32, f32), bg: (f32, f32, f32)) -> (f32, f32, 
 /// `over` composited on `under` at `alpha` (0 = fully `under`, 1 = fully `over`).
 /// The background pass draws opaque quads, so translucent highlights are flattened
 /// here rather than blended by the GPU — same result, no pipeline state to order.
-pub(super) fn blend_over(
-    over: (f32, f32, f32),
-    under: (f32, f32, f32),
-    alpha: f32,
-) -> (f32, f32, f32) {
+fn blend_over(over: (f32, f32, f32), under: (f32, f32, f32), alpha: f32) -> (f32, f32, f32) {
     let a = alpha.clamp(0.0, 1.0);
     (
         under.0 + (over.0 - under.0) * a,
@@ -813,7 +809,7 @@ pub(super) fn create_bg_pipeline(device: &Device, format: TextureFormat) -> Rend
             module: &shader,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
-            buffers: &[VertexBufferLayout {
+            buffers: &[Some(VertexBufferLayout {
                 array_stride: std::mem::size_of::<BgVertex>() as u64,
                 step_mode: VertexStepMode::Vertex,
                 attributes: &[
@@ -828,7 +824,7 @@ pub(super) fn create_bg_pipeline(device: &Device, format: TextureFormat) -> Rend
                         shader_location: 1,
                     },
                 ],
-            }],
+            })],
         },
         fragment: Some(FragmentState {
             module: &shader,
@@ -878,7 +874,7 @@ pub(super) fn create_dot_pipeline(device: &Device, format: TextureFormat) -> Ren
             module: &shader,
             entry_point: Some("vs_main"),
             compilation_options: Default::default(),
-            buffers: &[VertexBufferLayout {
+            buffers: &[Some(VertexBufferLayout {
                 array_stride: std::mem::size_of::<DotVertex>() as u64,
                 step_mode: VertexStepMode::Vertex,
                 attributes: &[
@@ -898,7 +894,7 @@ pub(super) fn create_dot_pipeline(device: &Device, format: TextureFormat) -> Ren
                         shader_location: 2,
                     },
                 ],
-            }],
+            })],
         },
         fragment: Some(FragmentState {
             module: &shader,

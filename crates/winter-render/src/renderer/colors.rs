@@ -15,12 +15,12 @@ use crate::theme::{Rgb, Theme};
 /// is brighter: that keeps light text on a dark background crisp, but the same
 /// math thins dark text on a bright highlight (a selection, search match, or an
 /// explicit SGR background). Bolding compensates by covering more of each cell.
-pub(super) const DARK_ON_LIGHT_BOLD_MARGIN: i32 = 90;
+const DARK_ON_LIGHT_BOLD_MARGIN: i32 = 90;
 
 /// Minimum RGB distance (see `color_distance`, max ~441) between a glyph's color
 /// and the block cursor's fill before the glyph is considered lost in the cursor
 /// and repainted in a contrasting color.
-pub(super) const CURSOR_CONTRAST_MIN: f32 = 96.0;
+const CURSOR_CONTRAST_MIN: f32 = 96.0;
 
 // ========================================================================
 // Implementation
@@ -59,7 +59,7 @@ pub(super) fn needs_dark_on_light_bold(fg: (u8, u8, u8), bg: (u8, u8, u8)) -> bo
 /// Straight-line RGB distance between two colors, 0 (identical) to ~441 (black
 /// to white). Crude but stable, and enough to tell "invisible on this fill" from
 /// "readable on this fill".
-pub(super) fn color_distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
+fn color_distance(a: (u8, u8, u8), b: (u8, u8, u8)) -> f32 {
     let d = |x: u8, y: u8| x as f32 - y as f32;
     (d(a.0, b.0).powi(2) + d(a.1, b.1).powi(2) + d(a.2, b.2).powi(2)).sqrt()
 }
@@ -177,7 +177,7 @@ pub(super) fn cell_text_fg(cell: Option<&Cell>, theme: &Theme) -> (u8, u8, u8) {
     }
 }
 
-pub(super) fn xterm_256_to_rgb(index: u8) -> (u8, u8, u8) {
+fn xterm_256_to_rgb(index: u8) -> (u8, u8, u8) {
     if index < 16 {
         return ANSI_COLORS[index as usize];
     }
@@ -196,7 +196,7 @@ pub(super) fn xterm_256_to_rgb(index: u8) -> (u8, u8, u8) {
     (grey, grey, grey)
 }
 
-pub(super) const ANSI_COLORS: [(u8, u8, u8); 16] = [
+const ANSI_COLORS: [(u8, u8, u8); 16] = [
     (0, 0, 0),
     (128, 0, 0),
     (0, 128, 0),

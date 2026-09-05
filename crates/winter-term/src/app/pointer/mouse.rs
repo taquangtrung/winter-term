@@ -30,7 +30,7 @@ impl App {
         button: MouseButton,
         focused: PaneId,
     ) {
-        let (x, y) = self.cursor_pos;
+        let (x, y) = self.pointer.cursor_pos;
         let Some((_, pane_rect)) = self.pane_at_pixel(x, y) else {
             return;
         };
@@ -63,7 +63,7 @@ impl App {
     }
 
     pub(crate) fn forward_mouse_motion(&mut self, focused: PaneId) {
-        let (x, y) = self.cursor_pos;
+        let (x, y) = self.pointer.cursor_pos;
         let Some((_, pane_rect)) = self.pane_at_pixel(x, y) else {
             return;
         };
@@ -88,7 +88,7 @@ impl App {
     }
 
     pub(crate) fn forward_mouse_scroll(&mut self, scroll_lines: isize, focused: PaneId) {
-        let (x, y) = self.cursor_pos;
+        let (x, y) = self.pointer.cursor_pos;
         let Some((_, pane_rect)) = self.pane_at_pixel(x, y) else {
             return;
         };

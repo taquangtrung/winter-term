@@ -1,7 +1,7 @@
 //! Glyph machinery: font configuration and loading, cell metrics,
 //! fallback glyphs, and shaping helpers.
 
-use super::background::*;
+use super::background::DotVertex;
 use super::GpuRenderer;
 use crate::glyph_quad::GlyphTexture;
 use glyphon::{Attrs, Color, Family, FontSystem, Shaping, SwashContent};
@@ -21,7 +21,7 @@ pub(super) const DEFAULT_BOLD_WEIGHT: glyphon::cosmic_text::Weight =
 /// Diameter of a procedurally-drawn braille dot as a fraction of its sub-cell.
 /// The anti-aliased circle leaves natural corner gaps, so this can be fairly
 /// large while still reading as distinct dots like wezterm's built-in braille.
-pub(super) const BRAILLE_DOT_RATIO: f32 = 0.9;
+const BRAILLE_DOT_RATIO: f32 = 0.9;
 
 // ========================================================================
 // Implementation
@@ -289,7 +289,7 @@ impl GpuRenderer {
     /// preserving the glyph's own color so [`GlyphQuadPass`] draws it as-is;
     /// when `false` it's a single-channel coverage mask, tinted per-instance by
     /// [`GlyphQuadPass`] with the cell's foreground color, same as before.
-    pub(super) fn rasterize_fallback_glyph(
+    fn rasterize_fallback_glyph(
         &mut self,
         ch: char,
         tail: Option<&str>,
@@ -305,19 +305,9 @@ impl GpuRenderer {
         let mut buffer = glyphon::Buffer::new(&mut self.font_system, metrics);
         let canvas_w = (self.font_size * 3.0).ceil().max(1.0) as u32;
         let canvas_h = (self.line_height * 2.0).ceil().max(1.0) as u32;
-        buffer.set_size(
-            &mut self.font_system,
-            Some(canvas_w as f32),
-            Some(canvas_h as f32),
-        );
+        buffer.set_size(Some(canvas_w as f32), Some(canvas_h as f32));
         let text = glyph_key(ch, tail);
-        buffer.set_text(
-            &mut self.font_system,
-            &text,
-            &attrs,
-            Shaping::Advanced,
-            None,
-        );
+        buffer.set_text(&text, &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(&mut self.font_system, false);
 
         let mut is_color = false;
@@ -407,7 +397,7 @@ pub(super) fn base_family(name: Option<&str>) -> Family<'_> {
 /// character, so asking for the color-emoji family here never breaks
 /// non-emoji wide glyphs, and requesting it for a system that lacks
 /// Noto Color Emoji entirely is equally harmless.
-pub(super) fn fallback_family(name: Option<&str>, is_wide: bool) -> Family<'_> {
+fn fallback_family(name: Option<&str>, is_wide: bool) -> Family<'_> {
     if is_wide {
         Family::Name("Noto Color Emoji")
     } else {
@@ -453,7 +443,7 @@ pub(super) fn needs_complex_shaping(c: char) -> bool {
 /// already promoted its cell to `Wide` on seeing the keycap enclosure, and
 /// that promotion is reason enough on its own to route it through the same
 /// color-emoji-family, ink-fit quad treatment as any other wide emoji.
-pub(super) fn needs_fallback_quad_attempt(ch: char, is_wide: bool) -> bool {
+fn needs_fallback_quad_attempt(ch: char, is_wide: bool) -> bool {
     needs_complex_shaping(ch) || is_wide
 }
 
@@ -619,14 +609,14 @@ pub(super) fn measure_cell(
 ) -> (f32, f32) {
     let metrics = glyphon::Metrics::new(font_size, line_height);
     let mut buffer = glyphon::Buffer::new(font_system, metrics);
-    buffer.set_size(font_system, Some(f32::MAX), Some(line_height));
+    buffer.set_size(Some(f32::MAX), Some(line_height));
     let attrs = Attrs::new()
         .family(base_family(family))
         .weight(parse_weight(
             normal_weight,
             glyphon::cosmic_text::Weight::NORMAL,
         ));
-    buffer.set_text(font_system, "M", &attrs, Shaping::Advanced, None);
+    buffer.set_text("M", &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
 
     if let Some(run) = buffer.layout_runs().next() {
@@ -651,7 +641,7 @@ pub(super) fn measure_cell(
 /// glyphs (including ones the primary font covers, which already render at the
 /// cell's natural advance) are left to render through cosmic-text's normal
 /// text layout instead of the quad pass.
-pub(super) fn advance_scale_ratio(cell_width: f32, natural_advance: f32) -> Option<f32> {
+fn advance_scale_ratio(cell_width: f32, natural_advance: f32) -> Option<f32> {
     (natural_advance > 0.5 && (natural_advance - cell_width).abs() > 0.5)
         .then(|| cell_width / natural_advance)
 }
@@ -667,12 +657,7 @@ pub(super) fn advance_scale_ratio(cell_width: f32, natural_advance: f32) -> Opti
 /// line; a symbol font can advance a wide glyph as if it were single-width,
 /// which would otherwise read as a spurious ~2x upscale need). Callers must
 /// ensure `ink_width` and `ink_height` are both positive.
-pub(super) fn ink_contain_scale(
-    max_width: f32,
-    max_height: f32,
-    ink_width: f32,
-    ink_height: f32,
-) -> f32 {
+fn ink_contain_scale(max_width: f32, max_height: f32, ink_width: f32, ink_height: f32) -> f32 {
     (max_width / ink_width).min(max_height / ink_height)
 }
 
@@ -680,11 +665,7 @@ pub(super) fn ink_contain_scale(
 /// its tight ink bounding box, returning `(width, height, pixels)`, or `None`
 /// if every pixel is fully transparent. A pixel counts as ink when its alpha
 /// channel (every 4th byte) is nonzero.
-pub(super) fn crop_to_ink_rgba(
-    canvas: &[u8],
-    canvas_w: u32,
-    canvas_h: u32,
-) -> Option<(u32, u32, Vec<u8>)> {
+fn crop_to_ink_rgba(canvas: &[u8], canvas_w: u32, canvas_h: u32) -> Option<(u32, u32, Vec<u8>)> {
     let mut min_x = canvas_w;
     let mut min_y = canvas_h;
     let mut max_x = 0u32;
@@ -723,7 +704,7 @@ pub(super) fn crop_to_ink_rgba(
 /// non-`Wide` cell (see [`GpuRenderer::ensure_fallback_glyph_quad`]), which
 /// by construction is never emoji-presentation (see [`fallback_family`]), so
 /// this always shapes on the plain configured/monospace family.
-pub(super) fn measure_glyph_advance(
+fn measure_glyph_advance(
     font_system: &mut FontSystem,
     font_size: f32,
     line_height: f32,
@@ -733,7 +714,7 @@ pub(super) fn measure_glyph_advance(
 ) -> f32 {
     let metrics = glyphon::Metrics::new(font_size, line_height);
     let mut buffer = glyphon::Buffer::new(font_system, metrics);
-    buffer.set_size(font_system, Some(f32::MAX), Some(line_height));
+    buffer.set_size(Some(f32::MAX), Some(line_height));
     let attrs = Attrs::new()
         .family(base_family(family))
         .weight(parse_weight(
@@ -741,13 +722,7 @@ pub(super) fn measure_glyph_advance(
             glyphon::cosmic_text::Weight::NORMAL,
         ));
     let mut buf = [0u8; 4];
-    buffer.set_text(
-        font_system,
-        ch.encode_utf8(&mut buf),
-        &attrs,
-        Shaping::Advanced,
-        None,
-    );
+    buffer.set_text(ch.encode_utf8(&mut buf), &attrs, Shaping::Advanced, None);
     buffer.shape_until_scroll(font_system, false);
     buffer
         .layout_runs()
@@ -771,14 +746,14 @@ pub(super) fn font_covers_braille(
     let mut buffer = glyphon::Buffer::new(font_system, metrics);
     // A size must be set or `shape_until_scroll` produces no layout runs, which
     // would make this always report "no braille" (matching `measure_cell`).
-    buffer.set_size(font_system, Some(f32::MAX), Some(line_height));
+    buffer.set_size(Some(f32::MAX), Some(line_height));
     let attrs = Attrs::new()
         .family(base_family(family))
         .weight(parse_weight(
             normal_weight,
             glyphon::cosmic_text::Weight::NORMAL,
         ));
-    buffer.set_text(font_system, "\u{28ff}", &attrs, Shaping::Basic, None);
+    buffer.set_text("\u{28ff}", &attrs, Shaping::Basic, None);
     buffer.shape_until_scroll(font_system, false);
     buffer
         .layout_runs()
@@ -802,9 +777,9 @@ pub(super) fn font_covers_bold_weight(
     let matched_family = |weight: glyphon::cosmic_text::Weight, font_system: &mut FontSystem| {
         let metrics = glyphon::Metrics::new(font_size, line_height);
         let mut buffer = glyphon::Buffer::new(font_system, metrics);
-        buffer.set_size(font_system, Some(f32::MAX), Some(line_height));
+        buffer.set_size(Some(f32::MAX), Some(line_height));
         let attrs = Attrs::new().family(base_family(family)).weight(weight);
-        buffer.set_text(font_system, "M", &attrs, Shaping::Advanced, None);
+        buffer.set_text("M", &attrs, Shaping::Advanced, None);
         buffer.shape_until_scroll(font_system, false);
         let font_id = buffer
             .layout_runs()
@@ -1068,15 +1043,9 @@ mod tests {
 
             let metrics = glyphon::Metrics::new(size, line_height);
             let mut buffer = glyphon::Buffer::new(&mut font_system, metrics);
-            buffer.set_size(&mut font_system, Some(4000.0), Some(line_height));
+            buffer.set_size(Some(4000.0), Some(line_height));
             let attrs = Attrs::new().family(glyphon::cosmic_text::Family::Monospace);
-            buffer.set_text(
-                &mut font_system,
-                &"w".repeat(80),
-                &attrs,
-                Shaping::Basic,
-                None,
-            );
+            buffer.set_text(&"w".repeat(80), &attrs, Shaping::Basic, None);
             buffer.shape_until_scroll(&mut font_system, false);
 
             let run = buffer.layout_runs().next().expect("shaped line");

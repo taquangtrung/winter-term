@@ -41,5 +41,5 @@ regex = "1"
 # needed `default-features = false` to get the same thing; 0.15 inverted that,
 # so disabling defaults now silently truncates any TBP escape over 1 KiB.
 vte = "0.15"
-wgpu = "29"
+wgpu = "30"
 winresource = "0.1"

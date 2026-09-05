@@ -6,6 +6,10 @@ use crate::model::layout::PaneId;
 use super::vim::{char_class, line_chars};
 use super::App;
 
+// ========================================================================
+// Data Structures
+// ========================================================================
+
 /// A match's position in the pane's whole buffer: `(absolute_row, column)`,
 /// with the row counted from the oldest scrollback line (see
 /// [`winter_render::Grid::to_absolute_row`]) so it stays valid as the viewport
@@ -15,7 +19,7 @@ pub(crate) type MatchPos = (usize, usize);
 /// Where a search step begins scanning.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum SearchFrom {
-    /// The position the search was launched from ([`App::search_origin`]).
+    /// The position the search was launched from ([`SearchState::origin`]).
     /// Used while the query is still being typed so every keystroke re-searches
     /// from the same spot (Vim's `incsearch`) instead of creeping forward
     /// through the buffer one letter at a time.
@@ -24,6 +28,35 @@ pub(crate) enum SearchFrom {
     /// Used by `n`/`N`, so repeats step match-by-match — and so a repeat after
     /// moving the cursor by hand resumes from the cursor, like Vim.
     Cursor,
+}
+
+/// The live `/` search: the query being typed, where it started, and which
+/// match it is parked on. Putting the search away clears every field except
+/// [`Self::last`] and [`Self::reverse`], which is what lets `n`/`N` resume the
+/// same search, the same way round, from wherever the cursor now is.
+#[derive(Debug, Default)]
+pub(crate) struct SearchState {
+    /// The match `n`/`N` is parked on — the pane and the match's absolute
+    /// `(row, col)` start. Drawn in [`winter_render::Theme::search_current_bg`]
+    /// so the focused match stands out from the other highlighted matches.
+    pub(crate) current: Option<(PaneId, (usize, usize))>,
+    /// The last query searched for, kept after the search is put away with `Esc`
+    /// so `n`/`N` can pick it back up from wherever the cursor now is — vim keeps
+    /// the pattern the same way across `:nohlsearch`.
+    pub(crate) last: Option<String>,
+    /// 1-based index of the focused match (0 when no matches).
+    pub(crate) match_index: usize,
+    pub(crate) match_total: usize,
+    /// Where the active search was launched from: the pane and the absolute
+    /// buffer position (`(row, col)`) of the cursor when `/`/`?`/`*` was
+    /// pressed. Every keystroke of the query re-searches from here, so typing
+    /// doesn't creep forward through the buffer.
+    pub(crate) origin: Option<(PaneId, (usize, usize))>,
+    pub(crate) query: Option<String>,
+    /// Vim-style search direction: `?`/`#` set this so `n` repeats backward and
+    /// `N` forward (both reversed from the `/`/`*` default). `SearchNext`
+    /// (`n`) walks in this direction; `SearchPrevious` (`N`) walks the other.
+    pub(crate) reverse: bool,
 }
 
 // ========================================================================
@@ -35,7 +68,7 @@ impl App {
     /// unless the active search is reversed (`?`/`#`), mirroring Vim's sticky
     /// search direction.
     pub(crate) fn search_start_direction(&self) -> input::BlockNav {
-        if self.search_reverse {
+        if self.search.reverse {
             input::BlockNav::Previous
         } else {
             input::BlockNav::Next
@@ -58,8 +91,8 @@ impl App {
             return;
         };
 
-        self.search_query = Some(word);
-        self.search_reverse = !forward;
+        self.search.query = Some(word);
+        self.search.reverse = !forward;
         if !self.config.status_bar.enabled {
             self.resize_all_panes();
         }
@@ -81,7 +114,7 @@ impl App {
             let row = row.min(grid.rows().saturating_sub(1));
             (grid.to_absolute_row(row), col)
         });
-        self.search_origin = pos.map(|p| (focused, p));
+        self.search.origin = pos.map(|p| (focused, p));
     }
 
     /// Repeat the search from the cursor (`n`/`N`). See [`App::search_step`].
@@ -95,13 +128,13 @@ impl App {
     /// `:nohlsearch`. A no-op while a search is still active, or when nothing has
     /// been searched for yet.
     pub(crate) fn resume_last_search(&mut self) {
-        if self.search_query.is_some() {
+        if self.search.query.is_some() {
             return;
         }
-        let Some(query) = self.search_last.clone() else {
+        let Some(query) = self.search.last.clone() else {
             return;
         };
-        self.search_query = Some(query);
+        self.search.query = Some(query);
         // Reviving the query forces the status bar back on when it's configured
         // hidden (see `status_bar_visible`), so match the pane geometry now.
         if !self.config.status_bar.enabled {
@@ -126,17 +159,17 @@ impl App {
         direction: input::BlockNav,
         from: SearchFrom,
     ) {
-        let query = match &self.search_query {
+        let query = match &self.search.query {
             Some(q) if !q.is_empty() => q.clone(),
             _ => {
-                self.search_match_index = 0;
-                self.search_match_total = 0;
-                self.search_current = None;
+                self.search.match_index = 0;
+                self.search.match_total = 0;
+                self.search.current = None;
                 return;
             }
         };
         // Remembered past the end of this search so `n`/`N` can revive it.
-        self.search_last = Some(query.clone());
+        self.search.last = Some(query.clone());
 
         // Both the match list and the scan origin are read under one immutable
         // borrow of the pane, before the counters below take `&mut self`.
@@ -150,10 +183,10 @@ impl App {
             return;
         };
 
-        self.search_match_total = matches.len();
+        self.search.match_total = matches.len();
         if matches.is_empty() {
-            self.search_match_index = 0;
-            self.search_current = None;
+            self.search.match_index = 0;
+            self.search.current = None;
             return;
         }
 
@@ -164,8 +197,8 @@ impl App {
                 .rposition(|&m| m < start)
                 .unwrap_or(matches.len() - 1),
         };
-        self.search_match_index = pos + 1;
-        self.search_current = Some((focused, matches[pos]));
+        self.search.match_index = pos + 1;
+        self.search.current = Some((focused, matches[pos]));
         // A confirmed search jump is one of vim's jumplist jumps — record where
         // it started before revealing the match.
         self.push_jump(focused);
@@ -183,7 +216,7 @@ impl App {
         grid: &winter_render::Grid,
     ) -> MatchPos {
         if from == SearchFrom::Origin {
-            if let Some((_, pos)) = self.search_origin.filter(|&(p, _)| p == focused) {
+            if let Some((_, pos)) = self.search.origin.filter(|&(p, _)| p == focused) {
                 return pos;
             }
         }
@@ -195,7 +228,7 @@ impl App {
     /// `gn` / `gN`: Select the next/previous search match in Visual mode.
     pub(crate) fn select_search_match(&mut self, focused: PaneId, forward: bool) {
         self.resume_last_search();
-        let query = match &self.search_query {
+        let query = match &self.search.query {
             Some(q) if !q.is_empty() => q.clone(),
             _ => return,
         };
@@ -234,7 +267,7 @@ impl App {
             let view_r2 = abs_end_row
                 .saturating_sub(top)
                 .min(grid.rows().saturating_sub(1));
-            self.visual_anchor = Some((view_r1, start_col));
+            self.selection.visual_anchor = Some((view_r1, start_col));
             self.set_nav_cursor(focused, (view_r2, end_col));
             self.update_visual_selection(focused);
             self.dirty = true;
@@ -244,7 +277,7 @@ impl App {
     /// `cgn` / `cgN`: Change the next/previous search match on the editable prompt line.
     pub(crate) fn change_search_match(&mut self, focused: PaneId, forward: bool) {
         self.resume_last_search();
-        let query = match &self.search_query {
+        let query = match &self.search.query {
             Some(q) if !q.is_empty() => q.clone(),
             _ => return,
         };
@@ -289,15 +322,15 @@ impl App {
             focused,
         );
         self.modes.insert(focused, crate::model::mode::Mode::Insert);
-        self.selection = None;
-        self.visual_anchor = None;
+        self.selection.span = None;
+        self.selection.visual_anchor = None;
         self.dirty = true;
     }
 
     /// `dgn` / `dgN`: Delete the next/previous search match on the editable prompt line.
     pub(crate) fn delete_search_match(&mut self, focused: PaneId, forward: bool) {
         self.resume_last_search();
-        let query = match &self.search_query {
+        let query = match &self.search.query {
             Some(q) if !q.is_empty() => q.clone(),
             _ => return,
         };
@@ -533,7 +566,7 @@ mod tests {
         let id = app.tab().panes()[0];
         app.panes.insert(id, pane_with_lines(lines));
         app.set_nav_cursor(id, (0, 0));
-        app.search_query = Some(query.to_string());
+        app.search.query = Some(query.to_string());
         (app, id)
     }
 
@@ -545,7 +578,7 @@ mod tests {
     fn test_search_start_direction_follows_search_reverse() {
         let mut app = crate::app::App::new();
         assert_eq!(app.search_start_direction(), input::BlockNav::Next);
-        app.search_reverse = true;
+        app.search.reverse = true;
         assert_eq!(app.search_start_direction(), input::BlockNav::Previous);
     }
 
@@ -592,8 +625,8 @@ mod tests {
 
         app.search_in_pane(id, input::BlockNav::Next);
 
-        assert_eq!(app.search_match_total, 3);
-        assert_eq!(app.search_match_index, 1);
+        assert_eq!(app.search.match_total, 3);
+        assert_eq!(app.search.match_index, 1);
         assert_eq!(
             app.nav_cursor(id),
             Some((1, 0)),
@@ -611,7 +644,7 @@ mod tests {
         let mut stops = Vec::new();
         for _ in 0..4 {
             app.search_in_pane(id, input::BlockNav::Next);
-            stops.push((app.search_match_index, app.nav_cursor(id).unwrap()));
+            stops.push((app.search.match_index, app.nav_cursor(id).unwrap()));
         }
 
         assert_eq!(
@@ -630,7 +663,7 @@ mod tests {
         let mut stops = Vec::new();
         for _ in 0..3 {
             app.search_in_pane(id, input::BlockNav::Previous);
-            stops.push((app.search_match_index, app.nav_cursor(id).unwrap()));
+            stops.push((app.search.match_index, app.nav_cursor(id).unwrap()));
         }
 
         assert_eq!(stops, vec![(3, (2, 4)), (2, (1, 8)), (1, (1, 0))]);
@@ -644,11 +677,11 @@ mod tests {
         app.set_search_origin(id);
 
         for c in "ink".chars() {
-            app.search_query.as_mut().unwrap().push(c);
+            app.search.query.as_mut().unwrap().push(c);
             app.search_step(id, input::BlockNav::Next, SearchFrom::Origin);
         }
 
-        assert_eq!(app.search_match_index, 1);
+        assert_eq!(app.search.match_index, 1);
         assert_eq!(app.nav_cursor(id), Some((1, 0)));
     }
 
@@ -658,8 +691,8 @@ mod tests {
 
         app.search_in_pane(id, input::BlockNav::Next);
 
-        assert_eq!(app.search_match_total, 0);
-        assert_eq!(app.search_match_index, 0);
+        assert_eq!(app.search.match_total, 0);
+        assert_eq!(app.search.match_index, 0);
     }
 
     #[test]
@@ -675,11 +708,11 @@ mod tests {
         }
         assert!(pane.grid().scrollback_len() >= rows);
         app.panes.insert(id, pane);
-        app.search_query = Some("ink".to_string());
+        app.search.query = Some("ink".to_string());
 
         app.search_in_pane(id, input::BlockNav::Next);
 
-        assert_eq!(app.search_match_total, 1);
+        assert_eq!(app.search.match_total, 1);
         let grid = app.panes[&id].grid();
         let (row, col) = app.nav_cursor(id).unwrap();
         let visible: String = (0..3)
@@ -697,26 +730,26 @@ mod tests {
         use crate::model::input::Action;
 
         let (mut app, id) = app_with_lines(LINES, "");
-        app.search_query = None;
+        app.search.query = None;
 
         app.handle_action(Action::SearchStart, id);
         for c in "ink".chars() {
             app.handle_action(Action::SearchChar(c), id);
         }
         app.handle_action(Action::SearchExecute, id);
-        assert_eq!((app.search_match_index, app.search_match_total), (1, 3));
+        assert_eq!((app.search.match_index, app.search.match_total), (1, 3));
 
         app.handle_action(Action::SearchNext, id);
-        assert_eq!(app.search_match_index, 2);
+        assert_eq!(app.search.match_index, 2);
         app.handle_action(Action::SearchNext, id);
-        assert_eq!(app.search_match_index, 3);
+        assert_eq!(app.search.match_index, 3);
         app.handle_action(Action::SearchPrevious, id);
-        assert_eq!(app.search_match_index, 2);
+        assert_eq!(app.search.match_index, 2);
 
         // Esc ends the search but leaves the cursor on the match it walked to.
         app.handle_action(Action::SearchCancel, id);
-        assert_eq!(app.search_query, None);
-        assert_eq!(app.search_match_total, 0);
+        assert_eq!(app.search.query, None);
+        assert_eq!(app.search.match_total, 0);
         assert_eq!(app.nav_cursor(id), Some((1, 8)));
     }
 
@@ -729,23 +762,23 @@ mod tests {
 
         let (mut app, id) = app_with_lines(LINES, "ink");
         app.search_in_pane(id, input::BlockNav::Next);
-        assert_eq!(app.search_match_index, 1);
+        assert_eq!(app.search.match_index, 1);
 
         app.handle_action(Action::SearchCancel, id);
-        assert_eq!(app.search_query, None);
-        assert_eq!(app.search_last.as_deref(), Some("ink"));
+        assert_eq!(app.search.query, None);
+        assert_eq!(app.search.last.as_deref(), Some("ink"));
 
         app.handle_action(Action::SearchNext, id);
 
         assert_eq!(
-            app.search_query.as_deref(),
+            app.search.query.as_deref(),
             Some("ink"),
             "highlight comes back"
         );
-        assert_eq!(app.search_match_total, 3);
+        assert_eq!(app.search.match_total, 3);
         // Resumed from the cursor's position (the first match), so it advances to
         // the second rather than restarting from the top.
-        assert_eq!(app.search_match_index, 2);
+        assert_eq!(app.search.match_index, 2);
         assert_eq!(app.nav_cursor(id), Some((1, 8)));
     }
 
@@ -754,12 +787,12 @@ mod tests {
         use crate::model::input::Action;
 
         let (mut app, id) = app_with_lines(LINES, "");
-        app.search_query = None;
+        app.search.query = None;
 
         app.handle_action(Action::SearchNext, id);
 
-        assert_eq!(app.search_query, None);
-        assert_eq!(app.search_match_total, 0);
+        assert_eq!(app.search.query, None);
+        assert_eq!(app.search.match_total, 0);
     }
 
     #[test]
@@ -772,35 +805,35 @@ mod tests {
         let (mut app, id) = app_with_lines(LINES, "ink");
 
         app.search_in_pane(id, input::BlockNav::Next);
-        assert_eq!(app.search_current, Some((id, (1, 0))));
+        assert_eq!(app.search.current, Some((id, (1, 0))));
         app.search_in_pane(id, input::BlockNav::Next);
-        assert_eq!(app.search_current, Some((id, (1, 8))));
+        assert_eq!(app.search.current, Some((id, (1, 8))));
 
         app.handle_action(Action::SearchCancel, id);
-        assert_eq!(app.search_current, None);
+        assert_eq!(app.search.current, None);
     }
 
     #[test]
     fn test_search_current_clears_when_the_query_stops_matching() {
         let (mut app, id) = app_with_lines(LINES, "ink");
         app.search_in_pane(id, input::BlockNav::Next);
-        assert!(app.search_current.is_some());
+        assert!(app.search.current.is_some());
 
-        app.search_query = Some("nomatch".to_string());
+        app.search.query = Some("nomatch".to_string());
         app.search_in_pane(id, input::BlockNav::Next);
 
-        assert_eq!(app.search_current, None);
+        assert_eq!(app.search.current, None);
     }
 
     #[test]
     fn test_search_word_under_cursor_forward_sets_query_and_direction() {
         let (mut app, id) = app_with_lines(&["needle here", "needle"], "");
-        app.search_query = None;
+        app.search.query = None;
 
         app.search_word_under_cursor(id, true);
 
-        assert_eq!(app.search_query.as_deref(), Some("needle"));
-        assert!(!app.search_reverse);
+        assert_eq!(app.search.query.as_deref(), Some("needle"));
+        assert!(!app.search.reverse);
         // The cursor already sat on an occurrence, so `*` moves to the next one.
         assert_eq!(app.nav_cursor(id), Some((1, 0)));
     }
@@ -808,26 +841,26 @@ mod tests {
     #[test]
     fn test_search_word_under_cursor_backward_sets_query_and_direction() {
         let (mut app, id) = app_with_lines(&["needle here", "needle"], "");
-        app.search_query = None;
+        app.search.query = None;
         app.set_nav_cursor(id, (1, 0));
 
         app.search_word_under_cursor(id, false);
 
-        assert_eq!(app.search_query.as_deref(), Some("needle"));
-        assert!(app.search_reverse);
+        assert_eq!(app.search.query.as_deref(), Some("needle"));
+        assert!(app.search.reverse);
         assert_eq!(app.nav_cursor(id), Some((0, 0)));
     }
 
     #[test]
     fn test_search_word_under_cursor_on_blank_cell_leaves_query_untouched() {
         let (mut app, id) = app_with_lines(&["needle"], "");
-        app.search_query = None;
+        app.search.query = None;
         // Column 30 is well past "needle" — blank padding.
         app.set_nav_cursor(id, (0, 30));
 
         app.search_word_under_cursor(id, true);
 
-        assert_eq!(app.search_query, None);
+        assert_eq!(app.search.query, None);
     }
 
     #[test]
@@ -841,7 +874,7 @@ mod tests {
         // Mode is Visual
         assert_eq!(app.modes.get(&id), Some(&crate::model::mode::Mode::Visual));
         // Visual anchor is at (0, 6), nav cursor is at (0, 10)
-        assert_eq!(app.visual_anchor, Some((0, 6)));
+        assert_eq!(app.selection.visual_anchor, Some((0, 6)));
         assert_eq!(app.nav_cursor(id), Some((0, 10)));
     }
 

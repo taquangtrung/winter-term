@@ -184,7 +184,7 @@ impl App {
                 if let Some(action) = action {
                     if let Ok(abs_row) = action.parse::<usize>() {
                         if let Some((_pid, origin)) = self.swoop_initial_cursor.take() {
-                            self.jump_lists.entry(focused).or_default().push(origin);
+                            self.vim.jump_lists.entry(focused).or_default().push(origin);
                         }
                         self.nav_cursors.insert(focused, (abs_row, 0));
                         self.reveal_position(focused, (abs_row, 0));

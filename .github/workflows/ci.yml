@@ -130,7 +130,9 @@ jobs:
       # A prebuilt binary; building cargo-audit from source on every run costs
       # more minutes than the check itself.
       - uses: taiki-e/install-action@cargo-audit
-      - run: cargo audit
+      # --deny warnings, with the known-unactionable advisories listed in
+      # .cargo/audit.toml, so a new one cannot hide among them.
+      - run: cargo audit --deny warnings
 
   # Catches the crates.io rejections that only surface at publish time:
   # a missing description, an unreadable readme path, an excluded file.

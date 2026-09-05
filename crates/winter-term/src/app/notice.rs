@@ -50,9 +50,9 @@ impl App {
         } else if let Some(palette) = &self.palette {
             let selected = palette.selected_action().unwrap_or("");
             format!("Winter - palette: > {} [{}]", palette.query, selected)
-        } else if self.search_query.is_some() || self.pending == PendingPrefix::SearchInput {
-            let query = self.search_query.as_deref().unwrap_or("");
-            let prefix = if self.search_reverse { '?' } else { '/' };
+        } else if self.search.query.is_some() || self.pending == PendingPrefix::SearchInput {
+            let query = self.search.query.as_deref().unwrap_or("");
+            let prefix = if self.search.reverse { '?' } else { '/' };
             format!("Winter - search: {prefix}{query}")
         } else if self.quick_select.is_some() {
             "Winter - quick select".to_string()

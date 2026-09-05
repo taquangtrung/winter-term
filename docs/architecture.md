@@ -30,7 +30,7 @@ Every crate sets `#![forbid(unsafe_code)]`. The three library crates also set `#
 
 ## The byte pipeline
 
-A pane spawns a PTY child and reads its output on a background thread. Those bytes go through exactly one `vte` parse pass, in `CombinedPerformer` (`crates/winter-term/src/terminal/pane.rs`), which fans each parsed event out to two consumers at once.
+A pane spawns a PTY child and reads its output on a background thread. Those bytes go through exactly one `vte` parse pass, in `CombinedPerformer` (`crates/winter-term/src/terminal/pane/performer.rs`), which fans each parsed event out to two consumers at once.
 
 ```text
         PTY child (shell)
@@ -55,7 +55,7 @@ A pane spawns a PTY child and reads its output on a background thread. Those byt
 
 The single-pass design is the reason the visual grid and the block list can never disagree about ordering: a block is anchored to the grid row the cursor was on when its escape arrived, and those anchors are drained together with the block itself.
 
-`CombinedPerformer` also handles what `vte` 0.13 will not. It tracks `ESC _` APC strings by hand so the Kitty graphics protocol can be parsed, and it keeps separate Kitty keyboard flag stacks for the main and alternate screens so a full-screen program cannot leak pushed flags back into the shell prompt.
+`CombinedPerformer` also handles what `vte` 0.15 will not. It tracks `ESC _` APC strings by hand so the Kitty graphics protocol can be parsed, and it keeps separate Kitty keyboard flag stacks for the main and alternate screens so a full-screen program cannot leak pushed flags back into the shell prompt.
 
 `winter_render::Screen` is a second, standalone VT driver over the same `Grid`. It is not used by the app; it backs the headless demo path in `crates/winter-term/src/main.rs` and the tests.
 
@@ -107,7 +107,7 @@ The default ceiling is `Restricted`, so nothing arriving from a PTY can reach `T
 
 ## Interaction model
 
-`crates/winter-term/src/model/` is a pure layer: modes, split-tree geometry, key resolution, the command palette, and the settings page, with std-only dependencies and no side effects. This is what makes the vim layer testable without a window, and it is where most of the 967 test functions live.
+`crates/winter-term/src/model/` is a pure layer: modes, split-tree geometry, key resolution, the command palette, and the settings page, with std-only dependencies and no side effects. This is what makes the vim layer testable without a window, and it is where most of the 977 test functions live.
 
 The mode machine is per pane and has four states. Insert encodes keys to bytes for the PTY. Normal intercepts them as motions, operators, and layout actions. Visual is Normal with motions extending a selection. Block-Focus forwards keys to a rich block until `Esc`.
 
@@ -116,6 +116,8 @@ One transition is deliberately asymmetric: `Esc` in Normal stays in Normal. Only
 Layout is a binary split tree per tab (`crates/winter-term/src/model/layout.rs`): leaves are panes, internal nodes are splits with a ratio clamped to `[0.1, 0.9]` so a pane can never be squeezed to zero. `PaneId`s are allocated by the owner so they stay unique across tabs.
 
 `crates/winter-term/src/app/mod.rs` wires this to `winit`, with submodules splitting the `App` by concern: `init` for GPU bootstrap, `actions` for dispatch, `render` for frame composition, `navigation` for motions and search, `pointer` for mouse and clipboard, `blocks` for fold and yank.
+
+The state those submodules share is grouped into types rather than sitting flat on `App`: `SearchState` (the live `/` search), `MenuState` (the menubar and context menu), `PointerState` (hover, drags, click timing), `SelectionState` (the selection span and the Visual mode behind it), and `VimState` (jumplist, changelist, marks, registers). Each is owned by the submodule that drives it, so a submodule reaches for a named piece of state rather than for any of `App`'s fields.
 
 ## Normal mode
 
@@ -170,4 +172,4 @@ The `winter` binary dispatches on its first argument: no argument opens the wind
 
 ## Testing
 
-967 `#[test]` functions live beside the code, concentrated in the pure model layer. Integration tests cover the PTY (`crates/winter-core/tests/pty.rs`), shell integration, and mux end-to-end behavior. Two fuzz suites feed adversarial streams at the parsers: `crates/winter-render/tests/vt_fuzz.rs` for the VT parser and cell grid, and `crates/winter-core/tests/tbp_fuzz.rs` for the TBP block parser.
+977 `#[test]` functions live beside the code, concentrated in the pure model layer. Integration tests cover the PTY (`crates/winter-core/tests/pty.rs`), shell integration, and mux end-to-end behavior. Two fuzz suites feed adversarial streams at the parsers: `crates/winter-render/tests/vt_fuzz.rs` for the VT parser and cell grid, and `crates/winter-core/tests/tbp_fuzz.rs` for the TBP block parser.

@@ -13,7 +13,7 @@ rust-version.workspace = true
 readme = "README.md"
 
 [dependencies]
-glyphon = "0.11"
+glyphon = "0.12"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 pollster = "0.4"
 pulldown-cmark = { version = "0.12", default-features = false }
@@ -21,4 +21,4 @@ resvg = { version = "0.48", default-features = false, features = ["text", "syste
 unicode-normalization = "0.1"
 unicode-width = "0.1"
 vte.workspace = true
-wgpu = "29"
+wgpu = "30"

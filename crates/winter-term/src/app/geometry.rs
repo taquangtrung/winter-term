@@ -48,7 +48,7 @@ impl App {
     /// size) and `render_frame` (what's drawn), so they always agree on how
     /// much space is reserved at the bottom of the window.
     pub(crate) fn status_bar_visible(&self) -> bool {
-        self.config.status_bar.enabled || self.search_query.is_some()
+        self.config.status_bar.enabled || self.search.query.is_some()
     }
     pub(crate) fn viewport_rect(&self) -> PaneRect {
         let (w, h) = match (&self.window, &self.renderer) {
@@ -112,18 +112,18 @@ impl App {
     /// re-deriving the edge row from the post-scroll view on every call grows
     /// `end_row` further each time rather than snapping back to a fixed
     /// viewport position. Scrolling itself is throttled to one line per
-    /// [`AUTO_SCROLL_INTERVAL`] via `auto_scroll_next`; a no-op when the
+    /// [`AUTO_SCROLL_INTERVAL`] via `pointer.auto_scroll_next`; a no-op when the
     /// button isn't held, there's no active selection, or the pointer isn't
     /// within [`AUTO_SCROLL_EDGE_MARGIN`] of an edge.
     pub(crate) fn auto_scroll_selection(&mut self) {
-        if !self.mouse_down {
+        if !self.pointer.mouse_down {
             return;
         }
-        let Some(pane_id) = self.selection.as_ref().map(|sel| sel.pane) else {
+        let Some(pane_id) = self.selection.span.as_ref().map(|sel| sel.pane) else {
             return;
         };
         let vp = self.viewport_rect();
-        let (_, y) = self.cursor_pos;
+        let (_, y) = self.pointer.cursor_pos;
         let scroll_up = if y < vp.y + AUTO_SCROLL_EDGE_MARGIN {
             true
         } else if y > vp.y + vp.height - AUTO_SCROLL_EDGE_MARGIN {
@@ -149,8 +149,8 @@ impl App {
         let lines = (1 + extra).min(AUTO_SCROLL_MAX_LINES_PER_TICK);
 
         let now = Instant::now();
-        if now >= self.auto_scroll_next {
-            self.auto_scroll_next = now + AUTO_SCROLL_INTERVAL;
+        if now >= self.pointer.auto_scroll_next {
+            self.pointer.auto_scroll_next = now + AUTO_SCROLL_INTERVAL;
             let grid = pane.grid_mut();
             if scroll_up {
                 grid.scroll_up_history(lines);
@@ -166,7 +166,7 @@ impl App {
             (grid.rows().saturating_sub(1), grid.cols().saturating_sub(1))
         };
         let abs_edge_row = grid.to_absolute_row(edge_row);
-        if let Some(sel) = &mut self.selection {
+        if let Some(sel) = &mut self.selection.span {
             sel.end_row = abs_edge_row;
             sel.end_col = edge_col;
         }

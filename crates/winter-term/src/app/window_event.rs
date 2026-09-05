@@ -170,7 +170,7 @@ impl App {
         }
 
         // Esc dismisses an open menu before anything else acts on it.
-        if self.open_menu.is_some() && key.code == KeyCode::Escape {
+        if self.menus.open.is_some() && key.code == KeyCode::Escape {
             self.close_menu();
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -179,8 +179,8 @@ impl App {
         }
 
         // Esc clears a mouse-drag selection before anything else acts on it.
-        if escape_clears_selection(&key, mode, self.selection.is_some()) {
-            self.selection = None;
+        if escape_clears_selection(&key, mode, self.selection.span.is_some()) {
+            self.selection.span = None;
             self.dirty = true;
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -341,14 +341,14 @@ impl App {
         // Tabbar/menubar clicks take precedence over the panes (including
         // mouse-tracking apps), and any click resolves an open menu.
         if let (ElementState::Pressed, MouseButton::Left) = (state, button) {
-            let (x, y) = self.cursor_pos;
+            let (x, y) = self.pointer.cursor_pos;
             if let Some(direction) = self.edge_resize_direction(x, y) {
                 if let Some(window) = &self.window {
                     let _ = window.drag_resize_window(direction);
                 }
                 return;
             }
-            if (self.open_menu.is_some() || y < self.top_chrome_height())
+            if (self.menus.open.is_some() || y < self.top_chrome_height())
                 && self.handle_tabbar_click(x, y)
             {
                 if self.exit_requested {
@@ -370,7 +370,7 @@ impl App {
             && button == MouseButton::Left
             && self.modifiers.state().control_key()
         {
-            if let Some(url) = &self.hovered_url {
+            if let Some(url) = &self.pointer.hovered_url {
                 let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
                 if matches!(scheme.as_str(), "http" | "https" | "mailto") {
                     let _ = open::that(url);
@@ -395,7 +395,7 @@ impl App {
             if self.config.paste_on_right_click {
                 self.paste_from_clipboard();
             } else {
-                let (x, y) = self.cursor_pos;
+                let (x, y) = self.pointer.cursor_pos;
                 self.open_context_menu(x, y);
                 if let Some(window) = &self.window {
                     window.request_redraw();
@@ -407,15 +407,15 @@ impl App {
         // Any left-press dismisses an open context menu before other handling.
         if state == ElementState::Pressed
             && button == MouseButton::Left
-            && self.context_menu_pos.is_some()
+            && self.menus.context_pos.is_some()
         {
-            let (x, y) = self.cursor_pos;
+            let (x, y) = self.pointer.cursor_pos;
             let surface_w = self.viewport_rect().width;
             if let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) {
                 let tabbar = self.build_top_tabbar();
                 let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
                 if let winter_render::TabbarHit::ContextMenuItem(i) = hit {
-                    if let Some(action) = self.context_menu_actions.get(i).cloned() {
+                    if let Some(action) = self.menus.context_actions.get(i).cloned() {
                         self.close_context_menu();
                         match action {
                             ContextAction::Copy => self.copy_selection(),
@@ -440,10 +440,10 @@ impl App {
 
         match (state, button) {
             (ElementState::Pressed, MouseButton::Left) => {
-                self.mouse_down = true;
-                self.selection = None;
+                self.pointer.mouse_down = true;
+                self.selection.span = None;
 
-                let (x, y) = self.cursor_pos;
+                let (x, y) = self.pointer.cursor_pos;
 
                 // Divider click: start a drag; skip scrollbar/focus changes.
                 let on_divider = {
@@ -451,7 +451,7 @@ impl App {
                     self.tab().divider_at(x, y, viewport).is_some()
                 };
                 if on_divider {
-                    self.divider_drag = Some((x, y));
+                    self.pointer.divider_drag = Some((x, y));
                 } else {
                     // Scrollbar click: right-edge strip of a pane navigates scrollback.
                     let vp = self.viewport_rect();
@@ -470,7 +470,7 @@ impl App {
                                     let top_virtual = (frac * total) as usize;
                                     let new_offset = sbl.saturating_sub(top_virtual);
                                     pane.grid_mut().set_scroll_offset(new_offset);
-                                    self.scrollbar_drag = Some(id);
+                                    self.pointer.scrollbar_drag = Some(id);
                                     if let Some(window) = &self.window {
                                         window.request_redraw();
                                     }
@@ -489,7 +489,7 @@ impl App {
                         // keyboard motion stopped.
                         self.track_nav_cursor_to_mouse(pane_id, row, col);
                         let now = Instant::now();
-                        if let Some((prev_time, prev_x, prev_y)) = self.last_click {
+                        if let Some((prev_time, prev_x, prev_y)) = self.pointer.last_click {
                             let dist = ((x - prev_x).powi(2) + (y - prev_y).powi(2)).sqrt();
                             if now.duration_since(prev_time) < Duration::from_millis(400)
                                 && dist < 5.0
@@ -497,16 +497,16 @@ impl App {
                                 self.select_word_at(pane_id, row, col);
                             }
                         }
-                        self.last_click = Some((now, x, y));
+                        self.pointer.last_click = Some((now, x, y));
                     }
                 }
 
                 self.dirty = true;
             }
             (ElementState::Released, MouseButton::Left) => {
-                self.mouse_down = false;
-                self.divider_drag = None;
-                self.scrollbar_drag = None;
+                self.pointer.mouse_down = false;
+                self.pointer.divider_drag = None;
+                self.pointer.scrollbar_drag = None;
                 self.finalize_tab_drag();
                 self.copy_selection();
                 self.copy_selection_to_primary();
@@ -522,11 +522,11 @@ impl App {
     pub(crate) fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         let x = position.x as f32;
         let y = position.y as f32;
-        self.cursor_pos = (x, y);
+        self.pointer.cursor_pos = (x, y);
 
         // Divider drag: highest priority, blocks selection and PTY forwarding.
-        if self.mouse_down {
-            if let Some((prev_x, prev_y)) = self.divider_drag {
+        if self.pointer.mouse_down {
+            if let Some((prev_x, prev_y)) = self.pointer.divider_drag {
                 let dx = x - prev_x;
                 let dy = y - prev_y;
                 let viewport = self.content_viewport();
@@ -534,7 +534,7 @@ impl App {
                     .tab_mut()
                     .drag_divider(prev_x, prev_y, dx, dy, viewport)
                 {
-                    self.divider_drag = Some((x, y));
+                    self.pointer.divider_drag = Some((x, y));
                     self.resize_all_panes();
                     self.dirty = true;
                     if let Some(window) = &self.window {
@@ -545,7 +545,7 @@ impl App {
             }
 
             // Scrollbar drag: update scroll position proportionally.
-            if let Some(sb_pane_id) = self.scrollbar_drag {
+            if let Some(sb_pane_id) = self.pointer.scrollbar_drag {
                 let vp = self.viewport_rect();
                 let layout_vp = crate::model::layout::Rect::new(vp.x, vp.y, vp.width, vp.height);
                 if let Some((_, rect)) = self
@@ -575,10 +575,10 @@ impl App {
             }
         }
 
-        if self.open_menu.is_some() {
+        if self.menus.open.is_some() {
             self.update_menu_hover(x, y);
         }
-        if self.context_menu_pos.is_some() {
+        if self.menus.context_pos.is_some() {
             self.update_context_menu_hover(x, y);
         }
 
@@ -590,7 +590,7 @@ impl App {
             if hit != self.tabbar_hover {
                 self.tabbar_hover = hit;
                 if let winter_render::TabbarHit::Tab(_) = hit {
-                    self.tab_hover_pos = Some(self.cursor_pos);
+                    self.tab_hover_pos = Some(self.pointer.cursor_pos);
                 } else {
                     self.tab_hover_pos = None;
                 }
@@ -603,7 +603,7 @@ impl App {
         }
 
         let focused = self.tab().focused();
-        if self.mouse_down
+        if self.pointer.mouse_down
             && self
                 .panes
                 .get(&focused)
@@ -614,7 +614,7 @@ impl App {
             return;
         }
 
-        if self.mouse_down {
+        if self.pointer.mouse_down {
             if let Some((pane_id, pane_rect)) = self.pane_at_pixel(x, y) {
                 let (row, col) = self.pixel_to_cell(x, y, pane_rect);
                 // Selection rows are absolute (see `Grid::to_absolute_row`)
@@ -625,12 +625,12 @@ impl App {
                     .get(&pane_id)
                     .map(|p| p.grid().to_absolute_row(row))
                     .unwrap_or(row);
-                if let Some(sel) = &mut self.selection {
+                if let Some(sel) = &mut self.selection.span {
                     sel.end_row = abs_row;
                     sel.end_col = col;
                     sel.pane = pane_id;
                 } else {
-                    self.selection = Some(Selection {
+                    self.selection.span = Some(Selection {
                         block: false,
                         start_row: abs_row,
                         start_col: col,
@@ -652,7 +652,7 @@ impl App {
 
         // Update hovered hyperlink and cursor icon (divider resize or pointer).
         let new_url = self.hovered_link_at(x, y);
-        self.hovered_url = new_url;
+        self.pointer.hovered_url = new_url;
         let vp = self.content_viewport();
         let icon = if let Some(direction) = self.edge_resize_direction(x, y) {
             CursorIcon::from(direction)
@@ -661,7 +661,7 @@ impl App {
                 Some(crate::model::layout::Direction::Vertical) => CursorIcon::EwResize,
                 Some(crate::model::layout::Direction::Horizontal) => CursorIcon::NsResize,
                 None => {
-                    if self.hovered_url.is_some() {
+                    if self.pointer.hovered_url.is_some() {
                         CursorIcon::Pointer
                     } else {
                         CursorIcon::Default

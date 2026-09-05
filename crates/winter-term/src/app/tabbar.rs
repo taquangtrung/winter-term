@@ -7,12 +7,34 @@
 
 use winter_render::{ContextMenu, Menu, MenuItem, MenuStyle, TabLabel, TabbarHit, TopTabbar};
 
-use super::App;
+use super::{App, ContextAction};
 use crate::config::TitleBarStyle;
 
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// What the menubar and the right-click context menu currently have open.
+/// Both are drawn by the same dropdown pass, so they share one struct.
+#[derive(Default)]
+pub(crate) struct MenuState {
+    /// The actions bound to each context-menu item, parallel to the rendered list.
+    pub(crate) context_actions: Vec<ContextAction>,
+    /// Active right-click context menu: pixel position where it was opened.
+    pub(crate) context_pos: Option<(f32, f32)>,
+    /// The currently hovered item in the context menu (drives the hover highlight).
+    pub(crate) context_selected: Option<usize>,
+    /// The URL (if any) that was under the pointer when the context menu opened.
+    pub(crate) context_url: Option<String>,
+    /// The open menu/dropdown (index into the tabbar's menu list), or `None`.
+    pub(crate) open: Option<usize>,
+    /// Index of the open submenu's parent within the open menu's items, or `None`.
+    pub(crate) open_submenu: Option<usize>,
+    /// The hovered dropdown item while a menu is open.
+    pub(crate) selected_item: Option<usize>,
+    /// The hovered submenu child while a submenu is open.
+    pub(crate) selected_subitem: Option<usize>,
+}
 
 /// A menu line: its display `label`, an optional `shortcut` hint, and the
 /// `command` dispatched by [`App::run_command`]. An item with `children` is a
@@ -224,14 +246,14 @@ pub(crate) fn clean_title(title: &str) -> String {
 impl App {
     /// The static def of item `i` in the currently open menu, if any.
     fn open_menu_item(&self, i: usize) -> Option<&'static ItemDef> {
-        let open = self.open_menu?;
+        let open = self.menus.open?;
         menu_defs(self.config.menu_style).get(open)?.items.get(i)
     }
 
     /// The static def of submenu child `child` under the open submenu parent.
     fn open_submenu_item(&self, child: usize) -> Option<&'static ItemDef> {
-        let open = self.open_menu?;
-        let parent = self.open_submenu?;
+        let open = self.menus.open?;
+        let parent = self.menus.open_submenu?;
         let item = menu_defs(self.config.menu_style)
             .get(open)?
             .items
@@ -262,9 +284,10 @@ impl App {
                 title: menu.title.to_string(),
             })
             .collect();
-        let context_menu = self.context_menu_pos.map(|(x, y)| ContextMenu {
+        let context_menu = self.menus.context_pos.map(|(x, y)| ContextMenu {
             items: self
-                .context_menu_actions
+                .menus
+                .context_actions
                 .iter()
                 .map(|a| MenuItem {
                     children: vec![],
@@ -276,15 +299,15 @@ impl App {
                     shortcut: String::new(),
                 })
                 .collect(),
-            selected: self.context_menu_selected,
+            selected: self.menus.context_selected,
             x,
             y,
         });
-        let url_tooltip = if let Some(url) = &self.hovered_url {
-            let (cx, cy) = self.cursor_pos;
+        let url_tooltip = if let Some(url) = &self.pointer.hovered_url {
+            let (cx, cy) = self.pointer.cursor_pos;
             Some((url.clone(), cx, cy))
         } else if let TabbarHit::Tab(idx) = self.tabbar_hover {
-            let (cx, cy) = self.tab_hover_pos.unwrap_or(self.cursor_pos);
+            let (cx, cy) = self.tab_hover_pos.unwrap_or(self.pointer.cursor_pos);
             let full_title = self.tab_title(idx);
             Some((full_title, cx, cy))
         } else {
@@ -297,10 +320,10 @@ impl App {
             controls_side: self.config.window_controls_side,
             menu_style: self.config.menu_style,
             menus,
-            open_menu: self.open_menu,
-            open_submenu: self.open_submenu,
-            selected_item: self.selected_item,
-            selected_subitem: self.selected_subitem,
+            open_menu: self.menus.open,
+            open_submenu: self.menus.open_submenu,
+            selected_item: self.menus.selected_item,
+            selected_subitem: self.menus.selected_subitem,
             tabs,
             url_tooltip,
             window_controls: self.config.title_bar_style == TitleBarStyle::Modern,
@@ -309,11 +332,11 @@ impl App {
 
     /// Close the right-click context menu.
     pub(crate) fn close_context_menu(&mut self) {
-        if self.context_menu_pos.is_some() {
-            self.context_menu_pos = None;
-            self.context_menu_url = None;
-            self.context_menu_actions.clear();
-            self.context_menu_selected = None;
+        if self.menus.context_pos.is_some() {
+            self.menus.context_pos = None;
+            self.menus.context_url = None;
+            self.menus.context_actions.clear();
+            self.menus.context_selected = None;
             self.dirty = true;
         }
     }
@@ -322,17 +345,17 @@ impl App {
     pub(crate) fn open_context_menu(&mut self, x: f32, y: f32) {
         use super::ContextAction;
         let mut actions: Vec<ContextAction> = Vec::new();
-        if self.selection.is_some() {
+        if self.selection.span.is_some() {
             actions.push(ContextAction::Copy);
         }
         actions.push(ContextAction::Paste);
-        if let Some(url) = &self.hovered_url {
+        if let Some(url) = &self.pointer.hovered_url {
             actions.push(ContextAction::OpenLink(url.clone()));
         }
-        self.context_menu_pos = Some((x, y));
-        self.context_menu_url = self.hovered_url.clone();
-        self.context_menu_actions = actions;
-        self.context_menu_selected = None;
+        self.menus.context_pos = Some((x, y));
+        self.menus.context_url = self.pointer.hovered_url.clone();
+        self.menus.context_actions = actions;
+        self.menus.context_selected = None;
         self.close_menu();
         self.dirty = true;
     }
@@ -340,7 +363,7 @@ impl App {
     /// Update the hovered context menu item from the pointer position while the
     /// context menu is open.
     pub(crate) fn update_context_menu_hover(&mut self, x: f32, y: f32) {
-        if self.context_menu_pos.is_none() {
+        if self.menus.context_pos.is_none() {
             return;
         }
         let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) else {
@@ -353,8 +376,8 @@ impl App {
             TabbarHit::ContextMenuItem(i) => Some(i),
             _ => None,
         };
-        if new_sel != self.context_menu_selected {
-            self.context_menu_selected = new_sel;
+        if new_sel != self.menus.context_selected {
+            self.menus.context_selected = new_sel;
             self.dirty = true;
         }
     }
@@ -379,7 +402,7 @@ impl App {
         let surface_w = self.viewport_rect().width;
         let tabbar = self.build_top_tabbar();
         let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
-        let menu_was_open = self.open_menu.is_some();
+        let menu_was_open = self.menus.open.is_some();
         let focused = self.tab().focused();
 
         match hit {
@@ -409,7 +432,7 @@ impl App {
                 }
             }
             TabbarHit::Hamburger => {
-                if self.open_menu.is_some() {
+                if self.menus.open.is_some() {
                     self.close_menu();
                 } else {
                     self.toggle_menu(0);
@@ -443,9 +466,9 @@ impl App {
                         self.run_command(command, focused);
                     } else {
                         // A submenu parent: keep it open and expand its children.
-                        self.open_submenu = Some(i);
-                        self.selected_item = Some(i);
-                        self.selected_subitem = None;
+                        self.menus.open_submenu = Some(i);
+                        self.menus.selected_item = Some(i);
+                        self.menus.selected_subitem = None;
                     }
                 }
             }
@@ -459,7 +482,7 @@ impl App {
                 }
             }
             TabbarHit::ContextMenuItem(i) => {
-                if let Some(action) = self.context_menu_actions.get(i).cloned() {
+                if let Some(action) = self.menus.context_actions.get(i).cloned() {
                     self.close_context_menu();
                     match action {
                         super::ContextAction::Copy => self.copy_selection(),
@@ -474,7 +497,7 @@ impl App {
                 }
             }
             TabbarHit::None => {
-                if self.context_menu_pos.is_some() {
+                if self.menus.context_pos.is_some() {
                     self.close_context_menu();
                     return true;
                 }
@@ -503,7 +526,7 @@ impl App {
     /// is open, requesting a redraw when the highlight changes. Hovering a submenu
     /// parent opens its child panel; the parent stays open throughout.
     pub(crate) fn update_menu_hover(&mut self, x: f32, y: f32) {
-        if self.open_menu.is_none() {
+        if self.menus.open.is_none() {
             return;
         }
         let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) else {
@@ -516,20 +539,32 @@ impl App {
         // (selected_item, open_submenu, selected_subitem) for this hover.
         let next = match hit {
             TabbarHit::DropdownItem(i) => match self.open_menu_item(i) {
-                Some(item) if item.label == "-" => (None, self.open_submenu, None),
+                Some(item) if item.label == "-" => (None, self.menus.open_submenu, None),
                 Some(item) if !item.children.is_empty() => (Some(i), Some(i), None),
                 Some(_) => (Some(i), None, None),
-                None => (None, self.open_submenu, None),
+                None => (None, self.menus.open_submenu, None),
             },
             // Keep the parent highlighted and its submenu open over its children.
-            TabbarHit::SubmenuItem(child) => (self.open_submenu, self.open_submenu, Some(child)),
+            TabbarHit::SubmenuItem(child) => (
+                self.menus.open_submenu,
+                self.menus.open_submenu,
+                Some(child),
+            ),
             // Off the items: leave the submenu open so the cursor can reach it.
-            _ => (None, self.open_submenu, None),
+            _ => (None, self.menus.open_submenu, None),
         };
 
-        let current = (self.selected_item, self.open_submenu, self.selected_subitem);
+        let current = (
+            self.menus.selected_item,
+            self.menus.open_submenu,
+            self.menus.selected_subitem,
+        );
         if next != current {
-            (self.selected_item, self.open_submenu, self.selected_subitem) = next;
+            (
+                self.menus.selected_item,
+                self.menus.open_submenu,
+                self.menus.selected_subitem,
+            ) = next;
             self.dirty = true;
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -539,24 +574,24 @@ impl App {
 
     /// Toggle the dropdown for menu `index` open or closed.
     pub(crate) fn toggle_menu(&mut self, index: usize) {
-        self.open_menu = if self.open_menu == Some(index) {
+        self.menus.open = if self.menus.open == Some(index) {
             None
         } else {
             Some(index)
         };
-        self.open_submenu = None;
-        self.selected_item = None;
-        self.selected_subitem = None;
+        self.menus.open_submenu = None;
+        self.menus.selected_item = None;
+        self.menus.selected_subitem = None;
         self.dirty = true;
     }
 
     /// Close any open dropdown (and its submenu).
     pub(crate) fn close_menu(&mut self) {
-        if self.open_menu.is_some() {
-            self.open_menu = None;
-            self.open_submenu = None;
-            self.selected_item = None;
-            self.selected_subitem = None;
+        if self.menus.open.is_some() {
+            self.menus.open = None;
+            self.menus.open_submenu = None;
+            self.menus.selected_item = None;
+            self.menus.selected_subitem = None;
             self.dirty = true;
         }
     }
@@ -568,7 +603,7 @@ impl App {
         let Some((src, start_x)) = self.tab_drag_start.take() else {
             return;
         };
-        let (x, y) = self.cursor_pos;
+        let (x, y) = self.pointer.cursor_pos;
         if (x - start_x).abs() < 10.0 {
             return;
         }
@@ -640,8 +675,8 @@ mod tests {
     #[test]
     fn test_open_submenu_item_resolves_the_child_command() {
         let mut app = App::new();
-        app.open_menu = Some(0);
-        app.open_submenu = MODERN_ITEMS.iter().position(|it| it.label == "Layout");
+        app.menus.open = Some(0);
+        app.menus.open_submenu = MODERN_ITEMS.iter().position(|it| it.label == "Layout");
         assert_eq!(
             app.open_submenu_item(0).map(|it| it.command),
             Some("split_vertical")
@@ -652,13 +687,13 @@ mod tests {
     #[test]
     fn test_build_top_tabbar_carries_submenu_children_and_state() {
         let mut app = App::new();
-        app.open_menu = Some(0);
+        app.menus.open = Some(0);
         let layout_idx = MODERN_ITEMS
             .iter()
             .position(|it| it.label == "Layout")
             .unwrap();
-        app.open_submenu = Some(layout_idx);
-        app.selected_subitem = Some(1);
+        app.menus.open_submenu = Some(layout_idx);
+        app.menus.selected_subitem = Some(1);
         let tabbar = app.build_top_tabbar();
         assert_eq!(tabbar.open_submenu, Some(layout_idx));
         assert_eq!(tabbar.selected_subitem, Some(1));
@@ -694,7 +729,7 @@ mod tests {
     #[test]
     fn test_build_top_tabbar_reflects_active_tab_and_menu_state() {
         let mut app = App::new();
-        app.open_menu = Some(0);
+        app.menus.open = Some(0);
         let tabbar = app.build_top_tabbar();
         assert_eq!(tabbar.tabs.len(), 1);
         assert_eq!(tabbar.active_tab, 0);
@@ -706,9 +741,9 @@ mod tests {
     fn test_toggle_menu_opens_then_closes() {
         let mut app = App::new();
         app.toggle_menu(0);
-        assert_eq!(app.open_menu, Some(0));
+        assert_eq!(app.menus.open, Some(0));
         app.toggle_menu(0);
-        assert_eq!(app.open_menu, None);
+        assert_eq!(app.menus.open, None);
     }
 
     #[test]

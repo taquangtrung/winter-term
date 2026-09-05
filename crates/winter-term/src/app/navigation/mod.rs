@@ -9,6 +9,8 @@ pub(crate) mod search;
 pub(crate) mod swoop;
 mod vim;
 
+use std::collections::HashMap;
+
 use crate::model::input::{self, CursorMove, FindChar, TextObject, VisualKind};
 use crate::model::layout::PaneId;
 use crate::model::mode::{Mode, ModeEvent};
@@ -16,6 +18,8 @@ use crate::model::mode::{Mode, ModeEvent};
 use super::prompt_edit::PromptDelete;
 use super::App;
 use super::FindLabel;
+
+pub(crate) use search::SearchState;
 
 /// Label keys for the `f`/`t` jump overlay, home-row first so the common cases sit
 /// under the fingers. Lowercase only: the overlay is dismissed by anything else,
@@ -32,6 +36,28 @@ const MAX_JUMP_LIST_LEN: usize = 100;
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// Per-pane vim bookkeeping that survives across commands: the jumplist,
+/// the changelist, dot-repeat, marks, and registers.
+#[derive(Default)]
+pub(crate) struct VimState {
+    /// Per-pane vim-style changelists backing `g;`/`g,` (see
+    /// [`ChangeList`]).
+    pub(crate) change_lists: HashMap<PaneId, ChangeList>,
+    /// The Insert-mode typing run in progress per pane (see
+    /// [`InsertSession`]).
+    pub(crate) insert_sessions: HashMap<PaneId, InsertSession>,
+    /// Per-pane vim-style jumplists backing `Ctrl+O`/`Ctrl+I` (see
+    /// [`JumpList`]).
+    pub(crate) jump_lists: HashMap<PaneId, JumpList>,
+    /// The most recent change per pane, replayed by `.` (see
+    /// [`LastChange`]).
+    pub(crate) last_changes: HashMap<PaneId, LastChange>,
+    /// Per-pane named marks (`(PaneId, mark_char) -> (abs_row, col)`).
+    pub(crate) marks: HashMap<(PaneId, char), (usize, usize)>,
+    /// Vim named registers (`"{a-z}`, `"{0-9}`, `"+`, `"*`).
+    pub(crate) registers: HashMap<char, String>,
+}
 
 /// A per-pane, vim-style jumplist: the absolute positions (row, col) the
 /// cursor was at before each "long" jump — `gg`/`G`, `H`/`M`/`L`, `{`/`}`,
@@ -255,7 +281,7 @@ impl App {
             return;
         };
         let origin = (pane.grid().to_absolute_row(row), col);
-        self.jump_lists.entry(focused).or_default().push(origin);
+        self.vim.jump_lists.entry(focused).or_default().push(origin);
     }
 
     /// `Ctrl+O`: step the cursor back to the previous recorded jump origin,
@@ -263,7 +289,8 @@ impl App {
     /// when the pane is in Visual mode, like any other cursor move.
     pub(crate) fn jump_older(&mut self, focused: PaneId) {
         let live = self.live_jump_position(focused);
-        let target = live.and_then(|live| self.jump_lists.entry(focused).or_default().older(live));
+        let target =
+            live.and_then(|live| self.vim.jump_lists.entry(focused).or_default().older(live));
         if let Some(target) = target {
             self.jump_to(focused, target);
         }
@@ -272,7 +299,7 @@ impl App {
     /// `Ctrl+I`/`Tab`: step the cursor forward through the jumplist, back
     /// toward the position the walk started from.
     pub(crate) fn jump_newer(&mut self, focused: PaneId) {
-        let target = self.jump_lists.entry(focused).or_default().newer();
+        let target = self.vim.jump_lists.entry(focused).or_default().newer();
         if let Some(target) = target {
             self.jump_to(focused, target);
         }
@@ -283,8 +310,13 @@ impl App {
     /// selection when the pane is in Visual mode, like any other cursor move.
     pub(crate) fn change_older(&mut self, focused: PaneId) {
         let live = self.live_jump_position(focused);
-        let target =
-            live.and_then(|live| self.change_lists.entry(focused).or_default().older(live));
+        let target = live.and_then(|live| {
+            self.vim
+                .change_lists
+                .entry(focused)
+                .or_default()
+                .older(live)
+        });
         if let Some(target) = target {
             self.jump_to(focused, target);
         }
@@ -293,7 +325,7 @@ impl App {
     /// `g,`: step the cursor forward through the changelist, back toward the
     /// position the walk started from.
     pub(crate) fn change_newer(&mut self, focused: PaneId) {
-        let target = self.change_lists.entry(focused).or_default().newer();
+        let target = self.vim.change_lists.entry(focused).or_default().newer();
         if let Some(target) = target {
             self.jump_to(focused, target);
         }
@@ -317,7 +349,7 @@ impl App {
             | input::Action::ChangeSearchMatch { .. }
             | input::Action::SubstituteChar => {
                 let anchor = self.live_jump_position(focused);
-                self.insert_sessions.insert(
+                self.vim.insert_sessions.insert(
                     focused,
                     InsertSession {
                         anchor,
@@ -334,10 +366,11 @@ impl App {
             _ if is_change_action(action)
                 && self.panes.get(&focused).is_some_and(|p| p.is_at_prompt()) =>
             {
-                self.last_changes
+                self.vim
+                    .last_changes
                     .insert(focused, LastChange::Action(action.clone()));
                 if let Some(pos) = self.live_jump_position(focused) {
-                    self.change_lists.entry(focused).or_default().push(pos);
+                    self.vim.change_lists.entry(focused).or_default().push(pos);
                 }
             }
             _ => {}
@@ -348,16 +381,21 @@ impl App {
     /// the pane's last change (replayed by `.`), and the session's anchor
     /// joins the changelist so `g;` returns to where the typing began.
     fn finish_insert_session(&mut self, focused: PaneId) {
-        let Some(session) = self.insert_sessions.remove(&focused) else {
+        let Some(session) = self.vim.insert_sessions.remove(&focused) else {
             return;
         };
         if session.run.is_empty() {
             return;
         }
         if let Some(anchor) = session.anchor {
-            self.change_lists.entry(focused).or_default().push(anchor);
+            self.vim
+                .change_lists
+                .entry(focused)
+                .or_default()
+                .push(anchor);
         }
-        self.last_changes
+        self.vim
+            .last_changes
             .insert(focused, LastChange::Typed(session.run));
     }
 
@@ -367,7 +405,7 @@ impl App {
     /// bytes verbatim — straight to the PTY, so the prompt shadow is desynced
     /// to keep later undo honest about a line it no longer models.
     pub(crate) fn repeat_last_change(&mut self, focused: PaneId) {
-        let Some(change) = self.last_changes.get(&focused).cloned() else {
+        let Some(change) = self.vim.last_changes.get(&focused).cloned() else {
             return;
         };
         match change {
@@ -375,7 +413,7 @@ impl App {
             LastChange::Typed(run) => {
                 if self.panes.get(&focused).is_some_and(|p| p.is_at_prompt()) {
                     if let Some(pos) = self.live_jump_position(focused) {
-                        self.change_lists.entry(focused).or_default().push(pos);
+                        self.vim.change_lists.entry(focused).or_default().push(pos);
                     }
                     if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
                         shadow.desync();
@@ -398,14 +436,14 @@ impl App {
             return;
         };
         let abs_row = pane.grid().to_absolute_row(row);
-        self.marks.insert((focused, mark), (abs_row, col));
+        self.vim.marks.insert((focused, mark), (abs_row, col));
     }
 
     /// `` `{a-z} `` / `'{a-z}`: jump to a named mark recorded by [`Self::set_mark`].
     /// `exact` lands on the exact column; `false` lands on the line's first non-blank.
     /// Records the jump origin beforehand so `Ctrl+O` returns to the pre-jump location.
     pub(crate) fn goto_mark(&mut self, focused: PaneId, mark: char, exact: bool) {
-        let Some(&(abs_row, col)) = self.marks.get(&(focused, mark)) else {
+        let Some(&(abs_row, col)) = self.vim.marks.get(&(focused, mark)) else {
             return;
         };
         let Some(pane) = self.panes.get(&focused) else {
@@ -682,8 +720,8 @@ impl App {
 
         self.modes
             .insert(focused, Mode::Normal.apply(ModeEvent::EnterVisual));
-        self.visual_kind = VisualKind::Line;
-        self.visual_anchor = Some((start, 0));
+        self.selection.visual_kind = VisualKind::Line;
+        self.selection.visual_anchor = Some((start, 0));
         self.set_nav_cursor(focused, (end, 0));
         self.update_visual_selection(focused);
         self.dirty = true;
@@ -711,7 +749,7 @@ impl App {
 
         self.modes
             .insert(focused, Mode::Normal.apply(ModeEvent::EnterVisual));
-        self.visual_kind = VisualKind::Char;
+        self.selection.visual_kind = VisualKind::Char;
 
         self.reveal_position(focused, (abs_r2, c2));
         if let Some(pane) = self.panes.get(&focused) {
@@ -723,7 +761,7 @@ impl App {
             let view_r2 = abs_r2
                 .saturating_sub(top)
                 .min(grid.rows().saturating_sub(1));
-            self.visual_anchor = Some((view_r1, c1));
+            self.selection.visual_anchor = Some((view_r1, c1));
             self.set_nav_cursor(focused, (view_r2, c2));
             self.update_visual_selection(focused);
             self.dirty = true;
@@ -789,8 +827,8 @@ impl App {
             focused,
         );
         self.modes.insert(focused, Mode::Insert);
-        self.selection = None;
-        self.visual_anchor = None;
+        self.selection.span = None;
+        self.selection.visual_anchor = None;
         self.dirty = true;
     }
 
@@ -917,7 +955,7 @@ impl App {
         let (prompt_row, _) = grid.cursor();
         let abs_prompt_row = grid.to_absolute_row(prompt_row);
 
-        let Some(sel) = self.selection.as_ref().filter(|s| s.pane == focused) else {
+        let Some(sel) = self.selection.span.as_ref().filter(|s| s.pane == focused) else {
             return;
         };
         let (sr, sc, er, ec) = (
@@ -941,8 +979,8 @@ impl App {
             (0, grid.cols().saturating_sub(1))
         };
         self.modes.insert(focused, Mode::Normal);
-        self.visual_anchor = None;
-        self.selection = None;
+        self.selection.visual_anchor = None;
+        self.selection.span = None;
         self.delete_on_prompt(
             PromptDelete::Range {
                 start_col: c1,
@@ -1142,11 +1180,11 @@ mod tests {
 
         assert_eq!(app.modes.get(&id), Some(&Mode::Visual));
         assert_eq!(
-            app.visual_kind,
+            app.selection.visual_kind,
             VisualKind::Line,
             "paragraph selection is linewise"
         );
-        let sel = app.selection.as_ref().expect("a selection");
+        let sel = app.selection.span.as_ref().expect("a selection");
         assert_eq!((sel.start_row, sel.end_row), (0, 1));
         assert_eq!(app.selected_text().as_deref(), Some("alpha\nbeta"));
         assert_eq!(
@@ -1162,7 +1200,7 @@ mod tests {
 
         app.handle_action(input::Action::SelectParagraph, id);
 
-        let sel = app.selection.as_ref().expect("a selection");
+        let sel = app.selection.span.as_ref().expect("a selection");
         assert_eq!((sel.start_row, sel.end_row), (3, 3));
         assert_eq!(app.selected_text().as_deref(), Some("gamma"));
     }
@@ -1175,7 +1213,7 @@ mod tests {
 
         app.handle_action(input::Action::SelectParagraph, id);
 
-        let sel = app.selection.as_ref().expect("a selection");
+        let sel = app.selection.span.as_ref().expect("a selection");
         assert_eq!((sel.start_row, sel.end_row), (2, 2));
     }
 
@@ -1304,7 +1342,7 @@ mod tests {
         let id = PaneId(1);
         app.panes.insert(id, pane_with_lines(&["banana"]));
         app.modes.insert(id, Mode::Visual);
-        app.visual_anchor = Some((0, 0));
+        app.selection.visual_anchor = Some((0, 0));
         app.set_nav_cursor(id, (0, 0));
         app.update_visual_selection(id);
 
@@ -1787,7 +1825,7 @@ mod tests {
 
         app.handle_action(input::Action::DeleteCharForward, id);
         assert!(matches!(
-            app.last_changes.get(&id),
+            app.vim.last_changes.get(&id),
             Some(LastChange::Action(input::Action::DeleteCharForward))
         ));
 
@@ -1815,14 +1853,15 @@ mod tests {
         app.handle_action(input::Action::EnterInsert(input::InsertAt::Cursor), id);
         app.handle_action(input::Action::SendBytes(b"hi".to_vec()), id);
         // The key handler accumulates forwarded bytes into the session run.
-        app.insert_sessions
+        app.vim
+            .insert_sessions
             .entry(id)
             .or_default()
             .run
             .extend_from_slice(b"hi");
         app.handle_action(input::Action::SwitchMode(Mode::Normal), id);
         assert_eq!(
-            app.last_changes.get(&id),
+            app.vim.last_changes.get(&id),
             Some(&LastChange::Typed(b"hi".to_vec()))
         );
 
@@ -1853,7 +1892,7 @@ mod tests {
         app.handle_action(input::Action::RepeatLastChange, id);
 
         assert_eq!(app.nav_cursor(id), before);
-        assert!(!app.last_changes.contains_key(&id));
+        assert!(!app.vim.last_changes.contains_key(&id));
     }
 
     #[test]
@@ -1917,7 +1956,7 @@ mod tests {
             "entry chord left Insert"
         );
         assert_eq!(
-            app.last_changes.get(&id),
+            app.vim.last_changes.get(&id),
             Some(&LastChange::Typed(b"hi".to_vec())),
             "the real key path accumulated the typed run and finalized it on leaving Insert"
         );
@@ -2022,7 +2061,7 @@ mod tests {
         // either order.
         let (mut app, id) = app_with_paragraphs(2);
         app.modes.insert(id, Mode::Visual);
-        app.visual_anchor = Some((0, 2));
+        app.selection.visual_anchor = Some((0, 2));
         app.set_nav_cursor(id, (2, 1));
         app.update_visual_selection(id);
         // `update_visual_selection` stores anchor->cursor order, and the swap
@@ -2030,6 +2069,7 @@ mod tests {
         // same way the renderer resolves it) instead of the raw field order.
         let span_before = app
             .selection
+            .span
             .as_ref()
             .map(|s| (s.start_row.min(s.end_row), s.start_row.max(s.end_row)));
 
@@ -2041,12 +2081,13 @@ mod tests {
             "cursor sits on the anchor"
         );
         assert_eq!(
-            app.visual_anchor,
+            app.selection.visual_anchor,
             Some((2, 1)),
             "anchor moved to the old cursor"
         );
         assert_eq!(
             app.selection
+                .span
                 .as_ref()
                 .map(|s| (s.start_row.min(s.end_row), s.start_row.max(s.end_row))),
             span_before,
@@ -2069,6 +2110,7 @@ mod tests {
         );
         let span = app
             .selection
+            .span
             .as_ref()
             .map(|s| (s.start_row, s.end_row))
             .expect("selection live");
@@ -2076,7 +2118,7 @@ mod tests {
         // Leaving Visual (same `V` again) clears it; `gv` restores it.
         app.handle_action(input::Action::EnterVisual(input::VisualKind::Line), id);
         assert!(
-            app.selection.is_none(),
+            app.selection.span.is_none(),
             "exiting Visual cleared the selection"
         );
 
@@ -2088,12 +2130,15 @@ mod tests {
             "gv re-enters Visual"
         );
         assert_eq!(
-            app.visual_kind,
+            app.selection.visual_kind,
             VisualKind::Line,
             "the linewise kind is preserved"
         );
         assert_eq!(
-            app.selection.as_ref().map(|s| (s.start_row, s.end_row)),
+            app.selection
+                .span
+                .as_ref()
+                .map(|s| (s.start_row, s.end_row)),
             Some(span),
             "the same span is selected again"
         );
@@ -2157,8 +2202,11 @@ mod tests {
 
         app.handle_action(input::Action::GotoMark(input::GotoMark::new('b', true)), id);
         assert_eq!(app.nav_cursor(id), Some((3, 0)));
-        assert!(app.selection.is_some(), "selection extends to the mark");
-        let sel = app.selection.as_ref().unwrap();
+        assert!(
+            app.selection.span.is_some(),
+            "selection extends to the mark"
+        );
+        let sel = app.selection.span.as_ref().unwrap();
         assert_eq!((sel.start_row, sel.end_row), (0, 3));
     }
 
@@ -2179,7 +2227,7 @@ mod tests {
         );
 
         assert_eq!(app.modes.get(&id), Some(&Mode::Visual));
-        assert_eq!(app.visual_kind, VisualKind::Char);
+        assert_eq!(app.selection.visual_kind, VisualKind::Char);
         assert_eq!(app.selected_text().as_deref(), Some("world"));
     }
 
@@ -2225,13 +2273,13 @@ mod tests {
         // Enter blockwise visual
         app.handle_action(input::Action::EnterVisual(input::VisualKind::Block), id);
         assert_eq!(app.modes.get(&id), Some(&Mode::Visual));
-        assert_eq!(app.visual_kind, VisualKind::Block);
+        assert_eq!(app.selection.visual_kind, VisualKind::Block);
 
         // Move down 2 rows, right 2 cols (cols 1..=3 on rows 0..=2)
         app.set_nav_cursor(id, (2, 3));
         app.update_visual_selection(id);
 
-        let sel = app.selection.as_ref().expect("block selection active");
+        let sel = app.selection.span.as_ref().expect("block selection active");
         assert!(sel.block, "selection is marked block");
         assert_eq!(app.selected_text().as_deref(), Some("bcd\n234\nhij"));
     }
@@ -2243,14 +2291,14 @@ mod tests {
         app.panes
             .insert(id, pane_with_lines(&["echo \"hello\"", ""]));
         app.modes.insert(id, Mode::Visual);
-        app.visual_anchor = Some((0, 5));
+        app.selection.visual_anchor = Some((0, 5));
         app.set_nav_cursor(id, (0, 11));
         app.update_visual_selection(id);
 
         // Yank into register 'a'
         app.handle_action(input::Action::YankSelectionRegister('a'), id);
         assert_eq!(
-            app.registers.get(&'a').map(String::as_str),
+            app.vim.registers.get(&'a').map(String::as_str),
             Some("\"hello\"")
         );
         assert_eq!(app.modes.get(&id), Some(&Mode::Normal));
@@ -2294,7 +2342,7 @@ mod tests {
         assert_eq!(app.nav_cursor(id), Some((1, 0)));
 
         // Jump list has origin (0, 0)
-        let jl = app.jump_lists.get_mut(&id).expect("jumplist entry");
+        let jl = app.vim.jump_lists.get_mut(&id).expect("jumplist entry");
         assert_eq!(jl.older((1, 0)), Some((0, 0)));
     }
 

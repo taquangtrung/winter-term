@@ -1,7 +1,7 @@
 //! Image and rich-content uploads: decoded rasters, SVG, markdown, and
 //! text, cached as GPU textures.
 
-use super::glyphs::*;
+use super::glyphs::{base_family, effective_bold_weight};
 use super::GpuRenderer;
 use glyphon::{Attrs, Family, Shaping};
 
@@ -9,7 +9,7 @@ use glyphon::{Attrs, Family, Shaping};
 // Constants
 // ========================================================================
 
-pub(super) const MAX_SVG_DIM: u32 = 4096;
+const MAX_SVG_DIM: u32 = 4096;
 
 // ========================================================================
 // Implementation
@@ -98,7 +98,7 @@ impl GpuRenderer {
             &mut self.font_system,
             glyphon::Metrics::new(self.font_size, self.line_height),
         );
-        buffer.set_size(&mut self.font_system, Some(width as f32), None);
+        buffer.set_size(Some(width as f32), None);
 
         let default_attrs = Attrs::new().family(base_family(fam.as_deref())).color(fg);
         let attr_spans: Vec<(&str, Attrs)> = spans
@@ -121,13 +121,7 @@ impl GpuRenderer {
                 (span.text.as_str(), attrs)
             })
             .collect();
-        buffer.set_rich_text(
-            &mut self.font_system,
-            attr_spans,
-            &default_attrs,
-            Shaping::Advanced,
-            None,
-        );
+        buffer.set_rich_text(attr_spans, &default_attrs, Shaping::Advanced, None);
         self.rasterize_buffer(id, buffer, width)
     }
 
@@ -143,20 +137,14 @@ impl GpuRenderer {
             &mut self.font_system,
             glyphon::Metrics::new(self.font_size, self.line_height),
         );
-        buffer.set_size(&mut self.font_system, Some(width as f32), None);
-        buffer.set_rich_text(
-            &mut self.font_system,
-            [(text, attrs.clone())],
-            &attrs,
-            Shaping::Advanced,
-            None,
-        );
+        buffer.set_size(Some(width as f32), None);
+        buffer.set_rich_text([(text, attrs.clone())], &attrs, Shaping::Advanced, None);
         self.rasterize_buffer(id, buffer, width)
     }
 
     /// Shape `buffer`, measure its height, software-rasterize its glyphs over an
     /// opaque themed background, and cache the result as a texture under `id`.
-    pub(super) fn rasterize_buffer(
+    fn rasterize_buffer(
         &mut self,
         id: u64,
         mut buffer: glyphon::Buffer,

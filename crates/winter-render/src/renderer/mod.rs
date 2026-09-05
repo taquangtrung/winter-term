@@ -28,7 +28,7 @@ mod glyphs;
 mod images;
 
 pub use chrome::{PaletteItem, PaletteView, WhichKeyView};
-use glyphs::*;
+use glyphs::FallbackGlyphFit;
 pub use glyphs::{start_font_load, FontConfig, FontLoad};
 
 // ========================================================================
@@ -141,7 +141,7 @@ impl GpuRenderer {}
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use super::*;
+    use super::glyphs::FontCtx;
 
     pub(super) fn sample_menu_chrome(selected: Option<usize>) -> crate::tabbar::TopTabbar {
         use crate::tabbar::{ControlsSide, Menu, MenuItem, MenuStyle, TabLabel, TopTabbar};

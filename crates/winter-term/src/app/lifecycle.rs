@@ -7,7 +7,7 @@ use winit::event_loop::ActiveEventLoop;
 
 use crate::config::Config;
 use crate::control::{self};
-use crate::model::input::{self, PendingPrefix, VisualKind, WindowKeymap};
+use crate::model::input::{self, PendingPrefix, WindowKeymap};
 use crate::model::layout::{Direction, FocusDir, PaneId, Rect, Tab};
 use crate::model::mode::Mode;
 use crate::model::palette::Palette;
@@ -15,6 +15,9 @@ use crate::session::Session;
 use crate::terminal::webview::WebViewManager;
 use winter_render::TabbarHit;
 
+use super::navigation::{SearchState, VimState};
+use super::pointer::{PointerState, SelectionState};
+use super::tabbar::MenuState;
 use super::App;
 use super::CURSOR_BLINK_PERIOD;
 
@@ -45,23 +48,17 @@ impl App {
             config,
             config_watch_rx,
             _config_watcher: config_watcher,
-            cursor_pos: (0.0, 0.0),
             dirty: true,
-            auto_scroll_next: Instant::now(),
-            divider_drag: None,
-            scrollbar_drag: None,
             notice: None,
             pending_config_error: config_error,
             clipboard: None,
             folded_blocks: HashMap::new(),
-            last_click: None,
             suppress_synthesized_keys: false,
             window_focused: true,
             last_find: None,
             image_blocks: Vec::new(),
             last_tile_layout: None,
             modifiers: winit::event::Modifiers::default(),
-            mouse_down: false,
             exit_requested: false,
             pending_reload: false,
             control_rx: control::spawn_listener(),
@@ -82,50 +79,29 @@ impl App {
             quick_select: None,
             find_labels: None,
             renderer: None,
-            search_query: None,
-            search_match_index: 0,
-            search_match_total: 0,
-            search_current: None,
-            search_last: None,
-            search_origin: None,
-            search_reverse: false,
-            selection: None,
             settings_page: None,
             swoop_initial_cursor: None,
             active_tab: 0,
             tab_mru: vec![0],
             mru_walk: None,
-            jump_lists: HashMap::new(),
-            change_lists: HashMap::new(),
-            last_changes: HashMap::new(),
-            insert_sessions: HashMap::new(),
-            marks: HashMap::new(),
-            registers: HashMap::new(),
             palette_history: crate::config::load_state().palette_history,
-            last_visual: None,
-            open_menu: None,
-            open_submenu: None,
-            selected_item: None,
-            selected_subitem: None,
             next_pane_id: 1,
             tabs: vec![Tab::new()],
             modes,
-            visual_anchor: None,
-            visual_kind: VisualKind::Char,
             webview_mgr: WebViewManager::new(),
             window: None,
             window_keymap,
             window_title: String::new(),
-            hovered_url: None,
-            context_menu_pos: None,
-            context_menu_url: None,
-            context_menu_actions: Vec::new(),
-            context_menu_selected: None,
             base_font_size,
             blink_phase: true,
             blink_next_flip: Instant::now() + CURSOR_BLINK_PERIOD,
             last_activity: Instant::now(),
             tab_drag_start: None,
+            menus: MenuState::default(),
+            pointer: PointerState::default(),
+            search: SearchState::default(),
+            selection: SelectionState::default(),
+            vim: VimState::default(),
         }
     }
     pub(crate) fn save_app_state(&self) {
@@ -202,7 +178,7 @@ impl App {
                 self.tab_mut().focus_in_direction(dir, layout_vp);
             }
             "search" => {
-                self.search_query = Some(String::new());
+                self.search.query = Some(String::new());
             }
             "next_block" => {
                 self.focus_block(input::BlockNav::Next, focused);

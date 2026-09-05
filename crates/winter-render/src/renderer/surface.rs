@@ -1,7 +1,12 @@
 //! GPU surface and device setup, resizing, and renderer configuration.
 
-use super::background::*;
-use super::glyphs::*;
+use super::background::{
+    create_bg_pipeline, create_dot_pipeline, BG_BUFFER_SIZE, DIVIDER_THICKNESS, DOT_BUFFER_SIZE,
+};
+use super::glyphs::{
+    font_covers_bold_weight, font_covers_braille, measure_cell, FontConfig, FontLoad,
+    DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT,
+};
 use super::GpuRenderer;
 use super::PaneRect;
 use crate::glyph_quad::GlyphQuadPass;
@@ -64,6 +69,8 @@ impl GpuRenderer {
             height: height.max(1),
             present_mode: wgpu::PresentMode::AutoVsync,
             alpha_mode: caps.alpha_modes[0],
+            // Auto is what wgpu chose implicitly before 30 made it explicit.
+            color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };

@@ -43,8 +43,8 @@ impl App {
                 // and the anchor.
                 if old_mode == Mode::Visual {
                     self.remember_visual(focused);
-                    self.visual_anchor = None;
-                    self.selection = None;
+                    self.selection.visual_anchor = None;
+                    self.selection.span = None;
                 }
                 // Leaving Normal (browsing matches with `/`, `n`/`N`) without
                 // going through `SearchCancel` (e.g. `i`/`a`/`o` back to Insert
@@ -52,16 +52,16 @@ impl App {
                 // here too, so a status bar forced on only for the search (see
                 // `status_bar_visible`) drops back to its configured visibility.
                 // As with `SearchCancel`, the query itself is remembered
-                // (`search_last`) so `n`/`N` back in Normal mode resume it.
+                // (`search.last`) so `n`/`N` back in Normal mode resume it.
                 if old_mode == Mode::Normal
                     && new_mode != Mode::Normal
-                    && self.search_query.is_some()
+                    && self.search.query.is_some()
                 {
-                    self.search_query = None;
-                    self.search_match_index = 0;
-                    self.search_match_total = 0;
-                    self.search_current = None;
-                    self.search_origin = None;
+                    self.search.query = None;
+                    self.search.match_index = 0;
+                    self.search.match_total = 0;
+                    self.search.current = None;
+                    self.search.origin = None;
                     if !self.config.status_bar.enabled {
                         self.resize_all_panes();
                     }
@@ -238,13 +238,13 @@ impl App {
                 self.remember_visual(focused);
                 self.modes
                     .insert(focused, Mode::Visual.apply(ModeEvent::Escape));
-                self.visual_anchor = None;
-                self.selection = None;
+                self.selection.visual_anchor = None;
+                self.selection.span = None;
                 self.dirty = true;
             }
             Action::YankSelectionRegister(reg) => {
                 if let Some(text) = self.selected_text() {
-                    self.registers.insert(reg, text.clone());
+                    self.vim.registers.insert(reg, text.clone());
                     if reg == '+' || reg == '*' || reg == '"' {
                         self.copy_selection();
                     } else {
@@ -254,8 +254,8 @@ impl App {
                 self.remember_visual(focused);
                 self.modes
                     .insert(focused, Mode::Visual.apply(ModeEvent::Escape));
-                self.visual_anchor = None;
-                self.selection = None;
+                self.selection.visual_anchor = None;
+                self.selection.span = None;
                 self.dirty = true;
             }
             Action::Paste => {
@@ -265,7 +265,7 @@ impl App {
                 let text = if register == '+' || register == '*' {
                     self.clipboard_text()
                 } else {
-                    self.registers.get(&register).cloned()
+                    self.vim.registers.get(&register).cloned()
                 };
                 if let Some(text) = text {
                     self.paste_text(&text);
@@ -382,8 +382,8 @@ impl App {
                 self.webview_mgr.forward_key_event(focused, &bytes);
             }
             Action::SearchStart => {
-                self.search_query = Some(String::new());
-                self.search_reverse = false;
+                self.search.query = Some(String::new());
+                self.search.reverse = false;
                 self.set_search_origin(focused);
                 // Forces the status bar on (see `status_bar_visible`) when it's
                 // configured hidden, which shrinks the pane area by one row;
@@ -395,8 +395,8 @@ impl App {
                 self.dirty = true;
             }
             Action::SearchStartBackward => {
-                self.search_query = Some(String::new());
-                self.search_reverse = true;
+                self.search.query = Some(String::new());
+                self.search.reverse = true;
                 self.set_search_origin(focused);
                 if !self.config.status_bar.enabled {
                     self.resize_all_panes();
@@ -404,14 +404,14 @@ impl App {
                 self.dirty = true;
             }
             Action::SearchChar(c) => {
-                if let Some(q) = &mut self.search_query {
+                if let Some(q) = &mut self.search.query {
                     q.push(c);
                 }
                 self.search_step(focused, self.search_start_direction(), SearchFrom::Origin);
                 self.dirty = true;
             }
             Action::SearchBackspace => {
-                if let Some(q) = &mut self.search_query {
+                if let Some(q) = &mut self.search.query {
                     q.pop();
                 }
                 self.search_step(focused, self.search_start_direction(), SearchFrom::Origin);
@@ -428,18 +428,18 @@ impl App {
                 // Also the plain `Esc` in Normal mode (vim's `:nohlsearch`), which
                 // no longer leaves Normal — so do nothing at all when there's no
                 // search to clear, rather than forcing a status-bar resize.
-                if self.search_query.is_none() {
+                if self.search.query.is_none() {
                     return;
                 }
                 // The cursor stays on the match the search landed on: ending the
                 // search puts away the highlight and the query, not the navigation
-                // it just did. `search_last` and `search_reverse` survive, so `n`/`N`
+                // it just did. `search.last` and `search.reverse` survive, so `n`/`N`
                 // can resume the same search, the same way round, from here.
-                self.search_query = None;
-                self.search_match_index = 0;
-                self.search_match_total = 0;
-                self.search_current = None;
-                self.search_origin = None;
+                self.search.query = None;
+                self.search.match_index = 0;
+                self.search.match_total = 0;
+                self.search.current = None;
+                self.search.origin = None;
                 // Mirrors `SearchStart`: the status bar drops back to its
                 // configured (hidden) visibility, giving the pane area its row
                 // back, so resize immediately to match.
@@ -634,8 +634,8 @@ impl App {
         }
         self.delete_on_prompt(op, focused);
         self.modes.insert(focused, Mode::Insert);
-        self.selection = None;
-        self.visual_anchor = None;
+        self.selection.span = None;
+        self.selection.visual_anchor = None;
         self.dirty = true;
     }
 
@@ -786,21 +786,21 @@ impl App {
             Mode::Normal => {
                 self.modes
                     .insert(focused, Mode::Normal.apply(ModeEvent::EnterVisual));
-                self.visual_anchor = Some(self.nav_cursor(focused).unwrap_or((0, 0)));
-                self.visual_kind = kind;
+                self.selection.visual_anchor = Some(self.nav_cursor(focused).unwrap_or((0, 0)));
+                self.selection.visual_kind = kind;
                 self.update_visual_selection(focused);
             }
-            Mode::Visual if self.visual_kind == kind => {
+            Mode::Visual if self.selection.visual_kind == kind => {
                 // Same kind again leaves Visual, back to Normal.
                 self.remember_visual(focused);
                 self.modes
                     .insert(focused, Mode::Visual.apply(ModeEvent::EnterVisual));
-                self.visual_anchor = None;
-                self.selection = None;
+                self.selection.visual_anchor = None;
+                self.selection.span = None;
             }
             Mode::Visual => {
                 // Switch kind (charwise <-> linewise <-> blockwise), keeping the anchor.
-                self.visual_kind = kind;
+                self.selection.visual_kind = kind;
                 self.update_visual_selection(focused);
             }
             Mode::Insert | Mode::BlockFocus => {}
@@ -812,8 +812,10 @@ impl App {
     /// so extending continues from there. The highlighted span is unchanged —
     /// it always runs anchor..cursor in either order.
     fn swap_visual_ends(&mut self, focused: PaneId) {
-        if let (Some(anchor), Some(cursor)) = (self.visual_anchor, self.nav_cursor(focused)) {
-            self.visual_anchor = Some(cursor);
+        if let (Some(anchor), Some(cursor)) =
+            (self.selection.visual_anchor, self.nav_cursor(focused))
+        {
+            self.selection.visual_anchor = Some(cursor);
             self.set_nav_cursor(focused, anchor);
             self.update_visual_selection(focused);
             self.dirty = true;
@@ -826,7 +828,7 @@ impl App {
     /// still names the same text after the view has scrolled or grown; a pane
     /// without a live selection (no anchor or cursor) snapshots nothing.
     fn remember_visual(&mut self, focused: PaneId) {
-        let Some((anchor_row, anchor_col)) = self.visual_anchor else {
+        let Some((anchor_row, anchor_col)) = self.selection.visual_anchor else {
             return;
         };
         let Some((cursor_row, cursor_col)) = self.nav_cursor(focused) else {
@@ -836,10 +838,10 @@ impl App {
             return;
         };
         let grid = pane.grid();
-        self.last_visual = Some(LastVisual {
+        self.selection.last_visual = Some(LastVisual {
             anchor: (grid.to_absolute_row(anchor_row), anchor_col),
             cursor: (grid.to_absolute_row(cursor_row), cursor_col),
-            kind: self.visual_kind,
+            kind: self.selection.visual_kind,
             pane: focused,
         });
     }
@@ -851,6 +853,7 @@ impl App {
     /// `gv` on a selection taller than the window.
     fn restore_visual(&mut self, focused: PaneId) {
         let Some(last) = self
+            .selection
             .last_visual
             .as_ref()
             .filter(|lv| lv.pane == focused)
@@ -860,7 +863,7 @@ impl App {
         };
         self.modes
             .insert(focused, Mode::Normal.apply(ModeEvent::EnterVisual));
-        self.visual_kind = last.kind;
+        self.selection.visual_kind = last.kind;
         self.reveal_position(focused, last.cursor);
         // Anchor back to viewport coordinates under the (possibly moved) view.
         if let Some(pane) = self.panes.get(&focused) {
@@ -871,7 +874,7 @@ impl App {
                 .0
                 .saturating_sub(top)
                 .min(grid.rows().saturating_sub(1));
-            self.visual_anchor = Some((anchor_row, last.anchor.1));
+            self.selection.visual_anchor = Some((anchor_row, last.anchor.1));
         }
         self.update_visual_selection(focused);
         self.dirty = true;

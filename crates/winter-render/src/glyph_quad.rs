@@ -167,7 +167,7 @@ impl GlyphQuadPass {
                     module: &shader,
                     entry_point: Some("vs_main"),
                     compilation_options: Default::default(),
-                    buffers: &[VertexBufferLayout {
+                    buffers: &[Some(VertexBufferLayout {
                         array_stride: VERTEX_BYTES as u64,
                         step_mode: VertexStepMode::Vertex,
                         attributes: &[
@@ -187,7 +187,7 @@ impl GlyphQuadPass {
                                 shader_location: 2,
                             },
                         ],
-                    }],
+                    })],
                 },
                 fragment: Some(FragmentState {
                     module: &shader,

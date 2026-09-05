@@ -74,7 +74,7 @@ impl App {
         // it's configured hidden — it's the only place search feedback (query
         // text, match position) is shown, so there'd otherwise be nowhere to
         // put it. Reverts to the configured visibility as soon as the search
-        // ends (`search_query` back to `None`). Shared with `viewport_rect`/
+        // ends (`search.query` back to `None`). Shared with `viewport_rect`/
         // `resize_all_panes` via `status_bar_visible` so pane geometry and the
         // PTY's row count always agree with what's drawn here.
         let status_enabled = self.status_bar_visible();
@@ -131,7 +131,7 @@ impl App {
         };
 
         let rects = self.tabs[self.active_tab].rects(layout_vp);
-        let sel = self.selection.as_ref().map(|s| {
+        let sel = self.selection.span.as_ref().map(|s| {
             (
                 s.pane,
                 s.start_row,
@@ -159,7 +159,7 @@ impl App {
 
         // Precompute search match cell positions per pane so PaneView can borrow
         // them as slices. Built before the view loop to satisfy the borrow checker.
-        let query_str = self.search_query.as_deref().filter(|q| !q.is_empty());
+        let query_str = self.search.query.as_deref().filter(|q| !q.is_empty());
         let search_match_data: Vec<Vec<(usize, usize)>> = rects
             .iter()
             .map(|(id, _)| match (query_str, self.panes.get(id)) {
@@ -175,7 +175,7 @@ impl App {
         let search_current_data: Vec<Vec<(usize, usize)>> = rects
             .iter()
             .map(
-                |(id, _)| match (query_str, self.search_current, self.panes.get(id)) {
+                |(id, _)| match (query_str, self.search.current, self.panes.get(id)) {
                     (Some(qs), Some((pane_id, (abs_row, col))), Some(pane)) if pane_id == *id => {
                         let grid = pane.grid();
                         let top = grid.to_absolute_row(0);
@@ -226,7 +226,7 @@ impl App {
             vec![vec![]; rects.len()]
         };
 
-        let (cx, cy) = self.cursor_pos;
+        let (cx, cy) = self.pointer.cursor_pos;
         let hovered_pane: Option<PaneId> = rects
             .iter()
             .find(|(_, r)| {
@@ -279,7 +279,8 @@ impl App {
                     config_shape,
                 );
                 let hovered_link = if hovered_pane == Some(*id) {
-                    self.hovered_url
+                    self.pointer
+                        .hovered_url
                         .as_deref()
                         .map(|url| pane.grid().find_link_id(url))
                         .unwrap_or(0)
@@ -424,11 +425,11 @@ impl App {
             });
         }
 
-        let search = self.search_query.as_ref().map(|q| StatusSearch {
+        let search = self.search.query.as_ref().map(|q| StatusSearch {
             query: q.clone(),
-            match_index: self.search_match_index,
-            match_total: self.search_match_total,
-            reverse: self.search_reverse,
+            match_index: self.search.match_index,
+            match_total: self.search.match_total,
+            reverse: self.search.reverse,
         });
         let status = status_bar(
             mode,

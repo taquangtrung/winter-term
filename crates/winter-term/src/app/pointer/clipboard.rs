@@ -33,13 +33,13 @@ fn copy_confirmation(text: &str) -> String {
 // ========================================================================
 
 impl App {
-    /// The selected text, and its line/character counts. Rows in `self.selection`
+    /// The selected text, and its line/character counts. Rows in `self.selection.span`
     /// are absolute (see [`winter_render::Grid::to_absolute_row`]), so this reads
     /// via `absolute_cell` rather than the scroll-position-dependent `visible_cell`
     /// — a selection built up over an auto-scrolled drag stays correct however far
     /// the view has since scrolled.
     pub(crate) fn selected_text(&self) -> Option<String> {
-        let sel = self.selection.as_ref()?;
+        let sel = self.selection.span.as_ref()?;
         let pane = self.panes.get(&sel.pane)?;
         let grid = pane.grid();
 
@@ -121,9 +121,10 @@ impl App {
     /// relative, so both are converted to `Selection`'s absolute addressing
     /// (see [`winter_render::Grid::to_absolute_row`]) before storing.
     pub(crate) fn update_visual_selection(&mut self, focused: PaneId) {
-        let (Some((ar, ac)), Some((cr, cc))) = (self.visual_anchor, self.nav_cursor(focused))
+        let (Some((ar, ac)), Some((cr, cc))) =
+            (self.selection.visual_anchor, self.nav_cursor(focused))
         else {
-            self.selection = None;
+            self.selection.span = None;
             return;
         };
         let Some(pane) = self.panes.get(&focused) else {
@@ -133,7 +134,7 @@ impl App {
         let last_col = grid.cols().saturating_sub(1);
         let abs_ar = grid.to_absolute_row(ar);
         let abs_cr = grid.to_absolute_row(cr);
-        self.selection = Some(match self.visual_kind {
+        self.selection.span = Some(match self.selection.visual_kind {
             VisualKind::Block => Selection {
                 block: true,
                 end_col: cc,
@@ -279,7 +280,7 @@ impl App {
         let abs_row = grid.to_absolute_row(row);
         let ch = grid.cell(row, col).map(|c| c.ch).unwrap_or(' ');
         if !WORD_CHARS.contains(ch) {
-            self.selection = Some(Selection {
+            self.selection.span = Some(Selection {
                 block: false,
                 start_row: abs_row,
                 start_col: col,
@@ -313,7 +314,7 @@ impl App {
                 break;
             }
         }
-        self.selection = Some(Selection {
+        self.selection.span = Some(Selection {
             block: false,
             start_row: abs_row,
             start_col: start,
@@ -382,7 +383,7 @@ mod tests {
         }
         app.panes.insert(id, pane);
         app.modes.insert(id, crate::model::mode::Mode::Visual);
-        app.visual_anchor = Some((0, anchor));
+        app.selection.visual_anchor = Some((0, anchor));
         app.set_nav_cursor(id, (0, cursor));
         app.update_visual_selection(id);
         app
@@ -425,7 +426,7 @@ mod tests {
         app.panes.insert(id, pane);
         app.modes.insert(id, crate::model::mode::Mode::Visual);
         // Anchor at row 0, col 0; cursor at row 1, col 4 ("Z")
-        app.visual_anchor = Some((0, 0));
+        app.selection.visual_anchor = Some((0, 0));
         app.set_nav_cursor(id, (1, 4));
         app.update_visual_selection(id);
 

@@ -41,7 +41,10 @@ mod tabbar;
 mod tabs;
 mod window_event;
 
+use navigation::{SearchState, VimState};
+use pointer::{PointerState, SelectionState};
 use prompt_edit::PromptShadow;
+use tabbar::MenuState;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{mpsc, Arc};
@@ -430,7 +433,8 @@ impl App {
             .or_default()
             .apply_insert_key(key, at_prompt);
         if let Action::SendBytes(bytes) = action {
-            self.insert_sessions
+            self.vim
+                .insert_sessions
                 .entry(focused)
                 .or_default()
                 .run
@@ -520,17 +524,7 @@ pub struct App {
     /// after construction, but must stay alive for as long as the app runs —
     /// dropping it stops event delivery.
     pub(crate) _config_watcher: Option<notify::RecommendedWatcher>,
-    pub(crate) cursor_pos: (f32, f32),
     pub(crate) dirty: bool,
-    /// Next instant at which a held-button selection drag near the top/bottom
-    /// viewport edge is allowed to auto-scroll by another line. Throttles
-    /// [`App::auto_scroll_selection`] against the ~16ms `about_to_wait` tick.
-    pub(crate) auto_scroll_next: Instant,
-    /// Previous cursor pixel position during a split-divider drag, or `None`
-    /// when no drag is in progress. Cleared on mouse release.
-    pub(crate) divider_drag: Option<(f32, f32)>,
-    /// Which pane's scrollbar is being dragged, if any. Cleared on mouse release.
-    pub(crate) scrollbar_drag: Option<PaneId>,
     /// A transient status-bar notice and the instant it expires: an error (e.g.
     /// a Vim edit aimed at the non-editable scrollback area) or an info
     /// confirmation (e.g. "Copied to clipboard").
@@ -547,7 +541,6 @@ pub struct App {
     pub(crate) folded_blocks: HashMap<PaneId, HashSet<usize>>,
     /// Raster-image blocks rendered natively on the GPU (instead of a WebView).
     pub(crate) image_blocks: Vec<ImageBlock>,
-    pub(crate) last_click: Option<(Instant, f32, f32)>,
     /// Set when the window gains focus; cleared on the next `ModifiersChanged`
     /// event. While set, `KeyboardInput::Pressed` events are swallowed because
     /// winit synthesizes presses for all physically-held keys on `XI_FocusIn`,
@@ -564,7 +557,6 @@ pub struct App {
     pub(crate) last_find: Option<input::FindChar>,
     pub(crate) last_tile_layout: Option<(usize, usize, u32, u32)>,
     pub(crate) modifiers: winit::event::Modifiers,
-    pub(crate) mouse_down: bool,
     /// Set when the custom window-close control is clicked, drained by the mouse
     /// handler into the same quit path as a native close request.
     pub(crate) exit_requested: bool,
@@ -623,28 +615,6 @@ pub struct App {
     /// user picks one with a single keystroke instead of repeating `;`.
     pub(crate) find_labels: Option<Vec<FindLabel>>,
     pub(crate) renderer: Option<GpuRenderer>,
-    pub(crate) search_query: Option<String>,
-    /// 1-based index of the focused match (0 when no matches).
-    pub(crate) search_match_index: usize,
-    pub(crate) search_match_total: usize,
-    /// Where the active search was launched from: the pane and the absolute
-    /// buffer position (`(row, col)`) of the cursor when `/`/`?`/`*` was
-    /// pressed. Every keystroke of the query re-searches from here, so typing
-    /// doesn't creep forward through the buffer.
-    pub(crate) search_origin: Option<(PaneId, (usize, usize))>,
-    /// The match `n`/`N` is parked on — the pane and the match's absolute
-    /// `(row, col)` start. Drawn in [`winter_render::Theme::search_current_bg`]
-    /// so the focused match stands out from the other highlighted matches.
-    pub(crate) search_current: Option<(PaneId, (usize, usize))>,
-    /// The last query searched for, kept after the search is put away with `Esc`
-    /// so `n`/`N` can pick it back up from wherever the cursor now is — vim keeps
-    /// the pattern the same way across `:nohlsearch`.
-    pub(crate) search_last: Option<String>,
-    /// Vim-style search direction: `?`/`#` set this so `n` repeats backward and
-    /// `N` forward (both reversed from the `/`/`*` default). `SearchNext`
-    /// (`n`) walks in this direction; `SearchPrevious` (`N`) walks the other.
-    pub(crate) search_reverse: bool,
-    pub(crate) selection: Option<Selection>,
     /// The open full-window settings page (a native text-mode overlay), or
     /// `None`. Rendered by [`render`] as a terminal grid covering the window.
     pub(crate) settings_page: Option<SettingsPage>,
@@ -659,61 +629,19 @@ pub struct App {
     /// repeated recency commands step through usage order without reshuffling it.
     /// `None` once a deliberate switch ends the walk.
     pub(crate) mru_walk: Option<usize>,
-    /// Per-pane vim-style jumplists backing `Ctrl+O`/`Ctrl+I` (see
-    /// [`navigation::JumpList`]).
-    pub(crate) jump_lists: HashMap<PaneId, navigation::JumpList>,
-    /// Per-pane vim-style changelists backing `g;`/`g,` (see
-    /// [`navigation::ChangeList`]).
-    pub(crate) change_lists: HashMap<PaneId, navigation::ChangeList>,
-    /// The most recent change per pane, replayed by `.` (see
-    /// [`navigation::LastChange`]).
-    pub(crate) last_changes: HashMap<PaneId, navigation::LastChange>,
-    /// The Insert-mode typing run in progress per pane (see
-    /// [`navigation::InsertSession`]).
-    pub(crate) insert_sessions: HashMap<PaneId, navigation::InsertSession>,
-    /// Per-pane named marks (`(PaneId, mark_char) -> (abs_row, col)`).
-    pub(crate) marks: HashMap<(PaneId, char), (usize, usize)>,
-    /// Vim named registers (`"{a-z}`, `"{0-9}`, `"+`, `"*`).
-    pub(crate) registers: HashMap<char, String>,
     /// Previously executed palette queries, persisted across sessions.
     pub(crate) palette_history: Vec<String>,
-    /// The last Visual selection, restored by `gv` (see [`LastVisual`]).
-    pub(crate) last_visual: Option<LastVisual>,
-    /// The open menu/dropdown (index into the tabbar's menu list), or `None`.
-    pub(crate) open_menu: Option<usize>,
-    /// Index of the open submenu's parent within the open menu's items, or `None`.
-    pub(crate) open_submenu: Option<usize>,
-    /// The hovered dropdown item while a menu is open.
-    pub(crate) selected_item: Option<usize>,
-    /// The hovered submenu child while a submenu is open.
-    pub(crate) selected_subitem: Option<usize>,
     /// Next free globally-unique pane id; allocated by [`Self::alloc_pane_id`].
     pub(crate) next_pane_id: u64,
     /// All open tabs, each its own split-tree of panes.
     pub(crate) tabs: Vec<Tab>,
     pub(crate) modes: HashMap<PaneId, Mode>,
-    /// Visual-mode anchor (viewport `(row, col)`) where the selection began.
-    /// `Some` only while the focused pane is in Visual mode.
-    pub(crate) visual_anchor: Option<(usize, usize)>,
-    /// The active Visual selection kind (Block, Char, Line).
-    pub(crate) visual_kind: VisualKind,
     pub(crate) webview_mgr: WebViewManager,
     pub(crate) window: Option<Arc<Window>>,
     /// Configurable split/close/focus key bindings (the `window` keybindings
     /// block), resolved against in Normal mode.
     pub(crate) window_keymap: WindowKeymap,
     pub(crate) window_title: String,
-    /// The URL of the hyperlinked cell currently under the pointer, if any.
-    /// Drives the pointer-cursor icon and Ctrl+click to open.
-    pub(crate) hovered_url: Option<String>,
-    /// Active right-click context menu: pixel position where it was opened.
-    pub(crate) context_menu_pos: Option<(f32, f32)>,
-    /// The URL (if any) that was under the pointer when the context menu opened.
-    pub(crate) context_menu_url: Option<String>,
-    /// The actions bound to each context-menu item, parallel to the rendered list.
-    pub(crate) context_menu_actions: Vec<ContextAction>,
-    /// The currently hovered item in the context menu (drives the hover highlight).
-    pub(crate) context_menu_selected: Option<usize>,
     /// The font size from config at startup; Ctrl+0 resets back to this value.
     pub(crate) base_font_size: f32,
     /// Whether the cursor is in its "visible" blink phase. Toggled by the blink
@@ -729,6 +657,19 @@ pub struct App {
     /// Source tab index and the pointer x position when a tab drag began. `None`
     /// when no drag is in progress. Cleared on mouse release.
     pub(crate) tab_drag_start: Option<(usize, f32)>,
+    /// The tabbar menus and the right-click context menu (see [`MenuState`]).
+    pub(crate) menus: MenuState,
+    /// Transient pointer input: hover, drags, and click timing (see
+    /// [`PointerState`]).
+    pub(crate) pointer: PointerState,
+    /// The live `/` search (see [`SearchState`]).
+    pub(crate) search: SearchState,
+    /// The active selection and the Visual-mode state behind it (see
+    /// [`SelectionState`]).
+    pub(crate) selection: SelectionState,
+    /// Per-pane vim state: jumplist, changelist, marks, registers (see
+    /// [`VimState`]).
+    pub(crate) vim: VimState,
 }
 
 /// An action dispatched from a right-click context menu item.
@@ -1358,14 +1299,14 @@ mod tests {
         let mut app = App::new();
         let focused = app.tab().focused();
         app.modes.insert(focused, Mode::Normal);
-        app.search_query = Some("foo".to_string());
-        app.search_match_total = 2;
+        app.search.query = Some("foo".to_string());
+        app.search.match_total = 2;
 
         app.handle_action(input::Action::SearchCancel, focused);
 
         assert_eq!(app.modes.get(&focused), Some(&Mode::Normal));
-        assert!(app.search_query.is_none());
-        assert_eq!(app.search_match_total, 0);
+        assert!(app.search.query.is_none());
+        assert_eq!(app.search.match_total, 0);
     }
 
     #[test]
@@ -1572,10 +1513,10 @@ mod tests {
         app.config.status_bar.enabled = false;
         assert!(!app.status_bar_visible());
 
-        app.search_query = Some("foo".to_string());
+        app.search.query = Some("foo".to_string());
         assert!(app.status_bar_visible());
 
-        app.search_query = None;
+        app.search.query = None;
         assert!(!app.status_bar_visible());
     }
 
@@ -1585,7 +1526,7 @@ mod tests {
         app.config.status_bar.enabled = true;
         assert!(app.status_bar_visible());
 
-        app.search_query = Some("foo".to_string());
+        app.search.query = Some("foo".to_string());
         assert!(app.status_bar_visible());
     }
 
@@ -1598,17 +1539,17 @@ mod tests {
 
         // Search executed, now browsing matches in Normal mode: the bar is
         // forced visible even though it's configured off.
-        app.search_query = Some("foo".to_string());
-        app.search_match_index = 1;
-        app.search_match_total = 3;
+        app.search.query = Some("foo".to_string());
+        app.search.match_index = 1;
+        app.search.match_total = 3;
         assert!(app.status_bar_visible());
 
         // `i` back to Insert (done browsing, not a `SearchCancel` mid-input)
         // still ends the search and lets the bar drop back to hidden.
         app.handle_action(input::Action::SwitchMode(Mode::Insert), focused);
-        assert!(app.search_query.is_none());
-        assert_eq!(app.search_match_index, 0);
-        assert_eq!(app.search_match_total, 0);
+        assert!(app.search.query.is_none());
+        assert_eq!(app.search.match_index, 0);
+        assert_eq!(app.search.match_total, 0);
         assert!(!app.status_bar_visible());
     }
 
@@ -2257,8 +2198,8 @@ mod tests {
         let mut app = App::new();
         let id = PaneId(1);
         app.panes.insert(id, pane_with_scrollback());
-        app.mouse_down = true;
-        app.selection = Some(Selection {
+        app.pointer.mouse_down = true;
+        app.selection.span = Some(Selection {
             block: false,
             start_row: 5,
             start_col: 0,
@@ -2270,7 +2211,7 @@ mod tests {
         // 800x600) viewport — barely deep enough to scroll, so one step moves
         // the minimum one line (see test_auto_scroll_selection_speed_scales_
         // with_edge_depth for the deep-in-margin case).
-        app.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, 23.0);
 
         app.auto_scroll_selection();
 
@@ -2280,7 +2221,7 @@ mod tests {
             1,
             "should scroll one line into history"
         );
-        let sel = app.selection.as_ref().expect("selection still active");
+        let sel = app.selection.span.as_ref().expect("selection still active");
         assert_eq!(
             (sel.end_row, sel.end_col),
             (pane.grid().to_absolute_row(0), 0),
@@ -2299,9 +2240,9 @@ mod tests {
         let mut app = App::new();
         let id = PaneId(1);
         app.panes.insert(id, pane_with_scrollback());
-        app.mouse_down = true;
+        app.pointer.mouse_down = true;
         let start_abs = app.panes[&id].grid().to_absolute_row(5);
-        app.selection = Some(Selection {
+        app.selection.span = Some(Selection {
             block: false,
             start_row: start_abs,
             start_col: 0,
@@ -2309,13 +2250,13 @@ mod tests {
             end_col: 0,
             pane: id,
         });
-        app.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, 23.0);
 
         let mut ends = Vec::new();
         for _ in 0..3 {
-            app.auto_scroll_next = Instant::now(); // Bypass the interval throttle.
+            app.pointer.auto_scroll_next = Instant::now(); // Bypass the interval throttle.
             app.auto_scroll_selection();
-            ends.push(app.selection.as_ref().unwrap().end_row);
+            ends.push(app.selection.span.as_ref().unwrap().end_row);
         }
 
         assert!(
@@ -2336,8 +2277,8 @@ mod tests {
             let mut app = App::new();
             let id = PaneId(1);
             app.panes.insert(id, pane_with_scrollback());
-            app.mouse_down = true;
-            app.selection = Some(Selection {
+            app.pointer.mouse_down = true;
+            app.selection.span = Some(Selection {
                 block: false,
                 start_row: 5,
                 start_col: 0,
@@ -2345,7 +2286,7 @@ mod tests {
                 end_col: 0,
                 pane: id,
             });
-            app.cursor_pos = (10.0, 23.0);
+            app.pointer.cursor_pos = (10.0, 23.0);
             app.auto_scroll_selection();
             app.panes[&id].grid().scroll_offset()
         };
@@ -2353,8 +2294,8 @@ mod tests {
             let mut app = App::new();
             let id = PaneId(1);
             app.panes.insert(id, pane_with_scrollback());
-            app.mouse_down = true;
-            app.selection = Some(Selection {
+            app.pointer.mouse_down = true;
+            app.selection.span = Some(Selection {
                 block: false,
                 start_row: 5,
                 start_col: 0,
@@ -2362,7 +2303,7 @@ mod tests {
                 end_col: 0,
                 pane: id,
             });
-            app.cursor_pos = (10.0, 0.0);
+            app.pointer.cursor_pos = (10.0, 0.0);
             app.auto_scroll_selection();
             app.panes[&id].grid().scroll_offset()
         };
@@ -2402,11 +2343,11 @@ mod tests {
         let mut app = App::new();
         let id = PaneId(1);
         app.panes.insert(id, pane);
-        app.mouse_down = true;
+        app.pointer.mouse_down = true;
         // Anchor the drag on the live view's current top row (still holding
         // real numbers, not the fresh blank row the cursor just moved to).
         let start_abs = app.panes[&id].grid().to_absolute_row(0);
-        app.selection = Some(Selection {
+        app.selection.span = Some(Selection {
             block: false,
             start_row: start_abs,
             start_col: 0,
@@ -2414,12 +2355,12 @@ mod tests {
             end_col: 0,
             pane: id,
         });
-        app.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, 23.0);
 
         // Scroll well past both a single page's worth of rows and the whole
         // available scrollback, so the offset saturates at the oldest line.
         for _ in 0..(rows + 25) {
-            app.auto_scroll_next = Instant::now();
+            app.pointer.auto_scroll_next = Instant::now();
             app.auto_scroll_selection();
         }
         assert_eq!(
@@ -2428,7 +2369,7 @@ mod tests {
             "should have scrolled all the way back"
         );
 
-        let sel = app.selection.as_ref().unwrap();
+        let sel = app.selection.span.as_ref().unwrap();
         let expected_lines = sel.start_row.max(sel.end_row) - sel.start_row.min(sel.end_row) + 1;
         let text = app.selected_text().expect("selection has content");
         let lines: Vec<&str> = text.lines().collect();
@@ -2448,8 +2389,8 @@ mod tests {
         let mut app = App::new();
         let id = PaneId(1);
         app.panes.insert(id, pane_with_scrollback());
-        app.mouse_down = true;
-        app.selection = Some(Selection {
+        app.pointer.mouse_down = true;
+        app.selection.span = Some(Selection {
             block: false,
             start_row: 5,
             start_col: 0,
@@ -2457,12 +2398,12 @@ mod tests {
             end_col: 0,
             pane: id,
         });
-        app.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, 23.0);
 
         app.auto_scroll_selection();
         app.auto_scroll_selection();
 
-        // The second call lands before `auto_scroll_next`, so it must not
+        // The second call lands before `pointer.auto_scroll_next`, so it must not
         // advance the scrollback a second time.
         assert_eq!(app.panes[&id].grid().scroll_offset(), 1);
     }
@@ -2472,8 +2413,8 @@ mod tests {
         let mut app = App::new();
         let id = PaneId(1);
         app.panes.insert(id, pane_with_scrollback());
-        app.mouse_down = true;
-        app.selection = Some(Selection {
+        app.pointer.mouse_down = true;
+        app.selection.span = Some(Selection {
             block: false,
             start_row: 5,
             start_col: 0,
@@ -2481,7 +2422,7 @@ mod tests {
             end_col: 0,
             pane: id,
         });
-        app.cursor_pos = (10.0, 300.0);
+        app.pointer.cursor_pos = (10.0, 300.0);
 
         app.auto_scroll_selection();
 
@@ -2493,8 +2434,8 @@ mod tests {
         let mut app = App::new();
         let id = PaneId(1);
         app.panes.insert(id, pane_with_scrollback());
-        app.mouse_down = false;
-        app.selection = Some(Selection {
+        app.pointer.mouse_down = false;
+        app.selection.span = Some(Selection {
             block: false,
             start_row: 5,
             start_col: 0,
@@ -2502,7 +2443,7 @@ mod tests {
             end_col: 0,
             pane: id,
         });
-        app.cursor_pos = (10.0, 1.0);
+        app.pointer.cursor_pos = (10.0, 1.0);
 
         app.auto_scroll_selection();
 
