@@ -5190,7 +5190,7 @@ dependencies = [
  "pulldown-cmark",
  "resvg",
  "unicode-normalization",
- "unicode-width 0.1.14",
+ "unicode-width 0.2.2",
  "vte",
  "wgpu",
 ]

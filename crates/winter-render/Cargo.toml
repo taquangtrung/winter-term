@@ -19,6 +19,6 @@ pollster = "0.4"
 pulldown-cmark = { version = "0.12", default-features = false }
 resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
 unicode-normalization = "0.1"
-unicode-width = "0.1"
+unicode-width = "0.2"
 vte.workspace = true
 wgpu = "30"
