@@ -33,7 +33,7 @@ regex.workspace = true
 winter-core.workspace = true
 
 winter-render.workspace = true
-pollster = "0.4"
+pollster = "1.0"
 portable-pty.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json.workspace = true
