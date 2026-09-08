@@ -58,6 +58,11 @@ pub struct PaneView<'a> {
     /// The Normal-mode traversal cursor, in viewport `(row, col)`, drawn in
     /// [`Self::cursor_shape`]. `None` when the pane is not being navigated.
     pub nav_cursor: Option<(usize, usize)>,
+    /// The viewport row span `(top_row, row_count)` of the rich block whose
+    /// reserved band the nav cursor sits in: the block *is* the cursor there,
+    /// drawn as an accent outline around the whole band instead of a 1-cell
+    /// block somewhere in the blank space behind the image. `None` otherwise.
+    pub block_band: Option<(usize, usize)>,
     /// The row to band with [`Theme::cursor_line_bg`] (with its soft-wrapped
     /// continuations). Separate from [`Self::nav_cursor`] so an unfocused pane can
     /// keep showing where its cursor is even though the cursor block itself is

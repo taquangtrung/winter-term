@@ -67,7 +67,7 @@ const PATCH_MIN_INTERVAL: Duration = Duration::from_millis(100);
 /// Everything a tile needs in order to be created and positioned.
 pub struct TileParams {
     /// Grid row the tile is anchored to.
-    pub grid_row: usize,
+    pub abs_row: usize,
     /// Tile height in physical pixels.
     pub height: u32,
     /// The document to load into the tile.
@@ -116,7 +116,7 @@ struct PendingUpdate {
 }
 
 struct TileSlot {
-    grid_row: usize,
+    abs_row: usize,
     /// When the WebView's content was last actually updated, for the patch
     /// rate limit; `None` before the first update.
     last_applied: Option<Instant>,
@@ -204,7 +204,7 @@ impl WebViewManager {
         self.tiles.insert(
             key,
             TileSlot {
-                grid_row: params.grid_row,
+                abs_row: params.abs_row,
                 last_applied: Some(Instant::now()),
                 pane_id,
                 pending: None,
@@ -216,23 +216,29 @@ impl WebViewManager {
         Ok(())
     }
 
-    /// Reposition all tiles based on scroll offset. Tiles whose pane is not in
-    /// `active_panes` (i.e. belong to a background tab) are hidden, as are tiles
-    /// that scroll offscreen; tiles that come back are re-shown.
+    /// Reposition all tiles against `viewport_top`, the absolute row currently
+    /// at the top of the viewport (see [`winter_render::Grid::to_absolute_row`]).
+    /// Tiles whose pane is not in `active_panes` (i.e. belong to a background
+    /// tab) are hidden, as are tiles that scroll offscreen; tiles that come
+    /// back are re-shown. Panes in `alt_screen_panes` are showing the
+    /// alternate screen, so their tiles are hidden too: a full-screen app
+    /// owns the viewport, and a primary-screen block painted over it would
+    /// hide the app's rows until it exits.
     pub fn reposition_tiles(
         &mut self,
-        scroll_offset: usize,
+        viewport_top: usize,
         grid_rows: usize,
         cell_height: f32,
         pane_y_offset: f32,
         active_panes: &std::collections::HashSet<crate::model::layout::PaneId>,
+        alt_screen_panes: &std::collections::HashSet<crate::model::layout::PaneId>,
     ) {
         for (key, slot) in self.tiles.iter_mut() {
-            if !active_panes.contains(&key.pane_id) {
+            if !active_panes.contains(&key.pane_id) || alt_screen_panes.contains(&key.pane_id) {
                 let _ = slot.webview.set_visible(false);
                 continue;
             }
-            let visible_row = slot.grid_row as isize - scroll_offset as isize;
+            let visible_row = slot.abs_row as isize - viewport_top as isize;
             if visible_row < 0 || visible_row as usize >= grid_rows {
                 let _ = slot.webview.set_visible(false);
             } else {
@@ -260,18 +266,34 @@ impl WebViewManager {
         (BLOCK_HEIGHT_ROWS as f32 * cell_height) as u32
     }
 
-    /// Shift tiles of `pane_id` anchored at or below `row` down by `delta`
-    /// rows: a band above them grew, so their anchors must follow the content
+    /// Move tiles of `pane_id` anchored at or below `row` by `delta` rows: a
+    /// band above them grew or shrank, so their anchors must follow the content
     /// they point at. The next `reposition_tiles` moves the views.
     pub fn shift_tiles_at_or_below(
         &mut self,
         pane_id: crate::model::layout::PaneId,
         row: usize,
-        delta: usize,
+        delta: isize,
     ) {
         for slot in self.tiles.values_mut() {
-            if slot.pane_id == pane_id && slot.grid_row >= row {
-                slot.grid_row += delta;
+            if slot.pane_id == pane_id && slot.abs_row >= row {
+                slot.abs_row = slot.abs_row.saturating_add_signed(delta);
+            }
+        }
+    }
+
+    /// Push every tile of `pane_id` through a resize reflow's row remap (see
+    /// [`winter_render::RowRemap`]), the same as the app's image blocks: the
+    /// reflow moved the rows a tile is anchored to, and a tile left at the
+    /// old row floats over unrelated output.
+    pub fn remap_tiles(
+        &mut self,
+        pane_id: crate::model::layout::PaneId,
+        remap: &winter_render::RowRemap,
+    ) {
+        for slot in self.tiles.values_mut() {
+            if slot.pane_id == pane_id {
+                slot.abs_row = remap.map(slot.abs_row);
             }
         }
     }
@@ -348,7 +370,7 @@ impl WebViewManager {
         self.report_rx.try_iter().collect()
     }
 
-    /// A tile's current `(grid_row, reserved_rows)`, for computing how much
+    /// A tile's current `(abs_row, reserved_rows)`, for computing how much
     /// further a height report can grow it before touching the grid.
     /// `None` when no matching tile exists.
     pub fn tile_band(
@@ -364,7 +386,21 @@ impl WebViewManager {
         };
         self.tiles
             .get(&key)
-            .map(|slot| (slot.grid_row, slot.reserved_rows))
+            .map(|slot| (slot.abs_row, slot.reserved_rows))
+    }
+
+    /// Every tile band of `pane_id`, as `(abs_row, reserved_rows)` pairs in
+    /// anchor order: the same viewport rows a nav cursor treats as one stop,
+    /// and the span the block-as-cursor outline is drawn around.
+    pub fn tile_bands(&self, pane_id: crate::model::layout::PaneId) -> Vec<(usize, usize)> {
+        let mut bands: Vec<(usize, usize)> = self
+            .tiles
+            .values()
+            .filter(|slot| slot.pane_id == pane_id)
+            .map(|slot| (slot.abs_row, slot.reserved_rows))
+            .collect();
+        bands.sort_unstable_by_key(|&(abs_row, _)| abs_row);
+        bands
     }
 
     /// Grow a tile's own bounds to `reserved_rows` grid rows tall. Returns
@@ -405,6 +441,37 @@ impl WebViewManager {
     /// Remove all WebView tiles belonging to a closed pane.
     pub fn remove_tiles_for_pane(&mut self, pane_id: crate::model::layout::PaneId) {
         self.tiles.retain(|key, _| key.pane_id != pane_id);
+    }
+
+    /// Remove the one tile rendering the named block segment, e.g. because
+    /// the scrollback's retention budget elided the block's content. A no-op
+    /// when the segment rendered natively (no tile exists for it).
+    pub fn remove_tile(
+        &mut self,
+        pane_id: crate::model::layout::PaneId,
+        block_index: usize,
+        segment_index: usize,
+    ) {
+        self.tiles.remove(&TileKey {
+            pane_id,
+            block_index,
+            segment_index,
+        });
+    }
+
+    /// Remove tiles of `pane_id` whose band overlaps the erased absolute row
+    /// span `[start, end)`: the grid rows they were placed over have been
+    /// blanked, so the tile is left floating over unrelated output.
+    pub fn remove_tiles_in(
+        &mut self,
+        pane_id: crate::model::layout::PaneId,
+        (start, end): (usize, usize),
+    ) {
+        self.tiles.retain(|key, slot| {
+            key.pane_id != pane_id
+                || slot.abs_row >= end
+                || slot.abs_row + slot.reserved_rows <= start
+        });
     }
 
     /// Hide every tile, e.g. while a full-window overlay (the settings page) is

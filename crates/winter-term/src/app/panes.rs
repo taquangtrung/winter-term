@@ -170,7 +170,7 @@ impl App {
         self.vim.marks.retain(|(p, _), _| *p != pane_id);
         self.pane_titles.remove(&pane_id);
         self.webview_mgr.remove_tiles_for_pane(pane_id);
-        self.image_blocks.retain(|img| img.pane_id != pane_id);
+        self.retain_image_blocks(|img| img.pane_id != pane_id);
         self.last_tile_layout = None;
         self.tabs.all[tab_idx].close(pane_id);
         // Rebalance the remaining panes' ratios so they stay evenly spaced,
@@ -239,6 +239,17 @@ impl App {
         let mut clipboard_write: Option<String> = None;
         // Panes whose PTY raised an OSC 52 read query, answered after the loop.
         let mut clipboard_reads: Vec<PaneId> = Vec::new();
+        // Absolute row spans a `clear` (or any screen erase) blanked this pump,
+        // per pane: the blocks anchored inside them are dropped below.
+        let mut erased: Vec<(PaneId, (usize, usize))> = Vec::new();
+        // Blocks the retention budget elided this pump, as
+        // `(pane, block_index, segment_index)`: their rendered texture and
+        // WebView tile can never show content again.
+        let mut elided: Vec<(PaneId, usize, usize)> = Vec::new();
+        // Row remaps from resizes applied during this pump (mux session
+        // geometry), drained after the loop so `self` is free to be borrowed
+        // mutably for the app's own anchors.
+        let mut remapped: Vec<(PaneId, winter_render::RowRemap)> = Vec::new();
         // Re-assert the block trust ceiling every pump rather than at pane
         // construction: panes are created from a dozen places (new tab, split,
         // session restore, mux attach), and a construction site that forgot to
@@ -249,6 +260,9 @@ impl App {
             pane.block_queue_mut().set_max_trust(max_trust);
         }
         for (id, pane) in self.panes.iter_mut() {
+            for remap in pane.take_row_remaps() {
+                remapped.push((*id, remap));
+            }
             let prev_count = pane.block_queue().entries().len();
             if pane.drain_output() {
                 pane.grid_mut().detect_urls();
@@ -276,6 +290,12 @@ impl App {
             for idx in patched {
                 patched_tiles.push((*id, idx));
             }
+            for (block_index, segment_index) in pane.drain_elided_blocks() {
+                elided.push((*id, block_index, segment_index));
+            }
+            for span in pane.take_erased_spans() {
+                erased.push((*id, span));
+            }
         }
         if !new_titles.is_empty() {
             for (id, title) in new_titles {
@@ -283,6 +303,15 @@ impl App {
             }
             self.update_window_title();
         }
+        for (id, remap) in &remapped {
+            self.remap_pane_anchors(*id, remap);
+        }
+        // Before new blocks are built, so a block emitted in the same pump as
+        // the `clear` that preceded it survives.
+        for (id, span) in erased {
+            self.drop_blocks_in(id, span);
+        }
+        self.drop_elided_blocks(&elided);
         if !new_entries.is_empty() {
             self.create_block_tiles(&new_entries);
         }
@@ -351,6 +380,11 @@ impl App {
                 pane.resize(cols.max(1), rows.max(1));
                 if offset > 0 {
                     pane.grid_mut().set_scroll_offset(offset);
+                }
+                // The reflow moved the content the app's anchors name; push
+                // them through the remap before the redraw lands.
+                for remap in pane.take_row_remaps() {
+                    self.remap_pane_anchors(id, &remap);
                 }
             }
         }

@@ -135,7 +135,7 @@ Clipboard reading via OSC 52 is similarly opt-in (`clipboard-read`). See the [us
 | Document | Contents |
 |---|---|
 | [Usage guide](docs/usage-guide.md) | Modes, full keymaps, settings, multiplexer |
-| [TBP spec](docs/terminal-block-protocol-spec.md) | TBP v1 framing, verbs, and trust tiers |
+| [TBP spec](docs/terminal-block-protocol-spec.md) | TBP v1 protocol framing and tiers |
 | [Architecture](docs/architecture.md) | Crate structure and rendering pipeline |
 | [Contributing](CONTRIBUTING.md) | Development setup, test suite, PR guidelines |
 | [Release guide](docs/releasing.md) | Maintainer runbook for cutting a release |

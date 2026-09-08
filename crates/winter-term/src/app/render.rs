@@ -7,8 +7,8 @@ use crate::model::layout::{PaneId, Rect};
 use crate::model::mode::Mode;
 use crate::model::palette::{Palette, PaletteMode};
 use crate::model::settings_page::{Control, SettingsField, SettingsPage};
-use crate::terminal::block_queue::BlockEntry;
-use crate::terminal::pane::{BLOCK_RESERVE_ROWS, MAX_IMAGE_ROWS};
+use crate::terminal::block_queue::{BlockEntry, BlockKind};
+use crate::terminal::pane::{Pane, MAX_IMAGE_ROWS};
 use crate::terminal::webview;
 use winter_core::winter_proto::EmitBlock;
 use winter_render::renderer::{PaneRect, PaneView};
@@ -30,6 +30,15 @@ const CSV_MIME: &str = "text/csv";
 const JSON_MIME: &str = "application/json";
 const MARKDOWN_MIME: &str = "text/markdown";
 const SVG_MIME: &str = "image/svg+xml";
+
+/// Blank space left above a block's image inside its reserved band, as a
+/// fraction of the cell height, so a block reads as its own object instead of
+/// butting straight against the line of output above it.
+///
+/// Taken *out* of the band, not added to it. The reservation is what keeps the
+/// following prompt flush under the block, so padding the band's height here
+/// would instead open the same gap below every block.
+const BLOCK_PAD_TOP_RATIO: f32 = 0.5;
 
 /// Opacity a closed live block's image placement draws at, so a reader can
 /// tell a finished block from one still accepting patches.
@@ -54,14 +63,6 @@ const SETTINGS_HINT: &str = "↑/↓ Move     ←/→ Change     Space Toggle   
 // Frame composition helpers
 // ========================================================================
 
-/// The band of the window the panes are laid out in.
-#[derive(Clone, Copy)]
-struct ContentBand {
-    /// Whole cell rows that fit inside `viewport`.
-    rows: usize,
-    viewport: Rect,
-}
-
 /// One pane's rainbow-parens marks: viewport `(row, col)` plus the resolved
 /// RGB to paint that bracket glyph in.
 type BracketColors = Vec<(usize, usize, (u8, u8, u8))>;
@@ -85,6 +86,10 @@ struct PaneViewInput<'a> {
     blink_phase: bool,
     config: &'a crate::config::Config,
     focused: PaneId,
+    /// The focused pane's block bands, `(abs_row, rows)` in anchor order: the
+    /// reserved rows a nav cursor treats as one stop, and the span the
+    /// block-as-cursor outline replaces the 1-cell cursor with.
+    focused_bands: &'a [(usize, usize)],
     hovered_pane: Option<PaneId>,
     hovered_url: Option<&'a str>,
     modes: &'a std::collections::HashMap<PaneId, Mode>,
@@ -104,6 +109,7 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
         blink_phase,
         config,
         focused,
+        focused_bands,
         hovered_pane,
         hovered_url,
         modes,
@@ -142,6 +148,21 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
             } else {
                 None
             };
+            // The block-as-cursor: while the traversal cursor sits inside a
+            // rich block's reserved band, the band itself is the cursor. The
+            // span is clipped to the viewport so an outline never draws past
+            // an edge the image itself is cropped at.
+            let block_band = nav_cursor.and_then(|(nav_row, _)| {
+                focused_bands.iter().find_map(|&(abs_row, band_rows)| {
+                    let top = pane.grid().to_viewport_row(abs_row);
+                    let bottom = top + band_rows as isize;
+                    let rows = pane.grid().rows() as isize;
+                    let (start, end) = (top.max(0), bottom.min(rows));
+                    let nav = nav_row as isize;
+                    (nav >= start && nav < end)
+                        .then(|| (start.max(0) as usize, (end - start).max(1) as usize))
+                })
+            });
             // The cursor-line band is not focus-gated: a pane left in Normal
             // mode keeps showing where its cursor is, so switching panes (and
             // back) doesn't lose your place. Only the cursor block itself is
@@ -183,6 +204,7 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
             };
             views.push(PaneView {
                 bracket_colors: &overlays.bracket_colors[i],
+                block_band,
                 cursor_shape,
                 cursor_unfocused,
                 cursor_visible,
@@ -250,35 +272,104 @@ fn reflow_width_wrapped_blocks(
     }
 }
 
-/// Place native image blocks at their grid row, scaled to fit the pane width
-/// and preserving aspect, skipping any scrolled off the content area.
+/// The on-screen slice of a block whose band starts at viewport row `top_row`
+/// of a pane `pane_h` pixels tall starting at `pane_top`: where to draw it and
+/// which rows of its texture survive clipping.
+struct BlockClip {
+    /// Drawn height in pixels, always the part inside the pane.
+    height: f32,
+    /// Bottom of the sampled texture, `1.0` when nothing is cropped.
+    v_max: f32,
+    /// Top of the sampled texture, `0.0` when nothing is cropped.
+    v_min: f32,
+    /// Top edge in pixels from the window's top.
+    y: f32,
+}
+
+/// Clip a block's `display_h`-tall image to the `band_h` pixels of its reserved
+/// band still available to it, and to the pane, given the image's top edge
+/// `band_top` pixels below the pane's own top.
+///
+/// `band_top` is signed on purpose. A band scrolls above the pane's first row
+/// well before it leaves the viewport, and dropping it at that point makes a
+/// tall block vanish the moment its first line does; cropping the texture
+/// instead keeps the rows still on screen aligned with the grid rows they
+/// belong to. Returns `None` only once no part of the block is visible.
+fn clip_block_band(
+    band_top: f32,
+    display_h: f32,
+    band_h: f32,
+    pane_top: f32,
+    pane_h: f32,
+) -> Option<BlockClip> {
+    if display_h <= 0.0 {
+        return None;
+    }
+    // Pane-relative extent of the drawn image: the band's top, running for as
+    // much of the image as the band holds.
+    let drawn_top = band_top.max(0.0);
+    let drawn_bottom = (band_top + display_h.min(band_h)).min(pane_h);
+    if drawn_bottom <= drawn_top {
+        return None;
+    }
+    Some(BlockClip {
+        height: drawn_bottom - drawn_top,
+        v_max: (drawn_bottom - band_top) / display_h,
+        v_min: (drawn_top - band_top) / display_h,
+        y: pane_top + drawn_top,
+    })
+}
+
+/// Whether `pane` can still absorb `extra` blank rows inserted at absolute row
+/// `abs_row`, the first row past a band that has outgrown its reservation.
+///
+/// False once the row has scrolled into history (the grid only inserts into
+/// its live rows) or once the insert would push the band past the bottom of
+/// the screen. Both cases fall back to clipping the block to its band.
+fn band_has_room(pane: &Pane, abs_row: usize, extra: usize) -> bool {
+    let grid = pane.grid();
+    let Some(live_row) = abs_row.checked_sub(grid.absolute_live_top()) else {
+        return false;
+    };
+    live_row + extra <= grid.rows()
+}
+
+/// Place native image blocks at their anchor row, scaled to fit the pane width
+/// and preserving aspect, cropping any part outside the pane's content area.
 fn image_placements(
     blocks: &[ImageBlock],
     panes: &std::collections::HashMap<PaneId, crate::terminal::pane::Pane>,
     rects: &[(PaneId, Rect)],
     cell_height: f32,
-    content_rows: usize,
 ) -> Vec<ImagePlacement> {
     let mut placements: Vec<ImagePlacement> = Vec::new();
     for img in blocks {
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == img.pane_id) else {
             continue;
         };
-        let pane_rect = App::layout_rect_to_pane(*rect);
-        let scroll_offset = panes
-            .get(&img.pane_id)
-            .map(|p| p.grid().scroll_offset())
-            .unwrap_or(0);
-        let visible_row = img.grid_row as isize - scroll_offset as isize;
-        if visible_row < 0 || visible_row as usize >= content_rows {
+        let Some(pane) = panes.get(&img.pane_id) else {
+            continue;
+        };
+        // While the pane shows the alternate screen, a full-screen app owns
+        // every row of the viewport. A primary-screen block painted on top
+        // would hide the app's own rows (four lines of vim, a htop gauge)
+        // until it exits, so it is not drawn at all until the pane returns.
+        if pane.grid().is_alt_screen() {
             continue;
         }
+        let pane_rect = App::layout_rect_to_pane(*rect);
+        let top_row = pane.grid().to_viewport_row(img.abs_row);
         let nat_w = img.nat_w as f32;
         let nat_h = img.nat_h as f32;
-        let band_h = img.max_rows as f32 * cell_height;
-        let (display_w, display_h) = if nat_w <= 0.0 || nat_h <= 0.0 {
-            (0.0, 0.0)
-        } else if img.fit_to_band {
+        if nat_w <= 0.0 || nat_h <= 0.0 {
+            continue;
+        }
+        // The image is inset below the band's first row by the top padding,
+        // and gets whatever height the band has left after it.
+        let pad_top = cell_height * BLOCK_PAD_TOP_RATIO;
+        let band_top = top_row as f32 * cell_height + pad_top;
+        let band_h = (img.max_rows as f32 * cell_height - pad_top).max(0.0);
+        let (display_w, display_h) = if img.fit_to_band {
             // Images/SVG: scale down to fit the reserved band.
             let scale = (pane_rect.width / nat_w).min(band_h / nat_h).min(1.0);
             (nat_w * scale, nat_h * scale)
@@ -287,24 +378,20 @@ fn image_placements(
             let w = nat_w.min(pane_rect.width);
             (w, nat_h * w / nat_w)
         };
-        // Clip the bottom to the band and the content area (above the status
-        // bar) so a tall block never overruns either.
-        let y = pane_rect.y + visible_row as f32 * cell_height;
-        let available = (pane_rect.y + pane_rect.height - y).max(0.0);
-        let limit = band_h.min(available);
-        let (height, v_max) = if display_h > limit && display_h > 0.0 {
-            (limit, limit / display_h)
-        } else {
-            (display_h, 1.0)
+        let Some(clip) =
+            clip_block_band(band_top, display_h, band_h, pane_rect.y, pane_rect.height)
+        else {
+            continue;
         };
         placements.push(ImagePlacement {
             alpha: if img.closed { CLOSED_BLOCK_ALPHA } else { 1.0 },
-            height,
+            height: clip.height,
             id: img.id,
-            v_max,
+            v_max: clip.v_max,
+            v_min: clip.v_min,
             width: display_w,
             x: pane_rect.x,
-            y,
+            y: clip.y,
         });
     }
     placements
@@ -408,8 +495,8 @@ impl App {
         };
         let (full_cols, full_rows) = renderer.grid_size();
         let (cw, ch) = renderer.cell_size();
-        let band = self.content_band(cw, ch, full_cols, full_rows, status_enabled);
-        let rects = self.tabs.all[self.tabs.active].rects(band.viewport);
+        let viewport = self.content_band(cw, ch, full_cols, full_rows, status_enabled);
+        let rects = self.tabs.all[self.tabs.active].rects(viewport);
         let focused = self.tabs.all[self.tabs.active].focused();
         let mode = self.modes.get(&focused).copied().unwrap_or_default();
         let overlays = self.build_pane_overlays(&rects, renderer.theme());
@@ -433,16 +520,20 @@ impl App {
             .as_ref()
             .map(|p| palette_view(p, self.config.palette_match_underline));
         let which_key_view = which_key_view(&self.pending, self.pending_since);
+        // Gathered before the renderer is held mutably: the bands read app
+        // state the views below borrow alongside it.
+        let focused_bands = self.block_bands(focused);
 
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
         reflow_width_wrapped_blocks(&mut self.image_blocks, &rects, renderer);
-        let placements = image_placements(&self.image_blocks, &self.panes, &rects, ch, band.rows);
+        let placements = image_placements(&self.image_blocks, &self.panes, &rects, ch);
         let views = build_pane_views(PaneViewInput {
             blink_phase: self.blink_phase,
             config: &self.config,
             focused,
+            focused_bands: &focused_bands,
             hovered_pane,
             hovered_url: self.pointer.hovered_url.as_deref(),
             modes: &self.modes,
@@ -471,8 +562,7 @@ impl App {
     // Frame data
     // --------------------------------------------------------------------
 
-    /// The band of the window the panes are laid out in, and how many whole
-    /// cell rows fit inside it.
+    /// The band of the window the panes are laid out in.
     fn content_band(
         &self,
         cw: f32,
@@ -480,7 +570,7 @@ impl App {
         full_cols: usize,
         full_rows: usize,
         status_enabled: bool,
-    ) -> ContentBand {
+    ) -> Rect {
         // Panes sit below the top tabbar (tabbar/menubar) and, when enabled,
         // above the status bar; the grid is centered in whatever space remains
         // below the tabbar, whether or not the status bar eats into it.
@@ -509,22 +599,12 @@ impl App {
         // so a window height that isn't an exact multiple of the cell height
         // never leaves a dead, un-drawable strip pinned to one edge.
         let (rows, top_pad) = super::content_band(h - top_h_on_screen - status_h, ch);
-        let layout_vp = Rect::new(
+        Rect::new(
             0.0,
             top_h_on_screen + top_pad,
             w,
             (rows as f32 * ch).max(1.0),
-        );
-        let content_rows = if ch > 0.0 {
-            (layout_vp.height / ch).floor() as usize
-        } else {
-            1
-        };
-
-        ContentBand {
-            rows: content_rows,
-            viewport: layout_vp,
-        }
+        )
     }
 
     /// Precompute the per-pane overlay data the pane views borrow as slices:
@@ -645,8 +725,21 @@ impl App {
             .panes()
             .into_iter()
             .collect();
+        // Panes currently showing the alternate screen: their WebView tiles
+        // are hidden for the same reason `image_placements` skips them (a
+        // full-screen app owns the viewport), and they reappear once the app
+        // exits. Tracked in the layout key so the flip itself repositions.
+        let alt_panes: std::collections::HashSet<PaneId> = self
+            .panes
+            .iter()
+            .filter(|(_, pane)| pane.grid().is_alt_screen())
+            .map(|(id, _)| *id)
+            .collect();
         if let Some(pane) = self.panes.get(&focused) {
-            let scroll_offset = pane.grid().scroll_offset();
+            // Tiles are anchored absolutely, so what moves them is the absolute
+            // row currently at the top of the viewport: it advances both when
+            // the user scrolls and when new output pushes lines into history.
+            let viewport_top = pane.grid().to_absolute_row(0);
 
             let focused_rect = rects.iter().find(|(id, _)| *id == focused);
             let pane_y = focused_rect.map(|(_, r)| r.y).unwrap_or(0.0);
@@ -654,15 +747,24 @@ impl App {
             // Repositioning every tile does a GTK round-trip per WebView; only do
             // it when the scroll position or layout actually changed, otherwise
             // plain typing (which never moves tiles) stalls on GTK IPC.
-            let layout = (scroll_offset, full_rows, ch.to_bits(), pane_y.to_bits());
-            if self.last_tile_layout != Some(layout) {
+            let mut alt_key: Vec<PaneId> = alt_panes.iter().copied().collect();
+            alt_key.sort_by_key(|id| id.0);
+            let layout = (
+                viewport_top,
+                full_rows,
+                ch.to_bits(),
+                pane_y.to_bits(),
+                alt_key,
+            );
+            if self.last_tile_layout.as_ref() != Some(&layout) {
                 self.last_tile_layout = Some(layout);
                 self.webview_mgr.reposition_tiles(
-                    scroll_offset,
+                    viewport_top,
                     full_rows,
                     ch,
                     pane_y,
                     &active_panes,
+                    &alt_panes,
                 );
             }
         }
@@ -682,6 +784,7 @@ impl App {
         let grid = build_settings_grid(page, renderer.theme(), cols, rows);
         let view = PaneView {
             bracket_colors: &[],
+            block_band: None,
             cursor_shape: CursorShape::Block,
             cursor_unfocused: false,
             cursor_visible: true,
@@ -758,27 +861,27 @@ impl App {
                     // Images/SVG scale to fit the band; text shows at native
                     // size and clips. Width-wrapped kinds keep their source for
                     // re-rasterization on resize.
-                    let (dims, reflow, fit_to_band, max_rows) = match &source {
+                    // The band is always the rows the grid actually reserved
+                    // (`entry.reserved_rows`), never a constant re-picked here:
+                    // any disagreement shows up as dead space between the block
+                    // and the next prompt, or as a block overdrawing it.
+                    let max_rows = entry.reserved_rows;
+                    let (dims, reflow, fit_to_band) = match &source {
                         NativeImage::Markdown(md) => (
                             renderer.upload_markdown(id, md, pane_rect.width),
                             Some(ReflowSource::Markdown(md.clone())),
                             false,
-                            BLOCK_RESERVE_ROWS,
                         ),
                         NativeImage::Raster(bytes) => {
-                            (renderer.upload_image(id, bytes), None, true, MAX_IMAGE_ROWS)
+                            (renderer.upload_image(id, bytes), None, true)
                         }
-                        NativeImage::Svg(markup) => (
-                            renderer.upload_svg(id, markup.as_bytes()),
-                            None,
-                            true,
-                            BLOCK_RESERVE_ROWS,
-                        ),
+                        NativeImage::Svg(markup) => {
+                            (renderer.upload_svg(id, markup.as_bytes()), None, true)
+                        }
                         NativeImage::Text(text) => (
                             renderer.upload_text(id, text, pane_rect.width),
                             Some(ReflowSource::Text(text.clone())),
                             false,
-                            BLOCK_RESERVE_ROWS,
                         ),
                     };
                     if let Some((nat_w, nat_h)) = dims {
@@ -787,7 +890,7 @@ impl App {
                             block_index: entry.block_index,
                             closed: entry.closed,
                             fit_to_band,
-                            grid_row: entry.grid_row,
+                            abs_row: entry.abs_row,
                             id,
                             max_rows,
                             nat_h,
@@ -799,6 +902,25 @@ impl App {
                         });
                         if debug {
                             eprintln!("winter: image block id={id} {nat_w}x{nat_h}");
+                        }
+                        // Markdown and text reserve the default band, because
+                        // their height depends on font metrics and wrap width
+                        // that the PTY thread has no way to know. Now that the
+                        // content is laid out the real height is known, so give
+                        // back what it did not need (or take the rows it turned
+                        // out to be short). Images and SVG skip this: their band
+                        // was already reserved from their intrinsic size, and
+                        // they scale to fit whatever it is.
+                        //
+                        // Only for one-shot blocks. A live block is re-measured
+                        // on every patch, so fitting it here would make the rows
+                        // below it jitter as its content streams in.
+                        let one_shot = entry.kind == BlockKind::Content;
+                        if one_shot && !fit_to_band {
+                            let pos = self.image_blocks.len() - 1;
+                            let content_h =
+                                native_content_height(nat_w as f32, nat_h as f32, pane_rect.width);
+                            self.set_band_rows(*pane_id, pos, band_fit_rows(content_h, ch));
                         }
                     } else if debug {
                         eprintln!("winter: image decode failed for block");
@@ -818,7 +940,7 @@ impl App {
                 )
             };
             let params = webview::TileParams {
-                grid_row: entry.grid_row,
+                abs_row: entry.abs_row,
                 html,
                 x: pane_rect.x as i32,
                 y: pane_rect.y as i32,
@@ -835,6 +957,177 @@ impl App {
             }
         }
         self.last_tile_layout = None;
+    }
+
+    /// Resize the band of `self.image_blocks[pos]` to `rows`, inserting or
+    /// removing grid rows so the blank band behind a block matches the height
+    /// its content actually needs.
+    ///
+    /// Everything anchored below the band follows: later blocks, WebView tiles,
+    /// the pane's pending anchors and queued entries, and the shell's cursor.
+    /// Growing is refused when the taller band would not fit on screen (the
+    /// block is clipped instead, as before); shrinking always fits by
+    /// construction.
+    fn set_band_rows(&mut self, pane_id: PaneId, pos: usize, rows: usize) {
+        let Some(block) = self.image_blocks.get(pos) else {
+            return;
+        };
+        let (have, abs_row) = (block.max_rows, block.abs_row);
+        if rows == have {
+            return;
+        }
+        if rows > have {
+            let add = rows - have;
+            let at = abs_row + have;
+            if !self
+                .panes
+                .get(&pane_id)
+                .is_some_and(|p| band_has_room(p, at, add))
+            {
+                return;
+            }
+            if let Some(pane) = self.panes.get_mut(&pane_id) {
+                pane.insert_band_rows(at, add);
+            }
+            self.shift_blocks_at_or_below(pane_id, at, add as isize);
+        } else {
+            let spare = have - rows;
+            // The first row the block does not need; everything from there
+            // down closes up against it.
+            let at = abs_row + rows;
+            if let Some(pane) = self.panes.get_mut(&pane_id) {
+                pane.remove_band_rows(at, spare);
+            }
+            self.shift_blocks_at_or_below(pane_id, at, -(spare as isize));
+        }
+        self.image_blocks[pos].max_rows = rows;
+        self.last_tile_layout = None;
+    }
+
+    /// Drop every block of `pane_id` whose reserved band overlaps the erased
+    /// absolute row span `[start, end)`.
+    ///
+    /// A block draws an image over grid rows it does not own; erasing those
+    /// rows (a `clear`, or any full-screen erase) blanks the grid but cannot
+    /// reach the image, so without this the block stays on screen painted over
+    /// whatever the shell writes next.
+    pub(crate) fn drop_blocks_in(&mut self, pane_id: PaneId, (start, end): (usize, usize)) {
+        self.retain_image_blocks(|block| {
+            block.pane_id != pane_id
+                || block.abs_row >= end
+                || block.abs_row + block.max_rows <= start
+        });
+        self.webview_mgr.remove_tiles_in(pane_id, (start, end));
+    }
+
+    /// Drop the rendered blocks whose source segments the scrollback's
+    /// retention budget elided: the content is gone, so the texture and the
+    /// WebView tile can never show anything again, and an image block's
+    /// decoded texture is megabytes that would otherwise never come back.
+    pub(crate) fn drop_elided_blocks(&mut self, elided: &[(PaneId, usize, usize)]) {
+        for &(pane_id, block_index, segment_index) in elided {
+            self.retain_image_blocks(|block| {
+                block.pane_id != pane_id
+                    || block.block_index != block_index
+                    || block.segment_index != segment_index
+            });
+            self.webview_mgr
+                .remove_tile(pane_id, block_index, segment_index);
+        }
+    }
+
+    /// Push every absolute-row anchor the app holds for `pane_id` through a
+    /// resize reflow's row remap (see [`winter_render::RowRemap`]): image
+    /// blocks, WebView tiles, the selection and its Visual anchor, the search
+    /// cursor, vim marks and the jump/changelists. A resize rebuilds the live
+    /// screen by replaying logical lines, so a line that re-wraps differently
+    /// moves every row below it — an anchor left at its old row draws its
+    /// block over the wrong content (the "block detached after resize"
+    /// overlap).
+    pub(crate) fn remap_pane_anchors(&mut self, pane_id: PaneId, remap: &winter_render::RowRemap) {
+        let map = |row: usize| remap.map(row);
+        for block in &mut self.image_blocks {
+            if block.pane_id == pane_id {
+                block.abs_row = map(block.abs_row);
+            }
+        }
+        self.webview_mgr.remap_tiles(pane_id, remap);
+        if let Some(span) = &mut self.selection.span {
+            if span.pane == pane_id {
+                span.start_row = map(span.start_row);
+                span.end_row = map(span.end_row);
+            }
+        }
+        // The Visual anchor belongs to the focused pane alone (it is held
+        // only while that pane is in Visual mode), so it follows this remap
+        // only when that is the pane being remapped.
+        let focused = self.tabs.all[self.tabs.active].focused();
+        if pane_id == focused {
+            if let Some((row, _)) = &mut self.selection.visual_anchor {
+                *row = map(*row);
+            }
+        }
+        if let Some(last) = &mut self.selection.last_visual {
+            if last.pane == pane_id {
+                last.anchor.0 = map(last.anchor.0);
+                last.cursor.0 = map(last.cursor.0);
+            }
+        }
+        if let Some((search_pane, (row, _))) = &mut self.search.current {
+            if *search_pane == pane_id {
+                *row = map(*row);
+            }
+        }
+        for ((mark_pane, _), (row, _)) in self.vim.marks.iter_mut() {
+            if *mark_pane == pane_id {
+                *row = map(*row);
+            }
+        }
+        if let Some(list) = self.vim.jump_lists.get_mut(&pane_id) {
+            list.remap_rows(&map);
+        }
+        if let Some(list) = self.vim.change_lists.get_mut(&pane_id) {
+            list.remap_rows(&map);
+        }
+        self.last_tile_layout = None;
+        self.dirty = true;
+    }
+
+    /// Keep only the image blocks matching `keep`, freeing the GPU texture of
+    /// every dropped one.
+    ///
+    /// An `ImageBlock` entry and its texture have separate lifetimes: the
+    /// entry names the block, the texture caches its decoded pixels under the
+    /// renderer's id. Every removal path must go through here, or the texture
+    /// outlives its block for the life of the process — a few megabytes each
+    /// for real screenshots, with nothing left on screen to show for them.
+    pub(crate) fn retain_image_blocks(&mut self, keep: impl Fn(&ImageBlock) -> bool) {
+        let removed: Vec<ImageBlock> = self
+            .image_blocks
+            .extract_if(.., |block| !keep(block))
+            .collect();
+        if removed.is_empty() {
+            return;
+        }
+        if let Some(renderer) = self.renderer.as_mut() {
+            for block in &removed {
+                renderer.free_image(block.id);
+            }
+        }
+        self.last_tile_layout = None;
+        self.dirty = true;
+    }
+
+    /// Move every block and WebView tile of `pane_id` anchored at or below
+    /// absolute `row` by `delta` rows, after a band above them changed size.
+    fn shift_blocks_at_or_below(&mut self, pane_id: PaneId, row: usize, delta: isize) {
+        for block in &mut self.image_blocks {
+            if block.pane_id == pane_id && block.abs_row >= row {
+                block.abs_row = block.abs_row.saturating_add_signed(delta);
+            }
+        }
+        self.webview_mgr
+            .shift_tiles_at_or_below(pane_id, row, delta);
     }
 
     pub(crate) fn update_live_tiles(&mut self, patched: &[(PaneId, usize)]) {
@@ -886,44 +1179,22 @@ impl App {
                     NativeImage::Text(text) => renderer.upload_text(id, text, pane_rect.width),
                 };
                 if let Some((nat_w, nat_h)) = dims {
-                    let (add, insert_at) = {
-                        let block = &mut self.image_blocks[pos];
-                        block.closed = entry.closed;
-                        block.nat_w = nat_w;
-                        block.nat_h = nat_h;
-                        block.rastered_width = pane_rect.width.floor() as u32;
-                        block.reflow = match &source {
-                            NativeImage::Markdown(md) => Some(ReflowSource::Markdown(md.clone())),
-                            NativeImage::Text(text) => Some(ReflowSource::Text(text.clone())),
-                            NativeImage::Raster(_) | NativeImage::Svg(_) => None,
-                        };
-                        let growth = band_growth_rows(nat_h as f32, ch, block.max_rows);
-                        (growth, block.grid_row + block.max_rows)
+                    let block = &mut self.image_blocks[pos];
+                    block.closed = entry.closed;
+                    block.nat_w = nat_w;
+                    block.nat_h = nat_h;
+                    block.rastered_width = pane_rect.width.floor() as u32;
+                    block.reflow = match &source {
+                        NativeImage::Markdown(md) => Some(ReflowSource::Markdown(md.clone())),
+                        NativeImage::Text(text) => Some(ReflowSource::Text(text.clone())),
+                        NativeImage::Raster(_) | NativeImage::Svg(_) => None,
                     };
-                    // A patch can grow the content past its reserved band:
-                    // insert the missing rows, shifting the grid rows, later
-                    // anchors, and tiles below: instead of clipping. Only
-                    // while the grown band still fits on screen; larger bands
-                    // keep the clip-to-available behavior.
-                    let grid_rows = self
-                        .panes
-                        .get(pane_id)
-                        .map(|p| p.grid().rows())
-                        .unwrap_or(0);
-                    if add > 0 && insert_at + add <= grid_rows {
-                        self.image_blocks[pos].max_rows += add;
-                        if let Some(pane) = self.panes.get_mut(pane_id) {
-                            pane.insert_band_rows(insert_at, add);
-                        }
-                        for other in &mut self.image_blocks {
-                            if other.pane_id == *pane_id && other.grid_row >= insert_at {
-                                other.grid_row += add;
-                            }
-                        }
-                        self.webview_mgr
-                            .shift_tiles_at_or_below(*pane_id, insert_at, add);
-                        self.last_tile_layout = None;
-                    }
+                    // A patch can push the content past its reserved band, so
+                    // grow to fit instead of clipping. Grow-only: a live
+                    // block's height moves with every patch, and shrinking it
+                    // back each time would make the rows below it jitter.
+                    let want = band_fit_rows(nat_h as f32, ch).max(block.max_rows);
+                    self.set_band_rows(*pane_id, pos, want);
                 }
                 continue;
             }
@@ -951,41 +1222,38 @@ impl App {
         let ch = renderer.cell_size().1;
 
         for report in self.webview_mgr.drain_height_reports() {
-            let Some((grid_row, reserved_rows)) = self.webview_mgr.tile_band(
+            let Some((abs_row, reserved_rows)) = self.webview_mgr.tile_band(
                 report.pane_id,
                 report.block_index,
                 report.segment_index,
             ) else {
                 continue;
             };
-            let add = band_growth_rows(report.height_px, ch, reserved_rows);
+            // Grow-only, like a live block: a WebView re-reports its height on
+            // every patch, and shrinking on each one would jitter the rows
+            // below it.
+            let want = band_fit_rows(report.height_px, ch).max(reserved_rows);
+            let add = want - reserved_rows;
             if add == 0 {
                 continue;
             }
-            let insert_at = grid_row + reserved_rows;
-            let grid_rows = self
+            let insert_at = abs_row + reserved_rows;
+            let has_room = self
                 .panes
                 .get(&report.pane_id)
-                .map(|p| p.grid().rows())
-                .unwrap_or(0);
-            if insert_at + add > grid_rows {
+                .is_some_and(|p| band_has_room(p, insert_at, add));
+            if !has_room {
                 continue;
             }
             if let Some(pane) = self.panes.get_mut(&report.pane_id) {
                 pane.insert_band_rows(insert_at, add);
             }
-            for block in &mut self.image_blocks {
-                if block.pane_id == report.pane_id && block.grid_row >= insert_at {
-                    block.grid_row += add;
-                }
-            }
-            self.webview_mgr
-                .shift_tiles_at_or_below(report.pane_id, insert_at, add);
+            self.shift_blocks_at_or_below(report.pane_id, insert_at, add as isize);
             self.webview_mgr.resize_tile(
                 report.pane_id,
                 report.block_index,
                 report.segment_index,
-                reserved_rows + add,
+                want,
                 ch,
             );
             self.last_tile_layout = None;
@@ -1363,18 +1631,30 @@ fn mix_rgb(a: ThemeRgb, b: ThemeRgb, t: f32) -> Color {
     })
 }
 
-/// Extra rows a patched block needs beyond its reserved band: the content's
-/// rastered height in whole cell rows minus what is already reserved, capped
-/// so a growing block can never reserve more rows than the image cap: a
-/// runaway patch stream must not eat the whole screen.
-fn band_growth_rows(nat_h: f32, cell_height: f32, reserved: usize) -> usize {
-    if cell_height <= 0.0 || nat_h <= 0.0 {
-        return 0;
+/// The on-screen height of a natively-drawn text block (markdown, CSV, JSON)
+/// rasterized at `nat_w` x `nat_h` into a pane `pane_w` wide.
+///
+/// Mirrors the non-`fit_to_band` branch of [`image_placements`]: the block is
+/// drawn at its natural size, scaled down only if it is wider than the pane.
+/// Both must agree, or the band reserved for a block and the pixels it draws
+/// disagree by exactly that scale factor.
+fn native_content_height(nat_w: f32, nat_h: f32, pane_w: f32) -> f32 {
+    if nat_w <= 0.0 {
+        return 0.0;
     }
-    let needed = (nat_h / cell_height).ceil() as usize;
-    needed
-        .saturating_sub(reserved)
-        .min(MAX_IMAGE_ROWS.saturating_sub(reserved))
+    let w = nat_w.min(pane_w);
+    nat_h * w / nat_w
+}
+
+/// Whole cell rows a block whose content rasterized to `content_h` pixels
+/// should reserve: enough to show all of it, never less than one row, and
+/// never more than [`MAX_IMAGE_ROWS`] so a runaway patch stream cannot eat the
+/// whole screen.
+fn band_fit_rows(content_h: f32, cell_height: f32) -> usize {
+    if cell_height <= 0.0 || content_h <= 0.0 {
+        return 1;
+    }
+    ((content_h / cell_height).ceil() as usize).clamp(1, MAX_IMAGE_ROWS)
 }
 
 /// The GPU-renderable source for a block's richest representation, or `None`
@@ -1449,15 +1729,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_band_growth_rows_returns_only_the_overflow_capped_at_the_image_rows() {
-        // With a 10px cell: 130px content over a 12-row band needs exactly 1
-        // more row; a runaway stream is capped at the image row limit instead
-        // of eating the screen; content within the band asks for nothing.
-        assert_eq!(band_growth_rows(130.0, 10.0, 12), 1);
-        assert_eq!(band_growth_rows(100.0, 10.0, 12), 0);
-        assert_eq!(band_growth_rows(500.0, 10.0, 12), MAX_IMAGE_ROWS - 12);
-        assert_eq!(band_growth_rows(300.0, 10.0, MAX_IMAGE_ROWS), 0);
-        assert_eq!(band_growth_rows(0.0, 10.0, 12), 0);
+    fn test_band_fit_rows_covers_the_content_within_the_image_row_cap() {
+        // With a 10px cell: 130px of content needs 13 whole rows, a partial row
+        // still costs a whole one, and a runaway stream is capped at the image
+        // row limit rather than eating the screen.
+        assert_eq!(band_fit_rows(130.0, 10.0), 13);
+        assert_eq!(band_fit_rows(131.0, 10.0), 14);
+        assert_eq!(band_fit_rows(100.0, 10.0), 10);
+        assert_eq!(band_fit_rows(5000.0, 10.0), MAX_IMAGE_ROWS);
+        // A block always occupies at least one row, however small or unmeasured
+        // its content: a zero-row band would put the next prompt on top of it.
+        assert_eq!(band_fit_rows(1.0, 10.0), 1);
+        assert_eq!(band_fit_rows(0.0, 10.0), 1);
+        assert_eq!(band_fit_rows(100.0, 0.0), 1);
     }
 
     #[test]
@@ -1505,5 +1789,232 @@ mod tests {
             effective_cursor_shape(false, None, CursorShape::Bar),
             CursorShape::Bar
         );
+    }
+
+    #[test]
+    fn test_clip_block_band_crops_the_top_instead_of_dropping_a_half_scrolled_block() {
+        // Regression: a band whose first row scrolls above the pane used to be
+        // skipped outright, so a tall block popped out of existence the moment
+        // its top line left the viewport instead of sliding off it. Starting
+        // 20px above a 100px-tall image means the top fifth is cropped and the
+        // rest is drawn flush against the pane's top edge.
+        let clip = clip_block_band(-20.0, 100.0, 100.0, 50.0, 400.0).expect("still visible");
+        assert_eq!(clip.y, 50.0, "drawn flush with the pane's top edge");
+        assert_eq!(clip.height, 80.0);
+        assert_eq!(clip.v_min, 0.2);
+        assert_eq!(clip.v_max, 1.0);
+    }
+
+    #[test]
+    fn test_clip_block_band_crops_the_bottom_at_the_pane_edge() {
+        // A band starting 30px from the bottom of a 100px-tall pane shows only
+        // its first 30px, cropped rather than squashed.
+        let clip = clip_block_band(70.0, 100.0, 100.0, 0.0, 100.0).expect("still visible");
+        assert_eq!(clip.y, 70.0);
+        assert_eq!(clip.height, 30.0);
+        assert_eq!(clip.v_min, 0.0);
+        assert_eq!(clip.v_max, 0.3);
+    }
+
+    #[test]
+    fn test_clip_block_band_crops_content_taller_than_its_reserved_band() {
+        // Text/markdown draws at native size: the part past the reserved band
+        // is cropped so the prompt below it is never overdrawn.
+        let clip = clip_block_band(0.0, 200.0, 50.0, 0.0, 400.0).expect("visible");
+        assert_eq!(clip.height, 50.0);
+        assert_eq!(clip.v_max, 0.25);
+    }
+
+    #[test]
+    fn test_clip_block_band_drops_a_block_fully_outside_the_pane() {
+        // Scrolled entirely above, and entirely below, the pane.
+        assert!(clip_block_band(-100.0, 100.0, 100.0, 0.0, 400.0).is_none());
+        assert!(clip_block_band(400.0, 100.0, 100.0, 0.0, 400.0).is_none());
+        // A zero-height image has nothing to draw and no valid `v` range.
+        assert!(clip_block_band(0.0, 0.0, 100.0, 0.0, 400.0).is_none());
+    }
+    #[test]
+    fn test_block_top_padding_comes_out_of_the_band_not_out_of_the_prompt_below() {
+        // The image is inset below its band's first row, and gives up that
+        // much of the band's height rather than growing past it: the bottom
+        // edge must still land inside the reservation, or the padding would
+        // reappear as a gap under every block instead of above it.
+        let cell_height = 20.0;
+        let band_rows = 12.0;
+        let pad = cell_height * BLOCK_PAD_TOP_RATIO;
+        let band_top = pad;
+        let band_h = band_rows * cell_height - pad;
+        assert!(pad > 0.0, "there is real padding to check");
+
+        let clip = clip_block_band(band_top, band_h, band_h, 0.0, 1000.0).expect("visible");
+        assert_eq!(clip.y, pad, "the image starts below the band's first row");
+        assert_eq!(
+            clip.y + clip.height,
+            band_rows * cell_height,
+            "and still ends inside the reserved band"
+        );
+        assert_eq!(clip.v_min, 0.0, "nothing is cropped by the padding itself");
+        assert_eq!(clip.v_max, 1.0);
+    }
+
+    /// An `ImageBlock` for `pane` anchored at `abs_row`, spanning `max_rows`
+    /// rows of source segment `block_index`/`segment_index`, with a rasterized
+    /// size that makes it placeable.
+    fn image_block(
+        pane: PaneId,
+        abs_row: usize,
+        block_index: usize,
+        segment_index: usize,
+    ) -> ImageBlock {
+        ImageBlock {
+            abs_row,
+            block_index,
+            closed: false,
+            fit_to_band: true,
+            id: block_index as u64,
+            max_rows: 4,
+            nat_h: 40,
+            nat_w: 80,
+            pane_id: pane,
+            rastered_width: 400,
+            reflow: None,
+            segment_index,
+        }
+    }
+
+    /// An app with one live `cat` pane at `focused`, plus one image block per
+    /// `(abs_row, block_index, segment_index)` anchor, laid out over a
+    /// 400x300 rect. Building the blocks inside sidesteps the chicken-and-egg
+    /// of needing the pane id before the app exists.
+    fn app_with_image_blocks(
+        anchors: &[(usize, usize, usize)],
+    ) -> (App, PaneId, Vec<(PaneId, Rect)>) {
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        let pane = crate::terminal::pane::Pane::with_command(
+            40,
+            8,
+            portable_pty::CommandBuilder::new("cat"),
+            winter_render::MAX_SCROLLBACK,
+        )
+        .expect("test pane spawn");
+        app.panes.insert(id, pane);
+        app.image_blocks = anchors
+            .iter()
+            .map(|&(abs_row, block_index, segment_index)| {
+                image_block(id, abs_row, block_index, segment_index)
+            })
+            .collect();
+        let rects = vec![(id, Rect::new(0.0, 0.0, 400.0, 300.0))];
+        (app, id, rects)
+    }
+
+    #[test]
+    fn test_image_placements_skip_a_pane_on_the_alternate_screen() {
+        // Regression: a block anchored in the primary screen kept drawing on
+        // top of vim/less/htop once the pane entered the alternate screen,
+        // hiding the rows the full-screen app had drawn there.
+        let (mut app, pane_id, rects) = app_with_image_blocks(&[(1, 0, 1)]);
+
+        let placements = image_placements(&app.image_blocks, &app.panes, &rects, 20.0);
+        assert_eq!(placements.len(), 1, "fixture: the block places normally");
+
+        app.panes
+            .get_mut(&pane_id)
+            .unwrap()
+            .grid_mut()
+            .enter_alt_screen();
+        let placements = image_placements(&app.image_blocks, &app.panes, &rects, 20.0);
+        assert!(
+            placements.is_empty(),
+            "an alt-screen pane must not have primary-screen blocks painted over it"
+        );
+
+        app.panes
+            .get_mut(&pane_id)
+            .unwrap()
+            .grid_mut()
+            .leave_alt_screen();
+        let placements = image_placements(&app.image_blocks, &app.panes, &rects, 20.0);
+        assert_eq!(
+            placements.len(),
+            1,
+            "leaving the alt screen restores the block"
+        );
+    }
+
+    #[test]
+    fn test_drop_elided_blocks_drops_only_the_elided_segment() {
+        // Regression: an elided block's ImageBlock entry (and its GPU texture)
+        // stayed forever, because nothing connected the scrollback's retention
+        // budget to the rendered block.
+        let (mut app, pane_id, _rects) = app_with_image_blocks(&[(2, 0, 1), (9, 1, 1)]);
+
+        app.drop_elided_blocks(&[(pane_id, 0, 1)]);
+
+        assert_eq!(app.image_blocks.len(), 1);
+        assert_eq!(app.image_blocks[0].block_index, 1, "the live block stays");
+        assert!(app.dirty, "dropping a rendered block must request a redraw");
+    }
+
+    #[test]
+    fn test_drop_blocks_in_keeps_blocks_outside_the_erased_span() {
+        let (mut app, pane_id, _rects) = app_with_image_blocks(&[(2, 0, 1), (10, 1, 1)]);
+
+        // Erase rows 0..5: only the band at row 2 overlaps.
+        app.drop_blocks_in(pane_id, (0, 5));
+
+        assert_eq!(app.image_blocks.len(), 1);
+        assert_eq!(app.image_blocks[0].abs_row, 10);
+    }
+
+    #[test]
+    fn test_pane_resize_remaps_image_block_anchors() {
+        // Regression (#4, "blocks detach on a resize that re-wraps"): a
+        // 30-char line above the block re-wrapped from 2 rows to 3 when the
+        // grid narrowed, but the anchor kept row 2 and the image drew over
+        // the re-wrapped line's last row. The reflow's row remap must carry
+        // the anchor down to the band's own first blank row.
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        let mut pane = crate::terminal::pane::Pane::with_command(
+            20,
+            8,
+            portable_pty::CommandBuilder::new("cat"),
+            winter_render::MAX_SCROLLBACK,
+        )
+        .expect("test pane spawn");
+        {
+            let grid = pane.grid_mut();
+            let long = "abcdefghijklmnopqrstuvwxyz0123"; // 30 chars: rows 0-1
+            assert_eq!(long.chars().count(), 30);
+            for ch in long.chars() {
+                grid.print(ch);
+            }
+            grid.carriage_return();
+            grid.line_feed(); // the band's first row: 2
+            for _ in 0..3 {
+                grid.line_feed(); // blank band rows 2-4
+            }
+            for ch in "tail".chars() {
+                grid.print(ch); // row 5
+            }
+        }
+        app.panes.insert(id, pane);
+        app.image_blocks.push(image_block(id, 2, 0, 1));
+
+        let pane = app.panes.get_mut(&id).unwrap();
+        pane.resize(10, 8); // the 30 chars now wrap rows 0-2
+        for remap in pane.take_row_remaps() {
+            app.remap_pane_anchors(id, &remap);
+        }
+
+        let grid = app.panes[&id].grid();
+        assert_eq!(
+            app.image_blocks[0].abs_row,
+            grid.to_absolute_row(3),
+            "the anchor must follow the band below the re-wrapped line"
+        );
+        assert!(app.dirty, "a remapped anchor must request a redraw");
     }
 }

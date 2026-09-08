@@ -1,6 +1,6 @@
 //! Resizing the grid and reflowing wrapped rows to the new width.
 
-use super::{Cell, CellWidth, Style};
+use super::{Cell, CellWidth, RowRemap, Style};
 use super::{Cursor, Grid};
 
 // ========================================================================
@@ -31,22 +31,28 @@ impl Grid {
     }
     /// The hanging indent width of absolute line `abs_row`, in columns.
     pub fn absolute_row_wrap_indent(&self, abs_row: usize) -> usize {
-        if abs_row < self.scrollback_wrap_indent.len() {
-            self.scrollback_wrap_indent[abs_row]
+        let Some(row) = self.to_retained_row(abs_row) else {
+            return 0;
+        };
+        if row < self.scrollback_wrap_indent.len() {
+            self.scrollback_wrap_indent[row]
         } else {
-            let live_row = abs_row.saturating_sub(self.scrollback.len());
+            let live_row = row.saturating_sub(self.scrollback.len());
             self.row_wrap_indent.get(live_row).copied().unwrap_or(0)
         }
     }
     /// Whether absolute line `abs_row` soft-wrapped into the line below.
     pub fn absolute_row_wraps(&self, abs_row: usize) -> bool {
-        if abs_row < self.scrollback_wrapped.len() {
-            self.scrollback_wrapped[abs_row]
-        } else if abs_row < self.scrollback.len() {
+        let Some(row) = self.to_retained_row(abs_row) else {
+            return false;
+        };
+        if row < self.scrollback_wrapped.len() {
+            self.scrollback_wrapped[row]
+        } else if row < self.scrollback.len() {
             self.absolute_cell(abs_row, self.cols.saturating_sub(1))
                 .is_some_and(|cell| cell.ch != '\0' && !cell.ch.is_whitespace())
         } else {
-            let live = abs_row - self.scrollback.len();
+            let live = row - self.scrollback.len();
             self.row_wrapped.get(live).copied().unwrap_or(false)
         }
     }
@@ -78,7 +84,9 @@ impl Grid {
     /// `cols`×`rows` grid, replaying its logical lines through a throwaway
     /// [`Grid`] so wrapping, wide cells, and the cursor position are recomputed
     /// identically to [`Grid::resize`]. Returns the new cells, the new per-row
-    /// wrap flags, and the recomputed cursor `(row, col)`.
+    /// wrap flags, the recomputed cursor `(row, col)`, and the row remap of
+    /// the replay — with rows expressed relative to the new live top, so the
+    /// caller can rebase them into its own absolute address space.
     ///
     /// This is the shared reflow core, factored out so that a stored
     /// alternate-screen (primary) buffer can be reflowed alongside the live
@@ -89,7 +97,7 @@ impl Grid {
         wrapped: &[bool],
         cursor: (usize, usize),
         new_size: (usize, usize),
-    ) -> (Vec<Cell>, Vec<bool>, usize, usize) {
+    ) -> (Vec<Cell>, Vec<bool>, usize, usize, Option<RowRemap>) {
         let (old_cols, old_rows) = old_size;
         let (cols, rows) = new_size;
         let (cur_row, cur_col) = cursor;
@@ -99,7 +107,18 @@ impl Grid {
         g.cursor.row = cur_row.min(old_rows.saturating_sub(1));
         g.cursor.col = cur_col.min(old_cols.saturating_sub(1));
         g.resize(cols, rows);
-        (g.cells, g.row_wrapped, g.cursor.row, g.cursor.col)
+        let remap = g.take_row_remap().map(|remap| {
+            let scrolled = g.scrollback.len();
+            RowRemap {
+                old_live_top: 0,
+                new_abs: remap
+                    .new_abs
+                    .into_iter()
+                    .map(|abs| abs.saturating_sub(scrolled))
+                    .collect(),
+            }
+        });
+        (g.cells, g.row_wrapped, g.cursor.row, g.cursor.col, remap)
     }
     /// Resize the grid, reflowing the live screen: soft-wrapped rows are merged
     /// back into logical lines and re-wrapped at the new width, so narrowing no
@@ -126,10 +145,15 @@ impl Grid {
         // 1. Collect logical lines from the live grid, dropping wide-char spacers
         //    (the lead glyph is replayed and recreates them) and trimming trailing
         //    blank padding from each line's final row. Track the cursor's logical
-        //    position so it can be restored after re-wrapping.
+        //    position so it can be restored after re-wrapping. `line_starts`
+        //    records the row each logical line began at, so the row remap below
+        //    can push pre-resize anchors onto the rows their content lands on.
         let old_cols = self.cols;
         let old_rows = self.rows;
+        let old_live_top = self.absolute_live_top();
         let mut lines: Vec<Vec<Cell>> = Vec::new();
+        let mut line_starts: Vec<usize> = Vec::new();
+        let mut current_line_start = 0usize;
         let mut cur: Vec<Cell> = Vec::new();
         let mut cursor_target: Option<(usize, usize)> = None;
         for r in 0..self.rows {
@@ -158,10 +182,13 @@ impl Grid {
                     cur.pop();
                 }
                 lines.push(std::mem::take(&mut cur));
+                line_starts.push(current_line_start);
+                current_line_start = r + 1;
             }
         }
         if !cur.is_empty() {
             lines.push(cur);
+            line_starts.push(current_line_start);
         }
         // Drop trailing empty lines, but never past the cursor's line.
         let keep = lines
@@ -171,6 +198,7 @@ impl Grid {
             .unwrap_or(0)
             .max(cursor_target.map_or(0, |(li, _)| li + 1));
         lines.truncate(keep);
+        line_starts.truncate(keep);
 
         // 2. Reset to a blank grid at the new size (scrollback retained), then
         //    replay the logical lines through `print`, which rebuilds wrapping,
@@ -188,7 +216,16 @@ impl Grid {
         let saved_style = self.style;
         let saved_link = self.active_link;
         let mut new_cursor: Option<(usize, usize)> = None;
+        // The absolute row each logical line starts at after replay, parallel
+        // to `lines`: what the row remap maps old line starts onto.
+        let mut line_new_abs: Vec<usize> = Vec::with_capacity(lines.len());
         for (i, line) in lines.iter().enumerate() {
+            // The cursor sits at this line's first row here: after the previous
+            // line's CR/LF (which also cleared any deferred wrap), or at the
+            // fresh (0, 0) for the first line. `print` on the first glyph may
+            // scroll the screen, and `to_absolute_row` absorbs that, so the
+            // capture is taken before any of this line's printing.
+            line_new_abs.push(self.to_absolute_row(self.cursor.row));
             for (j, cell) in line.iter().enumerate() {
                 self.style = cell.style;
                 self.active_link = cell.style.link;
@@ -232,6 +269,37 @@ impl Grid {
         self.cursor.col = cc.min(cols.saturating_sub(1));
         self.cursor.wrap_pending = false;
 
+        // Record how the pre-resize live rows map onto the replayed screen:
+        // a row that began a logical line maps exactly onto that line's new
+        // first row (this is the anchor case — a block's reserved band is
+        // made of blank hard lines), and a row inside a wrapped line is
+        // clamped inside that line's new extent (selection endpoints). Rows
+        // whose lines were dropped as trailing blanks collapse onto the last
+        // surviving line.
+        let mut remap = None;
+        if let Some(&last_new_abs) = line_new_abs.last() {
+            let final_abs = self.to_absolute_row(self.cursor.row).max(last_new_abs);
+            let mut new_abs: Vec<usize> = Vec::with_capacity(old_rows);
+            let mut containing = 0usize;
+            for r in 0..old_rows {
+                while containing + 1 < line_starts.len() && line_starts[containing + 1] <= r {
+                    containing += 1;
+                }
+                let new_start = line_new_abs[containing];
+                let new_height = if containing + 1 < line_new_abs.len() {
+                    line_new_abs[containing + 1].saturating_sub(new_start)
+                } else {
+                    final_abs.saturating_sub(new_start)
+                };
+                let offset = (r - line_starts[containing]).min(new_height.saturating_sub(1));
+                new_abs.push(new_start + offset);
+            }
+            remap = Some(RowRemap {
+                old_live_top,
+                new_abs,
+            });
+        }
+
         // 3. Reflow the stored primary buffer (captured when the alt screen was
         //    entered) to the new dimensions too, so it stays consistent with
         //    `cols`/`rows`. Without this, a resize while a fullscreen app owns
@@ -245,7 +313,7 @@ impl Grid {
         //    prompt content it holds.
         if let Some(alt) = self.alt_buffer.as_mut() {
             let wrapped = vec![false; old_rows];
-            let (cells, _wrapped, cr, cc) = Self::reflow_buffer(
+            let (cells, _wrapped, cr, cc, alt_remap) = Self::reflow_buffer(
                 (old_cols, old_rows),
                 &alt.cells,
                 &wrapped,
@@ -256,7 +324,20 @@ impl Grid {
             alt.cursor.row = cr.min(rows.saturating_sub(1));
             alt.cursor.col = cc.min(cols.saturating_sub(1));
             alt.cursor.wrap_pending = false;
+            // While the alt screen owns the live rows, the anchors the remap
+            // is for (block bands, selections) name the stored primary
+            // screen, so the published remap must describe THAT reflow —
+            // pushing them through the alt screen's replay would re-point
+            // them at the full-screen app's rows instead.
+            if let Some(temp) = alt_remap {
+                let live_top = self.absolute_live_top();
+                remap = Some(RowRemap {
+                    old_live_top: live_top,
+                    new_abs: temp.new_abs.into_iter().map(|rel| live_top + rel).collect(),
+                });
+            }
         }
+        self.pending_remap = remap;
     }
 }
 
@@ -533,6 +614,111 @@ mod tests {
         assert!(
             !grid.wrap_indent(),
             "the setter must agree with the builder"
+        );
+    }
+
+    #[test]
+    fn test_resize_row_remap_tracks_a_band_anchor_through_a_rewrap() {
+        // Regression (the "blocks detach on resize" bug): a long line above a
+        // block's band re-wraps from 2 rows to 3 when the grid narrows, moving
+        // every row below it down one — but the band's anchor kept its old
+        // row and the block drew over the line above it. The remap must land
+        // the anchor on the band's own first blank line after the reflow.
+        let mut grid = Grid::new(20, 8);
+        // A 40-char line of distinct characters: rows 0-1 at 20 cols.
+        let long = "abcdefghijklmnopqrstuvwxyz0123456789ABCD";
+        assert_eq!(long.chars().count(), 40);
+        for ch in long.chars() {
+            grid.print(ch);
+        }
+        grid.carriage_return();
+        grid.line_feed();
+        // The band's three blank rows (2, 3, 4), then a line below.
+        for _ in 0..3 {
+            grid.line_feed();
+        }
+        for ch in "tail".chars() {
+            grid.print(ch);
+        }
+        let anchor = grid.to_absolute_row(2);
+
+        grid.resize(10, 8); // the 40 chars now wrap rows 0-3
+
+        assert_eq!(
+            row_text(&grid, 3),
+            "456789ABCD",
+            "fixture: the line re-wrapped to 4 rows"
+        );
+        let remap = grid
+            .take_row_remap()
+            .expect("a reflowing resize produces a remap");
+        assert_eq!(
+            remap.map(anchor),
+            grid.to_absolute_row(4),
+            "the anchor must follow the band below the re-wrapped line"
+        );
+    }
+
+    #[test]
+    fn test_resize_row_remap_maps_scrollback_rows_to_themselves() {
+        // The scrollback is never reflowed, so an anchor into it (a band that
+        // scrolled into history) must survive the resize unchanged.
+        let mut grid = Grid::new(4, 3);
+        for ch in "abcdefgh".chars() {
+            grid.print(ch);
+        }
+        grid.line_feed(); // rows pushed into history
+        let anchor = grid.to_absolute_row(0);
+        grid.resize(8, 3);
+        let remap = grid.take_row_remap().expect("remap");
+        assert_eq!(remap.map(anchor), anchor);
+    }
+
+    #[test]
+    fn test_same_size_resize_produces_no_remap() {
+        let mut grid = Grid::new(6, 3);
+        for ch in "abcdef".chars() {
+            grid.print(ch);
+        }
+        grid.resize(6, 3);
+        assert!(grid.take_row_remap().is_none());
+    }
+
+    #[test]
+    fn test_resize_row_remap_describes_the_primary_screen_while_alt_is_active() {
+        // While a full-screen app owns the alt screen, block anchors name the
+        // stored primary screen, so the published remap must reflow THAT
+        // buffer — not the app's live rows, which is what the live replay
+        // describes. Pushing a primary anchor through the alt replay would
+        // re-point it at the app's content.
+        let mut grid = Grid::new(20, 8);
+        let long = "abcdefghijklmnopqrstuvwxyz0123"; // 30 chars: rows 0-1
+        for ch in long.chars() {
+            grid.print(ch);
+        }
+        grid.carriage_return();
+        grid.line_feed(); // the band's first row: 2
+        for _ in 0..3 {
+            grid.line_feed(); // blank band rows 2-4
+        }
+        for ch in "tail".chars() {
+            grid.print(ch); // row 5
+        }
+        let anchor = grid.to_absolute_row(2);
+
+        grid.enter_alt_screen();
+        grid.resize(10, 8);
+        let remap = grid
+            .take_row_remap()
+            .expect("a remap for the primary screen");
+        grid.leave_alt_screen();
+
+        // The primary's 30 chars re-wrap under the all-hard-lines assumption
+        // (10 + 20 chars): rows 0-2, so the band starts at row 3.
+        assert_eq!(
+            remap.map(anchor),
+            grid.to_absolute_row(3),
+            "the anchor must land on the primary screen's re-flowed band row"
         );
     }
 }

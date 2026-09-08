@@ -70,8 +70,59 @@ pub struct Grid {
     scrollback_wrap_indent: Vec<usize>,
     scrollback_wrapped: Vec<bool>,
     style: Style,
+    /// Absolute row spans (`[start, end)`) the screen has erased since the last
+    /// [`Grid::take_erased_spans`]. Rich blocks anchor a band of rows and draw
+    /// an image over it; erasing those rows blanks the grid but cannot reach
+    /// the image, so the owner has to be told to drop the block. Without this a
+    /// `clear` leaves every block on screen, painted over the fresh output.
+    erased_spans: Vec<(usize, usize)>,
+    /// How many scrollback rows have been evicted (by the retention budget or
+    /// by `clear`) over this grid's lifetime. Absolute row addressing counts
+    /// from the first line ever written rather than from the oldest *retained*
+    /// one, so a long-lived anchor (a selection, a block's band) keeps naming
+    /// the same text once the history ring starts dropping its front. See
+    /// [`Grid::to_absolute_row`].
+    trimmed_rows: usize,
     /// Whether soft-wrapped continuation lines inherit the first non-blank indent.
     wrap_indent: bool,
+    /// The row remap produced by the last [`Grid::resize`], until the owner
+    /// drains it with [`Grid::take_row_remap`]. `None` when no resize has
+    /// reflowed the live screen since the last drain (or the last resize was
+    /// the same-size no-op, which moves nothing).
+    pending_remap: Option<RowRemap>,
+}
+
+/// How the rows of a pre-resize live screen map onto the post-resize one,
+/// produced by a reflowing [`Grid::resize`] and drained via
+/// [`Grid::take_row_remap`].
+///
+/// The reflow rebuilds the live screen by replaying logical lines, so a row
+/// that re-wraps differently moves everything below it; an anchor that still
+/// points at the old row then names content that has scrolled away from it
+/// (a block's band overlapping the line above it). [`RowRemap::map`] pushes
+/// an old absolute row through the replay: a row that begins a logical line
+/// maps exactly onto that line's new first row, and a row inside a wrapped
+/// line is clamped inside the line's new extent. Rows of the scrollback —
+/// never reflowed — map to themselves.
+#[derive(Clone, Debug)]
+pub struct RowRemap {
+    /// Absolute row of the first live row before the resize.
+    old_live_top: usize,
+    /// For each pre-resize live row (top to bottom), its post-resize
+    /// absolute row.
+    new_abs: Vec<usize>,
+}
+
+impl RowRemap {
+    /// The post-resize absolute row naming the content that sat at
+    /// pre-resize absolute row `old_abs`. Scrollback rows (never reflowed)
+    /// and rows past the live screen map to themselves / the last known row.
+    pub fn map(&self, old_abs: usize) -> usize {
+        match old_abs.checked_sub(self.old_live_top) {
+            Some(row) => self.new_abs[row.min(self.new_abs.len().saturating_sub(1))],
+            None => old_abs,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -112,6 +163,7 @@ impl Grid {
             cursor: Cursor::default(),
             cursor_shape_set: false,
             cursor_visible: true,
+            erased_spans: Vec::new(),
             focus_event: false,
             // Index 0 is the sentinel "no link" entry so id 0 always means none.
             link_table: vec![String::new()],
@@ -132,7 +184,9 @@ impl Grid {
             scrollback_wrap_indent: Vec::new(),
             scrollback_wrapped: Vec::new(),
             style: Style::default(),
+            trimmed_rows: 0,
             wrap_indent: true,
+            pending_remap: None,
         }
     }
 
@@ -156,6 +210,49 @@ impl Grid {
     /// The cursor's (row, col).
     pub fn cursor(&self) -> (usize, usize) {
         (self.cursor.row, self.cursor.col)
+    }
+
+    /// Note that live rows `first..last` were just blanked, in absolute terms,
+    /// for [`Self::take_erased_spans`]. Ignored on the alternate screen, where
+    /// no block bands are reserved and full-screen apps erase constantly.
+    pub(super) fn record_erased_rows(&mut self, (first, last): (usize, usize)) {
+        if first >= last || self.alt_buffer.is_some() {
+            return;
+        }
+        let top = self.absolute_live_top();
+        self.erased_spans.push((top + first, top + last));
+    }
+
+    /// Absolute row spans erased since the last call, and clear the record.
+    ///
+    /// The owner of any anchor into the live grid (a rich block's reserved
+    /// band) must drop what falls inside one: the rows are blank now, and
+    /// anything still drawn over them is painted on top of newer output.
+    pub fn take_erased_spans(&mut self) -> Vec<(usize, usize)> {
+        std::mem::take(&mut self.erased_spans)
+    }
+
+    /// The row remap from the last reflowing [`Grid::resize`], if any: how
+    /// absolute rows of the pre-resize live screen map to the post-resize
+    /// one. Every anchor kept against the live screen (a rich block's band,
+    /// a selection endpoint) must be pushed through it, or it keeps naming
+    /// the old row while the re-wrapped content moved off it.
+    pub fn take_row_remap(&mut self) -> Option<RowRemap> {
+        self.pending_remap.take()
+    }
+
+    /// The absolute line index (see [`Self::to_absolute_row`]) of the live
+    /// grid's first row, i.e. of everything the history does not hold.
+    ///
+    /// Not the same as `to_absolute_row(0)`: that names the top *visible* row,
+    /// which is a history line whenever the view is scrolled back.
+    pub fn absolute_live_top(&self) -> usize {
+        self.trimmed_rows + self.scrollback.len()
+    }
+
+    /// The cursor row's absolute line index (see [`Self::to_absolute_row`]).
+    pub fn absolute_cursor_row(&self) -> usize {
+        self.absolute_live_top() + self.cursor.row
     }
 
     /// Whether the cursor is parked at the last column with a line wrap
@@ -234,41 +331,73 @@ impl Grid {
     }
 
     /// Convert a currently-visible viewport row (0..[`Self::rows`]) to an
-    /// absolute line index counted from the oldest scrollback line (0)
+    /// absolute line index counted from the first line ever written (0)
     /// through the live grid's last row. Unlike a viewport row, this stays
-    /// stable as [`Self::scroll_offset`] changes, so a row captured while
-    /// dragging a selection still names the same line after the view
-    /// scrolls further; pair with [`Self::absolute_cell`] to read it back.
+    /// stable as [`Self::scroll_offset`] changes and as the retention budget
+    /// evicts the front of the history, so a row captured while dragging a
+    /// selection (or anchoring a block's band) still names the same line
+    /// however far the view has since scrolled; pair with
+    /// [`Self::absolute_cell`] to read it back.
     pub fn to_absolute_row(&self, viewport_row: usize) -> usize {
-        self.scrollback.len() - self.scroll_offset + viewport_row
+        self.trimmed_rows + self.scrollback.len() - self.scroll_offset + viewport_row
+    }
+
+    /// Convert an absolute line index (see [`Self::to_absolute_row`]) back to
+    /// the viewport row it currently occupies. Signed, and deliberately
+    /// unclamped: a line scrolled above the viewport reads negative and one
+    /// below reads at or past [`Self::rows`], which is what lets a caller
+    /// drawing a multi-row band (a rich block's image) clip the part that
+    /// straddles an edge instead of dropping the whole band.
+    pub fn to_viewport_row(&self, abs_row: usize) -> isize {
+        abs_row as isize - self.to_absolute_row(0) as isize
     }
 
     /// The cell at absolute line `abs_row` (see [`Self::to_absolute_row`]),
     /// column `col`, independent of the current scroll position. `None` if
-    /// out of bounds.
+    /// out of bounds, which includes a line the retention budget has already
+    /// evicted.
     pub fn absolute_cell(&self, abs_row: usize, col: usize) -> Option<&Cell> {
         if col >= self.cols {
             return None;
         }
-        if abs_row < self.scrollback.len() {
-            return self.scrollback[abs_row].get(col);
+        let row = self.to_retained_row(abs_row)?;
+        if row < self.scrollback.len() {
+            return self.scrollback[row].get(col);
         }
-        let live_row = abs_row - self.scrollback.len();
+        let live_row = row - self.scrollback.len();
         if live_row >= self.rows {
             return None;
         }
         self.cells.get(live_row * self.cols + col)
     }
 
+    /// Index `abs_row` into the *retained* rows (`scrollback` then `cells`),
+    /// or `None` when it names a line already evicted from the history.
+    pub(super) fn to_retained_row(&self, abs_row: usize) -> Option<usize> {
+        abs_row.checked_sub(self.trimmed_rows)
+    }
+
     /// The column of the last non-blank cell in visible `row`, or 0 for a blank
     /// row. Lets Normal-mode navigation stop at a line's real end instead of
     /// running into the trailing blank padding of prompts and outputs.
     pub fn visible_line_end(&self, row: usize) -> usize {
-        let mut end = 0;
+        self.visible_line_content_end(row).unwrap_or(0)
+    }
+
+    /// The column of the last non-blank cell in visible `row`, or `None` when
+    /// the row holds nothing at all.
+    ///
+    /// The distinction [`Self::visible_line_end`] flattens away: it answers 0
+    /// both for a blank row and for one whose only character sits in column 0.
+    /// A caller sizing a selection highlight needs them apart, or every blank
+    /// line swept up by a drag (and every row of a rich block's reserved band)
+    /// picks up a stray one-cell highlight down the left edge.
+    pub fn visible_line_content_end(&self, row: usize) -> Option<usize> {
+        let mut end = None;
         for col in 0..self.cols {
             if let Some(cell) = self.visible_cell(row, col) {
                 if cell.ch != '\0' && !cell.ch.is_whitespace() {
-                    end = col;
+                    end = Some(col);
                 }
             }
         }

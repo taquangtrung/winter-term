@@ -194,4 +194,11 @@ impl GpuRenderer {
     pub fn has_image(&self, id: u64) -> bool {
         self.image_pass.has(id)
     }
+
+    /// Release the texture cached for `id`. A no-op for an unknown `id`,
+    /// so callers can free on every removal path without first checking
+    /// the block ever rasterized.
+    pub fn free_image(&mut self, id: u64) {
+        self.image_pass.remove(id)
+    }
 }

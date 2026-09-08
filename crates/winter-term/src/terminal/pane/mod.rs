@@ -21,7 +21,7 @@ use winter_render::Grid;
 #[cfg(test)]
 use winter_render::MAX_SCROLLBACK;
 
-use super::block_queue::BlockQueue;
+use super::block_queue::{BlockBand, BlockQueue};
 use crate::mux::protocol::ServerMessage;
 use crate::mux::resilience::ResilientClient;
 
@@ -82,6 +82,11 @@ pub struct Pane {
     command: String,
     combined: CombinedPerformer,
     parser: vte::Parser,
+    /// Row remaps from grid resizes since the last [`Pane::take_row_remaps`]:
+    /// the app's own anchors (image blocks, WebView tiles, selections) must
+    /// be pushed through them, the same way the pane's internal ones already
+    /// were inside [`Pane::apply_grid_resize`].
+    row_remaps: Vec<winter_render::RowRemap>,
     transport: PaneTransport,
 }
 
@@ -230,6 +235,7 @@ impl Pane {
             command: command_str,
             combined: CombinedPerformer::new(cols, rows, max_scrollback),
             parser: vte::Parser::new(),
+            row_remaps: Vec::new(),
             transport: PaneTransport::Local {
                 child,
                 master: pair.master,
@@ -274,6 +280,7 @@ impl Pane {
             command: format!("{MUX_COMMAND_PREFIX}{session}"),
             combined: CombinedPerformer::new(cols.max(1), rows.max(1), max_scrollback),
             parser: vte::Parser::new(),
+            row_remaps: Vec::new(),
             transport: PaneTransport::Mux {
                 client,
                 exited: false,
@@ -305,6 +312,7 @@ impl Pane {
             command: format!("{MUX_REMOTE_COMMAND_PREFIX}{host}|{session}"),
             combined: CombinedPerformer::new(cols.max(1), rows.max(1), max_scrollback),
             parser: vte::Parser::new(),
+            row_remaps: Vec::new(),
             transport: PaneTransport::Mux {
                 client,
                 exited: false,
@@ -363,10 +371,15 @@ impl Pane {
             }
         }
         if got_any {
-            let (row, _) = self.combined.grid().cursor();
+            // A block whose reservation was somehow missed still needs a band;
+            // anchor it at the cursor with the default height.
+            let fallback = BlockBand {
+                abs_row: self.combined.grid().absolute_cursor_row(),
+                rows: BLOCK_RESERVE_ROWS,
+            };
             let anchors = self.combined.take_block_anchors();
             self.block_queue
-                .update(self.combined.scrollback(), row, &anchors);
+                .update(self.combined.scrollback(), fallback, &anchors);
         }
         if let Some((cols, rows)) = session_geometry {
             self.apply_grid_resize(cols, rows);
@@ -455,7 +468,15 @@ impl Pane {
             let g = self.combined.grid();
             g.scroll_top() != 0 || g.scroll_bottom() != g.rows().saturating_sub(1)
         };
-        self.combined.resize(cols, rows);
+        let remap = self.combined.resize(cols, rows);
+        // The reflow rebuilt the live screen; the queued block anchors and
+        // the app's anchors (see [`Pane::take_row_remaps`]) must follow the
+        // rows their bands now occupy, or a re-wrapped line above a block
+        // leaves the block drawn over it.
+        if let Some(remap) = &remap {
+            self.block_queue.remap_rows(remap);
+            self.row_remaps.push(remap.clone());
+        }
         if had_region {
             self.write(b"\x1b[r");
         }
@@ -559,14 +580,70 @@ impl Pane {
         self.block_queue.drain_patched_live(&blocks)
     }
 
-    /// Grow a reserved band by inserting `extra` blank rows at screen row
-    /// `row` (the first row past the band): the rows, cursor, and every block
-    /// anchor at or below `row` shift down, so the content beneath a patched
-    /// block is overdrawn by neither the block nor the shell.
-    pub fn insert_band_rows(&mut self, row: usize, extra: usize) {
-        self.combined.grid_mut().insert_rows_at(row, extra);
-        self.combined.shift_block_anchors(row, extra);
-        self.block_queue.shift_rows_at_or_below(row, extra);
+    /// `(block_index, segment_index)` pairs of blocks elided by the
+    /// scrollback's retention budget since the last call (see
+    /// [`BlockQueue::take_elided`]). The rendered block for each — GPU
+    /// image, WebView tile — can never show content again and should be
+    /// dropped by the owner.
+    pub fn drain_elided_blocks(&mut self) -> Vec<(usize, usize)> {
+        self.block_queue.take_elided()
+    }
+
+    /// Absolute row spans the screen has erased since the last call (see
+    /// [`winter_render::Grid::take_erased_spans`]). Any block anchored inside
+    /// one has lost the rows it was drawn over and must be dropped.
+    pub fn take_erased_spans(&mut self) -> Vec<(usize, usize)> {
+        self.combined.grid_mut().take_erased_spans()
+    }
+
+    /// Row remaps from grid resizes since the last call (see
+    /// [`winter_render::Grid::take_row_remap`]). The app pushes its own
+    /// absolute-row anchors through each: the reflow moved the content they
+    /// name, and an anchor left behind draws its block over the wrong rows.
+    pub fn take_row_remaps(&mut self) -> Vec<winter_render::RowRemap> {
+        std::mem::take(&mut self.row_remaps)
+    }
+
+    /// Grow a reserved band by inserting `extra` blank rows at absolute row
+    /// `abs_row` (the first row past the band): the rows, cursor, and every
+    /// block anchor at or below it shift down, so the content beneath a
+    /// patched block is overdrawn by neither the block nor the shell.
+    pub fn insert_band_rows(&mut self, abs_row: usize, extra: usize) {
+        let Some(live_row) = self.live_band_row(abs_row) else {
+            return;
+        };
+        self.combined.grid_mut().insert_rows_at(live_row, extra);
+        self.shift_anchors_at_or_below(abs_row, extra as isize);
+    }
+
+    /// Hand `spare` rows of a reserved band back at absolute row `abs_row`
+    /// (the first row the block does not need): the rows below close the gap,
+    /// and the cursor and every anchor below follow them up, so a block that
+    /// reserved more room than its content needed does not leave dead space
+    /// above the next prompt.
+    pub fn remove_band_rows(&mut self, abs_row: usize, spare: usize) {
+        let Some(live_row) = self.live_band_row(abs_row) else {
+            return;
+        };
+        self.combined.grid_mut().remove_rows_at(live_row, spare);
+        self.shift_anchors_at_or_below(abs_row, -(spare as isize));
+    }
+
+    /// The live grid row absolute `abs_row` names, or `None` when it is not a
+    /// live row at all: the grid can only insert into or delete from its live
+    /// rows, so a band whose tail has scrolled into history is no longer
+    /// resizable and the block is clipped to what it has instead.
+    fn live_band_row(&self, abs_row: usize) -> Option<usize> {
+        let grid = self.combined.grid();
+        let live_row = abs_row.checked_sub(grid.absolute_live_top())?;
+        (live_row < grid.rows()).then_some(live_row)
+    }
+
+    /// Move every anchor at or below absolute `row` by `delta`, keeping the
+    /// pending anchors and the queued entries pointing at the same content.
+    fn shift_anchors_at_or_below(&mut self, row: usize, delta: isize) {
+        self.combined.shift_block_anchors(row, delta);
+        self.block_queue.shift_rows_at_or_below(row, delta);
     }
 
     /// Whether the child process has exited.

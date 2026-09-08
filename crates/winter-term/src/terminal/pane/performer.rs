@@ -5,6 +5,7 @@ use super::{
     BACKSPACE, BELL, BLOCK_RESERVE_ROWS, CARRIAGE_RETURN, HORIZONTAL_TAB, LINE_FEED,
     MAX_IMAGE_ROWS, RIS,
 };
+use crate::terminal::block_queue::BlockBand;
 use base64::Engine;
 use std::io::Cursor;
 use vte::{Params, Perform};
@@ -22,6 +23,9 @@ pub(super) const APC_MAX_PAYLOAD: usize = 4 * 1024 * 1024;
 /// Raster image MIME types whose displayed height can be computed from their
 /// pixel dimensions at emit time (so they reserve an exact band).
 pub(super) const RASTER_MIMES: [&str; 4] = ["image/gif", "image/jpeg", "image/png", "image/webp"];
+/// SVG, whose intrinsic size is readable from the markup, so it reserves an
+/// exact band like a raster image rather than falling back to the default.
+pub(super) const SVG_MIME: &str = "image/svg+xml";
 /// Number of renderable (`Content`/`Live`) segments across the scrollback, used
 /// to detect how many blocks an escape just produced.
 pub(super) fn content_segment_count(scrollback: &Scrollback) -> usize {
@@ -58,34 +62,108 @@ pub(super) fn new_renderable_segments(
     }
     added
 }
-/// Exact rows a raster image occupies fit to the pane width, capped at
-/// [`MAX_IMAGE_ROWS`]. `None` when the block is not a raster image (the caller
-/// then uses the default band).
+/// The intrinsic pixel size of an SVG document, from the root element's
+/// `width`/`height`, falling back to the last two numbers of its `viewBox`.
+///
+/// Deliberately a shallow attribute scan rather than a real parse: this runs on
+/// the PTY drain path, and all it has to decide is how many grid rows to
+/// reserve. Anything it cannot read falls back to the default band.
+fn svg_intrinsic_size(markup: &str) -> Option<(f32, f32)> {
+    let open = markup.find("<svg")?;
+    let root = &markup[open..markup[open..].find('>').map(|i| open + i)?];
+
+    fn attr(root: &str, name: &str) -> Option<f32> {
+        // Match the attribute only at a word boundary, so `width` does not
+        // also match the `stroke-width` that most real documents carry.
+        let mut from = 0;
+        let at = loop {
+            let hit = from + root[from..].find(name)?;
+            let boundary = hit == 0
+                || root[..hit]
+                    .chars()
+                    .next_back()
+                    .is_some_and(|c| c.is_whitespace());
+            if boundary {
+                break hit;
+            }
+            from = hit + name.len();
+        };
+        let rest = root[at + name.len()..].trim_start();
+        let rest = rest.strip_prefix('=')?.trim_start();
+        let quote = rest.chars().next().filter(|c| *c == '"' || *c == '\'')?;
+        let close = rest[1..].find(quote)? + 1;
+        let value = &rest[1..close];
+        // Percentages are relative to a viewport this has no notion of, so they
+        // read as unknown rather than as a wrong number.
+        if value.trim_end().ends_with('%') {
+            return None;
+        }
+        // Trailing CSS unit ("120px") is dropped; the leading number is the size.
+        let digits: String = value
+            .trim_start()
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        digits.parse().ok().filter(|n: &f32| *n > 0.0)
+    }
+
+    if let (Some(w), Some(h)) = (attr(root, "width"), attr(root, "height")) {
+        return Some((w, h));
+    }
+    let vb_at = root.find("viewBox")?;
+    let rest = root[vb_at..].split('"').nth(1)?;
+    let nums: Vec<f32> = rest
+        .split([' ', ','])
+        .filter(|s| !s.is_empty())
+        .filter_map(|s| s.parse().ok())
+        .collect();
+    match nums[..] {
+        [_, _, w, h] if w > 0.0 && h > 0.0 => Some((w, h)),
+        _ => None,
+    }
+}
+
+/// Exact rows an image block occupies fit to the pane width, capped at
+/// [`MAX_IMAGE_ROWS`]. `None` when the block's height is not knowable at emit
+/// time (markdown, text, live blocks), and the caller uses the default band.
+///
+/// Worth the work per block: whatever this over-reserves stays on screen as
+/// blank rows between the block and the next prompt, since nothing shrinks a
+/// band back down once the content turns out to be smaller.
 pub(super) fn image_reserve_rows(
     emit: &EmitBlock,
     cols: usize,
     cell_width: f32,
     cell_height: f32,
 ) -> Option<usize> {
+    let (nat_w, nat_h) = raster_dimensions(emit).or_else(|| {
+        let markup = emit.bundle.get(SVG_MIME).and_then(|v| v.as_str())?;
+        svg_intrinsic_size(markup)
+    })?;
+    if nat_w <= 0.0 || nat_h <= 0.0 || cell_height <= 0.0 {
+        return None;
+    }
+    let pane_w = cols as f32 * cell_width;
+    let display_w = nat_w.min(pane_w);
+    let display_h = display_w * nat_h / nat_w;
+    let rows = (display_h / cell_height).ceil() as usize;
+    Some(rows.clamp(1, MAX_IMAGE_ROWS))
+}
+
+/// The pixel dimensions of a raster block, read from the encoded header.
+fn raster_dimensions(emit: &EmitBlock) -> Option<(f32, f32)> {
     let value = RASTER_MIMES
         .iter()
         .find_map(|mime| emit.bundle.get(mime).and_then(|v| v.as_str()))?;
     let bytes = base64::engine::general_purpose::STANDARD
         .decode(value)
         .ok()?;
-    let (nat_w, nat_h) = image::ImageReader::new(Cursor::new(bytes))
+    let (w, h) = image::ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
         .ok()?
         .into_dimensions()
         .ok()?;
-    if nat_w == 0 || nat_h == 0 || cell_height <= 0.0 {
-        return None;
-    }
-    let pane_w = cols as f32 * cell_width;
-    let display_w = (nat_w as f32).min(pane_w);
-    let display_h = display_w * nat_h as f32 / nat_w as f32;
-    let rows = (display_h / cell_height).ceil() as usize;
-    Some(rows.clamp(1, MAX_IMAGE_ROWS))
+    (w > 0 && h > 0).then_some((w as f32, h as f32))
 }
 /// What a call to [`CombinedPerformer::apc_filter`] wants the drain loop to do
 /// with the current byte.
@@ -173,7 +251,7 @@ pub(super) struct CombinedPerformer {
     bell: bool,
     /// Grid rows (one per emitted block, in emission order) where the block was
     /// anchored, drained by [`Pane::drain_output`] into the block queue.
-    block_anchors: Vec<usize>,
+    block_anchors: Vec<BlockBand>,
     /// Pixel cell size, used to convert an image's pixel height into reserved
     /// rows. Set by the app once the renderer is up; defaults are close enough
     /// until then.
@@ -307,17 +385,18 @@ impl CombinedPerformer {
         }
     }
 
-    /// Anchor rows of blocks emitted since the last call, in emission order.
-    pub(super) fn take_block_anchors(&mut self) -> Vec<usize> {
+    /// Absolute anchor rows of blocks emitted since the last call, in emission
+    /// order (see [`winter_render::Grid::to_absolute_row`]).
+    pub(super) fn take_block_anchors(&mut self) -> Vec<BlockBand> {
         std::mem::take(&mut self.block_anchors)
     }
 
-    /// Shift pending block anchors at or below `row` down by `delta` (a band
-    /// above them grew mid-drain).
-    pub(super) fn shift_block_anchors(&mut self, row: usize, delta: usize) {
+    /// Move pending block anchors at or below absolute `row` by `delta` (a band
+    /// above them grew or shrank mid-drain).
+    pub(super) fn shift_block_anchors(&mut self, row: usize, delta: isize) {
         for anchor in &mut self.block_anchors {
-            if *anchor >= row {
-                *anchor += delta;
+            if anchor.abs_row >= row {
+                anchor.abs_row = anchor.abs_row.saturating_add_signed(delta);
             }
         }
     }
@@ -344,22 +423,23 @@ impl CombinedPerformer {
             .collect()
     }
 
-    /// Reserve `rows` blank grid rows for a block at the cursor: anchor it
-    /// at the cursor row and line-feed past the band. When the reservation
-    /// itself scrolls the screen (a band emitted near the bottom), the
-    /// anchor is pulled up so it keeps naming the band's visible top: the
-    /// rows scrolled off the top are the band's own, clipped ones.
+    /// Reserve `rows` blank grid rows for a block at the cursor: anchor it at
+    /// the cursor row and line-feed past the band.
+    ///
+    /// The anchor is *absolute* (see [`winter_render::Grid::to_absolute_row`]),
+    /// not a screen row. A screen row names the band correctly only until the
+    /// next line of output scrolls the grid, after which the block would be
+    /// drawn over whatever live text had moved into that row; an absolute row
+    /// keeps naming the band's own first line for as long as the line is
+    /// retained, including while the reservation's own line feeds scroll the
+    /// screen out from under it.
     pub(super) fn reserve_band_rows(&mut self, rows: usize) {
-        let scrolled_before = self.grid.scrollback_len();
-        self.block_anchors.push(self.grid.cursor().0);
+        self.block_anchors.push(BlockBand {
+            abs_row: self.grid.absolute_cursor_row(),
+            rows,
+        });
         for _ in 0..rows {
             self.grid.line_feed();
-        }
-        let scrolled = self.grid.scrollback_len() - scrolled_before;
-        if scrolled > 0 {
-            if let Some(anchor) = self.block_anchors.last_mut() {
-                *anchor = anchor.saturating_sub(scrolled);
-            }
         }
     }
 
@@ -580,8 +660,17 @@ impl CombinedPerformer {
         std::mem::take(&mut self.bell)
     }
 
-    pub(super) fn resize(&mut self, cols: usize, rows: usize) {
+    pub(super) fn resize(&mut self, cols: usize, rows: usize) -> Option<winter_render::RowRemap> {
         self.grid.resize(cols, rows);
+        let remap = self.grid.take_row_remap();
+        // Pending block anchors point into the live screen the reflow just
+        // rebuilt; push them onto the rows their bands now sit at.
+        if let Some(remap) = &remap {
+            for anchor in &mut self.block_anchors {
+                anchor.abs_row = remap.map(anchor.abs_row);
+            }
+        }
+        remap
     }
 }
 impl Perform for CombinedPerformer {
@@ -932,11 +1021,12 @@ mod tests {
         );
     }
     #[test]
-    fn test_band_anchor_names_the_visible_top_when_emission_scrolls() {
-        // Regression: a band reserved while the cursor sits at the bottom
-        // scrolls the screen during its own line feeds; the anchor kept the
-        // pre-scroll cursor row and pointed past the band's real top,
-        // misplacing the block and every later anchor.
+    fn test_band_anchor_names_the_bands_own_line_after_later_output_scrolls() {
+        // Regression: the anchor used to be a screen row, so it kept naming a
+        // fixed position on the display instead of the band's first line. Once
+        // a screenful of further output scrolled past, the block was drawn over
+        // whatever unrelated text had moved into that row, and scrolling back
+        // moved it the wrong way. An absolute anchor keeps naming the band.
         use winter_core::winter_proto::{BlockId, Message, OpenBlock};
 
         let mut cp = CombinedPerformer::new(20, 10, MAX_SCROLLBACK);
@@ -944,6 +1034,7 @@ mod tests {
             cp.grid_mut().line_feed();
         }
         assert_eq!(cp.grid().cursor().0, 9, "cursor parked at the bottom row");
+        let band_top = cp.grid().absolute_cursor_row();
 
         let escape = winter_core::winter_proto::encode(&Message::Open(OpenBlock {
             id: BlockId(1),
@@ -955,17 +1046,90 @@ mod tests {
             parser.advance(&mut cp, &[b]);
         }
         let anchors = cp.take_block_anchors();
-        let scrolled = cp.grid().scrollback_len();
-        assert!(scrolled >= BLOCK_RESERVE_ROWS);
-        assert_eq!(anchors, vec![9usize.saturating_sub(scrolled)]);
-        assert_eq!(anchors[0], 0, "the band's visible top after the scroll");
+        assert!(cp.grid().scrollback_len() >= BLOCK_RESERVE_ROWS);
+        assert_eq!(
+            anchors,
+            vec![BlockBand {
+                abs_row: band_top,
+                rows: BLOCK_RESERVE_ROWS
+            }],
+            "the anchor names the row the band started on, scroll or no scroll"
+        );
+
+        // A screenful more output moves the band deep into history: it must
+        // track that scroll row for row, where a screen-row anchor would have
+        // sat still and left the block drawn over live text.
+        let before = cp.grid().to_viewport_row(band_top);
+        for _ in 0..30 {
+            cp.grid_mut().line_feed();
+        }
+        let after = cp.grid().to_viewport_row(band_top);
+        assert_eq!(after, before - 30, "the band scrolled with its content");
+        assert!(after < 0, "and has left the top of the screen");
     }
+    #[test]
+    fn test_svg_intrinsic_size_reads_width_height_then_falls_back_to_viewbox() {
+        // The band an SVG reserves comes from these numbers, so a miss here
+        // costs the block a dozen blank rows of dead space under it.
+        assert_eq!(
+            svg_intrinsic_size(
+                r#"<svg xmlns="http://www.w3.org/2000/svg" width="360" height="90">"#
+            ),
+            Some((360.0, 90.0))
+        );
+        // CSS units, single quotes, and attribute order must all still read.
+        assert_eq!(
+            svg_intrinsic_size(r#"<svg height='40px' width='80px'>"#),
+            Some((80.0, 40.0))
+        );
+        // No width/height: the viewBox's last two numbers are the size.
+        assert_eq!(
+            svg_intrinsic_size(r#"<svg viewBox="0 0 200 50">"#),
+            Some((200.0, 50.0))
+        );
+        // Percentage sizes are relative to a viewport this cannot see, and a
+        // document with neither is unknowable: both fall back to the default
+        // band rather than reserving a wrong one.
+        assert_eq!(
+            svg_intrinsic_size(r#"<svg width="100%" height="100%">"#),
+            None
+        );
+        assert_eq!(svg_intrinsic_size(r#"<svg>"#), None);
+        assert_eq!(svg_intrinsic_size("not svg at all"), None);
+    }
+
+    #[test]
+    fn test_image_reserve_rows_sizes_an_svg_band_to_its_content() {
+        // Regression: SVG fell through to the default 12-row band whatever its
+        // height, so the demo's 90px graphic reserved more than twice the rows
+        // it drew into and left the rest as blank space above the next prompt.
+        use winter_core::winter_proto::{BlockId, MimeBundle};
+
+        let mut bundle = MimeBundle::new();
+        bundle.insert(
+            SVG_MIME,
+            serde_json::json!(r#"<svg width="360" height="90"></svg>"#),
+        );
+        let emit = EmitBlock {
+            bundle,
+            id: BlockId(1),
+            trust: winter_core::winter_proto::TrustTier::Restricted,
+        };
+        // 90px tall at a 20px cell, inside a pane wide enough not to scale it.
+        assert_eq!(image_reserve_rows(&emit, 200, 10.0, 20.0), Some(5));
+        // Narrow pane: the image scales down to the width, and the band with it.
+        assert_eq!(image_reserve_rows(&emit, 18, 10.0, 20.0), Some(3));
+    }
+
     #[test]
     fn test_shift_block_anchors_moves_only_rows_at_or_below() {
         let mut cp = CombinedPerformer::new(20, 30, MAX_SCROLLBACK);
-        cp.block_anchors = vec![2, 5, 9];
+        cp.block_anchors = [2, 5, 9]
+            .map(|abs_row| BlockBand { abs_row, rows: 4 })
+            .to_vec();
         cp.shift_block_anchors(5, 3);
-        assert_eq!(cp.block_anchors, vec![2, 8, 12]);
+        let rows: Vec<usize> = cp.block_anchors.iter().map(|a| a.abs_row).collect();
+        assert_eq!(rows, vec![2, 8, 12]);
     }
     #[test]
     fn test_osc52_read_query_raises_the_pending_flag_once() {

@@ -33,8 +33,36 @@ pub(crate) struct PointerState {
     pub(crate) hovered_url: Option<String>,
     pub(crate) last_click: Option<(Instant, f32, f32)>,
     pub(crate) mouse_down: bool,
+    /// Where the held left button went down: the pane, and the absolute
+    /// `(row, col)` under the pointer at that instant (see
+    /// [`winter_render::Grid::to_absolute_row`]). `None` when no button is
+    /// held.
+    ///
+    /// A drag's selection is anchored here rather than at the first motion
+    /// event, which is a different cell whenever the pointer has already
+    /// travelled between the press and the first event the compositor
+    /// delivers. A quick flick starts a selection lines away from where the
+    /// click landed.
+    pub(crate) press_cell: Option<(PaneId, usize, usize)>,
     /// Which pane's scrollbar is being dragged, if any. Cleared on mouse release.
     pub(crate) scrollbar_drag: Option<PaneId>,
+}
+
+impl PointerState {
+    /// The absolute `(row, col)` a fresh drag selection should anchor at,
+    /// given the cell `motion` the pointer has just moved onto in `pane`.
+    ///
+    /// The press cell, when the button went down in this same pane: a drag
+    /// starts where you clicked, not where the compositor happened to deliver
+    /// the first motion event, which on a quick flick is already lines away.
+    /// A press in another pane names a row in a different grid, so there the
+    /// motion's own cell is the only meaningful anchor.
+    pub(crate) fn drag_anchor(&self, pane: PaneId, motion: (usize, usize)) -> (usize, usize) {
+        match self.press_cell {
+            Some((press_pane, row, col)) if press_pane == pane => (row, col),
+            _ => motion,
+        }
+    }
 }
 
 impl Default for PointerState {
@@ -46,6 +74,7 @@ impl Default for PointerState {
             hovered_url: None,
             last_click: None,
             mouse_down: false,
+            press_cell: None,
             scrollbar_drag: None,
         }
     }
@@ -113,5 +142,41 @@ impl App {
         let pane = self.panes.get(&pane_id)?;
         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
         pane.grid().cell_link(row, col).map(str::to_string)
+    }
+}
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_drag_anchor_starts_at_the_press_not_at_the_first_motion() {
+        // Regression: the anchor was whatever cell the first motion event
+        // landed on. Pointer motion is compressed, so a quick drag's first
+        // event can arrive many rows below the click, and the selection then
+        // started well past the line the user actually clicked on.
+        let pointer = PointerState {
+            press_cell: Some((PaneId(1), 40, 3)),
+            ..Default::default()
+        };
+        assert_eq!(pointer.drag_anchor(PaneId(1), (57, 12)), (40, 3));
+    }
+
+    #[test]
+    fn test_drag_anchor_falls_back_when_the_press_was_in_another_pane() {
+        // A press in a different pane names a row in a different grid, so it
+        // cannot anchor this pane's selection; nor can a drag with no press
+        // behind it at all (a button held since before the window had focus).
+        let mut pointer = PointerState {
+            press_cell: Some((PaneId(2), 40, 3)),
+            ..Default::default()
+        };
+        assert_eq!(pointer.drag_anchor(PaneId(1), (57, 12)), (57, 12));
+        pointer.press_cell = None;
+        assert_eq!(pointer.drag_anchor(PaneId(1), (57, 12)), (57, 12));
     }
 }

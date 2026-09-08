@@ -160,22 +160,29 @@ pub(super) struct BgParams<'a> {
 
 /// The inclusive column span `[start, end]` of `sel_norm` that should be
 /// highlighted on `abs_row` (an absolute row from `Grid::to_absolute_row`),
-/// clamped to `content_end` (the row's last printable column) so the
-/// selection hugs the text instead of spilling past the newline across the
-/// trailing blank cells. `last_col` is the row's final column index, used for
-/// rows that run to the line's end. Returns `None` when `abs_row` is outside
-/// the selection or no content falls within the selected span.
+/// clamped to `content_end` (the row's last printable column, `None` for a
+/// blank row) so the selection hugs the text instead of spilling past the
+/// newline across the trailing blank cells. `last_col` is the row's final
+/// column index, used for rows that run to the line's end. Returns `None` when
+/// `abs_row` is outside the selection or no content falls within the selected
+/// span.
+///
+/// A blank row highlights nothing at all. Clamping it to column 0 instead
+/// leaves one stray highlighted cell on the left edge of every blank line a
+/// drag crosses, which reads as a broken selection down the reserved band of
+/// a rich block: the band is a dozen blank rows in a row.
 fn selection_span_on_row(
     sel_norm: Option<(usize, usize, usize, usize)>,
     block: bool,
     abs_row: usize,
     last_col: usize,
-    content_end: usize,
+    content_end: Option<usize>,
 ) -> Option<(usize, usize)> {
     let (sr1, sc1, sr2, sc2) = sel_norm?;
     if abs_row < sr1 || abs_row > sr2 {
         return None;
     }
+    let content_end = content_end?;
     if block {
         let start = sc1.min(sc2);
         let end = sc1.max(sc2).min(content_end);
@@ -260,7 +267,7 @@ pub(super) fn build_bg_vertices_offset(
             selection_block,
             grid.to_absolute_row(row),
             grid.cols().saturating_sub(1),
-            grid.visible_line_end(row),
+            grid.visible_line_content_end(row),
         );
 
         for col in 0..grid.cols() {
@@ -1790,35 +1797,69 @@ mod tests {
         // selection run to the last column but must clamp to that content end.
         let sel = Some((0, 2, 2, 9));
         // First row: starts at the anchor col, ends at the content end (4), not 9.
-        assert_eq!(selection_span_on_row(sel, false, 0, 9, 4), Some((2, 4)));
+        assert_eq!(
+            selection_span_on_row(sel, false, 0, 9, Some(4)),
+            Some((2, 4))
+        );
         // Middle row fully selected: 0..=last_col clamped to its own content (6).
-        assert_eq!(selection_span_on_row(sel, false, 1, 9, 6), Some((0, 6)));
+        assert_eq!(
+            selection_span_on_row(sel, false, 1, 9, Some(6)),
+            Some((0, 6))
+        );
         // Last row: ends at the anchor col (9) clamped to content end (3).
-        assert_eq!(selection_span_on_row(sel, false, 2, 9, 3), Some((0, 3)));
+        assert_eq!(
+            selection_span_on_row(sel, false, 2, 9, Some(3)),
+            Some((0, 3))
+        );
     }
     #[test]
     fn test_selection_span_skips_rows_outside_and_empty_spans() {
         let sel = Some((1, 0, 1, 5));
         // Rows above/below the selection are never highlighted.
-        assert_eq!(selection_span_on_row(sel, false, 0, 9, 9), None);
-        assert_eq!(selection_span_on_row(sel, false, 2, 9, 9), None);
+        assert_eq!(selection_span_on_row(sel, false, 0, 9, Some(9)), None);
+        assert_eq!(selection_span_on_row(sel, false, 2, 9, Some(9)), None);
         // A selection that starts past the row's content highlights nothing.
         assert_eq!(
-            selection_span_on_row(Some((0, 5, 0, 9)), false, 0, 9, 2),
+            selection_span_on_row(Some((0, 5, 0, 9)), false, 0, 9, Some(2)),
             None
         );
         // No selection at all.
-        assert_eq!(selection_span_on_row(None, false, 0, 9, 9), None);
+        assert_eq!(selection_span_on_row(None, false, 0, 9, Some(9)), None);
+    }
+    #[test]
+    fn test_selection_span_highlights_nothing_on_a_blank_row() {
+        // Regression: a blank row's content end read as column 0, the same
+        // answer as a row whose only character sits there, so every blank line
+        // a drag crossed picked up a one-cell highlight on its left edge. A
+        // rich block reserves a dozen blank rows, which turned that artifact
+        // into a visible column of stray cells straight down the band.
+        let sel = Some((0, 0, 2, 9));
+        assert_eq!(selection_span_on_row(sel, false, 1, 9, None), None);
+        assert_eq!(selection_span_on_row(sel, true, 1, 9, None), None);
+        // A row whose sole character is in column 0 still highlights it.
+        assert_eq!(
+            selection_span_on_row(sel, false, 1, 9, Some(0)),
+            Some((0, 0))
+        );
     }
     #[test]
     fn test_selection_span_blockwise() {
         let sel = Some((0, 3, 2, 6));
         // Block selection on rows 0, 1, 2 between columns 3 and 6:
-        assert_eq!(selection_span_on_row(sel, true, 0, 9, 8), Some((3, 6)));
-        assert_eq!(selection_span_on_row(sel, true, 1, 9, 8), Some((3, 6)));
-        assert_eq!(selection_span_on_row(sel, true, 2, 9, 5), Some((3, 5)));
+        assert_eq!(
+            selection_span_on_row(sel, true, 0, 9, Some(8)),
+            Some((3, 6))
+        );
+        assert_eq!(
+            selection_span_on_row(sel, true, 1, 9, Some(8)),
+            Some((3, 6))
+        );
+        assert_eq!(
+            selection_span_on_row(sel, true, 2, 9, Some(5)),
+            Some((3, 5))
+        );
         // Outside row:
-        assert_eq!(selection_span_on_row(sel, true, 3, 9, 8), None);
+        assert_eq!(selection_span_on_row(sel, true, 3, 9, Some(8)), None);
     }
     #[test]
     fn test_build_bg_vertices_with_selection() {

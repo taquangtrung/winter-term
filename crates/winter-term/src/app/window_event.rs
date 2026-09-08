@@ -488,6 +488,12 @@ impl App {
                         // cursor instead of leaving it wherever the last
                         // keyboard motion stopped.
                         self.track_nav_cursor_to_mouse(pane_id, row, col);
+                        // Anchor any drag that follows at the press, not at
+                        // the first motion event: see `PointerState::press_cell`.
+                        self.pointer.press_cell = self
+                            .panes
+                            .get(&pane_id)
+                            .map(|p| (pane_id, p.grid().to_absolute_row(row), col));
                         let now = Instant::now();
                         if let Some((prev_time, prev_x, prev_y)) = self.pointer.last_click {
                             let dist = ((x - prev_x).powi(2) + (y - prev_y).powi(2)).sqrt();
@@ -506,6 +512,7 @@ impl App {
             (ElementState::Released, MouseButton::Left) => {
                 self.pointer.mouse_down = false;
                 self.pointer.divider_drag = None;
+                self.pointer.press_cell = None;
                 self.pointer.scrollbar_drag = None;
                 self.finalize_tab_drag();
                 self.copy_selection();
@@ -630,10 +637,11 @@ impl App {
                     sel.end_col = col;
                     sel.pane = pane_id;
                 } else {
+                    let (start_row, start_col) = self.pointer.drag_anchor(pane_id, (abs_row, col));
                     self.selection.span = Some(Selection {
                         block: false,
-                        start_row: abs_row,
-                        start_col: col,
+                        start_row,
+                        start_col,
                         end_row: abs_row,
                         end_col: col,
                         pane: pane_id,

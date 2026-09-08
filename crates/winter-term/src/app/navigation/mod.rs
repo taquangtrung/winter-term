@@ -126,6 +126,18 @@ impl JumpList {
             self.entries.get(self.entries.len() - self.index).copied()
         }
     }
+
+    /// Push every recorded row through a resize reflow's row remap: the
+    /// positions are absolute rows into a live screen the reflow just
+    /// rebuilt, and one left at its old row names the wrong line.
+    pub(crate) fn remap_rows(&mut self, map: &dyn Fn(usize) -> usize) {
+        for (row, _) in &mut self.entries {
+            *row = map(*row);
+        }
+        if let Some((row, _)) = &mut self.return_pos {
+            *row = map(*row);
+        }
+    }
 }
 
 /// How many change positions a pane's [`ChangeList`] keeps; older entries
@@ -147,6 +159,12 @@ const MAX_CHANGE_LIST_LEN: usize = 100;
 pub(crate) struct ChangeList(JumpList);
 
 impl ChangeList {
+    /// Push every recorded row through a resize reflow's row remap, like
+    /// [`JumpList::remap_rows`].
+    pub(crate) fn remap_rows(&mut self, map: &dyn Fn(usize) -> usize) {
+        self.0.remap_rows(map);
+    }
+
     /// Record `pos` as the newest change position, collapsing it when it
     /// matches the previous one and resetting the walk to the live position.
     fn push(&mut self, pos: (usize, usize)) {
@@ -244,6 +262,44 @@ fn pushes_jump(mv: CursorMove) -> bool {
             | CursorMove::ParagraphForward
             | CursorMove::MatchingBracket
     )
+}
+
+/// The viewport row a `j`/`k` motion lands on when every rich block's reserved
+/// band in `spans` (viewport rows `[start, end)`) counts as a single stop.
+///
+/// Entering a band parks the cursor on its first row, where the cursor draws
+/// as the block-as-cursor outline instead of a 1-cell block in blank space;
+/// leaving it jumps to the first row past the band. A block therefore costs
+/// one stop in each direction instead of one keypress per blank row behind
+/// it, and the cursor never sits unseen inside a band it cannot annotate.
+fn vertical_band_stop(spans: &[(usize, usize)], row: usize, down: bool) -> usize {
+    if down {
+        // Already inside a band: leave at its end (the furthest, should bands
+        // ever overlap).
+        if let Some(&(_, end)) = spans
+            .iter()
+            .filter(|&&(start, end)| row >= start && row < end)
+            .max_by_key(|&&(_, end)| end)
+        {
+            return end;
+        }
+        // About to enter one: park on its first row.
+        if let Some(&(start, _)) = spans.iter().find(|&&(start, _)| start == row + 1) {
+            return start;
+        }
+        row + 1
+    } else {
+        // The row above is inside a band: park on its first row (the earliest,
+        // should bands ever overlap).
+        if let Some(&(start, _)) = spans
+            .iter()
+            .filter(|&&(start, end)| row > start && row <= end)
+            .min_by_key(|&&(start, _)| start)
+        {
+            return start;
+        }
+        row.saturating_sub(1)
+    }
 }
 
 // ========================================================================
@@ -547,6 +603,8 @@ impl App {
     /// buffer. Full-page moves scroll and snap the cursor to the new page's top
     /// or bottom row, like vim's `Ctrl-F`/`Ctrl-B`; half-page moves scroll and
     /// keep the cursor on its current screen row, like `Ctrl-D`/`Ctrl-U`.
+    /// A rich block's reserved band counts as one stop for `j`/`k` (see
+    /// [`vertical_band_stop`]).
     pub(crate) fn move_nav_cursor(&mut self, mv: input::CursorMove, focused: PaneId) {
         use CursorMove;
 
@@ -555,6 +613,9 @@ impl App {
             self.push_jump(focused);
         }
 
+        // The pane's block bands, gathered before the mutable pane borrow so
+        // the two borrows of `self` don't overlap.
+        let bands = self.block_bands(focused);
         // Read the stored cursor before mutably borrowing the pane so the two
         // borrows of `self` don't overlap (the method form borrows all of `self`).
         let stored = self.nav_cursors.get(&focused).copied();
@@ -567,20 +628,32 @@ impl App {
         let (mut row, mut col) = stored.unwrap_or_else(|| grid.cursor());
         row = row.min(rows.saturating_sub(1));
         col = col.min(cols.saturating_sub(1));
+        // The bands in viewport terms, clipped to the rows on screen and as
+        // `[start, end)` spans (see [`vertical_band_stop`]): only these can be
+        // motion stops or carry the block-as-cursor outline.
+        let spans: Vec<(usize, usize)> = bands
+            .iter()
+            .filter_map(|&(abs_row, band_rows)| {
+                let top = grid.to_viewport_row(abs_row);
+                let bottom = top + band_rows as isize;
+                let (start, end) = (top.max(0), bottom.min(rows as isize));
+                (start < end).then_some((start as usize, end as usize))
+            })
+            .collect();
 
         match mv {
             CursorMove::Left => col = col.saturating_sub(1),
             CursorMove::Right => col += 1,
             CursorMove::Up => {
                 if row > 0 {
-                    row -= 1;
+                    row = vertical_band_stop(&spans, row, false);
                 } else {
                     grid.scroll_up_history(1);
                 }
             }
             CursorMove::Down => {
                 if row < grid.last_content_row() {
-                    row += 1;
+                    row = vertical_band_stop(&spans, row, true);
                 } else {
                     grid.scroll_down_history(1);
                 }
@@ -1061,6 +1134,25 @@ impl App {
             self.update_visual_selection(focused);
         }
         self.dirty = true;
+    }
+
+    /// The reserved bands of every rich block in `pane_id` — natively drawn
+    /// images and WebView tiles alike — as `(abs_row, rows)` pairs in anchor
+    /// order, absolute so the bands keep naming their rows under scrolling.
+    ///
+    /// These spans are what the pane's grid reserved for a block, so they are
+    /// where a vertical motion stops once (see [`vertical_band_stop`]) and
+    /// what the block-as-cursor outline is drawn around.
+    pub(crate) fn block_bands(&self, pane_id: PaneId) -> Vec<(usize, usize)> {
+        let mut bands: Vec<(usize, usize)> = self
+            .image_blocks
+            .iter()
+            .filter(|block| block.pane_id == pane_id)
+            .map(|block| (block.abs_row, block.max_rows))
+            .collect();
+        bands.extend(self.webview_mgr.tile_bands(pane_id));
+        bands.sort_unstable_by_key(|&(abs_row, _)| abs_row);
+        bands
     }
 
     /// Move the traversal cursor to a char-search (`f`/`F`/`t`/`T`) target on the
@@ -2453,5 +2545,78 @@ mod tests {
         // Jump to prompt with `gp`
         app.handle_action(input::Action::JumpToPrompt, id);
         assert_eq!(app.nav_cursor(id), Some((2, 5)));
+    }
+
+    #[test]
+    fn test_vertical_band_stop_treats_a_band_as_one_stop_each_way() {
+        // A band spanning viewport rows [4, 9).
+        let spans = [(4, 9)];
+        // Down: entering parks on the band's first row, leaving from anywhere
+        // inside jumps past the whole band.
+        assert_eq!(vertical_band_stop(&spans, 3, true), 4);
+        assert_eq!(vertical_band_stop(&spans, 4, true), 9);
+        assert_eq!(vertical_band_stop(&spans, 6, true), 9);
+        // Up: entering from below parks on the first row, leaving from inside
+        // lands just above the band.
+        assert_eq!(vertical_band_stop(&spans, 9, false), 4);
+        assert_eq!(vertical_band_stop(&spans, 4, false), 3);
+        // Rows outside a band still move one row at a time.
+        assert_eq!(vertical_band_stop(&spans, 1, true), 2);
+        assert_eq!(vertical_band_stop(&spans, 2, false), 1);
+        assert_eq!(vertical_band_stop(&spans, 10, true), 11);
+        assert_eq!(vertical_band_stop(&spans, 12, false), 11);
+    }
+
+    #[test]
+    fn test_vertical_band_stop_without_bands_moves_one_row() {
+        assert_eq!(vertical_band_stop(&[], 5, true), 6);
+        assert_eq!(vertical_band_stop(&[], 5, false), 4);
+        // Row 0 cannot go further up.
+        assert_eq!(vertical_band_stop(&[], 0, false), 0);
+    }
+
+    #[test]
+    fn test_j_and_k_cross_a_block_band_in_one_stop_each() {
+        // Regression: a reserved band cost `j` one keypress per blank row
+        // behind the image, and the 1-cell cursor parked inside it was
+        // invisible against the block.
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        let pane = pane_with_lines(&["above", "more", "", "", "", "below"]);
+        app.panes.insert(id, pane);
+        app.modes.insert(id, Mode::Normal);
+        // A block band over the blank rows 2..5 (absolute rows 2..5, no
+        // scrollback in the fixture, so viewport rows line up with them).
+        app.image_blocks.push(crate::app::ImageBlock {
+            abs_row: 2,
+            block_index: 0,
+            closed: false,
+            fit_to_band: true,
+            id: 1,
+            max_rows: 3,
+            nat_h: 40,
+            nat_w: 80,
+            pane_id: id,
+            rastered_width: 400,
+            reflow: None,
+            segment_index: 1,
+        });
+        app.set_nav_cursor(id, (1, 0));
+
+        app.handle_action(input::Action::MoveCursor(input::CursorMove::Down), id);
+        assert_eq!(app.nav_cursor(id), Some((2, 0)), "j parks on the band");
+
+        app.handle_action(input::Action::MoveCursor(input::CursorMove::Down), id);
+        assert_eq!(
+            app.nav_cursor(id),
+            Some((5, 0)),
+            "the next j crosses the whole band in one stop"
+        );
+
+        app.handle_action(input::Action::MoveCursor(input::CursorMove::Up), id);
+        assert_eq!(app.nav_cursor(id), Some((2, 0)), "k parks on the band");
+
+        app.handle_action(input::Action::MoveCursor(input::CursorMove::Up), id);
+        assert_eq!(app.nav_cursor(id), Some((1, 0)), "and back above it");
     }
 }

@@ -350,7 +350,32 @@ impl GpuRenderer {
         );
         layers.bg_verts.extend_from_slice(&bg_verts);
 
-        if let Some((nav_row, nav_col)) = pane.nav_cursor.filter(|_| pane.nav_cursor_visible) {
+        // The block-as-cursor: while the traversal cursor sits inside a rich
+        // block's reserved band, the band itself is the cursor — an accent
+        // outline around the whole band replaces the 1-cell block, which
+        // would otherwise sit invisible in the blank space behind the image.
+        // Steady, not blinked: it is a band-sized affordance, and a rectangle
+        // that big flashing would be noise rather than feedback.
+        if let Some((band_top, band_rows)) = pane.block_band {
+            let px0 = rect.x + crate::PANE_H_PAD;
+            let py0 = rect.y + band_top as f32 * self.cell_height;
+            let px1 = px0 + pane_cols as f32 * self.cell_width;
+            let py1 = py0 + band_rows as f32 * self.cell_height;
+            for (qx0, qy0, qx1, qy1) in
+                cursor_outline_quads(px0, py0, px1 - px0, py1 - py0, CURSOR_HOLLOW_STROKE_WIDTH)
+            {
+                layers.bg_verts.extend_from_slice(&quad_vertices(
+                    qx0,
+                    qy0,
+                    qx1,
+                    qy1,
+                    self.theme.cursor_bg.as_linear(),
+                    surface.width,
+                    surface.height,
+                ));
+            }
+        } else if let Some((nav_row, nav_col)) = pane.nav_cursor.filter(|_| pane.nav_cursor_visible)
+        {
             if nav_row < pane_rows && nav_col < pane_cols {
                 let px0 = rect.x + crate::PANE_H_PAD + nav_col as f32 * self.cell_width;
                 let py0 = rect.y + nav_row as f32 * self.cell_height;

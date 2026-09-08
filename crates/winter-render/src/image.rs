@@ -32,11 +32,11 @@ const VERTS_PER_QUAD: u32 = 6;
 // ========================================================================
 
 /// Where to draw a cached image this frame, in pixels from the surface
-/// top-left. `id` keys the uploaded texture. `v_max` is the bottom texture
-/// coordinate (1.0 = whole image); values below 1.0 clip the bottom, used to
-/// keep a tall block inside the content area without squashing it. `alpha`
-/// multiplies the sampled color (1.0 = full opacity), used to dim a closed
-/// live block.
+/// top-left. `id` keys the uploaded texture. `v_min`/`v_max` bound the sampled
+/// texture rows (`0.0`/`1.0` = whole image); narrowing them crops the image
+/// rather than squashing it, which is how a block is kept inside the content
+/// area as it scrolls past either edge. `alpha` multiplies the sampled color
+/// (1.0 = full opacity), used to dim a closed live block.
 #[derive(Clone, Copy, Debug)]
 pub struct ImagePlacement {
     /// Opacity multiplier applied to the sampled color, `1.0` being fully
@@ -48,8 +48,14 @@ pub struct ImagePlacement {
     pub id: u64,
     /// Upper bound of the sampled `v` texture coordinate, `1.0` for a whole
     /// image. Below `1.0` the image is cropped from the bottom, which is how a
-    /// block taller than its reserved band is clipped.
+    /// block taller than its reserved band, or one running past the bottom of
+    /// the content area, is clipped.
     pub v_max: f32,
+    /// Lower bound of the sampled `v` texture coordinate, `0.0` for a whole
+    /// image. Above `0.0` the image is cropped from the top, which is how a
+    /// block whose band has scrolled partly above the content area keeps its
+    /// remaining rows aligned with the grid instead of disappearing.
+    pub v_min: f32,
     /// Destination width in physical pixels.
     pub width: f32,
     /// Destination left edge in physical pixels, from the window's left.
@@ -220,6 +226,15 @@ impl ImagePass {
         self.textures.contains_key(&id)
     }
 
+    /// Drop the texture cached under `id`, releasing its GPU memory. The
+    /// bind group owns the texture view, which owns the texture, so removing
+    /// it is what actually frees the memory; without this the cache only
+    /// ever grows, keeping every decoded image block alive for the life of
+    /// the process.
+    pub fn remove(&mut self, id: u64) {
+        self.textures.remove(&id);
+    }
+
     /// Upload `rgba` (tightly packed, `width * height * 4` bytes) as a texture
     /// cached under `id`, replacing any previous one.
     pub fn upload(
@@ -302,16 +317,17 @@ impl ImagePass {
             let x1 = (placement.x + placement.width) / surface_w * 2.0 - 1.0;
             let y0 = 1.0 - placement.y / surface_h * 2.0;
             let y1 = 1.0 - (placement.y + placement.height) / surface_h * 2.0;
-            let vm = placement.v_max;
+            let v0 = placement.v_min;
+            let v1 = placement.v_max;
             let a = placement.alpha;
             let first = verts.len() as u32;
             verts.extend_from_slice(&[
-                ImageVertex::new(x0, y0, 0.0, 0.0, a),
-                ImageVertex::new(x1, y0, 1.0, 0.0, a),
-                ImageVertex::new(x0, y1, 0.0, vm, a),
-                ImageVertex::new(x0, y1, 0.0, vm, a),
-                ImageVertex::new(x1, y0, 1.0, 0.0, a),
-                ImageVertex::new(x1, y1, 1.0, vm, a),
+                ImageVertex::new(x0, y0, 0.0, v0, a),
+                ImageVertex::new(x1, y0, 1.0, v0, a),
+                ImageVertex::new(x0, y1, 0.0, v1, a),
+                ImageVertex::new(x0, y1, 0.0, v1, a),
+                ImageVertex::new(x1, y0, 1.0, v0, a),
+                ImageVertex::new(x1, y1, 1.0, v1, a),
             ]);
             self.draws.push((placement.id, first));
         }

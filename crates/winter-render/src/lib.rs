@@ -18,7 +18,7 @@ mod tabbar;
 mod theme;
 
 pub use grid::{
-    Cell, CellWidth, Color, CursorShape, EraseMode, Grid, RgbColor, Style, MAX_SCROLLBACK,
+    Cell, CellWidth, Color, CursorShape, EraseMode, Grid, RgbColor, RowRemap, Style, MAX_SCROLLBACK,
 };
 pub use image::ImagePlacement;
 pub use renderer::{

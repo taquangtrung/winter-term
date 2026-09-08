@@ -51,6 +51,14 @@ impl Grid {
             EraseMode::ToStart => (0, self.cursor.row),
             EraseMode::Whole => (0, self.rows),
         };
+        // Record what this wiped, including the cursor's own row that
+        // `erase_in_line` above just handled, so the owner of any block
+        // anchored here drops it instead of leaving it drawn over new output.
+        self.record_erased_rows(match mode {
+            EraseMode::ToEnd => (self.cursor.row, self.rows),
+            EraseMode::ToStart => (0, self.cursor.row + 1),
+            EraseMode::Whole => (0, self.rows),
+        });
         for row in first..last {
             for col in 0..self.cols {
                 if let Some(index) = self.index(row, col) {
@@ -245,5 +253,34 @@ mod tests {
         assert_eq!(grid.cell(0, 0).unwrap().style.background, Color::Indexed(4));
         // Only the background carries over; the cell is otherwise blank.
         assert_eq!(grid.cell(0, 0).unwrap().ch, ' ');
+    }
+    #[test]
+    fn test_erase_in_display_records_the_absolute_span_it_blanked() {
+        // Regression: a `clear` blanked the grid but left every rich block
+        // still drawn over those rows, painting them on top of the fresh
+        // output. The erased span is what tells the owner to drop them.
+        let mut grid = Grid::new(4, 5);
+        for _ in 0..7 {
+            grid.line_feed(); // push two rows into history so live top != 0
+        }
+        let top = grid.absolute_live_top();
+        assert!(top > 0, "fixture needs a non-zero live top");
+
+        grid.move_to(2, 0);
+        grid.erase_in_display(EraseMode::Whole);
+        assert_eq!(grid.take_erased_spans(), vec![(top, top + 5)]);
+        assert!(
+            grid.take_erased_spans().is_empty(),
+            "the record is drained, not repeated"
+        );
+
+        // A partial erase reports only the rows it reached, and always
+        // includes the cursor's own row.
+        grid.move_to(2, 0);
+        grid.erase_in_display(EraseMode::ToEnd);
+        assert_eq!(grid.take_erased_spans(), vec![(top + 2, top + 5)]);
+        grid.move_to(2, 0);
+        grid.erase_in_display(EraseMode::ToStart);
+        assert_eq!(grid.take_erased_spans(), vec![(top, top + 3)]);
     }
 }

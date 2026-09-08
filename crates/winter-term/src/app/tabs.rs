@@ -253,7 +253,7 @@ impl App {
             self.nav_cursors.remove(&id);
             self.pane_titles.remove(&id);
             self.webview_mgr.remove_tiles_for_pane(id);
-            self.image_blocks.retain(|img| img.pane_id != id);
+            self.retain_image_blocks(|img| img.pane_id != id);
         }
         self.tabs.all.remove(index);
         if index < self.tabs.active {

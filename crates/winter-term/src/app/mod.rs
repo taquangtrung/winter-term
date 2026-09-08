@@ -553,7 +553,7 @@ pub struct App {
     pub(crate) window_focused: bool,
     /// The last char-search (`f`/`F`/`t`/`T`), repeated by `;` and `,`.
     pub(crate) last_find: Option<input::FindChar>,
-    pub(crate) last_tile_layout: Option<(usize, usize, u32, u32)>,
+    pub(crate) last_tile_layout: Option<(usize, usize, u32, u32, Vec<PaneId>)>,
     pub(crate) modifiers: winit::event::Modifiers,
     /// Set when the custom window-close control is clicked, drained by the mouse
     /// handler into the same quit path as a native close request.
@@ -663,7 +663,7 @@ pub(crate) enum ContextAction {
 
 /// A block drawn natively via the GPU. `id` keys the renderer's texture cache;
 /// `nat_w`/`nat_h` are the rendered pixel dimensions, used to preserve aspect
-/// ratio when placing it at `grid_row`. Width-wrapped blocks carry their source
+/// ratio when placing it at `abs_row`. Width-wrapped blocks carry their source
 /// in `reflow` so they can be re-rasterized at `rastered_width` on resize.
 pub(crate) struct ImageBlock {
     /// Scrollback block-list position of the block this image renders, used
@@ -675,7 +675,7 @@ pub(crate) struct ImageBlock {
     /// True for images/SVG (scaled down to fit the reserved band); false for
     /// text/markdown (shown at native size and clipped to the band).
     pub fit_to_band: bool,
-    pub grid_row: usize,
+    pub abs_row: usize,
     pub id: u64,
     /// Band height in rows the block is drawn into: matches the rows reserved
     /// for it in the grid, so the following prompt sits flush below.

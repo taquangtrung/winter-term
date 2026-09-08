@@ -12,6 +12,10 @@ impl Grid {
     /// the pre-clear output is no longer scrollable; also returns the view to the
     /// live bottom so the scrollbar reflects the now-empty history.
     pub fn clear_scrollback(&mut self) {
+        // Absolute addressing stays monotonic across the clear, so anchors into
+        // the discarded history resolve to nothing rather than silently
+        // re-pointing at whatever line later lands at the same index.
+        self.trimmed_rows += self.scrollback.len();
         self.scrollback.clear();
         self.scrollback_wrapped.clear();
         self.scrollback_wrap_indent.clear();
@@ -37,6 +41,7 @@ impl Grid {
             }
             if self.scrollback.len() > self.max_scrollback {
                 let excess = self.scrollback.len() - self.max_scrollback;
+                self.trimmed_rows += excess;
                 self.scrollback.drain(0..excess);
                 self.scrollback_wrapped.drain(0..excess);
                 self.scrollback_wrap_indent.drain(0..excess);
@@ -207,12 +212,52 @@ impl Grid {
         }
         if self.scrollback.len() > self.max_scrollback {
             let excess = self.scrollback.len() - self.max_scrollback;
+            self.trimmed_rows += excess;
             self.scrollback.drain(0..excess);
             self.scrollback_wrapped.drain(0..excess);
             self.scrollback_wrap_indent.drain(0..excess);
         }
         if self.cursor.row >= row {
             self.cursor.row = (self.cursor.row + n).min(self.rows - 1);
+        }
+        self.scroll_offset = 0;
+    }
+    /// Delete `n` rows starting at screen row `row`, shifting the rows below
+    /// them up and blanking the rows freed at the bottom. The mirror of
+    /// [`Self::insert_rows_at`], and the same shape as [`Self::delete_lines`]
+    /// except that it ignores the scroll region and addresses a given row
+    /// rather than the cursor's.
+    ///
+    /// Used to hand back the part of a block's reserved band the block turned
+    /// out not to need, once its content has actually been laid out. The
+    /// cursor rides the shift when it sits below the removed rows, so the
+    /// shell's prompt stays under the block instead of being left with a gap
+    /// above it. Ignored on the alternate screen, where reserved bands do not
+    /// render.
+    pub fn remove_rows_at(&mut self, row: usize, n: usize) {
+        if n == 0 || row >= self.rows || self.alt_buffer.is_some() {
+            return;
+        }
+        let n = n.min(self.rows - row);
+        let moved = self.rows - row - n;
+        self.copy_cells_within(
+            (row + n) * self.cols..self.rows * self.cols,
+            row * self.cols,
+        );
+        self.row_wrapped.copy_within(row + n..self.rows, row);
+        self.row_wrap_indent.copy_within(row + n..self.rows, row);
+        for r in row + moved..self.rows {
+            let start = r * self.cols;
+            for i in start..start + self.cols {
+                self.cells[i] = self.blank_cell();
+            }
+            self.row_wrapped[r] = false;
+            self.row_wrap_indent[r] = 0;
+        }
+        if self.cursor.row >= row + n {
+            self.cursor.row -= n;
+        } else if self.cursor.row > row {
+            self.cursor.row = row;
         }
         self.scroll_offset = 0;
     }
@@ -381,6 +426,94 @@ mod tests {
         let abs_after = grid.to_absolute_row(1);
         assert_eq!(abs_before, abs_after);
         assert_eq!(grid.absolute_cell(abs_after, 0).map(|c| c.ch), Some('d'));
+    }
+    #[test]
+    fn test_remove_rows_at_pulls_the_rows_below_up_and_blanks_the_tail() {
+        // Handing back the unused part of a block's band must close the gap:
+        // the rows under it move up by exactly `n`, and the rows freed at the
+        // bottom come back blank rather than repeating the old tail.
+        // Six rows so the fixture's four lines fit without scrolling any of
+        // them into history before the removal.
+        let mut grid = Grid::new(3, 6);
+        for line in ["aaa", "bbb", "ccc", "ddd"] {
+            for ch in line.chars() {
+                grid.print(ch);
+            }
+            grid.carriage_return();
+            grid.line_feed();
+        }
+        grid.remove_rows_at(1, 2); // drop "bbb" and "ccc"
+        let row = |r: usize| -> String {
+            (0..3)
+                .map(|c| grid.visible_cell(r, c).map(|x| x.ch).unwrap_or(' '))
+                .collect()
+        };
+        assert_eq!(row(0), "aaa");
+        assert_eq!(row(1), "ddd", "the row below the removal moved up by two");
+        assert_eq!(row(2), "   ", "and the freed tail is blank");
+        assert_eq!(row(3), "   ");
+        assert_eq!(grid.scrollback_len(), 0, "nothing was pushed into history");
+    }
+
+    #[test]
+    fn test_remove_rows_at_carries_the_cursor_so_the_prompt_stays_put() {
+        // The shell's prompt sits below the band. If the cursor did not ride
+        // the shift, shrinking the band would leave the prompt stranded a few
+        // rows lower than the text it belongs to.
+        let mut grid = Grid::new(3, 6);
+        grid.move_to(5, 0);
+        grid.remove_rows_at(1, 2);
+        assert_eq!(grid.cursor().0, 3);
+
+        // A cursor inside the removed span has nowhere to ride to; it lands on
+        // the first surviving row rather than underflowing.
+        let mut grid = Grid::new(3, 6);
+        grid.move_to(2, 0);
+        grid.remove_rows_at(1, 2);
+        assert_eq!(grid.cursor().0, 1);
+    }
+
+    #[test]
+    fn test_to_absolute_row_is_stable_as_the_retention_budget_evicts_history() {
+        // Regression: absolute rows counted from the oldest *retained* line, so
+        // every eviction slid the whole address space down by one. A long-lived
+        // anchor (a rich block's reserved band, a `gv` selection) then named a
+        // line further and further below the text it was captured on.
+        let mut grid = Grid::new(3, 2).with_max_scrollback(2);
+        for ch in "abcdefghi".chars() {
+            grid.print(ch);
+        }
+        grid.scroll_up(1); // scrollback: abc, def; live: ghi, blank.
+        let abs_ghi = grid.to_absolute_row(0);
+        assert_eq!(grid.absolute_cell(abs_ghi, 0).map(|c| c.ch), Some('g'));
+
+        grid.scroll_up(1); // "abc" is evicted; scrollback: def, ghi.
+        assert_eq!(grid.scrollback_len(), 2, "the budget held at two rows");
+        assert_eq!(
+            grid.absolute_cell(abs_ghi, 0).map(|c| c.ch),
+            Some('g'),
+            "the anchor still names the line it was captured on"
+        );
+        assert_eq!(
+            grid.to_viewport_row(abs_ghi),
+            -1,
+            "now one row above the view"
+        );
+    }
+    #[test]
+    fn test_absolute_cell_reports_a_line_evicted_from_history_as_gone() {
+        // An anchor whose line has been dropped must read as absent rather
+        // than silently resolving to whatever line now sits at that index.
+        let mut grid = Grid::new(3, 2).with_max_scrollback(2);
+        for ch in "abcdefghi".chars() {
+            grid.print(ch); // scrollback: abc; live: def, ghi.
+        }
+        let abs_abc = grid.to_absolute_row(0) - grid.scrollback_len();
+        assert_eq!(grid.absolute_cell(abs_abc, 0).map(|c| c.ch), Some('a'));
+
+        grid.scroll_up(1); // scrollback: abc, def.
+        grid.scroll_up(1); // "abc" falls off the front of the budget.
+        assert_eq!(grid.absolute_cell(abs_abc, 0), None);
     }
     #[test]
     fn test_absolute_cell_reads_scrollback_and_live_rows() {
