@@ -60,6 +60,15 @@ const MAX_HISTORY: usize = 100;
 // Data Structures
 // ========================================================================
 
+/// The first key of a two-key sequence, waiting for its second.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Leader {
+    /// `Ctrl-c`, followed by a digit: expand the tree to that depth.
+    Depth,
+    /// `z`, followed by a fold command.
+    Fold,
+}
+
 /// A directory listing the keyboard drives: move, fold, descend, and open.
 #[derive(Clone, Debug)]
 pub struct DirPage {
@@ -73,7 +82,7 @@ pub struct DirPage {
     message: Option<String>,
     marks: Marks,
     /// The first key of a two-key sequence, waiting for its second.
-    pending: Option<char>,
+    pending: Option<Leader>,
     root: PathBuf,
     rows: Vec<Row>,
     /// First listed row visible in the pane.
@@ -279,9 +288,73 @@ impl DirPage {
             return;
         }
         for path in collapsed {
-            self.folds.toggle(&path);
+            self.folds.expand(&path);
         }
         self.reload_keeping_selection();
+    }
+
+    /// Collapse everything if anything is open, else open one level. One key
+    /// that always does the thing the listing is not already showing.
+    fn toggle_fold_all(&mut self) {
+        let any_open = self.rows.iter().any(|row| row.expanded);
+        if any_open {
+            self.folds.collapse_all();
+            self.reload_keeping_selection();
+        } else {
+            self.expand_one_level();
+        }
+    }
+
+    /// Expand every directory down to `depth` levels below the root, reading
+    /// only as far as asked: depth 0 collapses everything.
+    fn expand_to_depth(&mut self, depth: usize) {
+        self.folds.collapse_all();
+        for _ in 0..depth {
+            self.reload();
+            self.expand_one_level();
+        }
+        self.reload_keeping_selection();
+    }
+
+    /// Open the whole subtree under the cursor, bounded by the reader's own
+    /// depth cap so a deep tree cannot be read without limit.
+    fn expand_subtree(&mut self) {
+        let Some(root) = self.selected().map(|row| row.entry.path.clone()) else {
+            return;
+        };
+        for path in source::descendant_dirs(&root, self.show_hidden) {
+            self.folds.expand(&path);
+        }
+        self.folds.expand(&root);
+        self.reload_keeping_selection();
+    }
+
+    /// Close the whole subtree under the cursor, the directory included.
+    fn collapse_subtree(&mut self) {
+        let Some(root) = self.selected().map(|row| row.entry.path.clone()) else {
+            return;
+        };
+        self.folds.collapse_under(&root);
+        self.reload_keeping_selection();
+    }
+
+    /// Open the subtree under the cursor, or close it when it is already open.
+    fn toggle_subtree(&mut self) {
+        let open = self.selected().is_some_and(|row| row.expanded);
+        if open {
+            self.collapse_subtree();
+        } else {
+            self.expand_subtree();
+        }
+    }
+
+    fn unmark_selected(&mut self) {
+        let Some(row) = self.selected() else {
+            return;
+        };
+        let path = row.entry.path.clone();
+        self.marks.remove(&path);
+        self.move_by(1);
     }
 
     fn toggle_fold(&mut self) {
@@ -534,17 +607,24 @@ impl DirPage {
 
     /// Resolve the second key of a two-key sequence. An unrecognized follow key
     /// abandons the sequence rather than holding it for the next keystroke.
-    fn resolve_pending(&mut self, leader: char, code: KeyCode) -> PageOutcome {
+    fn resolve_pending(&mut self, leader: Leader, key: &Key) -> PageOutcome {
         self.pending = None;
-        match (leader, code) {
-            ('g', KeyCode::Char('g')) => self.cursor = 0,
-            ('z', KeyCode::Char('o')) => self.expand_selected(true),
-            ('z', KeyCode::Char('c')) => self.expand_selected(false),
-            ('z', KeyCode::Char('a')) => self.toggle_fold(),
-            ('z', KeyCode::Char('R')) => self.expand_one_level(),
-            ('z', KeyCode::Char('M')) => {
+        match (leader, key.code) {
+            (Leader::Fold, KeyCode::Char('a')) | (Leader::Fold, KeyCode::Char('A')) => {
+                self.toggle_fold_all()
+            }
+            (Leader::Fold, KeyCode::Char('c')) => {
                 self.folds.collapse_all();
                 self.reload_keeping_selection();
+            }
+            (Leader::Fold, KeyCode::Char('u')) | (Leader::Fold, KeyCode::Char('d')) => {
+                self.expand_subtree()
+            }
+            (Leader::Fold, KeyCode::Char('f')) => self.collapse_subtree(),
+            (Leader::Fold, KeyCode::Char('t')) => self.toggle_subtree(),
+            (Leader::Depth, KeyCode::Char(digit)) if digit.is_ascii_digit() => {
+                let depth = digit.to_digit(10).unwrap_or(0) as usize;
+                self.expand_to_depth(depth);
             }
             _ => {}
         }
@@ -567,6 +647,8 @@ impl DirPage {
 impl Page for DirPage {
     fn on_job(&mut self, reply: JobReply) -> PageOutcome {
         match reply {
+            // A listing runs no commands of its own.
+            JobReply::Command(_) => return PageOutcome::Consumed,
             JobReply::DirSize { bytes, path } => {
                 self.sizes.insert(path, bytes);
             }
@@ -624,7 +706,13 @@ impl Page for DirPage {
     fn on_key(&mut self, key: &Key) -> PageOutcome {
         self.message = None;
         if let Some(leader) = self.pending {
-            return self.resolve_pending(leader, key.code);
+            return self.resolve_pending(leader, key);
+        }
+        if key.alt {
+            return self.on_alt_key(key);
+        }
+        if key.ctrl {
+            return self.on_ctrl_key(key);
         }
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -635,62 +723,35 @@ impl Page for DirPage {
                 self.move_by(-1);
                 PageOutcome::Consumed
             }
-            KeyCode::Char('g') | KeyCode::Char('z') => {
-                self.pending = match key.code {
-                    KeyCode::Char(c) => Some(c),
-                    _ => None,
-                };
+            KeyCode::Home => {
+                self.cursor = 0;
                 PageOutcome::Consumed
             }
-            KeyCode::Char('G') => {
+            KeyCode::End => {
                 self.cursor = self.rows.len().saturating_sub(1);
                 PageOutcome::Consumed
             }
-            KeyCode::Char('l') | KeyCode::Enter | KeyCode::Right => self.enter(),
+            KeyCode::Char('z') => {
+                self.pending = Some(Leader::Fold);
+                PageOutcome::Consumed
+            }
+            KeyCode::Enter => self.enter(),
+            KeyCode::Char('l') | KeyCode::Right => {
+                self.expand_selected(true);
+                PageOutcome::Consumed
+            }
             KeyCode::Char('h') | KeyCode::Left => {
                 self.fold_or_step_out();
                 PageOutcome::Consumed
             }
-            KeyCode::Char('-') => {
+            KeyCode::Backspace => {
                 self.ascend();
                 PageOutcome::Consumed
             }
-            KeyCode::Char('^') => {
-                if let Some(parent) = self.parent_row(self.cursor) {
-                    self.cursor = parent;
-                }
+            KeyCode::Tab if key.shift => {
+                self.toggle_fold_all();
                 PageOutcome::Consumed
             }
-            KeyCode::Char(']') => {
-                if let Some(next) = self.sibling_after(self.cursor) {
-                    self.cursor = next;
-                }
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('[') => {
-                if let Some(previous) = self.sibling_before(self.cursor) {
-                    self.cursor = previous;
-                }
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('}') => {
-                if let Some(child) = self.first_child(self.cursor) {
-                    self.cursor = child;
-                }
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('o') if key.ctrl => {
-                self.go_back();
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('i') if key.ctrl => {
-                self.go_forward();
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('o') => self
-                .selected()
-                .map(|row| PageOutcome::OpenExternal(row.entry.path.clone()))
-                .unwrap_or(PageOutcome::Consumed),
             KeyCode::Tab => {
                 self.toggle_fold();
                 PageOutcome::Consumed
@@ -709,32 +770,98 @@ impl Page for DirPage {
                 self.reload_keeping_selection();
                 PageOutcome::Consumed
             }
-            KeyCode::Char('r') => {
+            KeyCode::Char('G') => {
                 self.reload_keeping_selection();
                 PageOutcome::Consumed
             }
-            KeyCode::Char('S') => self.toggle_sizes(),
             KeyCode::Char('m') => {
                 self.toggle_mark();
                 PageOutcome::Consumed
             }
-            KeyCode::Char('*') => {
+            KeyCode::Char('M') => {
                 self.mark_all();
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('u') => {
+                self.unmark_selected();
                 PageOutcome::Consumed
             }
             KeyCode::Char('U') => {
                 self.marks.clear();
                 PageOutcome::Consumed
             }
-            KeyCode::Char('a') => self.ask(ASK_NEW_FILE, "New file: ".to_string(), String::new()),
-            KeyCode::Char('A') => self.ask(ASK_MKDIR, "New directory: ".to_string(), String::new()),
+            KeyCode::Char('_') => self.ask(ASK_NEW_FILE, "New file: ".to_string(), String::new()),
+            KeyCode::Char('+') => self.ask(ASK_MKDIR, "New directory: ".to_string(), String::new()),
             KeyCode::Char('R') => self.ask_rename(),
             KeyCode::Char('C') => self.ask_destination(ASK_COPY, "Copy"),
-            KeyCode::Char('M') => self.ask_destination(ASK_MOVE, "Move"),
-            KeyCode::Char('D') => self.ask_delete(),
-            KeyCode::Char('x') => self.ask(ASK_MODE, "Mode: ".to_string(), String::new()),
+            KeyCode::Char('x') => self.ask_delete(),
+            KeyCode::Char('*') => self.ask(ASK_MODE, "Mode: ".to_string(), String::new()),
+            KeyCode::Char('&') => self
+                .selected()
+                .map(|row| PageOutcome::OpenExternal(row.entry.path.clone()))
+                .unwrap_or(PageOutcome::Consumed),
+            // Escape stops the size walks when any are running, since that is
+            // the slow thing a listing does; with none running it closes.
+            KeyCode::Escape if self.show_sizes => self.toggle_sizes(),
             KeyCode::Char('q') | KeyCode::Escape => PageOutcome::Close,
             // Every other key belongs to the host.
+            _ => PageOutcome::Ignored,
+        }
+    }
+}
+
+// ========================================================================
+// DirPage: modified keys
+// ========================================================================
+
+impl DirPage {
+    fn on_alt_key(&mut self, key: &Key) -> PageOutcome {
+        match key.code {
+            KeyCode::Char('n') => {
+                if let Some(next) = self.sibling_after(self.cursor) {
+                    self.cursor = next;
+                }
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('p') => {
+                if let Some(previous) = self.sibling_before(self.cursor) {
+                    self.cursor = previous;
+                }
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('u') => {
+                if let Some(parent) = self.parent_row(self.cursor) {
+                    self.cursor = parent;
+                }
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('d') => {
+                if let Some(child) = self.first_child(self.cursor) {
+                    self.cursor = child;
+                }
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('m') => self.ask_destination(ASK_MOVE, "Move"),
+            // Shift-Alt pairs: history, and the size walk.
+            KeyCode::Char('B') => {
+                self.go_back();
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('F') => {
+                self.go_forward();
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('S') => self.toggle_sizes(),
+            _ => PageOutcome::Ignored,
+        }
+    }
+
+    fn on_ctrl_key(&mut self, key: &Key) -> PageOutcome {
+        match key.code {
+            KeyCode::Char('c') => {
+                self.pending = Some(Leader::Depth);
+                PageOutcome::Consumed
+            }
             _ => PageOutcome::Ignored,
         }
     }
@@ -797,6 +924,15 @@ mod tests {
     fn press(code: KeyCode) -> Key {
         Key {
             alt: false,
+            code,
+            ctrl: false,
+            shift: false,
+        }
+    }
+
+    fn alt(code: KeyCode) -> Key {
+        Key {
+            alt: true,
             code,
             ctrl: false,
             shift: false,
@@ -912,31 +1048,30 @@ mod tests {
     }
 
     #[test]
-    fn test_gg_and_shift_g_jump_to_the_ends() {
+    fn test_home_and_end_jump_to_the_ends() {
         let tree = TempTree::new("jumps");
         tree.touch("a.txt");
         tree.touch("b.txt");
         tree.touch("c.txt");
         let mut page = DirPage::new(tree.0.clone());
 
-        page.on_key(&press(KeyCode::Char('G')));
+        page.on_key(&press(KeyCode::End));
         assert_eq!(selected_name(&page), "c.txt");
-        page.on_key(&press(KeyCode::Char('g')));
-        page.on_key(&press(KeyCode::Char('g')));
+        page.on_key(&press(KeyCode::Home));
         assert_eq!(selected_name(&page), "a.txt");
     }
 
     #[test]
-    fn test_a_stray_g_sequence_is_abandoned_not_left_pending() {
-        // A pending `g` that survived an unrelated key would swallow the next
+    fn test_a_stray_fold_sequence_is_abandoned_not_left_pending() {
+        // A pending `z` that survived an unrelated key would swallow the next
         // keystroke as well.
         let tree = TempTree::new("pending");
         tree.touch("a.txt");
         tree.touch("b.txt");
         let mut page = DirPage::new(tree.0.clone());
 
-        page.on_key(&press(KeyCode::Char('g')));
-        page.on_key(&press(KeyCode::Char('x')));
+        page.on_key(&press(KeyCode::Char('z')));
+        page.on_key(&press(KeyCode::Char('!')));
         assert!(page.pending.is_none());
         page.on_key(&press(KeyCode::Char('j')));
         assert_eq!(selected_name(&page), "b.txt");
@@ -961,11 +1096,11 @@ mod tests {
         page.on_key(&press(KeyCode::Char('j')));
         assert_eq!(selected_name(&page), "child-a.txt");
 
-        page.on_key(&press(KeyCode::Char(']')));
+        page.on_key(&alt(KeyCode::Char('n')));
         assert_eq!(selected_name(&page), "child-b.txt");
-        page.on_key(&press(KeyCode::Char(']')));
+        page.on_key(&alt(KeyCode::Char('n')));
         assert_eq!(selected_name(&page), "child-b.txt", "no escape upward");
-        page.on_key(&press(KeyCode::Char('[')));
+        page.on_key(&alt(KeyCode::Char('p')));
         assert_eq!(selected_name(&page), "child-a.txt");
     }
 
@@ -975,11 +1110,11 @@ mod tests {
         let mut page = DirPage::new(tree.0.clone());
         page.on_key(&press(KeyCode::Tab));
 
-        page.on_key(&press(KeyCode::Char('}')));
+        page.on_key(&alt(KeyCode::Char('d')));
         assert_eq!(selected_name(&page), "child-a.txt");
-        page.on_key(&press(KeyCode::Char('^')));
+        page.on_key(&alt(KeyCode::Char('u')));
         assert_eq!(selected_name(&page), "nested");
-        page.on_key(&press(KeyCode::Char('^')));
+        page.on_key(&alt(KeyCode::Char('u')));
         assert_eq!(
             selected_name(&page),
             "nested",
@@ -1019,9 +1154,9 @@ mod tests {
         page.on_key(&press(KeyCode::Enter));
         assert_eq!(page.root, nested);
 
-        page.on_key(&ctrl(KeyCode::Char('o')));
+        page.on_key(&alt(KeyCode::Char('B')));
         assert_eq!(page.root, tree.0, "back returns to where it came from");
-        page.on_key(&ctrl(KeyCode::Char('i')));
+        page.on_key(&alt(KeyCode::Char('F')));
         assert_eq!(page.root, nested, "forward undoes the step back");
     }
 
@@ -1030,9 +1165,9 @@ mod tests {
         let (tree, _) = tree_with_nested_children("history-ends");
         let mut page = DirPage::new(tree.0.clone());
 
-        page.on_key(&ctrl(KeyCode::Char('o')));
+        page.on_key(&alt(KeyCode::Char('B')));
         assert_eq!(page.root, tree.0);
-        page.on_key(&ctrl(KeyCode::Char('i')));
+        page.on_key(&alt(KeyCode::Char('F')));
         assert_eq!(page.root, tree.0);
     }
 
@@ -1043,62 +1178,100 @@ mod tests {
         let (tree, nested) = tree_with_nested_children("history-branch");
         let mut page = DirPage::new(tree.0.clone());
         page.on_key(&press(KeyCode::Enter));
-        page.on_key(&ctrl(KeyCode::Char('o')));
+        page.on_key(&alt(KeyCode::Char('B')));
         assert!(!page.forward.is_empty());
 
-        page.on_key(&press(KeyCode::Char('-')));
+        page.on_key(&press(KeyCode::Backspace));
         assert!(page.forward.is_empty());
-        page.on_key(&ctrl(KeyCode::Char('i')));
+        page.on_key(&alt(KeyCode::Char('F')));
         assert_ne!(page.root, nested);
     }
 
     #[test]
-    fn test_zr_expands_one_level_at_a_time() {
-        // Expanding the whole tree at once can read an unbounded number of
-        // directories; each press must reach exactly one level further.
-        let tree = TempTree::new("zr");
+    fn test_za_opens_one_level_then_closes_everything() {
+        // One key that always does what the listing is not already showing:
+        // open when shut, shut when anything is open.
+        let tree = TempTree::new("fold-all");
+        let nested = tree.dir("nested");
+        fs::create_dir_all(nested.join("deeper")).expect("deeper dir");
+        let mut page = DirPage::new(tree.0.clone());
+
+        assert_eq!(page.rows.len(), 1);
+        page.on_key(&press(KeyCode::Char('z')));
+        page.on_key(&press(KeyCode::Char('a')));
+        assert_eq!(page.rows.len(), 2, "nested is open, deeper is not");
+
+        page.on_key(&press(KeyCode::Char('z')));
+        page.on_key(&press(KeyCode::Char('a')));
+        assert_eq!(page.rows.len(), 1, "and closed again");
+    }
+
+    #[test]
+    fn test_the_depth_keys_open_exactly_that_many_levels() {
+        // Reading the whole tree to show two levels is the mistake; each depth
+        // must read only as far as it shows.
+        let tree = TempTree::new("depth");
         let nested = tree.dir("nested");
         fs::create_dir_all(nested.join("deeper")).expect("deeper dir");
         fs::write(nested.join("deeper").join("leaf.txt"), "x").expect("leaf");
         let mut page = DirPage::new(tree.0.clone());
 
-        assert_eq!(page.rows.len(), 1);
-        page.on_key(&press(KeyCode::Char('z')));
-        page.on_key(&press(KeyCode::Char('R')));
-        assert_eq!(page.rows.len(), 2, "nested is open, deeper is not");
-        page.on_key(&press(KeyCode::Char('z')));
-        page.on_key(&press(KeyCode::Char('R')));
-        assert_eq!(page.rows.len(), 3, "one level further");
+        page.on_key(&ctrl(KeyCode::Char('c')));
+        page.on_key(&press(KeyCode::Char('1')));
+        assert_eq!(page.rows.len(), 2, "nested opens, deeper stays shut");
+
+        page.on_key(&ctrl(KeyCode::Char('c')));
+        page.on_key(&press(KeyCode::Char('2')));
+        assert_eq!(page.rows.len(), 3, "deeper opens, showing its leaf");
+
+        page.on_key(&ctrl(KeyCode::Char('c')));
+        page.on_key(&press(KeyCode::Char('0')));
+        assert_eq!(page.rows.len(), 1, "depth zero is everything closed");
     }
 
     #[test]
-    fn test_zo_and_zc_are_not_toggles() {
-        // `zo` on an open directory must leave it open, not close it.
-        let (tree, _) = tree_with_nested_children("zoc");
+    fn test_zu_opens_a_whole_subtree_and_zf_shuts_it() {
+        let tree = TempTree::new("subtree");
+        let nested = tree.dir("nested");
+        fs::create_dir_all(nested.join("deeper")).expect("deeper dir");
+        fs::write(nested.join("deeper").join("leaf.txt"), "x").expect("leaf");
+        let mut page = DirPage::new(tree.0.clone());
+
+        page.on_key(&press(KeyCode::Char('z')));
+        page.on_key(&press(KeyCode::Char('u')));
+        assert_eq!(page.rows.len(), 3, "the whole subtree, in one key");
+
+        page.on_key(&press(KeyCode::Char('z')));
+        page.on_key(&press(KeyCode::Char('f')));
+        assert_eq!(page.rows.len(), 1, "and shut, children included");
+    }
+
+    #[test]
+    fn test_l_expands_and_is_not_a_toggle() {
+        // `l` on an open directory must leave it open: it opens, and `h` is
+        // what closes, so holding either never flaps the tree.
+        let (tree, _) = tree_with_nested_children("expand-key");
         let mut page = DirPage::new(tree.0.clone());
 
         for _ in 0..2 {
-            page.on_key(&press(KeyCode::Char('z')));
-            page.on_key(&press(KeyCode::Char('o')));
+            page.on_key(&press(KeyCode::Char('l')));
         }
         assert_eq!(page.rows.len(), 4, "still expanded");
 
-        for _ in 0..2 {
-            page.on_key(&press(KeyCode::Char('z')));
-            page.on_key(&press(KeyCode::Char('c')));
-        }
-        assert_eq!(page.rows.len(), 2, "still collapsed");
+        page.on_key(&press(KeyCode::Char('h')));
+        assert_eq!(page.rows.len(), 2, "closed, cursor still on it");
+        assert_eq!(selected_name(&page), "nested");
     }
 
     #[test]
-    fn test_zm_collapses_everything() {
+    fn test_zc_collapses_everything() {
         let (tree, _) = tree_with_nested_children("zm");
         let mut page = DirPage::new(tree.0.clone());
         page.on_key(&press(KeyCode::Tab));
         assert_eq!(page.rows.len(), 4);
 
         page.on_key(&press(KeyCode::Char('z')));
-        page.on_key(&press(KeyCode::Char('M')));
+        page.on_key(&press(KeyCode::Char('c')));
         assert_eq!(page.rows.len(), 2);
     }
 
@@ -1108,7 +1281,7 @@ mod tests {
         let file = tree.touch("photo.png");
         let mut page = DirPage::new(tree.0.clone());
         assert_eq!(
-            page.on_key(&press(KeyCode::Char('o'))),
+            page.on_key(&press(KeyCode::Char('&'))),
             PageOutcome::OpenExternal(file)
         );
     }
@@ -1146,7 +1319,7 @@ mod tests {
 
         page.on_key(&press(KeyCode::Char('m')));
         assert_eq!(selected_name(&page), "untouched.txt");
-        let outcome = page.on_key(&press(KeyCode::Char('D')));
+        let outcome = page.on_key(&press(KeyCode::Char('x')));
         answer(&mut page, outcome, "y");
 
         assert!(!tree.path("marked.txt").exists());
@@ -1162,7 +1335,7 @@ mod tests {
         page.on_key(&press(KeyCode::Char('m')));
         page.on_key(&press(KeyCode::Char('m')));
 
-        let PageOutcome::Prompt(request) = page.on_key(&press(KeyCode::Char('D'))) else {
+        let PageOutcome::Prompt(request) = page.on_key(&press(KeyCode::Char('x'))) else {
             panic!("expected a prompt");
         };
         assert!(request.label.contains('2'), "got {:?}", request.label);
@@ -1175,7 +1348,7 @@ mod tests {
         tree.touch("keep.txt");
         let mut page = DirPage::new(tree.0.clone());
 
-        let PageOutcome::Prompt(request) = page.on_key(&press(KeyCode::Char('D'))) else {
+        let PageOutcome::Prompt(request) = page.on_key(&press(KeyCode::Char('x'))) else {
             panic!("expected a prompt");
         };
         page.on_prompt(PromptReply {
@@ -1190,7 +1363,7 @@ mod tests {
         let tree = TempTree::new("crud");
         let mut page = DirPage::new(tree.0.clone());
 
-        let outcome = page.on_key(&press(KeyCode::Char('a')));
+        let outcome = page.on_key(&press(KeyCode::Char('_')));
         answer(&mut page, outcome, "notes.txt");
         assert!(tree.path("notes.txt").exists());
         assert_eq!(selected_name(&page), "notes.txt", "the cursor follows it");
@@ -1200,7 +1373,7 @@ mod tests {
         assert!(tree.path("renamed.md").exists());
         assert!(!tree.path("notes.txt").exists());
 
-        let outcome = page.on_key(&press(KeyCode::Char('D')));
+        let outcome = page.on_key(&press(KeyCode::Char('x')));
         answer(&mut page, outcome, "y");
         assert!(!tree.path("renamed.md").exists());
         assert!(page.rows.is_empty());
@@ -1211,7 +1384,7 @@ mod tests {
         let tree = TempTree::new("mkdir");
         let mut page = DirPage::new(tree.0.clone());
 
-        let outcome = page.on_key(&press(KeyCode::Char('A')));
+        let outcome = page.on_key(&press(KeyCode::Char('+')));
         answer(&mut page, outcome, "sub");
         assert!(tree.path("sub").is_dir());
     }
@@ -1230,7 +1403,7 @@ mod tests {
             "a copy leaves the source"
         );
 
-        let outcome = page.on_key(&press(KeyCode::Char('M')));
+        let outcome = page.on_key(&alt(KeyCode::Char('m')));
         answer(&mut page, outcome, "moved.txt");
         assert!(tree.path("moved.txt").exists());
     }
@@ -1249,7 +1422,7 @@ mod tests {
         page.on_key(&press(KeyCode::Char('m')));
         assert_eq!(page.marks.len(), 2);
 
-        let outcome = page.on_key(&press(KeyCode::Char('M')));
+        let outcome = page.on_key(&alt(KeyCode::Char('m')));
         answer(&mut page, outcome, "target");
         assert!(tree.path("target").join("one.txt").exists());
         assert!(tree.path("target").join("two.txt").exists());
@@ -1262,7 +1435,7 @@ mod tests {
         let tree = TempTree::new("bad-name");
         let mut page = DirPage::new(tree.0.clone());
 
-        let outcome = page.on_key(&press(KeyCode::Char('a')));
+        let outcome = page.on_key(&press(KeyCode::Char('_')));
         answer(&mut page, outcome, "../escape.txt");
         let message = page.message.clone().unwrap_or_default();
         assert!(message.starts_with("failed:"), "got {message:?}");
@@ -1307,7 +1480,7 @@ mod tests {
         let second = tree.dir("bbb");
         let mut page = DirPage::new(tree.0.clone());
 
-        let outcome = page.on_key(&press(KeyCode::Char('S')));
+        let outcome = page.on_key(&alt(KeyCode::Char('S')));
         assert_eq!(
             outcome,
             PageOutcome::Job(JobRequest::DirSize(first.clone()))
@@ -1332,9 +1505,9 @@ mod tests {
         tree.dir("aaa");
         let mut page = DirPage::new(tree.0.clone());
 
-        page.on_key(&press(KeyCode::Char('S')));
+        page.on_key(&alt(KeyCode::Char('S')));
         assert_eq!(
-            page.on_key(&press(KeyCode::Char('S'))),
+            page.on_key(&alt(KeyCode::Char('S'))),
             PageOutcome::CancelJobs
         );
     }
@@ -1346,8 +1519,8 @@ mod tests {
         let tree = TempTree::new("sizes-late");
         let dir = tree.dir("aaa");
         let mut page = DirPage::new(tree.0.clone());
-        page.on_key(&press(KeyCode::Char('S')));
-        page.on_key(&press(KeyCode::Char('S')));
+        page.on_key(&alt(KeyCode::Char('S')));
+        page.on_key(&alt(KeyCode::Char('S')));
 
         let outcome = page.on_job(JobReply::DirSize {
             bytes: 1,
@@ -1362,17 +1535,17 @@ mod tests {
         // total into a different directory is the wrong one.
         let (tree, nested) = tree_with_nested_children("sizes-cache");
         let mut page = DirPage::new(tree.0.clone());
-        page.on_key(&press(KeyCode::Char('S')));
+        page.on_key(&alt(KeyCode::Char('S')));
         page.on_job(JobReply::DirSize {
             bytes: 64,
             path: nested.clone(),
         });
         assert_eq!(page.sizes.get(&nested).copied(), Some(64));
 
-        page.on_key(&press(KeyCode::Char('r')));
+        page.on_key(&press(KeyCode::Char('G')));
         assert_eq!(page.sizes.get(&nested).copied(), Some(64));
 
-        page.on_key(&press(KeyCode::Char('-')));
+        page.on_key(&press(KeyCode::Backspace));
         assert!(page.sizes.is_empty(), "a new root re-walks");
     }
 
@@ -1401,8 +1574,7 @@ mod tests {
         );
         assert_eq!(content.rows.len(), pane_rows);
 
-        page.on_key(&press(KeyCode::Char('g')));
-        page.on_key(&press(KeyCode::Char('g')));
+        page.on_key(&press(KeyCode::Home));
         assert_eq!(
             page.content(pane_rows).cursor_line,
             Some(HEADER_ROWS),

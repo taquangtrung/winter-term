@@ -629,6 +629,7 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ("export_scrollback_html", "Export: Scrollback to HTML", ""),
         ("dir_page", "Dir: Open Working Directory", ""),
         ("focus_down", "Focus Pane Down", ""),
+        ("git_page", "Git: Status", ""),
         ("focus_left", "Focus Pane Left", ""),
         ("focus_right", "Focus Pane Right", ""),
         ("focus_up", "Focus Pane Up", ""),

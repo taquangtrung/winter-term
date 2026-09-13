@@ -8,6 +8,7 @@ use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
 use crate::model::page::{Page, PageOutcome, PromptMode, PromptReply, PromptRequest};
 use crate::tools::dir::DirPage;
+use crate::tools::git::GitPage;
 use crate::tools::keys::KeysPage;
 
 use super::App;
@@ -19,6 +20,9 @@ use super::App;
 /// Tool name recorded for the directory listing, so its own chord toggles it.
 const DIR_TOOL: &str = "dir";
 
+/// Tool name recorded for the git view.
+const GIT_TOOL: &str = "git";
+
 /// Tool name recorded for the keys page.
 const KEYS_TOOL: &str = "keys";
 
@@ -27,7 +31,11 @@ const CARET: char = '\u{2502}';
 
 /// The glyph each tool shows in the status bar, in place of a mode icon. One
 /// line per tool, from the Font Awesome range every Nerd Font carries.
-const TOOL_ICONS: [(&str, char); 2] = [(DIR_TOOL, '\u{f07b}'), (KEYS_TOOL, '\u{f11c}')];
+const TOOL_ICONS: [(&str, char); 3] = [
+    (DIR_TOOL, '\u{f07b}'),
+    (GIT_TOOL, '\u{f1d3}'),
+    (KEYS_TOOL, '\u{f11c}'),
+];
 
 // ========================================================================
 // Data Structures
@@ -85,12 +93,31 @@ impl App {
         if self.close_page_if_showing(DIR_TOOL) {
             return;
         }
-        let root = self
-            .focused_cwd()
+        self.show_page(DIR_TOOL, Box::new(DirPage::new(self.page_start_dir())));
+    }
+
+    /// Show the working tree's state over the focused pane, for the repository
+    /// containing that pane's working directory.
+    pub(crate) fn open_git_page(&mut self) {
+        if self.close_page_if_showing(GIT_TOOL) {
+            return;
+        }
+        let page = GitPage::new(self.page_start_dir());
+        // The view knows nothing until git answers, so its first request goes
+        // out with it rather than waiting for a keystroke.
+        let first = page.initial_request();
+        self.show_page(GIT_TOOL, Box::new(page));
+        let pane_id = self.tab().focused();
+        self.jobs.spawn(pane_id, first);
+    }
+
+    /// Where a tool opens: the focused pane's working directory, falling back
+    /// to this process's own.
+    fn page_start_dir(&self) -> PathBuf {
+        self.focused_cwd()
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("/"));
-        self.show_page(DIR_TOOL, Box::new(DirPage::new(root)));
+            .unwrap_or_else(|| PathBuf::from("/"))
     }
 
     /// Cover the focused pane with `page`. The pane keeps its process, which

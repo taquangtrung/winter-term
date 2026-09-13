@@ -5,7 +5,9 @@
 //! without a window, a filesystem, or a repository.
 //!
 //! - [`dir`]: a directory listing.
+//! - [`git`]: the working tree's state.
 //! - [`keys`]: the command list and the chord bound to each command.
 
 pub mod dir;
+pub mod git;
 pub mod keys;

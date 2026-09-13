@@ -7,7 +7,7 @@ use std::sync::{mpsc, Arc};
 use std::thread;
 
 use crate::model::layout::PaneId;
-use crate::model::page::{JobReply, JobRequest};
+use crate::model::page::{CommandOutput, CommandRequest, JobReply, JobRequest};
 
 use super::App;
 
@@ -152,10 +152,35 @@ impl App {
 /// cancelled job stops within a directory or two rather than at the end.
 fn run(request: JobRequest, cancel: &AtomicBool) -> JobReply {
     match request {
+        JobRequest::Command(request) => JobReply::Command(run_command(request)),
         JobRequest::DirSize(path) => {
             let bytes = walk_size(&path, cancel, 0);
             JobReply::DirSize { bytes, path }
         }
+    }
+}
+
+/// Run a program to completion and collect what it wrote. Not interruptible:
+/// these are short commands, and killing one mid-write is how a repository ends
+/// up with a half-applied change.
+fn run_command(request: CommandRequest) -> CommandOutput {
+    let output = std::process::Command::new(&request.program)
+        .args(&request.args)
+        .current_dir(&request.cwd)
+        .output();
+    match output {
+        Ok(output) => CommandOutput {
+            code: output.status.code(),
+            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
+            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
+            tag: request.tag,
+        },
+        Err(e) => CommandOutput {
+            code: None,
+            stderr: e.to_string(),
+            stdout: String::new(),
+            tag: request.tag,
+        },
     }
 }
 
@@ -256,7 +281,9 @@ mod tests {
         assert_eq!(replies.len(), 1, "the walk reported back");
         let (got_pane, reply) = &replies[0];
         assert_eq!(*got_pane, pane, "answers go to whoever asked");
-        let JobReply::DirSize { bytes, .. } = reply;
+        let JobReply::DirSize { bytes, .. } = reply else {
+            panic!("expected a directory total");
+        };
         assert_eq!(*bytes, 150, "nested files count toward the total");
         assert!(!jobs.is_busy(), "and the job is no longer running");
     }

@@ -188,6 +188,7 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Ctrl-,` | Open settings |
 | `Ctrl-=` / `Ctrl--` / `Ctrl-0` | Font bigger, smaller, reset |
 | `Ctrl-Shift-d` | Show Dir over the focused pane (toggle) |
+| `Ctrl-Shift-g` | Show Git over the focused pane (toggle) |
 | `Ctrl-Shift-p` or `Alt-x` | Command palette |
 | `Ctrl-Shift-r` | History palette |
 | `Ctrl-Shift-z` | Pane switcher (then press the digit shown on a pane) |
@@ -205,30 +206,31 @@ A tool opens over the focused pane, covering it. The shell underneath keeps runn
 | Key | Action |
 |---|---|
 | `j` `k` or `Down` `Up` | Move down, up |
-| `gg` / `G` | First entry, last entry |
-| `Enter` or `l` | Enter a directory, or open a file in `$EDITOR` in a new tab |
-| `o` | Open the entry with the system handler |
-| `h` | Collapse, else step out to the parent row, else leave the root |
-| `-` | Leave the root for its parent, whatever the cursor is on |
-| `^` | Move to the directory the cursor sits inside |
-| `[` / `]` | Previous, next entry at the same level |
-| `}` | Move into an expanded directory |
-| `Ctrl-o` / `Ctrl-i` | Back, forward through directories visited |
-| `Tab` or `za` | Expand or collapse the directory under the cursor, in place |
-| `zo` / `zc` | Expand, collapse the directory under the cursor |
-| `zR` / `zM` | Expand every listed directory one level, collapse everything |
+| `Home` / `End` | First entry, last entry |
+| `Enter` | Enter a directory, or open a file in `$EDITOR` in a new tab |
+| `l` / `Right` | Open the directory under the cursor, in place |
+| `h` / `Left` | Close it, else step out to the parent row, else leave the root |
+| `Backspace` | Leave the root for its parent |
+| `Alt-n` / `Alt-p` | Next, previous entry at the same level |
+| `Alt-u` / `Alt-d` | Move to the parent, into an open directory |
+| `Shift-Alt-b` / `Shift-Alt-f` | Back, forward through directories visited |
+| `Tab` / `Shift-Tab` | Fold the entry, fold everything |
+| `z u` / `z f` / `z t` | Open, close, toggle the whole subtree |
+| `z a` / `z c` | Toggle everything, close everything |
+| `Ctrl-c 0` .. `Ctrl-c 9` | Open the tree to that depth |
 | `.` | Show or hide dotfiles |
 | `,` | Show or hide the size, age, and permission columns |
+| `Shift-Alt-s` | Show directory sizes; `Esc` stops the walks |
 | `s` | Cycle the sort: name, time, size |
-| `S` | Show directory sizes (toggle); turning it off stops the walks |
-| `r` | Re-read the listing |
-| `m` | Mark the entry and step on |
-| `*` / `U` | Mark everything listed, unmark everything |
-| `a` / `A` | New file, new directory |
+| `G` | Re-read the listing |
+| `m` / `u` | Mark, unmark the entry and step on |
+| `M` / `U` | Mark everything listed, unmark everything |
+| `_` / `+` | New file, new directory |
 | `R` | Rename the entry under the cursor |
-| `C` / `M` | Copy, move the targets |
-| `D` | Delete the targets, after confirming |
-| `x` | Set permission bits, as octal |
+| `C` / `Alt-m` | Copy, move the targets |
+| `x` | Delete the targets, after confirming |
+| `*` | Set permission bits, as octal |
+| `&` | Open the entry with the system handler |
 | `q` | Close |
 
 A directory's size is not something the filesystem knows, so `S` walks each one in the background, a directory at a time, showing `...` until a total arrives. Turning it off stops whatever is still walking. Totals are kept while you stay in the same directory and dropped when the root moves.
@@ -236,6 +238,25 @@ A directory's size is not something the filesystem knows, so `S` walks each one 
 An operation acts on the marked entries, or on the entry under the cursor when nothing is marked, never both: the header shows how many are marked and what the last operation reported. A name typed into a prompt is a name, so `../elsewhere` is refused rather than reaching outside the listing, and nothing overwrites an existing entry. Copy and move take a new name for one target and a destination directory for several. Moving the root clears the marks, since a mark held over would count toward an operation in a listing it was never part of.
 
 Directories sort before files whatever the key, and moving the root, toggling a view option, or folding keeps the cursor on the entry it was already on. Each entry carries a glyph for what it is (folder, link, source, script, config, image, archive, or an executable), drawn from the range every Nerd Font carries, so a patched terminal font shows them and the status bar's own mode glyphs already assume one.
+
+**Git** (`Ctrl-Shift-g`, or `Git: Status`) shows the working tree of the repository the pane's directory sits in, as foldable sections. A file changed both in the index and in the working tree appears in both, which is what lets one half be staged without the other. Every command runs from the repository root, off the event-loop thread, and the view re-reads the tree after anything that changed it; a failure is reported in the header rather than swallowed.
+
+| Key | Action |
+|---|---|
+| `j` `k` or `Down` `Up` | Move down, up |
+| `Alt-n` / `Alt-p` | Next, previous entry, skipping blank lines |
+| `g t` / `g u` / `g s` / `g r` | Jump to untracked, unstaged, staged, recent |
+| `Tab` / `Shift-Tab` | Fold the section, fold everything |
+| `Enter` | Open the file under the cursor in `$EDITOR` |
+| `s` / `S` | Stage the target, stage everything |
+| `u` / `U` | Unstage the target, unstage everything |
+| `x` | Discard the target, after confirming |
+| `Ctrl-Shift-c` | Commit what is staged, with a one-line message |
+| `P` / `F` / `f` | Push, pull with rebase, fetch all |
+| `G` | Re-read the working tree |
+| `q` | Close |
+
+On a section heading, `s`, `u`, and `x` act on every file in that section. Discarding an untracked file deletes it, since `git restore` cannot reach a path that is not in the index.
 
 **Keys** (`Keys: Show Every Command`) lists every command and the chord bound to it, read from the keymap in force, so it cannot disagree with what the keys actually do.
 

@@ -129,6 +129,7 @@ window {
 
     // Tools: a pane holding a tool page instead of a terminal.
     "C+S+d" "dir_page"
+    "C+S+g" "git_page"
 
     // Jump between prompt blocks.
     "C+S+Up" "prev_block"

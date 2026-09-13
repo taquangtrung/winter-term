@@ -2,7 +2,7 @@
 //! the disk.
 
 use std::fs::{self, Metadata};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::entry::{Entry, EntryKind, Meta};
 use super::listing::{is_hidden, sort_entries, SortKey};
@@ -51,6 +51,27 @@ fn read_rows_at(
         }
     }
     rows
+}
+
+/// Every directory under `dir`, to the reader's own depth cap, so expanding a
+/// subtree cannot read without limit.
+pub fn descendant_dirs(dir: &Path, show_hidden: bool) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    collect_dirs(dir, show_hidden, 0, &mut found);
+    found
+}
+
+fn collect_dirs(dir: &Path, show_hidden: bool, depth: usize, found: &mut Vec<PathBuf>) {
+    if depth >= MAX_DEPTH {
+        return;
+    }
+    for entry in read_entries(dir, show_hidden) {
+        if !entry.is_dir() {
+            continue;
+        }
+        collect_dirs(&entry.path, show_hidden, depth + 1, found);
+        found.push(entry.path);
+    }
 }
 
 /// Every entry of `dir`, unsorted.
@@ -115,7 +136,6 @@ fn mode_of(_metadata: &Metadata) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     /// A temporary tree that removes itself on drop.
     struct TempTree(PathBuf);

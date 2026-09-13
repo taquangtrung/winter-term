@@ -164,6 +164,9 @@ impl App {
             "dir_page" => {
                 self.open_dir_page();
             }
+            "git_page" => {
+                self.open_git_page();
+            }
             "keys_page" => {
                 self.open_keys_page();
             }

@@ -50,9 +50,19 @@ impl Folds {
         true
     }
 
+    /// Expand `path`, whether or not it already was.
+    pub fn expand(&mut self, path: &Path) {
+        self.expanded.insert(path.to_path_buf());
+    }
+
     /// Collapse everything.
     pub fn collapse_all(&mut self) {
         self.expanded.clear();
+    }
+
+    /// Collapse `root` and everything under it.
+    pub fn collapse_under(&mut self, root: &Path) {
+        self.expanded.retain(|path| !path.starts_with(root));
     }
 
     /// Forget anything outside `root`, so moving a listing's root does not
@@ -93,6 +103,20 @@ mod tests {
         assert!(folds.is_expanded(path));
         assert!(!folds.toggle(path));
         assert!(!folds.is_expanded(path));
+    }
+
+    #[test]
+    fn test_collapse_under_closes_the_whole_subtree() {
+        // Collapsing a directory has to take its open children with it, or
+        // reopening it shows a tree the user thought they had closed.
+        let mut folds = Folds::new();
+        folds.expand(Path::new("/tmp/a"));
+        folds.expand(Path::new("/tmp/a/b"));
+        folds.expand(Path::new("/tmp/other"));
+        folds.collapse_under(Path::new("/tmp/a"));
+        assert!(!folds.is_expanded(Path::new("/tmp/a")));
+        assert!(!folds.is_expanded(Path::new("/tmp/a/b")));
+        assert!(folds.is_expanded(Path::new("/tmp/other")));
     }
 
     #[test]

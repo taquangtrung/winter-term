@@ -33,13 +33,30 @@ pub struct PageSpan {
 /// Slow work a page is asking the host to do off the event-loop thread.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JobRequest {
+    /// Run a program and capture what it wrote.
+    Command(CommandRequest),
     /// Total the bytes under this directory.
     DirSize(PathBuf),
+}
+
+/// A program to run on a page's behalf.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CommandRequest {
+    /// Arguments after the program name.
+    pub args: Vec<String>,
+    /// Directory to run in.
+    pub cwd: PathBuf,
+    /// The program.
+    pub program: String,
+    /// Which request this is, so the page knows what finished.
+    pub tag: &'static str,
 }
 
 /// The answer to a [`JobRequest`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum JobReply {
+    /// What a program wrote, and how it exited.
+    Command(CommandOutput),
     /// What a directory holds, with unreadable parts skipped rather than
     /// reported as an error: a total is worth more than a failure here.
     DirSize {
@@ -48,6 +65,37 @@ pub enum JobReply {
         /// The directory that was totalled.
         path: PathBuf,
     },
+}
+
+/// What running a program produced. A program that could not be started at all
+/// reports no code and its reason on `stderr`, so one path covers both.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CommandOutput {
+    /// Exit status, absent when the program never ran.
+    pub code: Option<i32>,
+    /// What it wrote to standard error.
+    pub stderr: String,
+    /// What it wrote to standard output.
+    pub stdout: String,
+    /// The tag of the request this answers.
+    pub tag: &'static str,
+}
+
+impl CommandOutput {
+    /// Whether the program ran and reported success.
+    pub fn succeeded(&self) -> bool {
+        self.code == Some(0)
+    }
+
+    /// The first line of the failure, for a one-line report.
+    pub fn failure(&self) -> String {
+        let text = if self.stderr.trim().is_empty() {
+            self.stdout.trim()
+        } else {
+            self.stderr.trim()
+        };
+        text.lines().next().unwrap_or("failed").to_string()
+    }
 }
 
 /// What a page is asking the host to read from the user.
