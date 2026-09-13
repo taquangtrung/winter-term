@@ -586,7 +586,7 @@ impl App {
             match_total: self.search.match_total,
             reverse: self.search.reverse,
         });
-        let page_name = self.pages.get(&focused).map(|slot| slot.page.title());
+        let page_name = self.pages.get(&focused).map(|slot| slot.status_label());
         let status = status_bar(
             mode,
             renderer.theme(),

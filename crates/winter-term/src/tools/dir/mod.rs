@@ -1,12 +1,14 @@
 //! Dir: a keyboard-driven directory listing in a pane.
 //!
 //! - [`entry`]: what a listing is made of.
+//! - [`icons`]: the glyph beside an entry's name.
 //! - [`listing`]: ordering and filtering.
 //! - [`rows`]: painting a listing.
 //! - [`source`]: reading the filesystem.
 //! - [`tree`]: expanded directories and row depth.
 
 pub mod entry;
+pub mod icons;
 pub mod listing;
 pub mod rows;
 pub mod source;

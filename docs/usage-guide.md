@@ -216,7 +216,7 @@ A tool opens over the focused pane, covering it. The shell underneath keeps runn
 | `r` | Re-read the listing |
 | `q` | Close |
 
-Directories sort before files whatever the key, and moving the root, toggling a view option, or folding keeps the cursor on the entry it was already on.
+Directories sort before files whatever the key, and moving the root, toggling a view option, or folding keeps the cursor on the entry it was already on. Each entry carries a glyph for what it is (folder, link, source, script, config, image, archive, or an executable), drawn from the range every Nerd Font carries, so a patched terminal font shows them and the status bar's own mode glyphs already assume one.
 
 **Keys** (`Keys: Show Every Command`) lists every command and the chord bound to it, read from the keymap in force, so it cannot disagree with what the keys actually do.
 

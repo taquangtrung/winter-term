@@ -22,6 +22,10 @@ const DIR_TOOL: &str = "dir";
 /// Tool name recorded for the keys page.
 const KEYS_TOOL: &str = "keys";
 
+/// The glyph each tool shows in the status bar, in place of a mode icon. One
+/// line per tool, from the Font Awesome range every Nerd Font carries.
+const TOOL_ICONS: [(&str, char); 2] = [(DIR_TOOL, '\u{f07b}'), (KEYS_TOOL, '\u{f11c}')];
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -32,6 +36,22 @@ pub(crate) struct PageSlot {
     pub(crate) page: Box<dyn Page>,
     prior_mode: Mode,
     tool: &'static str,
+}
+
+// ========================================================================
+// PageSlot
+// ========================================================================
+
+impl PageSlot {
+    /// How the status bar names what owns the keyboard: the tool's glyph, when
+    /// it has one, then the page's own title.
+    pub(crate) fn status_label(&self) -> String {
+        let title = self.page.title();
+        match TOOL_ICONS.iter().find(|(tool, _)| *tool == self.tool) {
+            Some((_, icon)) => format!("{icon} {title}"),
+            None => title,
+        }
+    }
 }
 
 // ========================================================================

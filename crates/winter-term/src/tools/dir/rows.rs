@@ -6,6 +6,7 @@ use std::time::{Duration, SystemTime};
 use crate::model::page::{PageRow, PageSpan, PageStyle};
 
 use super::entry::{EntryKind, Meta};
+use super::icons::icon_for;
 use super::listing::SortKey;
 use super::tree::Row;
 
@@ -76,7 +77,7 @@ pub fn entry_row(row: &Row, show_details: bool, now: SystemTime) -> PageRow {
         EntryKind::File => row.entry.name.clone(),
         EntryKind::Symlink => format!("{}@", row.entry.name),
     };
-    let label = format!("{indent}{glyph}{name}");
+    let label = format!("{indent}{glyph}{} {name}", icon_for(&row.entry));
     let mut spans = vec![PageSpan::new(name_style(row.entry.kind), label.clone())];
     if show_details {
         let gap = DETAIL_COL.saturating_sub(label.chars().count()).max(1);
@@ -237,18 +238,16 @@ mod tests {
     #[test]
     fn test_nesting_indents_and_marks_the_expanded_directory() {
         let now = SystemTime::UNIX_EPOCH;
-        assert_eq!(
-            text(entry_row(&row("src", EntryKind::Dir, 0, true), false, now)),
-            "⌄ src/"
-        );
-        assert_eq!(
-            text(entry_row(
-                &row("main.rs", EntryKind::File, 1, false),
-                false,
-                now
-            )),
-            "    main.rs"
-        );
+        let dir = text(entry_row(&row("src", EntryKind::Dir, 0, true), false, now));
+        assert!(dir.starts_with("⌄ "), "got {dir:?}");
+        assert!(dir.ends_with(" src/"), "got {dir:?}");
+        let file = text(entry_row(
+            &row("main.rs", EntryKind::File, 1, false),
+            false,
+            now,
+        ));
+        assert!(file.starts_with("    "), "one indent plus the glyph column");
+        assert!(file.ends_with(" main.rs"), "got {file:?}");
     }
 
     #[test]
@@ -261,6 +260,6 @@ mod tests {
             true,
             SystemTime::UNIX_EPOCH,
         ));
-        assert!(painted.starts_with(&format!("  {name} ")));
+        assert!(painted.contains(&format!("{name} ")), "got {painted:?}");
     }
 }
