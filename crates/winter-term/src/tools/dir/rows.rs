@@ -26,6 +26,12 @@ const GLYPH_NONE: &str = "  ";
 /// Columns one level of nesting indents by.
 const INDENT: usize = 2;
 
+/// Drawn at the start of a marked row.
+const MARK: &str = "*";
+
+/// Keeps an unmarked row's name aligned with the marked ones.
+const UNMARKED: &str = " ";
+
 /// Column the detail columns begin at.
 const DETAIL_COL: usize = 40;
 
@@ -45,8 +51,16 @@ const SIZE_STEP: u64 = 1024;
 // Functions
 // ========================================================================
 
-/// The header: where the listing is, and which toggles are on.
-pub fn header_row(root: &str, sort: SortKey, show_hidden: bool, show_details: bool) -> PageRow {
+/// The header: where the listing is, which toggles are on, how much is marked,
+/// and what the last operation reported.
+pub fn header_row(
+    root: &str,
+    sort: SortKey,
+    show_hidden: bool,
+    show_details: bool,
+    marked: usize,
+    message: Option<&str>,
+) -> PageRow {
     let mut flags = format!("sort:{}", sort.label());
     if show_hidden {
         flags.push_str("  dotfiles");
@@ -54,14 +68,22 @@ pub fn header_row(root: &str, sort: SortKey, show_hidden: bool, show_details: bo
     if show_details {
         flags.push_str("  details");
     }
-    vec![
+    if marked > 0 {
+        flags.push_str(&format!("  {marked} marked"));
+    }
+    let mut spans = vec![
         PageSpan::new(PageStyle::Header, format!("{root}  ")),
         PageSpan::new(PageStyle::Dim, flags),
-    ]
+    ];
+    if let Some(message) = message {
+        spans.push(PageSpan::new(PageStyle::Accent, format!("  {message}")));
+    }
+    spans
 }
 
-/// One entry: its fold glyph, indented name, and the detail columns when on.
-pub fn entry_row(row: &Row, show_details: bool, now: SystemTime) -> PageRow {
+/// One entry: its mark, fold glyph, indented name, and the detail columns when
+/// they are on.
+pub fn entry_row(row: &Row, show_details: bool, now: SystemTime, marked: bool) -> PageRow {
     let indent = " ".repeat(row.depth * INDENT);
     let glyph = if row.entry.is_dir() {
         if row.expanded {
@@ -77,8 +99,14 @@ pub fn entry_row(row: &Row, show_details: bool, now: SystemTime) -> PageRow {
         EntryKind::File => row.entry.name.clone(),
         EntryKind::Symlink => format!("{}@", row.entry.name),
     };
-    let label = format!("{indent}{glyph}{} {name}", icon_for(&row.entry));
-    let mut spans = vec![PageSpan::new(name_style(row.entry.kind), label.clone())];
+    let mark = if marked { MARK } else { UNMARKED };
+    let label = format!("{mark}{indent}{glyph}{} {name}", icon_for(&row.entry));
+    let style = if marked {
+        PageStyle::Marked
+    } else {
+        name_style(row.entry.kind)
+    };
+    let mut spans = vec![PageSpan::new(style, label.clone())];
     if show_details {
         let gap = DETAIL_COL.saturating_sub(label.chars().count()).max(1);
         spans.push(PageSpan::new(
@@ -238,16 +266,36 @@ mod tests {
     #[test]
     fn test_nesting_indents_and_marks_the_expanded_directory() {
         let now = SystemTime::UNIX_EPOCH;
-        let dir = text(entry_row(&row("src", EntryKind::Dir, 0, true), false, now));
-        assert!(dir.starts_with("⌄ "), "got {dir:?}");
+        let dir = text(entry_row(
+            &row("src", EntryKind::Dir, 0, true),
+            false,
+            now,
+            false,
+        ));
+        assert!(dir.starts_with(" ⌄ "), "got {dir:?}");
         assert!(dir.ends_with(" src/"), "got {dir:?}");
         let file = text(entry_row(
             &row("main.rs", EntryKind::File, 1, false),
             false,
             now,
+            false,
         ));
-        assert!(file.starts_with("    "), "one indent plus the glyph column");
+        assert!(
+            file.starts_with("     "),
+            "the mark column, one indent, then the glyph column"
+        );
         assert!(file.ends_with(" main.rs"), "got {file:?}");
+    }
+
+    #[test]
+    fn test_a_marked_row_leads_with_its_mark() {
+        let painted = text(entry_row(
+            &row("notes.txt", EntryKind::File, 0, false),
+            false,
+            SystemTime::UNIX_EPOCH,
+            true,
+        ));
+        assert!(painted.starts_with('*'), "got {painted:?}");
     }
 
     #[test]
@@ -259,6 +307,7 @@ mod tests {
             &row(&name, EntryKind::File, 0, false),
             true,
             SystemTime::UNIX_EPOCH,
+            false,
         ));
         assert!(painted.contains(&format!("{name} ")), "got {painted:?}");
     }

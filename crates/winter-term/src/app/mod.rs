@@ -585,6 +585,8 @@ pub struct App {
     /// Panes a tool page is currently covering. The pane keeps its terminal,
     /// which goes on running underneath and comes back when the page closes.
     pub(crate) pages: HashMap<PaneId, page::PageSlot>,
+    /// The question a page is waiting on an answer to, if any.
+    pub(crate) page_prompt: Option<page::ActivePrompt>,
     pub(crate) panes: HashMap<PaneId, Pane>,
     /// Panes whose last PTY-forwarded Insert-mode key was Tab - likely mid the
     /// shell's own tab-completion (e.g. zsh's menu-select). Lets the next bare

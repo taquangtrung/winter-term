@@ -221,7 +221,16 @@ A tool opens over the focused pane, covering it. The shell underneath keeps runn
 | `,` | Show or hide the size, age, and permission columns |
 | `s` | Cycle the sort: name, time, size |
 | `r` | Re-read the listing |
+| `m` | Mark the entry and step on |
+| `*` / `U` | Mark everything listed, unmark everything |
+| `a` / `A` | New file, new directory |
+| `R` | Rename the entry under the cursor |
+| `C` / `M` | Copy, move the targets |
+| `D` | Delete the targets, after confirming |
+| `x` | Set permission bits, as octal |
 | `q` | Close |
+
+An operation acts on the marked entries, or on the entry under the cursor when nothing is marked, never both: the header shows how many are marked and what the last operation reported. A name typed into a prompt is a name, so `../elsewhere` is refused rather than reaching outside the listing, and nothing overwrites an existing entry. Copy and move take a new name for one target and a destination directory for several. Moving the root clears the marks, since a mark held over would count toward an operation in a listing it was never part of.
 
 Directories sort before files whatever the key, and moving the root, toggling a view option, or folding keeps the cursor on the entry it was already on. Each entry carries a glyph for what it is (folder, link, source, script, config, image, archive, or an executable), drawn from the range every Nerd Font carries, so a patched terminal font shows them and the status bar's own mode glyphs already assume one.
 

@@ -524,7 +524,12 @@ impl App {
 
         // While a new-theme name is being entered, show the live input in place
         // of any transient notice (reuses the same status-bar/toast display).
-        let notice = if let Some(input) = &self.theme_name_input {
+        let notice = if let Some(text) = self.prompt_display() {
+            Some(StatusNotice {
+                kind: NoticeKind::Info,
+                text,
+            })
+        } else if let Some(input) = &self.theme_name_input {
             Some(StatusNotice {
                 kind: NoticeKind::Info,
                 text: format!("New theme name: {input}\u{2502}"),
@@ -1515,6 +1520,12 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         PageStyle::Header => Style {
             bold: true,
             foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        PageStyle::Marked => Style {
+            background: theme_rgb(theme.selection_bg),
+            bold: true,
+            foreground: theme_rgb(theme.selection_fg),
             ..Style::default()
         },
         PageStyle::Normal => Style {

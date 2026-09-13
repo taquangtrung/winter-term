@@ -63,6 +63,7 @@ impl App {
             nav_cursors: HashMap::new(),
             nav_resync_pending: false,
             next_image_id: 0,
+            page_prompt: None,
             pages: HashMap::new(),
             panes: HashMap::new(),
             pending_tab_completion: HashSet::new(),

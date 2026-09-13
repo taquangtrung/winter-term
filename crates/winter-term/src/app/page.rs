@@ -3,10 +3,10 @@
 
 use std::path::PathBuf;
 
-use crate::model::input::Key;
+use crate::model::input::{Key, KeyCode};
 use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
-use crate::model::page::{Page, PageOutcome};
+use crate::model::page::{Page, PageOutcome, PromptMode, PromptReply, PromptRequest};
 use crate::tools::dir::DirPage;
 use crate::tools::keys::KeysPage;
 
@@ -22,6 +22,9 @@ const DIR_TOOL: &str = "dir";
 /// Tool name recorded for the keys page.
 const KEYS_TOOL: &str = "keys";
 
+/// Drawn after a prompt's typed text, so the line reads as an input.
+const CARET: char = '\u{2502}';
+
 /// The glyph each tool shows in the status bar, in place of a mode icon. One
 /// line per tool, from the Font Awesome range every Nerd Font carries.
 const TOOL_ICONS: [(&str, char); 2] = [(DIR_TOOL, '\u{f07b}'), (KEYS_TOOL, '\u{f11c}')];
@@ -29,6 +32,13 @@ const TOOL_ICONS: [(&str, char); 2] = [(DIR_TOOL, '\u{f07b}'), (KEYS_TOOL, '\u{f
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// A question a page asked, and the answer being typed for it.
+pub(crate) struct ActivePrompt {
+    input: String,
+    pane: PaneId,
+    request: PromptRequest,
+}
 
 /// A page covering one pane: the page itself, which tool opened it, and the
 /// mode the pane was in, so closing the page puts the pane back as it was.
@@ -109,6 +119,10 @@ impl App {
         let Some(slot) = self.pages.remove(&pane_id) else {
             return;
         };
+        // A question belongs to the page that asked it.
+        if self.page_prompt.as_ref().is_some_and(|p| p.pane == pane_id) {
+            self.page_prompt = None;
+        }
         self.modes.insert(pane_id, slot.prior_mode);
         self.last_tile_layout = None;
         self.dirty = true;
@@ -135,7 +149,63 @@ impl App {
         let Some(slot) = self.pages.get_mut(&pane_id) else {
             return false;
         };
-        match slot.page.on_key(key) {
+        let outcome = slot.page.on_key(key);
+        self.act_on_page_outcome(pane_id, outcome)
+    }
+
+    /// Route one key into the open prompt: `Enter` answers, `Esc` cancels, and
+    /// a confirm prompt resolves on the first key it sees.
+    pub(crate) fn handle_prompt_key(&mut self, key: &Key) {
+        let Some(prompt) = self.page_prompt.as_mut() else {
+            return;
+        };
+        let confirm = prompt.request.mode == PromptMode::Confirm;
+        let answer = match key.code {
+            KeyCode::Escape => Some(None),
+            KeyCode::Enter if !confirm => Some(Some(prompt.input.clone())),
+            KeyCode::Char(c) if confirm => Some((c == 'y' || c == 'Y').then(|| c.to_string())),
+            KeyCode::Backspace if !confirm => {
+                prompt.input.pop();
+                None
+            }
+            KeyCode::Char(c) if !key.ctrl && !key.alt => {
+                prompt.input.push(c);
+                None
+            }
+            _ => None,
+        };
+        self.dirty = true;
+        let Some(answer) = answer else {
+            return;
+        };
+        let Some(prompt) = self.page_prompt.take() else {
+            return;
+        };
+        let pane_id = prompt.pane;
+        let reply = PromptReply {
+            answer,
+            tag: prompt.request.tag,
+        };
+        let Some(slot) = self.pages.get_mut(&pane_id) else {
+            return;
+        };
+        let outcome = slot.page.on_prompt(reply);
+        self.act_on_page_outcome(pane_id, outcome);
+    }
+
+    /// What the open prompt shows: its question, then what has been typed.
+    pub(crate) fn prompt_display(&self) -> Option<String> {
+        let prompt = self.page_prompt.as_ref()?;
+        match prompt.request.mode {
+            PromptMode::Confirm => Some(prompt.request.label.clone()),
+            PromptMode::Text => Some(format!("{}{}{CARET}", prompt.request.label, prompt.input)),
+        }
+    }
+
+    /// Carry out what a page asked for. Returns whether the input that produced
+    /// it was spent.
+    fn act_on_page_outcome(&mut self, pane_id: PaneId, outcome: PageOutcome) -> bool {
+        match outcome {
             PageOutcome::Close => {
                 self.close_page(pane_id);
                 true
@@ -156,6 +226,15 @@ impl App {
                 self.open_file_in_new_tab(path, None);
                 true
             }
+            PageOutcome::Prompt(request) => {
+                self.page_prompt = Some(ActivePrompt {
+                    input: request.initial.clone(),
+                    pane: pane_id,
+                    request,
+                });
+                self.dirty = true;
+                true
+            }
         }
     }
 }
@@ -169,6 +248,8 @@ mod tests {
     use super::*;
     use crate::model::input::KeyCode;
     use crate::model::page::{PageContent, PageSpan};
+    use std::cell::RefCell;
+    use std::rc::Rc;
 
     /// A page that counts the keys it claims, so a test can tell a key the
     /// page spent from one it handed back.
@@ -279,6 +360,90 @@ mod tests {
         let (mut app, covered) = app_with_open_page();
         let other = PaneId(covered.0 + 1);
         assert!(!app.offer_key_to_page(other, &press(KeyCode::Char('x'))));
+    }
+
+    /// A page that asks one question, sharing the answer it hears with the
+    /// test that opened it.
+    struct AskingPage {
+        heard: Rc<RefCell<Vec<Option<String>>>>,
+    }
+
+    impl Page for AskingPage {
+        fn title(&self) -> String {
+            "Asking".to_string()
+        }
+
+        fn content(&mut self, _rows: usize) -> PageContent {
+            PageContent::new(vec![vec![PageSpan::plain("asking")]])
+        }
+
+        fn on_key(&mut self, _key: &Key) -> PageOutcome {
+            PageOutcome::Prompt(PromptRequest {
+                initial: "seed".to_string(),
+                label: "Name: ".to_string(),
+                mode: PromptMode::Text,
+                tag: "ask",
+            })
+        }
+
+        fn on_prompt(&mut self, reply: PromptReply) -> PageOutcome {
+            self.heard.borrow_mut().push(reply.answer);
+            PageOutcome::Consumed
+        }
+    }
+
+    fn app_asking() -> (App, PaneId, Rc<RefCell<Vec<Option<String>>>>) {
+        let mut app = App::new();
+        let heard: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
+        app.show_page(
+            "asking",
+            Box::new(AskingPage {
+                heard: Rc::clone(&heard),
+            }),
+        );
+        let pane = app.tab().focused();
+        app.offer_key_to_page(pane, &press(KeyCode::Char('x')));
+        (app, pane, heard)
+    }
+
+    #[test]
+    fn test_a_prompt_starts_holding_its_initial_text() {
+        let (app, _, _) = app_asking();
+        assert_eq!(app.prompt_display().as_deref(), Some("Name: seed\u{2502}"));
+    }
+
+    #[test]
+    fn test_typing_edits_the_prompt_and_enter_delivers_the_answer() {
+        let (mut app, pane, heard) = app_asking();
+        app.handle_prompt_key(&press(KeyCode::Backspace));
+        app.handle_prompt_key(&press(KeyCode::Char('!')));
+        assert_eq!(app.prompt_display().as_deref(), Some("Name: see!\u{2502}"));
+
+        app.handle_prompt_key(&press(KeyCode::Enter));
+        assert!(app.page_prompt.is_none(), "the prompt closes on Enter");
+        assert!(app.pages.contains_key(&pane), "and the page stays open");
+        assert_eq!(heard.borrow().as_slice(), [Some("see!".to_string())]);
+    }
+
+    #[test]
+    fn test_escape_cancels_a_prompt_and_says_so() {
+        // The page has to hear the cancellation, not just stop hearing: an
+        // operation waiting on an answer would otherwise stay half-started.
+        let (mut app, _, heard) = app_asking();
+        app.handle_prompt_key(&press(KeyCode::Escape));
+        assert!(app.page_prompt.is_none());
+        assert_eq!(heard.borrow().as_slice(), [None]);
+    }
+
+    #[test]
+    fn test_closing_the_page_takes_its_question_with_it() {
+        // A prompt left behind would deliver its answer to a page that is gone,
+        // or worse, to whatever page opened next in that pane.
+        let (mut app, pane, heard) = app_asking();
+        assert!(app.page_prompt.is_some());
+        app.close_page(pane);
+        assert!(app.page_prompt.is_none());
+        assert!(heard.borrow().is_empty(), "and answers nothing");
     }
 
     #[test]

@@ -30,6 +30,40 @@ pub struct PageSpan {
     pub text: String,
 }
 
+/// What a page is asking the host to read from the user.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PromptRequest {
+    /// Text the input starts out holding, for an answer that is usually an edit
+    /// of what is already there.
+    pub initial: String,
+    /// What is being asked, shown before the input.
+    pub label: String,
+    /// Whether the answer is typed or a single yes-or-no key.
+    pub mode: PromptMode,
+    /// Which question this is, so the page knows what the answer belongs to.
+    pub tag: &'static str,
+}
+
+/// The answer to a [`PromptRequest`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PromptReply {
+    /// What the user typed, or `None` when the prompt was cancelled.
+    pub answer: Option<String>,
+    /// The tag of the question being answered.
+    pub tag: &'static str,
+}
+
+/// How a prompt collects its answer.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum PromptMode {
+    /// One key: `y` confirms, anything else cancels. For a question whose wrong
+    /// answer cannot be undone.
+    Confirm,
+    /// A line of text, ending at `Enter`.
+    #[default]
+    Text,
+}
+
 /// A semantic style, resolved against the active theme so a page never names a
 /// color of its own.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -40,6 +74,8 @@ pub enum PageStyle {
     Dim,
     /// A title or a column header.
     Header,
+    /// Selected by the user for an operation to act on.
+    Marked,
     /// Ordinary text.
     #[default]
     Normal,
@@ -56,6 +92,8 @@ pub enum PageOutcome {
     Ignored,
     /// The page asks the host to open this path with the system handler.
     OpenExternal(PathBuf),
+    /// The page asks the host to read an answer from the user.
+    Prompt(PromptRequest),
     /// The page asks the host to open this path for editing.
     OpenPath(PathBuf),
 }
@@ -99,6 +137,12 @@ pub trait Page {
 
     /// Offer a key to the page.
     fn on_key(&mut self, key: &Key) -> PageOutcome;
+
+    /// Hand back the answer to a prompt the page asked for. Pages that never
+    /// ask never implement it.
+    fn on_prompt(&mut self, _reply: PromptReply) -> PageOutcome {
+        PageOutcome::Consumed
+    }
 }
 
 // ========================================================================

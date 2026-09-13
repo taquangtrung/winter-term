@@ -121,6 +121,16 @@ impl App {
             return;
         }
 
+        // A page's prompt owns the keyboard while it is up, ahead of the
+        // window chords: a filename being typed must not trigger one.
+        if self.page_prompt.is_some() {
+            self.handle_prompt_key(&key);
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
         // While a new-theme name is being entered, intercept all keyboard
         // input the same way: Enter confirms, Escape cancels, other keys
         // edit the name.

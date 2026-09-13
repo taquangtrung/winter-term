@@ -3,6 +3,8 @@
 //! - [`entry`]: what a listing is made of.
 //! - [`icons`]: the glyph beside an entry's name.
 //! - [`listing`]: ordering and filtering.
+//! - [`marks`]: which entries an operation acts on.
+//! - [`ops`]: creating, moving, copying, and deleting.
 //! - [`rows`]: painting a listing.
 //! - [`source`]: reading the filesystem.
 //! - [`tree`]: expanded directories and row depth.
@@ -10,17 +12,23 @@
 pub mod entry;
 pub mod icons;
 pub mod listing;
+pub mod marks;
+pub mod ops;
 pub mod rows;
 pub mod source;
 pub mod tree;
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::model::input::{Key, KeyCode};
-use crate::model::page::{scroll_to_cursor, Page, PageContent, PageOutcome, PageSpan, PageStyle};
+use crate::model::page::{
+    scroll_to_cursor, Page, PageContent, PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply,
+    PromptRequest,
+};
 
 use listing::SortKey;
+use marks::Marks;
 use tree::{Folds, Row};
 
 // ========================================================================
@@ -32,6 +40,15 @@ const HEADER_ROWS: usize = 1;
 
 /// Shown in place of the listing when a directory has nothing to show.
 const EMPTY_NOTE: &str = "  (empty)";
+
+/// Prompt tags, one per question the listing asks.
+const ASK_COPY: &str = "copy";
+const ASK_DELETE: &str = "delete";
+const ASK_MKDIR: &str = "mkdir";
+const ASK_MODE: &str = "mode";
+const ASK_MOVE: &str = "move";
+const ASK_NEW_FILE: &str = "new-file";
+const ASK_RENAME: &str = "rename";
 
 /// Directories remembered in each direction of the visit history. Matches the
 /// jumplist's own depth, for the same reason: enough to walk back through a
@@ -51,6 +68,9 @@ pub struct DirPage {
     folds: Folds,
     /// Directories stepped back out of, most recent last.
     forward: Vec<PathBuf>,
+    /// What the last operation reported, shown in the header until the next key.
+    message: Option<String>,
+    marks: Marks,
     /// The first key of a two-key sequence, waiting for its second.
     pending: Option<char>,
     root: PathBuf,
@@ -74,6 +94,8 @@ impl DirPage {
             cursor: 0,
             folds: Folds::new(),
             forward: Vec::new(),
+            marks: Marks::new(),
+            message: None,
             pending: None,
             root,
             rows: Vec::new(),
@@ -157,6 +179,9 @@ impl DirPage {
     /// record itself.
     fn move_root_to(&mut self, root: PathBuf) {
         self.folds.retain_under(&root);
+        // The visible set changes wholesale, so a mark held over would count
+        // toward an operation aimed at a listing it was never part of.
+        self.marks.clear();
         self.root = root;
         self.cursor = 0;
         self.scroll = 0;
@@ -268,6 +293,196 @@ impl DirPage {
         self.cursor = next.clamp(0, last as isize) as usize;
     }
 
+    fn toggle_mark(&mut self) {
+        let Some(row) = self.selected() else {
+            return;
+        };
+        let path = row.entry.path.clone();
+        self.marks.toggle(&path);
+        self.move_by(1);
+    }
+
+    fn mark_all(&mut self) {
+        let listed: Vec<PathBuf> = self.rows.iter().map(|r| r.entry.path.clone()).collect();
+        for path in listed {
+            self.marks.insert(&path);
+        }
+    }
+
+    /// The paths the next operation acts on: every mark still listed, or the
+    /// entry under the cursor when nothing is marked.
+    fn targets(&self) -> Vec<PathBuf> {
+        let listed: Vec<PathBuf> = self.rows.iter().map(|r| r.entry.path.clone()).collect();
+        let cursor = self.selected().map(|row| row.entry.path.as_path());
+        marks::targets(&self.marks, &listed, cursor)
+    }
+
+    /// Ask a question, carrying the tag that says what the answer is for.
+    fn ask(&self, tag: &'static str, label: String, initial: String) -> PageOutcome {
+        PageOutcome::Prompt(PromptRequest {
+            initial,
+            label,
+            mode: PromptMode::Text,
+            tag,
+        })
+    }
+
+    /// Ask for a yes-or-no answer, for what cannot be undone.
+    fn confirm(&self, tag: &'static str, label: String) -> PageOutcome {
+        PageOutcome::Prompt(PromptRequest {
+            initial: String::new(),
+            label,
+            mode: PromptMode::Confirm,
+            tag,
+        })
+    }
+
+    /// Ask to rename the entry under the cursor, starting from its own name.
+    fn ask_rename(&self) -> PageOutcome {
+        let Some(row) = self.selected() else {
+            return PageOutcome::Consumed;
+        };
+        self.ask(
+            ASK_RENAME,
+            "Rename to: ".to_string(),
+            row.entry.name.clone(),
+        )
+    }
+
+    /// Ask to delete the targets, naming how many there are so a marked set is
+    /// never deleted on a glance at one filename.
+    fn ask_delete(&self) -> PageOutcome {
+        let targets = self.targets();
+        match targets.len() {
+            0 => PageOutcome::Consumed,
+            1 => self.confirm(
+                ASK_DELETE,
+                format!("Delete {}? (y/n) ", name_of(&targets[0])),
+            ),
+            count => self.confirm(ASK_DELETE, format!("Delete {count} entries? (y/n) ")),
+        }
+    }
+
+    /// Ask where the targets go, for a copy or a move.
+    fn ask_destination(&self, tag: &'static str, verb: &str) -> PageOutcome {
+        let targets = self.targets();
+        let Some(first) = targets.first() else {
+            return PageOutcome::Consumed;
+        };
+        let label = if targets.len() == 1 {
+            format!("{verb} {} to: ", name_of(first))
+        } else {
+            format!("{verb} {} entries into: ", targets.len())
+        };
+        self.ask(tag, label, String::new())
+    }
+
+    /// Carry out the answer to a question, and report what happened.
+    fn apply_answer(&mut self, tag: &'static str, answer: &str) {
+        let result = match tag {
+            ASK_COPY => self.copy_targets(answer),
+            ASK_DELETE => self.delete_targets(),
+            ASK_MKDIR => self.create(answer, true),
+            ASK_MODE => self.change_mode(answer),
+            ASK_MOVE => self.move_targets(answer),
+            ASK_NEW_FILE => self.create(answer, false),
+            ASK_RENAME => self.rename_selected(answer),
+            _ => Ok(String::new()),
+        };
+        self.message = Some(match result {
+            Ok(report) => report,
+            Err(report) => format!("failed: {report}"),
+        });
+        self.marks.clear();
+        self.reload_keeping_selection();
+    }
+
+    fn create(&mut self, name: &str, directory: bool) -> Result<String, String> {
+        let Some(path) = ops::resolve_name(&self.root, name) else {
+            return Err(format!("not a name: {name}"));
+        };
+        let result = if directory {
+            ops::create_dir(&path)
+        } else {
+            ops::create_file(&path)
+        };
+        result
+            .map(|()| format!("created {}", name_of(&path)))
+            .map_err(|e| e.to_string())
+    }
+
+    fn rename_selected(&mut self, name: &str) -> Result<String, String> {
+        let Some(row) = self.selected() else {
+            return Err("nothing selected".to_string());
+        };
+        let from = row.entry.path.clone();
+        let Some(to) = ops::resolve_name(&self.root, name) else {
+            return Err(format!("not a name: {name}"));
+        };
+        ops::move_entry(&from, &to)
+            .map(|()| format!("renamed to {}", name_of(&to)))
+            .map_err(|e| e.to_string())
+    }
+
+    fn copy_targets(&mut self, destination: &str) -> Result<String, String> {
+        self.transfer(destination, true)
+    }
+
+    fn move_targets(&mut self, destination: &str) -> Result<String, String> {
+        self.transfer(destination, false)
+    }
+
+    /// Copy or move every target to `destination`, which is a name in this
+    /// directory for a single target and a directory for several.
+    fn transfer(&mut self, destination: &str, copy: bool) -> Result<String, String> {
+        let targets = self.targets();
+        let single = targets.len() == 1;
+        let mut done = 0;
+        for from in &targets {
+            let to = if single {
+                ops::resolve_name(&self.root, destination)
+            } else {
+                ops::resolve_name(&self.root, destination).map(|dir| dir.join(name_of(from)))
+            };
+            let Some(to) = to else {
+                return Err(format!("not a name: {destination}"));
+            };
+            let result = if copy {
+                ops::copy_entry(from, &to)
+            } else {
+                ops::move_entry(from, &to)
+            };
+            // Stop at the first failure with what was already done reported:
+            // carrying on would bury the error under later successes.
+            result.map_err(|e| format!("{} ({done} done)", e))?;
+            done += 1;
+        }
+        Ok(format!("{} {done}", if copy { "copied" } else { "moved" }))
+    }
+
+    fn delete_targets(&mut self) -> Result<String, String> {
+        let targets = self.targets();
+        let mut done = 0;
+        for path in &targets {
+            ops::remove_entry(path).map_err(|e| format!("{} ({done} done)", e))?;
+            done += 1;
+        }
+        Ok(format!("deleted {done}"))
+    }
+
+    fn change_mode(&mut self, text: &str) -> Result<String, String> {
+        let Some(mode) = ops::parse_mode(text) else {
+            return Err(format!("not an octal mode: {text}"));
+        };
+        let targets = self.targets();
+        let mut done = 0;
+        for path in &targets {
+            ops::set_mode(path, mode).map_err(|e| format!("{} ({done} done)", e))?;
+            done += 1;
+        }
+        Ok(format!("set mode on {done}"))
+    }
+
     /// Resolve the second key of a two-key sequence. An unrecognized follow key
     /// abandons the sequence rather than holding it for the next keystroke.
     fn resolve_pending(&mut self, leader: char, code: KeyCode) -> PageOutcome {
@@ -301,6 +516,14 @@ impl DirPage {
 }
 
 impl Page for DirPage {
+    fn on_prompt(&mut self, reply: PromptReply) -> PageOutcome {
+        match reply.answer {
+            Some(answer) => self.apply_answer(reply.tag, &answer),
+            None => self.message = Some("cancelled".to_string()),
+        }
+        PageOutcome::Consumed
+    }
+
     fn title(&self) -> String {
         self.root
             .file_name()
@@ -315,6 +538,8 @@ impl Page for DirPage {
             self.sort,
             self.show_hidden,
             self.show_details,
+            self.marks.len(),
+            self.message.as_deref(),
         )];
         if self.rows.is_empty() {
             page_rows.push(vec![PageSpan::new(PageStyle::Dim, EMPTY_NOTE)]);
@@ -322,17 +547,19 @@ impl Page for DirPage {
         }
         let visible = rows.saturating_sub(HEADER_ROWS);
         self.scroll = scroll_to_cursor(self.scroll, self.cursor, self.rows.len(), visible);
-        page_rows.extend(
-            self.rows
-                .iter()
-                .skip(self.scroll)
-                .take(visible)
-                .map(|row| rows::entry_row(row, self.show_details, now)),
-        );
+        page_rows.extend(self.rows.iter().skip(self.scroll).take(visible).map(|row| {
+            rows::entry_row(
+                row,
+                self.show_details,
+                now,
+                self.marks.contains(&row.entry.path),
+            )
+        }));
         PageContent::new(page_rows).with_cursor_line(HEADER_ROWS + self.cursor - self.scroll)
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
+        self.message = None;
         if let Some(leader) = self.pending {
             return self.resolve_pending(leader, key.code);
         }
@@ -423,11 +650,41 @@ impl Page for DirPage {
                 self.reload_keeping_selection();
                 PageOutcome::Consumed
             }
+            KeyCode::Char('m') => {
+                self.toggle_mark();
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('*') => {
+                self.mark_all();
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('U') => {
+                self.marks.clear();
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('a') => self.ask(ASK_NEW_FILE, "New file: ".to_string(), String::new()),
+            KeyCode::Char('A') => self.ask(ASK_MKDIR, "New directory: ".to_string(), String::new()),
+            KeyCode::Char('R') => self.ask_rename(),
+            KeyCode::Char('C') => self.ask_destination(ASK_COPY, "Copy"),
+            KeyCode::Char('M') => self.ask_destination(ASK_MOVE, "Move"),
+            KeyCode::Char('D') => self.ask_delete(),
+            KeyCode::Char('x') => self.ask(ASK_MODE, "Mode: ".to_string(), String::new()),
             KeyCode::Char('q') | KeyCode::Escape => PageOutcome::Close,
             // Every other key belongs to the host.
             _ => PageOutcome::Ignored,
         }
     }
+}
+
+// ========================================================================
+// Helpers
+// ========================================================================
+
+/// The final component of `path`, as text.
+fn name_of(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
 // ========================================================================
@@ -448,6 +705,10 @@ mod tests {
                 std::env::temp_dir().join(format!("winter-dirpage-{tag}-{}", std::process::id()));
             fs::create_dir_all(&dir).expect("temp dir");
             Self(dir)
+        }
+
+        fn path(&self, name: &str) -> PathBuf {
+            self.0.join(name)
         }
 
         fn dir(&self, name: &str) -> PathBuf {
@@ -786,6 +1047,191 @@ mod tests {
             page.on_key(&press(KeyCode::Char('o'))),
             PageOutcome::OpenExternal(file)
         );
+    }
+
+    fn answer(page: &mut DirPage, outcome: PageOutcome, text: &str) {
+        let PageOutcome::Prompt(request) = outcome else {
+            panic!("expected a prompt, got {outcome:?}");
+        };
+        page.on_prompt(PromptReply {
+            answer: Some(text.to_string()),
+            tag: request.tag,
+        });
+    }
+
+    #[test]
+    fn test_marking_moves_on_so_a_run_of_marks_is_one_key_each() {
+        let tree = TempTree::new("mark-run");
+        tree.touch("a.txt");
+        tree.touch("b.txt");
+        let mut page = DirPage::new(tree.0.clone());
+
+        page.on_key(&press(KeyCode::Char('m')));
+        page.on_key(&press(KeyCode::Char('m')));
+        assert_eq!(page.marks.len(), 2);
+        assert_eq!(page.targets().len(), 2);
+    }
+
+    #[test]
+    fn test_an_operation_acts_on_the_marks_not_the_cursor() {
+        // The cursor sits on an unmarked entry: deleting must leave it alone.
+        let tree = TempTree::new("mark-target");
+        tree.touch("marked.txt");
+        tree.touch("untouched.txt");
+        let mut page = DirPage::new(tree.0.clone());
+
+        page.on_key(&press(KeyCode::Char('m')));
+        assert_eq!(selected_name(&page), "untouched.txt");
+        let outcome = page.on_key(&press(KeyCode::Char('D')));
+        answer(&mut page, outcome, "y");
+
+        assert!(!tree.path("marked.txt").exists());
+        assert!(tree.path("untouched.txt").exists());
+    }
+
+    #[test]
+    fn test_a_delete_prompt_says_how_many_it_will_take() {
+        let tree = TempTree::new("delete-count");
+        tree.touch("a.txt");
+        tree.touch("b.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Char('m')));
+        page.on_key(&press(KeyCode::Char('m')));
+
+        let PageOutcome::Prompt(request) = page.on_key(&press(KeyCode::Char('D'))) else {
+            panic!("expected a prompt");
+        };
+        assert!(request.label.contains('2'), "got {:?}", request.label);
+        assert_eq!(request.mode, PromptMode::Confirm);
+    }
+
+    #[test]
+    fn test_declining_a_delete_keeps_the_files() {
+        let tree = TempTree::new("delete-no");
+        tree.touch("keep.txt");
+        let mut page = DirPage::new(tree.0.clone());
+
+        let PageOutcome::Prompt(request) = page.on_key(&press(KeyCode::Char('D'))) else {
+            panic!("expected a prompt");
+        };
+        page.on_prompt(PromptReply {
+            answer: None,
+            tag: request.tag,
+        });
+        assert!(tree.path("keep.txt").exists());
+    }
+
+    #[test]
+    fn test_create_rename_and_delete_walk_the_listing_along() {
+        let tree = TempTree::new("crud");
+        let mut page = DirPage::new(tree.0.clone());
+
+        let outcome = page.on_key(&press(KeyCode::Char('a')));
+        answer(&mut page, outcome, "notes.txt");
+        assert!(tree.path("notes.txt").exists());
+        assert_eq!(selected_name(&page), "notes.txt", "the cursor follows it");
+
+        let outcome = page.on_key(&press(KeyCode::Char('R')));
+        answer(&mut page, outcome, "renamed.md");
+        assert!(tree.path("renamed.md").exists());
+        assert!(!tree.path("notes.txt").exists());
+
+        let outcome = page.on_key(&press(KeyCode::Char('D')));
+        answer(&mut page, outcome, "y");
+        assert!(!tree.path("renamed.md").exists());
+        assert!(page.rows.is_empty());
+    }
+
+    #[test]
+    fn test_a_new_directory_joins_the_listing() {
+        let tree = TempTree::new("mkdir");
+        let mut page = DirPage::new(tree.0.clone());
+
+        let outcome = page.on_key(&press(KeyCode::Char('A')));
+        answer(&mut page, outcome, "sub");
+        assert!(tree.path("sub").is_dir());
+    }
+
+    #[test]
+    fn test_copy_and_move_of_a_single_entry_use_the_answer_as_its_name() {
+        let tree = TempTree::new("transfer");
+        tree.touch("original.txt");
+        let mut page = DirPage::new(tree.0.clone());
+
+        let outcome = page.on_key(&press(KeyCode::Char('C')));
+        answer(&mut page, outcome, "copy.txt");
+        assert!(tree.path("copy.txt").exists());
+        assert!(
+            tree.path("original.txt").exists(),
+            "a copy leaves the source"
+        );
+
+        let outcome = page.on_key(&press(KeyCode::Char('M')));
+        answer(&mut page, outcome, "moved.txt");
+        assert!(tree.path("moved.txt").exists());
+    }
+
+    #[test]
+    fn test_several_marked_entries_transfer_into_a_directory() {
+        let tree = TempTree::new("transfer-many");
+        tree.touch("one.txt");
+        tree.touch("two.txt");
+        tree.dir("target");
+        let mut page = DirPage::new(tree.0.clone());
+
+        // The directory sorts first, so mark the two files after it.
+        page.on_key(&press(KeyCode::Char('j')));
+        page.on_key(&press(KeyCode::Char('m')));
+        page.on_key(&press(KeyCode::Char('m')));
+        assert_eq!(page.marks.len(), 2);
+
+        let outcome = page.on_key(&press(KeyCode::Char('M')));
+        answer(&mut page, outcome, "target");
+        assert!(tree.path("target").join("one.txt").exists());
+        assert!(tree.path("target").join("two.txt").exists());
+    }
+
+    #[test]
+    fn test_an_operation_reports_a_failure_instead_of_pretending() {
+        // A name that is not a name must be refused visibly, and must not be
+        // reported as a success.
+        let tree = TempTree::new("bad-name");
+        let mut page = DirPage::new(tree.0.clone());
+
+        let outcome = page.on_key(&press(KeyCode::Char('a')));
+        answer(&mut page, outcome, "../escape.txt");
+        let message = page.message.clone().unwrap_or_default();
+        assert!(message.starts_with("failed:"), "got {message:?}");
+        assert!(!tree.0.parent().expect("parent").join("escape.txt").exists());
+    }
+
+    #[test]
+    fn test_an_operation_clears_the_marks_it_consumed() {
+        // Marks left behind would silently widen the next operation.
+        let tree = TempTree::new("marks-cleared");
+        tree.touch("a.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Char('m')));
+
+        let outcome = page.on_key(&press(KeyCode::Char('C')));
+        answer(&mut page, outcome, "b.txt");
+        assert!(page.marks.is_empty());
+    }
+
+    #[test]
+    fn test_moving_the_root_clears_the_marks() {
+        // A mark that survived into a different listing would be counted by the
+        // next operation without ever being visible in it.
+        let (tree, nested) = tree_with_nested_children("marks-root");
+        let mut page = DirPage::new(tree.0.clone());
+        // Marking steps the cursor on, so come back to the directory to enter.
+        page.on_key(&press(KeyCode::Char('m')));
+        assert_eq!(page.marks.len(), 1);
+        page.on_key(&press(KeyCode::Char('k')));
+
+        page.on_key(&press(KeyCode::Enter));
+        assert_eq!(page.root, nested);
+        assert!(page.marks.is_empty());
     }
 
     #[test]
