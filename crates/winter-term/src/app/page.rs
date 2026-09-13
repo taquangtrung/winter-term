@@ -263,6 +263,22 @@ impl App {
                 self.jobs.spawn(pane_id, request);
                 true
             }
+            PageOutcome::Spawn(request) => {
+                self.spawn_in_tab(request);
+                true
+            }
+            PageOutcome::Yank(value) => {
+                let copied = self
+                    .clipboard()
+                    .and_then(|clipboard| clipboard.set_text(&value).ok())
+                    .is_some();
+                if copied {
+                    self.set_notice(format!("copied {value}"));
+                } else {
+                    self.set_error("clipboard unavailable");
+                }
+                true
+            }
             PageOutcome::Prompt(request) => {
                 self.page_prompt = Some(ActivePrompt {
                     input: request.initial.clone(),

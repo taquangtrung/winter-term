@@ -164,10 +164,13 @@ fn run(request: JobRequest, cancel: &AtomicBool) -> JobReply {
 /// these are short commands, and killing one mid-write is how a repository ends
 /// up with a half-applied change.
 fn run_command(request: CommandRequest) -> CommandOutput {
-    let output = std::process::Command::new(&request.program)
-        .args(&request.args)
-        .current_dir(&request.cwd)
-        .output();
+    let output = match &request.stdin {
+        Some(input) => piped_output(&request, input),
+        None => std::process::Command::new(&request.program)
+            .args(&request.args)
+            .current_dir(&request.cwd)
+            .output(),
+    };
     match output {
         Ok(output) => CommandOutput {
             code: output.status.code(),
@@ -182,6 +185,26 @@ fn run_command(request: CommandRequest) -> CommandOutput {
             tag: request.tag,
         },
     }
+}
+
+/// Run a program that reads its payload from standard input. The handle is
+/// dropped before waiting, since a program reading to end-of-input would
+/// otherwise never see one.
+fn piped_output(request: &CommandRequest, input: &str) -> std::io::Result<std::process::Output> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let mut child = std::process::Command::new(&request.program)
+        .args(&request.args)
+        .current_dir(&request.cwd)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()?;
+    if let Some(mut handle) = child.stdin.take() {
+        handle.write_all(input.as_bytes())?;
+    }
+    child.wait_with_output()
 }
 
 /// Total bytes under `dir`, skipping what cannot be read and links rather than

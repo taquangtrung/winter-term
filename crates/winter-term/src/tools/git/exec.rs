@@ -15,6 +15,22 @@ const GIT: &str = "git";
 /// Tag naming a commit request, so a reply says which command finished.
 pub const TAG_COMMIT: &str = "commit";
 
+/// Tag naming anything that changed the repository, which the view answers by
+/// re-reading it.
+pub const TAG_CHANGED: &str = "changed";
+
+/// Tag naming a command whose output is the answer, shown as it came back.
+pub const TAG_READ: &str = "read";
+
+/// Tag naming a log read that replaces the log view.
+pub const TAG_LOG_VIEW: &str = "log-view";
+
+/// Tag naming a remote-URL lookup, for opening it in a browser.
+pub const TAG_REMOTE_URL: &str = "remote-url";
+
+/// Tag naming a diff read.
+pub const TAG_DIFF: &str = "diff";
+
 /// Tag naming a discard request.
 pub const TAG_DISCARD: &str = "discard";
 
@@ -41,6 +57,81 @@ pub const TAG_STATUS: &str = "status";
 
 /// Tag naming an unstage request.
 pub const TAG_UNSTAGE: &str = "unstage";
+
+/// How far a reset moves, and what it keeps.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResetMode {
+    /// Throw away the index and the working tree.
+    Hard,
+    /// Keep the working tree, reset the index.
+    Mixed,
+    /// Keep both; only the branch pointer moves.
+    Soft,
+}
+
+impl ResetMode {
+    fn flag(self) -> &'static str {
+        match self {
+            ResetMode::Hard => "--hard",
+            ResetMode::Mixed => "--mixed",
+            ResetMode::Soft => "--soft",
+        }
+    }
+}
+
+/// Whether a sequence in progress should carry on or stop.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SequenceStep {
+    /// Give up and put the repository back.
+    Abort,
+    /// Carry on with the next commit.
+    Continue,
+    /// Leave this commit out and carry on.
+    Skip,
+}
+
+impl SequenceStep {
+    fn flag(self) -> &'static str {
+        match self {
+            SequenceStep::Abort => "--abort",
+            SequenceStep::Continue => "--continue",
+            SequenceStep::Skip => "--skip",
+        }
+    }
+}
+
+/// What a log read covers.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum LogScope {
+    /// Every ref, not just this branch.
+    AllRefs,
+    /// The current branch.
+    Branch,
+    /// One path's history.
+    File(String),
+}
+
+/// Where a patch is applied, and in which direction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ApplyTarget {
+    /// Add the change to the index: staging a hunk.
+    Index,
+    /// Take the change out of the index: unstaging a hunk.
+    IndexReverse,
+    /// Take the change out of the working tree: discarding a hunk.
+    WorktreeReverse,
+}
+
+impl ApplyTarget {
+    /// The tag the reply carries, so the view reports the right verb.
+    pub fn tag(self) -> &'static str {
+        match self {
+            ApplyTarget::Index => TAG_STAGE,
+            ApplyTarget::IndexReverse => TAG_UNSTAGE,
+            ApplyTarget::WorktreeReverse => TAG_DISCARD,
+        }
+    }
+}
 
 /// How many recent commits the status view lists.
 const RECENT_COMMITS: usize = 10;
@@ -143,6 +234,55 @@ pub fn commit(root: &Path, message: &str) -> JobRequest {
     )
 }
 
+/// The diff for one path, from the index when `staged` or from the working
+/// tree otherwise. Context is trimmed to what a reviewer needs, and rename
+/// detection is off so a hunk maps to one path.
+pub fn diff_file(root: &Path, path: &str, staged: bool) -> JobRequest {
+    let mut args = vec!["diff".to_string(), "--no-color".to_string()];
+    if staged {
+        args.push("--cached".to_string());
+    }
+    args.push("--no-ext-diff".to_string());
+    args.push("--no-renames".to_string());
+    args.push("--".to_string());
+    args.push(path.to_string());
+    owned_request(root, TAG_DIFF, args)
+}
+
+/// The diff for an untracked path, which git will only produce against the
+/// empty tree.
+pub fn diff_untracked(root: &Path, path: &str) -> JobRequest {
+    owned_request(
+        root,
+        TAG_DIFF,
+        vec![
+            "diff".to_string(),
+            "--no-color".to_string(),
+            "--no-index".to_string(),
+            "--".to_string(),
+            "/dev/null".to_string(),
+            path.to_string(),
+        ],
+    )
+}
+
+/// Apply `patch` to the index, or reverse it out of the index or the working
+/// tree. This is what makes staging a single hunk possible: the patch is fed
+/// on standard input rather than written to a file.
+pub fn apply_patch(root: &Path, patch: String, target: ApplyTarget) -> JobRequest {
+    let mut args = vec!["apply".to_string(), "--unidiff-zero".to_string()];
+    match target {
+        ApplyTarget::Index => args.push("--cached".to_string()),
+        ApplyTarget::IndexReverse => {
+            args.push("--cached".to_string());
+            args.push("--reverse".to_string());
+        }
+        ApplyTarget::WorktreeReverse => args.push("--reverse".to_string()),
+    }
+    args.push("-".to_string());
+    piped_request(root, target.tag(), args, Some(patch))
+}
+
 /// Push the current branch.
 pub fn push(root: &Path) -> JobRequest {
     request(root, TAG_PUSH, ["push"])
@@ -159,15 +299,214 @@ pub fn fetch(root: &Path) -> JobRequest {
     request(root, TAG_FETCH, ["fetch", "--all", "--prune"])
 }
 
+/// Check out an existing branch or revision.
+pub fn checkout(root: &Path, rev: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["checkout", rev])
+}
+
+/// Create a branch, checking it out when asked.
+pub fn branch_create(root: &Path, name: &str, checkout: bool) -> JobRequest {
+    if checkout {
+        owned(root, TAG_CHANGED, vec!["checkout", "-b", name])
+    } else {
+        owned(root, TAG_CHANGED, vec!["branch", name])
+    }
+}
+
+/// Delete a branch. `force` deletes one whose work is not merged.
+pub fn branch_delete(root: &Path, name: &str, force: bool) -> JobRequest {
+    let flag = if force { "-D" } else { "-d" };
+    owned(root, TAG_CHANGED, vec!["branch", flag, name])
+}
+
+/// Merge a branch into the current one.
+pub fn merge(root: &Path, rev: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["merge", "--no-edit", rev])
+}
+
+/// Continue or abandon whatever sequence is in progress. One command shape
+/// covers merge, rebase, cherry-pick, and revert, which is why the verb is a
+/// parameter rather than five near-identical functions.
+pub fn sequence(root: &Path, verb: &str, step: SequenceStep) -> JobRequest {
+    owned(root, TAG_CHANGED, vec![verb, step.flag()])
+}
+
+/// Replay commits onto `upstream`, in an editor when interactive.
+pub fn rebase(root: &Path, upstream: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["rebase", upstream])
+}
+
+/// Stash everything, with an optional message.
+pub fn stash_push(root: &Path, message: &str) -> JobRequest {
+    let mut args = vec!["stash".to_string(), "push".to_string()];
+    if !message.trim().is_empty() {
+        args.push("--message".to_string());
+        args.push(message.to_string());
+    }
+    owned_request(root, TAG_CHANGED, args)
+}
+
+/// Act on the newest stash entry.
+pub fn stash(root: &Path, verb: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["stash", verb])
+}
+
+/// List the stash, for reading rather than changing anything.
+pub fn stash_list(root: &Path) -> JobRequest {
+    owned(root, TAG_READ, vec!["stash", "list"])
+}
+
+/// Create a tag at the current commit.
+pub fn tag_create(root: &Path, name: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["tag", name])
+}
+
+/// Delete a tag.
+pub fn tag_delete(root: &Path, name: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["tag", "--delete", name])
+}
+
+/// List tags.
+pub fn tag_list(root: &Path) -> JobRequest {
+    owned(root, TAG_READ, vec!["tag", "--list"])
+}
+
+/// List remotes with their URLs.
+pub fn remote_list(root: &Path) -> JobRequest {
+    owned(root, TAG_READ, vec!["remote", "--verbose"])
+}
+
+/// Add a remote, taking `name url` as one answer.
+pub fn remote_add(root: &Path, name: &str, url: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["remote", "add", name, url])
+}
+
+/// Remove a remote.
+pub fn remote_remove(root: &Path, name: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["remote", "remove", name])
+}
+
+/// Drop remote-tracking refs the remote no longer has.
+pub fn remote_prune(root: &Path, name: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["remote", "prune", name])
+}
+
+/// The URL a remote fetches from, for opening it in a browser.
+pub fn remote_url(root: &Path, name: &str) -> JobRequest {
+    owned(root, TAG_REMOTE_URL, vec!["remote", "get-url", name])
+}
+
+/// Replay one commit onto the current branch.
+pub fn cherry_pick(root: &Path, rev: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["cherry-pick", rev])
+}
+
+/// Undo a commit with a new one.
+pub fn revert(root: &Path, rev: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["revert", "--no-edit", rev])
+}
+
+/// Move the branch pointer, keeping as much as `mode` says.
+pub fn reset(root: &Path, mode: ResetMode, rev: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["reset", mode.flag(), rev])
+}
+
+/// Worktrees, listed.
+pub fn worktree_list(root: &Path) -> JobRequest {
+    owned(root, TAG_READ, vec!["worktree", "list"])
+}
+
+/// Add a worktree at `path`, on a new branch named after it.
+pub fn worktree_add(root: &Path, path: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["worktree", "add", path])
+}
+
+/// Remove a worktree.
+pub fn worktree_remove(root: &Path, path: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["worktree", "remove", path])
+}
+
+/// Start a bisect, or answer its question.
+pub fn bisect(root: &Path, verb: &str) -> JobRequest {
+    owned(root, TAG_CHANGED, vec!["bisect", verb])
+}
+
+/// The log for a path, or for every ref.
+pub fn log(root: &Path, scope: LogScope, count: usize) -> JobRequest {
+    let count = format!("--max-count={count}");
+    let mut args = vec![
+        "log".to_string(),
+        "--oneline".to_string(),
+        "--no-decorate".to_string(),
+        count,
+    ];
+    match scope {
+        LogScope::AllRefs => args.push("--all".to_string()),
+        LogScope::Branch => {}
+        LogScope::File(path) => {
+            args.push("--".to_string());
+            args.push(path);
+        }
+    }
+    owned_request(root, TAG_LOG_VIEW, args)
+}
+
+/// Every ref, with what it points at.
+pub fn show_refs(root: &Path) -> JobRequest {
+    owned(root, TAG_READ, vec!["show-ref", "--abbrev"])
+}
+
+/// Who last touched each line of a path.
+pub fn blame(root: &Path, path: &str) -> JobRequest {
+    owned(
+        root,
+        TAG_READ,
+        vec!["blame", "--date=short", "--abbrev=8", "--", path],
+    )
+}
+
+/// A whole diff, for reading rather than staging.
+pub fn diff_all(root: &Path, staged: bool, rev: Option<&str>) -> JobRequest {
+    let mut args = vec!["diff".to_string(), "--no-color".to_string()];
+    if staged {
+        args.push("--cached".to_string());
+    }
+    if let Some(rev) = rev {
+        args.push(rev.to_string());
+    }
+    owned_request(root, TAG_READ, args)
+}
+
+/// Whatever the user typed, split on spaces: the escape hatch for the commands
+/// this view does not offer a key for.
+pub fn custom(root: &Path, line: &str) -> JobRequest {
+    let args = line.split_whitespace().map(str::to_string).collect();
+    owned_request(root, TAG_CHANGED, args)
+}
+
+fn owned(root: &Path, tag: &'static str, args: Vec<&str>) -> JobRequest {
+    owned_request(root, tag, args.into_iter().map(str::to_string).collect())
+}
+
 fn request<const N: usize>(cwd: &Path, tag: &'static str, args: [&str; N]) -> JobRequest {
     owned_request(cwd, tag, args.iter().map(|a| a.to_string()).collect())
 }
 
 fn owned_request(cwd: &Path, tag: &'static str, args: Vec<String>) -> JobRequest {
+    piped_request(cwd, tag, args, None)
+}
+
+fn piped_request(
+    cwd: &Path,
+    tag: &'static str,
+    args: Vec<String>,
+    stdin: Option<String>,
+) -> JobRequest {
     JobRequest::Command(CommandRequest {
         args,
         cwd: PathBuf::from(cwd),
         program: GIT.to_string(),
+        stdin,
         tag,
     })
 }

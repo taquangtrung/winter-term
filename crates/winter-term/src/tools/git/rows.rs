@@ -3,6 +3,7 @@
 
 use crate::model::page::{PageRow, PageSpan, PageStyle};
 
+use super::diff::FileDiff;
 use super::parse::{Commit, FileStatus, Section, Status};
 
 // ========================================================================
@@ -21,6 +22,9 @@ const GLYPH_EXPANDED: &str = "⌄ ";
 /// Indent every entry sits at, under its heading.
 const ENTRY_INDENT: &str = "  ";
 
+/// Indent a diff line sits at, under its file.
+const HUNK_INDENT: &str = "    ";
+
 /// Column the change code is drawn in, before the path.
 const CODE_WIDTH: usize = 2;
 
@@ -38,14 +42,29 @@ pub enum Item {
     File(FileRow),
     /// A section heading.
     Heading(Section),
+    /// A hunk of a file's diff, or one of its lines: both act on the hunk, so
+    /// a key works anywhere inside it rather than only on its header.
+    Hunk(HunkRow),
     /// The header, or a blank line: nothing to act on.
     None,
     /// The heading of the recent-commits section.
     RecentHeading,
 }
 
-/// A path listed in a section.
+/// One hunk of an expanded file's diff.
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HunkRow {
+    /// Which hunk of that file's diff, counting from zero.
+    pub index: usize,
+    /// The path the hunk belongs to.
+    pub path: String,
+    /// The section the file was listed under, which decides which way a patch
+    /// is applied.
+    pub section: Section,
+}
+
+/// A path listed in a section.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub struct FileRow {
     /// The path, relative to the repository root.
     pub path: String,
@@ -73,6 +92,7 @@ pub fn build(
     commits: &[Commit],
     collapsed: &dyn Fn(Option<Section>) -> bool,
     message: Option<&str>,
+    diffs: &dyn Fn(&FileRow) -> Option<FileDiff>,
 ) -> Vec<ViewRow> {
     let mut rows = vec![header_row(status, message), blank_row()];
     for section in Section::all() {
@@ -92,7 +112,19 @@ pub fn build(
             Item::Heading(section),
         ));
         if !shut {
-            rows.extend(files.into_iter().map(file_row));
+            for file in files {
+                let row = file_row(file);
+                let key = match &row.item {
+                    Item::File(key) => Some(key.clone()),
+                    _ => None,
+                };
+                rows.push(row);
+                // An expanded file shows its own diff, hunk by hunk, which is
+                // what makes staging part of a file possible.
+                if let Some(diff) = key.as_ref().and_then(diffs) {
+                    rows.extend(hunk_rows(key.as_ref().expect("a file row"), &diff));
+                }
+            }
         }
         rows.push(blank_row());
     }
@@ -171,6 +203,44 @@ fn file_row(file: &FileStatus) -> ViewRow {
     }
 }
 
+/// Every row of one file's diff: each hunk's header, then its lines, all
+/// standing for the same hunk.
+fn hunk_rows(file: &FileRow, diff: &FileDiff) -> Vec<ViewRow> {
+    let mut rows = Vec::new();
+    for (index, hunk) in diff.hunks.iter().enumerate() {
+        let item = Item::Hunk(HunkRow {
+            index,
+            path: file.path.clone(),
+            section: file.section,
+        });
+        let (added, removed) = hunk.counts();
+        rows.push(ViewRow {
+            item: item.clone(),
+            spans: vec![
+                PageSpan::new(PageStyle::Header, format!("{HUNK_INDENT}{}", hunk.header)),
+                PageSpan::new(PageStyle::Dim, format!("  +{added} -{removed}")),
+            ],
+        });
+        rows.extend(hunk.lines.iter().map(|line| ViewRow {
+            item: item.clone(),
+            spans: vec![PageSpan::new(
+                line_style(line),
+                format!("{HUNK_INDENT}{line}"),
+            )],
+        }));
+    }
+    rows
+}
+
+/// Added lines read as arriving, removed as leaving, context as neither.
+fn line_style(line: &str) -> PageStyle {
+    match line.chars().next() {
+        Some('+') => PageStyle::Accent,
+        Some('-') => PageStyle::Marked,
+        Some(_) | None => PageStyle::Dim,
+    }
+}
+
 fn commit_row(commit: &Commit) -> ViewRow {
     ViewRow {
         item: Item::Commit(commit.hash.clone()),
@@ -237,10 +307,14 @@ mod tests {
         true
     }
 
+    fn no_diffs(_file: &FileRow) -> Option<FileDiff> {
+        None
+    }
+
     #[test]
     fn test_an_empty_section_gets_no_heading() {
         // A clean tree should not read as four empty headings.
-        let rows = build(&status_with(Vec::new()), &[], &open, None);
+        let rows = build(&status_with(Vec::new()), &[], &open, None, &no_diffs);
         assert!(!rows.iter().any(|row| matches!(row.item, Item::Heading(_))));
     }
 
@@ -250,7 +324,7 @@ mod tests {
             file(Section::Staged, "a.rs", 'M'),
             file(Section::Staged, "b.rs", 'A'),
         ]);
-        let rows = build(&status, &[], &shut, None);
+        let rows = build(&status, &[], &shut, None, &no_diffs);
         let heading = rows
             .iter()
             .find(|row| matches!(row.item, Item::Heading(Section::Staged)))
@@ -263,7 +337,7 @@ mod tests {
     fn test_a_rename_shows_where_it_came_from() {
         let mut renamed = file(Section::Staged, "new.rs", 'R');
         renamed.renamed_from = Some("old.rs".to_string());
-        let rows = build(&status_with(vec![renamed]), &[], &open, None);
+        let rows = build(&status_with(vec![renamed]), &[], &open, None, &no_diffs);
         let row = rows
             .iter()
             .find(|row| matches!(row.item, Item::File(_)))
@@ -279,7 +353,7 @@ mod tests {
             file(Section::Staged, "both.rs", 'M'),
             file(Section::Unstaged, "both.rs", 'M'),
         ]);
-        let rows = build(&status, &[], &open, None);
+        let rows = build(&status, &[], &open, None, &no_diffs);
         let sections: Vec<Section> = rows
             .iter()
             .filter_map(|row| match &row.item {
@@ -299,7 +373,7 @@ mod tests {
             files: Vec::new(),
             upstream: Some("origin/main".to_string()),
         };
-        let rows = build(&status, &[], &open, None);
+        let rows = build(&status, &[], &open, None, &no_diffs);
         let header = text(&rows[0]);
         assert!(header.contains("origin/main"), "got {header:?}");
         assert!(header.contains("↑2 ↓1"), "got {header:?}");
@@ -311,7 +385,7 @@ mod tests {
             hash: "abc1234".to_string(),
             subject: "do the thing".to_string(),
         }];
-        let rows = build(&status_with(Vec::new()), &commits, &open, None);
+        let rows = build(&status_with(Vec::new()), &commits, &open, None, &no_diffs);
         assert!(rows
             .iter()
             .any(|row| row.item == Item::Commit("abc1234".to_string())));

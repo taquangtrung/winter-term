@@ -48,6 +48,9 @@ pub struct CommandRequest {
     pub cwd: PathBuf,
     /// The program.
     pub program: String,
+    /// What to write to the program's standard input, for a command that reads
+    /// its payload rather than taking it as an argument.
+    pub stdin: Option<String>,
     /// Which request this is, so the page knows what finished.
     pub tag: &'static str,
 }
@@ -96,6 +99,17 @@ impl CommandOutput {
         };
         text.lines().next().unwrap_or("failed").to_string()
     }
+}
+
+/// A command a page wants run in a real terminal rather than captured.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SpawnRequest {
+    /// Arguments after the program name.
+    pub args: Vec<String>,
+    /// Directory to run in.
+    pub cwd: PathBuf,
+    /// The program.
+    pub program: String,
 }
 
 /// What a page is asking the host to read from the user.
@@ -166,6 +180,11 @@ pub enum PageOutcome {
     Job(JobRequest),
     /// The page asks the host to read an answer from the user.
     Prompt(PromptRequest),
+    /// The page asks the host to run a command in a pane of its own, for work
+    /// that needs a terminal: an editor, or anything that prompts.
+    Spawn(SpawnRequest),
+    /// The page asks the host to copy this to the clipboard.
+    Yank(String),
     /// The page asks the host to open this path for editing.
     OpenPath(PathBuf),
 }

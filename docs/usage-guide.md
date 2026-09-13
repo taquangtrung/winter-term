@@ -248,15 +248,45 @@ Directories sort before files whatever the key, and moving the root, toggling a 
 | `g t` / `g u` / `g s` / `g r` | Jump to untracked, unstaged, staged, recent |
 | `Tab` / `Shift-Tab` | Fold the section, fold everything |
 | `Enter` | Open the file under the cursor in `$EDITOR` |
+| `Tab` on a file | Show its diff, hunk by hunk |
 | `s` / `S` | Stage the target, stage everything |
 | `u` / `U` | Unstage the target, unstage everything |
 | `x` | Discard the target, after confirming |
-| `Ctrl-Shift-c` | Commit what is staged, with a one-line message |
+| `a` / `-` | Apply, reverse the hunk under the cursor |
+| `y` | Copy the hash or path under the cursor |
 | `P` / `F` / `f` | Push, pull with rebase, fetch all |
 | `G` | Re-read the working tree |
+| `Ctrl-Shift-c` | Commit what is staged, with a one-line message |
+| `!` | Run any git command |
+| `Alt-y` | Show every ref |
+| `Alt-g` | Open the remote in a browser |
 | `q` | Close |
 
-On a section heading, `s`, `u`, and `x` act on every file in that section. Discarding an untracked file deletes it, since `git restore` cannot reach a path that is not in the index.
+On a section heading, `s`, `u`, and `x` act on every file in that section. On a hunk, or on any line inside it, they act on that hunk alone: the patch is built from the hunk and fed to `git apply` on standard input, so the rest of the file is untouched. Discarding an untracked file deletes it, since `git restore` cannot reach a path that is not in the index.
+
+These keys open a menu, and the next key picks from it:
+
+| Key | Menu |
+|---|---|
+| `b` | Branch: checkout, create, delete |
+| `c` | Commit: in an editor, one line, amend |
+| `d` | Diff: working tree, staged, against a revision |
+| `i` | Ignore: this path, this extension |
+| `m` | Merge: merge, continue, abort |
+| `r` | Rebase: interactive, onto upstream, continue, skip, abort |
+| `t` | Tag: create, delete, list |
+| `z` | Stash: push, pop, apply, drop, list |
+| `A` | Cherry-pick: pick, continue, abort |
+| `B` | Bisect: start, good, bad, reset |
+| `M` | Remote: list, add, remove, prune |
+| `O` | Reset: mixed, soft, hard |
+| `V` | Revert: revert, continue, abort |
+| `Z` | Worktree: list, add, remove |
+| `Ctrl-l` | Log: this branch, all refs, this file |
+
+Anything that wants a terminal of its own goes to a new tab: commit and amend in `$EDITOR`, and interactive rebase with its todo list. `o` resets to the commit under the cursor, or asks which one when the cursor is elsewhere.
+
+A log, a listing, or a diff fills the view; `j`/`k` move through it, `+` asks for more of a log, `y` copies the first field of a line, and `q` goes back to the status.
 
 **Keys** (`Keys: Show Every Command`) lists every command and the chord bound to it, read from the keymap in force, so it cannot disagree with what the keys actually do.
 

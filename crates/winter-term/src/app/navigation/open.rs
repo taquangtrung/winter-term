@@ -279,6 +279,17 @@ impl App {
         }
     }
 
+    /// Run a command in a new tab with a real PTY, for work that needs a
+    /// terminal: an editor, or a git command that prompts.
+    pub(crate) fn spawn_in_tab(&mut self, request: crate::model::page::SpawnRequest) {
+        let mut command = portable_pty::CommandBuilder::new(&request.program);
+        for arg in &request.args {
+            command.arg(arg);
+        }
+        command.cwd(&request.cwd);
+        self.spawn_command_tab(command, &request.program);
+    }
+
     /// Open `path` in a new tab running `$VISUAL` / `$EDITOR` (falling back
     /// to `vi`), positioned at `line` when the reference carried one. Winter
     /// owns the PTY, so the editor gets a real terminal: no detached spawn.
@@ -294,7 +305,12 @@ impl App {
         if let Some(dir) = path.parent() {
             command.cwd(dir);
         }
+        self.spawn_command_tab(command, &editor);
+    }
 
+    /// Open a new tab running `command` under its own PTY, reporting by name
+    /// when it cannot be started.
+    pub(crate) fn spawn_command_tab(&mut self, command: portable_pty::CommandBuilder, name: &str) {
         let id = self.alloc_pane_id();
         let (cols, rows) = self.renderer.as_ref().map(|r| r.grid_size()).unwrap_or((
             crate::app::DEFAULT_COLS as usize,
@@ -306,7 +322,7 @@ impl App {
             .unwrap_or(winter_render::MAX_SCROLLBACK);
         match Pane::with_command(cols.max(1), rows.max(1), command, scrollback) {
             Ok(pane) => self.push_new_tab(id, pane),
-            Err(e) => self.set_error(format!("could not start {editor}: {e}")),
+            Err(e) => self.set_error(format!("could not start {name}: {e}")),
         }
     }
 
