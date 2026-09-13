@@ -54,7 +54,9 @@ pub enum PageOutcome {
     Consumed,
     /// The page has no binding for it, so resolve it as an ordinary key.
     Ignored,
-    /// The page asks the host to open this path.
+    /// The page asks the host to open this path with the system handler.
+    OpenExternal(PathBuf),
+    /// The page asks the host to open this path for editing.
     OpenPath(PathBuf),
 }
 

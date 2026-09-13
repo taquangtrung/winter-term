@@ -207,9 +207,16 @@ A tool opens over the focused pane, covering it. The shell underneath keeps runn
 | `j` `k` or `Down` `Up` | Move down, up |
 | `gg` / `G` | First entry, last entry |
 | `Enter` or `l` | Enter a directory, or open a file in `$EDITOR` in a new tab |
-| `h` or `-` | Go up to the parent directory |
-| `Tab` | Expand or collapse the directory under the cursor, in place |
-| `z` | Collapse everything |
+| `o` | Open the entry with the system handler |
+| `h` | Collapse, else step out to the parent row, else leave the root |
+| `-` | Leave the root for its parent, whatever the cursor is on |
+| `^` | Move to the directory the cursor sits inside |
+| `[` / `]` | Previous, next entry at the same level |
+| `}` | Move into an expanded directory |
+| `Ctrl-o` / `Ctrl-i` | Back, forward through directories visited |
+| `Tab` or `za` | Expand or collapse the directory under the cursor, in place |
+| `zo` / `zc` | Expand, collapse the directory under the cursor |
+| `zR` / `zM` | Expand every listed directory one level, collapse everything |
 | `.` | Show or hide dotfiles |
 | `,` | Show or hide the size, age, and permission columns |
 | `s` | Cycle the sort: name, time, size |

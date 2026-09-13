@@ -33,6 +33,11 @@ const HEADER_ROWS: usize = 1;
 /// Shown in place of the listing when a directory has nothing to show.
 const EMPTY_NOTE: &str = "  (empty)";
 
+/// Directories remembered in each direction of the visit history. Matches the
+/// jumplist's own depth, for the same reason: enough to walk back through a
+/// session's wandering, bounded so it cannot grow without limit.
+const MAX_HISTORY: usize = 100;
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -40,8 +45,12 @@ const EMPTY_NOTE: &str = "  (empty)";
 /// A directory listing the keyboard drives: move, fold, descend, and open.
 #[derive(Clone, Debug)]
 pub struct DirPage {
+    /// Directories left behind, most recent last.
+    back: Vec<PathBuf>,
     cursor: usize,
     folds: Folds,
+    /// Directories stepped back out of, most recent last.
+    forward: Vec<PathBuf>,
     /// The first key of a two-key sequence, waiting for its second.
     pending: Option<char>,
     root: PathBuf,
@@ -61,8 +70,10 @@ impl DirPage {
     /// A listing of `root`, collapsed, sorted by name, hiding dotfiles.
     pub fn new(root: PathBuf) -> Self {
         let mut page = Self {
+            back: Vec::new(),
             cursor: 0,
             folds: Folds::new(),
+            forward: Vec::new(),
             pending: None,
             root,
             rows: Vec::new(),
@@ -129,10 +140,114 @@ impl DirPage {
     }
 
     fn set_root(&mut self, root: PathBuf) {
+        if root == self.root {
+            return;
+        }
+        self.back.push(self.root.clone());
+        if self.back.len() > MAX_HISTORY {
+            self.back.remove(0);
+        }
+        // A fresh move is a new branch of the history: what was stepped back
+        // out of is no longer ahead of anywhere.
+        self.forward.clear();
+        self.move_root_to(root);
+    }
+
+    /// Change the root without touching the history, so a history step does not
+    /// record itself.
+    fn move_root_to(&mut self, root: PathBuf) {
         self.folds.retain_under(&root);
         self.root = root;
         self.cursor = 0;
+        self.scroll = 0;
         self.reload();
+    }
+
+    /// Return to the previous directory in the visit history.
+    fn go_back(&mut self) {
+        let Some(previous) = self.back.pop() else {
+            return;
+        };
+        self.forward.push(self.root.clone());
+        self.move_root_to(previous);
+    }
+
+    /// Undo a step taken with [`Self::go_back`].
+    fn go_forward(&mut self) {
+        let Some(next) = self.forward.pop() else {
+            return;
+        };
+        self.back.push(self.root.clone());
+        self.move_root_to(next);
+    }
+
+    /// The row holding the directory `index` sits inside, if any.
+    fn parent_row(&self, index: usize) -> Option<usize> {
+        let depth = self.rows.get(index)?.depth;
+        (0..index).rev().find(|&i| self.rows[i].depth < depth)
+    }
+
+    /// The next row at the same depth, stopping at the end of the subtree the
+    /// cursor is in rather than escaping into the next one.
+    fn sibling_after(&self, index: usize) -> Option<usize> {
+        let depth = self.rows.get(index)?.depth;
+        self.rows
+            .iter()
+            .enumerate()
+            .skip(index + 1)
+            .take_while(|(_, row)| row.depth >= depth)
+            .find(|(_, row)| row.depth == depth)
+            .map(|(i, _)| i)
+    }
+
+    /// The previous row at the same depth, within the same subtree.
+    fn sibling_before(&self, index: usize) -> Option<usize> {
+        let depth = self.rows.get(index)?.depth;
+        (0..index)
+            .rev()
+            .take_while(|&i| self.rows[i].depth >= depth)
+            .find(|&i| self.rows[i].depth == depth)
+    }
+
+    /// The first row inside the expanded directory at `index`.
+    fn first_child(&self, index: usize) -> Option<usize> {
+        let depth = self.rows.get(index)?.depth;
+        self.rows
+            .get(index + 1)
+            .filter(|row| row.depth == depth + 1)
+            .map(|_| index + 1)
+    }
+
+    /// One key for stepping out: collapse an expanded directory, else move to
+    /// the directory this row sits in, else leave the root itself.
+    fn fold_or_step_out(&mut self) {
+        let expanded = self.selected().is_some_and(|row| row.expanded);
+        if expanded {
+            self.toggle_fold();
+            return;
+        }
+        match self.parent_row(self.cursor) {
+            Some(parent) => self.cursor = parent,
+            None => self.ascend(),
+        }
+    }
+
+    /// Expand every collapsed directory currently listed. Repeating it reaches
+    /// one level deeper each time, so the whole tree is never read at once.
+    fn expand_one_level(&mut self) {
+        let collapsed: Vec<PathBuf> = self
+            .rows
+            .iter()
+            .filter(|row| row.entry.is_dir() && !row.expanded)
+            .map(|row| row.entry.path.clone())
+            .collect();
+        if collapsed.is_empty() {
+            return;
+        }
+        for path in collapsed {
+            self.folds.toggle(&path);
+        }
+        self.reload_keeping_selection();
     }
 
     fn toggle_fold(&mut self) {
@@ -153,13 +268,35 @@ impl DirPage {
         self.cursor = next.clamp(0, last as isize) as usize;
     }
 
-    /// Resolve the second key of a `g` sequence.
-    fn resolve_pending(&mut self, code: KeyCode) -> PageOutcome {
+    /// Resolve the second key of a two-key sequence. An unrecognized follow key
+    /// abandons the sequence rather than holding it for the next keystroke.
+    fn resolve_pending(&mut self, leader: char, code: KeyCode) -> PageOutcome {
         self.pending = None;
-        if code == KeyCode::Char('g') {
-            self.cursor = 0;
+        match (leader, code) {
+            ('g', KeyCode::Char('g')) => self.cursor = 0,
+            ('z', KeyCode::Char('o')) => self.expand_selected(true),
+            ('z', KeyCode::Char('c')) => self.expand_selected(false),
+            ('z', KeyCode::Char('a')) => self.toggle_fold(),
+            ('z', KeyCode::Char('R')) => self.expand_one_level(),
+            ('z', KeyCode::Char('M')) => {
+                self.folds.collapse_all();
+                self.reload_keeping_selection();
+            }
+            _ => {}
         }
         PageOutcome::Consumed
+    }
+
+    /// Expand or collapse the directory under the cursor, whichever `expand`
+    /// asks for, leaving it alone when it is already that way.
+    fn expand_selected(&mut self, expand: bool) {
+        let Some(row) = self.selected() else {
+            return;
+        };
+        if !row.entry.is_dir() || row.expanded == expand {
+            return;
+        }
+        self.toggle_fold();
     }
 }
 
@@ -196,8 +333,8 @@ impl Page for DirPage {
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        if self.pending.is_some() {
-            return self.resolve_pending(key.code);
+        if let Some(leader) = self.pending {
+            return self.resolve_pending(leader, key.code);
         }
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
@@ -208,8 +345,11 @@ impl Page for DirPage {
                 self.move_by(-1);
                 PageOutcome::Consumed
             }
-            KeyCode::Char('g') => {
-                self.pending = Some('g');
+            KeyCode::Char('g') | KeyCode::Char('z') => {
+                self.pending = match key.code {
+                    KeyCode::Char(c) => Some(c),
+                    _ => None,
+                };
                 PageOutcome::Consumed
             }
             KeyCode::Char('G') => {
@@ -217,10 +357,50 @@ impl Page for DirPage {
                 PageOutcome::Consumed
             }
             KeyCode::Char('l') | KeyCode::Enter | KeyCode::Right => self.enter(),
-            KeyCode::Char('h') | KeyCode::Char('-') | KeyCode::Left => {
+            KeyCode::Char('h') | KeyCode::Left => {
+                self.fold_or_step_out();
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('-') => {
                 self.ascend();
                 PageOutcome::Consumed
             }
+            KeyCode::Char('^') => {
+                if let Some(parent) = self.parent_row(self.cursor) {
+                    self.cursor = parent;
+                }
+                PageOutcome::Consumed
+            }
+            KeyCode::Char(']') => {
+                if let Some(next) = self.sibling_after(self.cursor) {
+                    self.cursor = next;
+                }
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('[') => {
+                if let Some(previous) = self.sibling_before(self.cursor) {
+                    self.cursor = previous;
+                }
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('}') => {
+                if let Some(child) = self.first_child(self.cursor) {
+                    self.cursor = child;
+                }
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('o') if key.ctrl => {
+                self.go_back();
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('i') if key.ctrl => {
+                self.go_forward();
+                PageOutcome::Consumed
+            }
+            KeyCode::Char('o') => self
+                .selected()
+                .map(|row| PageOutcome::OpenExternal(row.entry.path.clone()))
+                .unwrap_or(PageOutcome::Consumed),
             KeyCode::Tab => {
                 self.toggle_fold();
                 PageOutcome::Consumed
@@ -240,11 +420,6 @@ impl Page for DirPage {
                 PageOutcome::Consumed
             }
             KeyCode::Char('r') => {
-                self.reload_keeping_selection();
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('z') => {
-                self.folds.collapse_all();
                 self.reload_keeping_selection();
                 PageOutcome::Consumed
             }
@@ -299,6 +474,15 @@ mod tests {
             alt: false,
             code,
             ctrl: false,
+            shift: false,
+        }
+    }
+
+    fn ctrl(code: KeyCode) -> Key {
+        Key {
+            alt: false,
+            code,
+            ctrl: true,
             shift: false,
         }
     }
@@ -431,6 +615,177 @@ mod tests {
         assert!(page.pending.is_none());
         page.on_key(&press(KeyCode::Char('j')));
         assert_eq!(selected_name(&page), "b.txt");
+    }
+
+    fn tree_with_nested_children(tag: &str) -> (TempTree, PathBuf) {
+        let tree = TempTree::new(tag);
+        let nested = tree.dir("nested");
+        fs::write(nested.join("child-a.txt"), "x").expect("child a");
+        fs::write(nested.join("child-b.txt"), "x").expect("child b");
+        tree.touch("zzz-sibling.txt");
+        (tree, nested)
+    }
+
+    #[test]
+    fn test_siblings_stay_inside_the_subtree_the_cursor_is_in() {
+        // A naive "next row at this depth" scan walks out of an expanded
+        // directory and lands in the parent's next entry instead.
+        let (tree, _) = tree_with_nested_children("siblings");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+        page.on_key(&press(KeyCode::Char('j')));
+        assert_eq!(selected_name(&page), "child-a.txt");
+
+        page.on_key(&press(KeyCode::Char(']')));
+        assert_eq!(selected_name(&page), "child-b.txt");
+        page.on_key(&press(KeyCode::Char(']')));
+        assert_eq!(selected_name(&page), "child-b.txt", "no escape upward");
+        page.on_key(&press(KeyCode::Char('[')));
+        assert_eq!(selected_name(&page), "child-a.txt");
+    }
+
+    #[test]
+    fn test_parent_and_first_child_walk_the_tree_vertically() {
+        let (tree, _) = tree_with_nested_children("vertical");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+
+        page.on_key(&press(KeyCode::Char('}')));
+        assert_eq!(selected_name(&page), "child-a.txt");
+        page.on_key(&press(KeyCode::Char('^')));
+        assert_eq!(selected_name(&page), "nested");
+        page.on_key(&press(KeyCode::Char('^')));
+        assert_eq!(
+            selected_name(&page),
+            "nested",
+            "the top level has no parent"
+        );
+    }
+
+    #[test]
+    fn test_h_collapses_then_steps_out_then_leaves_the_root() {
+        // One key covering three cases: each must be tried in this order, or
+        // collapsing a directory would also move the cursor off it.
+        let (tree, _) = tree_with_nested_children("stepout");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+        page.on_key(&press(KeyCode::Char('j')));
+        assert_eq!(selected_name(&page), "child-a.txt");
+
+        page.on_key(&press(KeyCode::Char('h')));
+        assert_eq!(
+            selected_name(&page),
+            "nested",
+            "steps out to the parent row"
+        );
+        page.on_key(&press(KeyCode::Char('h')));
+        assert_eq!(selected_name(&page), "nested", "collapses, staying put");
+        assert_eq!(page.rows.len(), 2, "the children are gone");
+
+        page.on_key(&press(KeyCode::Char('h')));
+        assert_eq!(page.root, tree.0.parent().expect("a parent").to_path_buf());
+    }
+
+    #[test]
+    fn test_history_walks_back_and_forward_through_visited_directories() {
+        let (tree, nested) = tree_with_nested_children("history");
+        let mut page = DirPage::new(tree.0.clone());
+
+        page.on_key(&press(KeyCode::Enter));
+        assert_eq!(page.root, nested);
+
+        page.on_key(&ctrl(KeyCode::Char('o')));
+        assert_eq!(page.root, tree.0, "back returns to where it came from");
+        page.on_key(&ctrl(KeyCode::Char('i')));
+        assert_eq!(page.root, nested, "forward undoes the step back");
+    }
+
+    #[test]
+    fn test_history_at_either_end_is_a_no_op() {
+        let (tree, _) = tree_with_nested_children("history-ends");
+        let mut page = DirPage::new(tree.0.clone());
+
+        page.on_key(&ctrl(KeyCode::Char('o')));
+        assert_eq!(page.root, tree.0);
+        page.on_key(&ctrl(KeyCode::Char('i')));
+        assert_eq!(page.root, tree.0);
+    }
+
+    #[test]
+    fn test_moving_somewhere_new_drops_the_forward_history() {
+        // Otherwise `forward` points at a branch the user has left, and
+        // Ctrl-i teleports somewhere unrelated.
+        let (tree, nested) = tree_with_nested_children("history-branch");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Enter));
+        page.on_key(&ctrl(KeyCode::Char('o')));
+        assert!(!page.forward.is_empty());
+
+        page.on_key(&press(KeyCode::Char('-')));
+        assert!(page.forward.is_empty());
+        page.on_key(&ctrl(KeyCode::Char('i')));
+        assert_ne!(page.root, nested);
+    }
+
+    #[test]
+    fn test_zr_expands_one_level_at_a_time() {
+        // Expanding the whole tree at once can read an unbounded number of
+        // directories; each press must reach exactly one level further.
+        let tree = TempTree::new("zr");
+        let nested = tree.dir("nested");
+        fs::create_dir_all(nested.join("deeper")).expect("deeper dir");
+        fs::write(nested.join("deeper").join("leaf.txt"), "x").expect("leaf");
+        let mut page = DirPage::new(tree.0.clone());
+
+        assert_eq!(page.rows.len(), 1);
+        page.on_key(&press(KeyCode::Char('z')));
+        page.on_key(&press(KeyCode::Char('R')));
+        assert_eq!(page.rows.len(), 2, "nested is open, deeper is not");
+        page.on_key(&press(KeyCode::Char('z')));
+        page.on_key(&press(KeyCode::Char('R')));
+        assert_eq!(page.rows.len(), 3, "one level further");
+    }
+
+    #[test]
+    fn test_zo_and_zc_are_not_toggles() {
+        // `zo` on an open directory must leave it open, not close it.
+        let (tree, _) = tree_with_nested_children("zoc");
+        let mut page = DirPage::new(tree.0.clone());
+
+        for _ in 0..2 {
+            page.on_key(&press(KeyCode::Char('z')));
+            page.on_key(&press(KeyCode::Char('o')));
+        }
+        assert_eq!(page.rows.len(), 4, "still expanded");
+
+        for _ in 0..2 {
+            page.on_key(&press(KeyCode::Char('z')));
+            page.on_key(&press(KeyCode::Char('c')));
+        }
+        assert_eq!(page.rows.len(), 2, "still collapsed");
+    }
+
+    #[test]
+    fn test_zm_collapses_everything() {
+        let (tree, _) = tree_with_nested_children("zm");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+        assert_eq!(page.rows.len(), 4);
+
+        page.on_key(&press(KeyCode::Char('z')));
+        page.on_key(&press(KeyCode::Char('M')));
+        assert_eq!(page.rows.len(), 2);
+    }
+
+    #[test]
+    fn test_o_hands_the_entry_to_the_system_handler() {
+        let tree = TempTree::new("external");
+        let file = tree.touch("photo.png");
+        let mut page = DirPage::new(tree.0.clone());
+        assert_eq!(
+            page.on_key(&press(KeyCode::Char('o'))),
+            PageOutcome::OpenExternal(file)
+        );
     }
 
     #[test]

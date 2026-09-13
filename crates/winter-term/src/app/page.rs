@@ -145,6 +145,13 @@ impl App {
                 true
             }
             PageOutcome::Ignored => false,
+            PageOutcome::OpenExternal(path) => {
+                match ::open::that(&path) {
+                    Ok(()) => self.set_notice(format!("opened {}", path.display())),
+                    Err(e) => self.set_error(format!("could not open {}: {e}", path.display())),
+                }
+                true
+            }
             PageOutcome::OpenPath(path) => {
                 self.open_file_in_new_tab(path, None);
                 true
