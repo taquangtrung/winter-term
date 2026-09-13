@@ -30,6 +30,26 @@ pub struct PageSpan {
     pub text: String,
 }
 
+/// Slow work a page is asking the host to do off the event-loop thread.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JobRequest {
+    /// Total the bytes under this directory.
+    DirSize(PathBuf),
+}
+
+/// The answer to a [`JobRequest`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum JobReply {
+    /// What a directory holds, with unreadable parts skipped rather than
+    /// reported as an error: a total is worth more than a failure here.
+    DirSize {
+        /// Bytes under the directory.
+        bytes: u64,
+        /// The directory that was totalled.
+        path: PathBuf,
+    },
+}
+
 /// What a page is asking the host to read from the user.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PromptRequest {
@@ -92,6 +112,10 @@ pub enum PageOutcome {
     Ignored,
     /// The page asks the host to open this path with the system handler.
     OpenExternal(PathBuf),
+    /// The page asks the host to stop the work it started.
+    CancelJobs,
+    /// The page asks the host to do slow work for it.
+    Job(JobRequest),
     /// The page asks the host to read an answer from the user.
     Prompt(PromptRequest),
     /// The page asks the host to open this path for editing.
@@ -141,6 +165,11 @@ pub trait Page {
     /// Hand back the answer to a prompt the page asked for. Pages that never
     /// ask never implement it.
     fn on_prompt(&mut self, _reply: PromptReply) -> PageOutcome {
+        PageOutcome::Consumed
+    }
+
+    /// Hand back the result of work the page asked for.
+    fn on_job(&mut self, _reply: JobReply) -> PageOutcome {
         PageOutcome::Consumed
     }
 }

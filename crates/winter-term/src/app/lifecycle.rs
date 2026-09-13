@@ -63,6 +63,7 @@ impl App {
             nav_cursors: HashMap::new(),
             nav_resync_pending: false,
             next_image_id: 0,
+            jobs: crate::app::jobs::Jobs::new(),
             page_prompt: None,
             pages: HashMap::new(),
             panes: HashMap::new(),

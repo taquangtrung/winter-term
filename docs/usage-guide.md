@@ -220,6 +220,7 @@ A tool opens over the focused pane, covering it. The shell underneath keeps runn
 | `.` | Show or hide dotfiles |
 | `,` | Show or hide the size, age, and permission columns |
 | `s` | Cycle the sort: name, time, size |
+| `S` | Show directory sizes (toggle); turning it off stops the walks |
 | `r` | Re-read the listing |
 | `m` | Mark the entry and step on |
 | `*` / `U` | Mark everything listed, unmark everything |
@@ -229,6 +230,8 @@ A tool opens over the focused pane, covering it. The shell underneath keeps runn
 | `D` | Delete the targets, after confirming |
 | `x` | Set permission bits, as octal |
 | `q` | Close |
+
+A directory's size is not something the filesystem knows, so `S` walks each one in the background, a directory at a time, showing `...` until a total arrives. Turning it off stops whatever is still walking. Totals are kept while you stay in the same directory and dropped when the root moves.
 
 An operation acts on the marked entries, or on the entry under the cursor when nothing is marked, never both: the header shows how many are marked and what the last operation reported. A name typed into a prompt is a name, so `../elsewhere` is refused rather than reaching outside the listing, and nothing overwrites an existing entry. Copy and move take a new name for one target and a destination directory for several. Moving the root clears the marks, since a mark held over would count toward an operation in a listing it was never part of.
 

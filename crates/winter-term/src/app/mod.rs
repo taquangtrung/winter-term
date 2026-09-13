@@ -11,6 +11,7 @@
 //! - [`blocks`]: block fold, yank, and focus operations.
 //! - [`geometry`]: chrome insets, viewports, pane hit-testing.
 //! - [`init`]: GPU and window bootstrap on `resumed`.
+//! - [`jobs`]: slow work a page asked for, run off the event-loop thread.
 //! - [`lifecycle`]: construction, state persistence, quit and reload.
 //! - [`navigation`]: vim-style cursor motions, search, quick-select.
 //! - [`notice`]: window title and transient status notices.
@@ -28,6 +29,7 @@ mod appearance;
 mod blocks;
 mod geometry;
 mod init;
+mod jobs;
 mod lifecycle;
 mod navigation;
 mod notice;
@@ -585,6 +587,8 @@ pub struct App {
     /// Panes a tool page is currently covering. The pane keeps its terminal,
     /// which goes on running underneath and comes back when the page closes.
     pub(crate) pages: HashMap<PaneId, page::PageSlot>,
+    /// Slow work pages have asked for, and the answers coming back.
+    pub(crate) jobs: jobs::Jobs,
     /// The question a page is waiting on an answer to, if any.
     pub(crate) page_prompt: Option<page::ActivePrompt>,
     pub(crate) panes: HashMap<PaneId, Pane>,
@@ -1114,6 +1118,18 @@ impl ApplicationHandler for App {
         }
 
         self.auto_scroll_selection();
+
+        // Answers from page jobs, and a poll that stays awake while any are
+        // still running so a finished one is not left sitting in the channel.
+        if self.deliver_finished_jobs() {
+            self.dirty = true;
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        if self.jobs.is_busy() {
+            self.last_activity = Instant::now();
+        }
 
         let now = Instant::now();
         let poll_interval = if is_poll_idle(self.last_activity, now) {

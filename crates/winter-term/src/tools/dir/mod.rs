@@ -18,13 +18,14 @@ pub mod rows;
 pub mod source;
 pub mod tree;
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    scroll_to_cursor, Page, PageContent, PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply,
-    PromptRequest,
+    scroll_to_cursor, JobReply, JobRequest, Page, PageContent, PageOutcome, PageSpan, PageStyle,
+    PromptMode, PromptReply, PromptRequest,
 };
 
 use listing::SortKey;
@@ -79,6 +80,11 @@ pub struct DirPage {
     scroll: usize,
     show_details: bool,
     show_hidden: bool,
+    /// Whether directory sizes are shown, which each one has to be walked for.
+    show_sizes: bool,
+    /// Totals already walked, kept across reloads since they rarely change and
+    /// re-walking on every keystroke would be the expensive mistake.
+    sizes: HashMap<PathBuf, u64>,
     sort: SortKey,
 }
 
@@ -102,6 +108,8 @@ impl DirPage {
             scroll: 0,
             show_details: false,
             show_hidden: false,
+            show_sizes: false,
+            sizes: HashMap::new(),
             sort: SortKey::default(),
         };
         page.reload();
@@ -182,6 +190,7 @@ impl DirPage {
         // The visible set changes wholesale, so a mark held over would count
         // toward an operation aimed at a listing it was never part of.
         self.marks.clear();
+        self.sizes.clear();
         self.root = root;
         self.cursor = 0;
         self.scroll = 0;
@@ -307,6 +316,15 @@ impl DirPage {
         for path in listed {
             self.marks.insert(&path);
         }
+    }
+
+    /// The walked total for a directory row: `None` for a file, or while the
+    /// walk is still running.
+    fn dir_size(&self, row: &Row) -> Option<u64> {
+        if !self.show_sizes || !row.entry.is_dir() {
+            return None;
+        }
+        self.sizes.get(&row.entry.path).copied()
     }
 
     /// The paths the next operation acts on: every mark still listed, or the
@@ -483,6 +501,37 @@ impl DirPage {
         Ok(format!("set mode on {done}"))
     }
 
+    /// Turn directory sizes on or off. Turning them off stops the walks still
+    /// running, which is the whole reason they are cancellable.
+    fn toggle_sizes(&mut self) -> PageOutcome {
+        self.show_sizes = !self.show_sizes;
+        if !self.show_sizes {
+            return PageOutcome::CancelJobs;
+        }
+        self.request_next_size()
+    }
+
+    /// Ask for the first directory on screen whose size is not known yet. One
+    /// at a time, so a listing of a thousand directories does not start a
+    /// thousand walks: each answer asks for the next.
+    fn request_next_size(&self) -> PageOutcome {
+        if !self.show_sizes {
+            return PageOutcome::Consumed;
+        }
+        match self.next_unsized() {
+            Some(path) => PageOutcome::Job(JobRequest::DirSize(path)),
+            None => PageOutcome::Consumed,
+        }
+    }
+
+    fn next_unsized(&self) -> Option<PathBuf> {
+        self.rows
+            .iter()
+            .filter(|row| row.entry.is_dir())
+            .map(|row| row.entry.path.clone())
+            .find(|path| !self.sizes.contains_key(path))
+    }
+
     /// Resolve the second key of a two-key sequence. An unrecognized follow key
     /// abandons the sequence rather than holding it for the next keystroke.
     fn resolve_pending(&mut self, leader: char, code: KeyCode) -> PageOutcome {
@@ -516,6 +565,15 @@ impl DirPage {
 }
 
 impl Page for DirPage {
+    fn on_job(&mut self, reply: JobReply) -> PageOutcome {
+        match reply {
+            JobReply::DirSize { bytes, path } => {
+                self.sizes.insert(path, bytes);
+            }
+        }
+        self.request_next_size()
+    }
+
     fn on_prompt(&mut self, reply: PromptReply) -> PageOutcome {
         match reply.answer {
             Some(answer) => self.apply_answer(reply.tag, &answer),
@@ -540,6 +598,7 @@ impl Page for DirPage {
             self.show_details,
             self.marks.len(),
             self.message.as_deref(),
+            self.show_sizes,
         )];
         if self.rows.is_empty() {
             page_rows.push(vec![PageSpan::new(PageStyle::Dim, EMPTY_NOTE)]);
@@ -550,9 +609,13 @@ impl Page for DirPage {
         page_rows.extend(self.rows.iter().skip(self.scroll).take(visible).map(|row| {
             rows::entry_row(
                 row,
-                self.show_details,
+                rows::RowStyle {
+                    marked: self.marks.contains(&row.entry.path),
+                    show_details: self.show_details,
+                    show_sizes: self.show_sizes,
+                    size: self.dir_size(row),
+                },
                 now,
-                self.marks.contains(&row.entry.path),
             )
         }));
         PageContent::new(page_rows).with_cursor_line(HEADER_ROWS + self.cursor - self.scroll)
@@ -650,6 +713,7 @@ impl Page for DirPage {
                 self.reload_keeping_selection();
                 PageOutcome::Consumed
             }
+            KeyCode::Char('S') => self.toggle_sizes(),
             KeyCode::Char('m') => {
                 self.toggle_mark();
                 PageOutcome::Consumed
@@ -1232,6 +1296,84 @@ mod tests {
         page.on_key(&press(KeyCode::Enter));
         assert_eq!(page.root, nested);
         assert!(page.marks.is_empty());
+    }
+
+    #[test]
+    fn test_toggling_sizes_asks_for_one_directory_at_a_time() {
+        // Asking for every directory at once starts as many walks as there are
+        // rows; each answer is what asks for the next.
+        let tree = TempTree::new("sizes");
+        let first = tree.dir("aaa");
+        let second = tree.dir("bbb");
+        let mut page = DirPage::new(tree.0.clone());
+
+        let outcome = page.on_key(&press(KeyCode::Char('S')));
+        assert_eq!(
+            outcome,
+            PageOutcome::Job(JobRequest::DirSize(first.clone()))
+        );
+
+        let next = page.on_job(JobReply::DirSize {
+            bytes: 10,
+            path: first,
+        });
+        assert_eq!(next, PageOutcome::Job(JobRequest::DirSize(second.clone())));
+
+        let done = page.on_job(JobReply::DirSize {
+            bytes: 20,
+            path: second,
+        });
+        assert_eq!(done, PageOutcome::Consumed, "nothing left to walk");
+    }
+
+    #[test]
+    fn test_turning_sizes_off_cancels_the_walks_still_running() {
+        let tree = TempTree::new("sizes-off");
+        tree.dir("aaa");
+        let mut page = DirPage::new(tree.0.clone());
+
+        page.on_key(&press(KeyCode::Char('S')));
+        assert_eq!(
+            page.on_key(&press(KeyCode::Char('S'))),
+            PageOutcome::CancelJobs
+        );
+    }
+
+    #[test]
+    fn test_an_answer_arriving_after_sizes_were_turned_off_asks_for_nothing() {
+        // The walk was cancelled, but one already in flight still reports back;
+        // it must not restart the chain.
+        let tree = TempTree::new("sizes-late");
+        let dir = tree.dir("aaa");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Char('S')));
+        page.on_key(&press(KeyCode::Char('S')));
+
+        let outcome = page.on_job(JobReply::DirSize {
+            bytes: 1,
+            path: dir,
+        });
+        assert_eq!(outcome, PageOutcome::Consumed);
+    }
+
+    #[test]
+    fn test_a_walked_total_survives_a_reload_but_not_a_new_root() {
+        // Re-walking on every keystroke is the expensive mistake; carrying a
+        // total into a different directory is the wrong one.
+        let (tree, nested) = tree_with_nested_children("sizes-cache");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Char('S')));
+        page.on_job(JobReply::DirSize {
+            bytes: 64,
+            path: nested.clone(),
+        });
+        assert_eq!(page.sizes.get(&nested).copied(), Some(64));
+
+        page.on_key(&press(KeyCode::Char('r')));
+        assert_eq!(page.sizes.get(&nested).copied(), Some(64));
+
+        page.on_key(&press(KeyCode::Char('-')));
+        assert!(page.sizes.is_empty(), "a new root re-walks");
     }
 
     #[test]

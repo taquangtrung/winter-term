@@ -119,10 +119,11 @@ impl App {
         let Some(slot) = self.pages.remove(&pane_id) else {
             return;
         };
-        // A question belongs to the page that asked it.
+        // A question, and any work in flight, belong to the page that asked.
         if self.page_prompt.as_ref().is_some_and(|p| p.pane == pane_id) {
             self.page_prompt = None;
         }
+        self.jobs.cancel_for(pane_id);
         self.modes.insert(pane_id, slot.prior_mode);
         self.last_tile_layout = None;
         self.dirty = true;
@@ -204,7 +205,7 @@ impl App {
 
     /// Carry out what a page asked for. Returns whether the input that produced
     /// it was spent.
-    fn act_on_page_outcome(&mut self, pane_id: PaneId, outcome: PageOutcome) -> bool {
+    pub(super) fn act_on_page_outcome(&mut self, pane_id: PaneId, outcome: PageOutcome) -> bool {
         match outcome {
             PageOutcome::Close => {
                 self.close_page(pane_id);
@@ -224,6 +225,15 @@ impl App {
             }
             PageOutcome::OpenPath(path) => {
                 self.open_file_in_new_tab(path, None);
+                true
+            }
+            PageOutcome::CancelJobs => {
+                self.jobs.cancel_for(pane_id);
+                self.dirty = true;
+                true
+            }
+            PageOutcome::Job(request) => {
+                self.jobs.spawn(pane_id, request);
                 true
             }
             PageOutcome::Prompt(request) => {

@@ -35,8 +35,11 @@ const UNMARKED: &str = " ";
 /// Column the detail columns begin at.
 const DETAIL_COL: usize = 40;
 
-/// Shown where a value does not apply, such as a directory's size.
+/// Shown where a value does not apply, such as an unwalked directory's size.
 const NO_VALUE: &str = "-";
+
+/// Shown for a directory whose walk has not finished.
+const WALKING: &str = "...";
 
 /// Seconds in the units an age is reported in, largest first.
 const AGE_UNITS: [(&str, u64); 4] = [("d", 86400), ("h", 3600), ("m", 60), ("s", 1)];
@@ -60,6 +63,7 @@ pub fn header_row(
     show_details: bool,
     marked: usize,
     message: Option<&str>,
+    show_sizes: bool,
 ) -> PageRow {
     let mut flags = format!("sort:{}", sort.label());
     if show_hidden {
@@ -67,6 +71,9 @@ pub fn header_row(
     }
     if show_details {
         flags.push_str("  details");
+    }
+    if show_sizes {
+        flags.push_str("  sizes");
     }
     if marked > 0 {
         flags.push_str(&format!("  {marked} marked"));
@@ -81,9 +88,22 @@ pub fn header_row(
     spans
 }
 
+/// How one row is drawn: what is on, and what has been measured for it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct RowStyle {
+    /// Whether the entry is marked for an operation.
+    pub marked: bool,
+    /// Whether the detail columns are shown.
+    pub show_details: bool,
+    /// Whether directory sizes are being walked and shown.
+    pub show_sizes: bool,
+    /// The walked total for a directory, once it is known.
+    pub size: Option<u64>,
+}
+
 /// One entry: its mark, fold glyph, indented name, and the detail columns when
 /// they are on.
-pub fn entry_row(row: &Row, show_details: bool, now: SystemTime, marked: bool) -> PageRow {
+pub fn entry_row(row: &Row, style: RowStyle, now: SystemTime) -> PageRow {
     let indent = " ".repeat(row.depth * INDENT);
     let glyph = if row.entry.is_dir() {
         if row.expanded {
@@ -99,22 +119,33 @@ pub fn entry_row(row: &Row, show_details: bool, now: SystemTime, marked: bool) -
         EntryKind::File => row.entry.name.clone(),
         EntryKind::Symlink => format!("{}@", row.entry.name),
     };
-    let mark = if marked { MARK } else { UNMARKED };
+    let mark = if style.marked { MARK } else { UNMARKED };
     let label = format!("{mark}{indent}{glyph}{} {name}", icon_for(&row.entry));
-    let style = if marked {
+    let name_style = if style.marked {
         PageStyle::Marked
     } else {
         name_style(row.entry.kind)
     };
-    let mut spans = vec![PageSpan::new(style, label.clone())];
-    if show_details {
+    let mut spans = vec![PageSpan::new(name_style, label.clone())];
+    let trailing = match (style.show_details, style.size) {
+        (true, size) => Some(details(row, now, size)),
+        (false, Some(size)) => Some(format!("{:>8}", format_size(size))),
+        (false, None) => walking_note(row, style),
+    };
+    if let Some(trailing) = trailing {
         let gap = DETAIL_COL.saturating_sub(label.chars().count()).max(1);
         spans.push(PageSpan::new(
             PageStyle::Dim,
-            format!("{}{}", " ".repeat(gap), details(row, now)),
+            format!("{}{}", " ".repeat(gap), trailing),
         ));
     }
     spans
+}
+
+/// What a directory shows while its size is still being walked. Nothing at all
+/// when sizes were never asked for.
+fn walking_note(row: &Row, style: RowStyle) -> Option<String> {
+    (style.show_sizes && row.entry.is_dir()).then(|| format!("{WALKING:>8}"))
 }
 
 /// Unix mode bits as the nine `rwx` characters, ignoring the file-type bits the
@@ -166,11 +197,11 @@ pub fn format_age(modified: SystemTime, now: SystemTime) -> String {
     format!("0{}", AGE_UNITS[AGE_UNITS.len() - 1].0)
 }
 
-fn details(row: &Row, now: SystemTime) -> String {
-    let size = if row.entry.is_dir() {
-        NO_VALUE.to_string()
-    } else {
-        format_size(row.entry.meta.len)
+fn details(row: &Row, now: SystemTime, walked: Option<u64>) -> String {
+    let size = match (row.entry.is_dir(), walked) {
+        (true, Some(bytes)) => format_size(bytes),
+        (true, None) => NO_VALUE.to_string(),
+        (false, _) => format_size(row.entry.meta.len),
     };
     format!(
         "{:>8}  {:>5}  {}",
@@ -268,17 +299,15 @@ mod tests {
         let now = SystemTime::UNIX_EPOCH;
         let dir = text(entry_row(
             &row("src", EntryKind::Dir, 0, true),
-            false,
+            RowStyle::default(),
             now,
-            false,
         ));
         assert!(dir.starts_with(" ⌄ "), "got {dir:?}");
         assert!(dir.ends_with(" src/"), "got {dir:?}");
         let file = text(entry_row(
             &row("main.rs", EntryKind::File, 1, false),
-            false,
+            RowStyle::default(),
             now,
-            false,
         ));
         assert!(
             file.starts_with("     "),
@@ -291,11 +320,57 @@ mod tests {
     fn test_a_marked_row_leads_with_its_mark() {
         let painted = text(entry_row(
             &row("notes.txt", EntryKind::File, 0, false),
-            false,
+            RowStyle {
+                marked: true,
+                ..RowStyle::default()
+            },
             SystemTime::UNIX_EPOCH,
-            true,
         ));
         assert!(painted.starts_with('*'), "got {painted:?}");
+    }
+
+    #[test]
+    fn test_a_directory_shows_its_walked_total_in_place_of_a_dash() {
+        // A directory's own `len` is meaningless, so the detail column shows a
+        // dash until a walk has something to put there.
+        let dir = row("src", EntryKind::Dir, 0, false);
+        let unwalked = text(entry_row(
+            &dir,
+            RowStyle {
+                show_details: true,
+                ..RowStyle::default()
+            },
+            SystemTime::UNIX_EPOCH,
+        ));
+        assert!(unwalked.contains('-'), "got {unwalked:?}");
+
+        let walked = text(entry_row(
+            &dir,
+            RowStyle {
+                show_details: true,
+                size: Some(2048),
+                ..RowStyle::default()
+            },
+            SystemTime::UNIX_EPOCH,
+        ));
+        assert!(walked.contains("2.0K"), "got {walked:?}");
+    }
+
+    #[test]
+    fn test_a_directory_being_walked_says_so_only_when_sizes_are_on() {
+        let dir = row("src", EntryKind::Dir, 0, false);
+        let quiet = text(entry_row(&dir, RowStyle::default(), SystemTime::UNIX_EPOCH));
+        assert!(quiet.ends_with("src/"), "got {quiet:?}");
+
+        let walking = text(entry_row(
+            &dir,
+            RowStyle {
+                show_sizes: true,
+                ..RowStyle::default()
+            },
+            SystemTime::UNIX_EPOCH,
+        ));
+        assert!(walking.ends_with(WALKING), "got {walking:?}");
     }
 
     #[test]
@@ -305,9 +380,11 @@ mod tests {
         let name = "a".repeat(DETAIL_COL + 10);
         let painted = text(entry_row(
             &row(&name, EntryKind::File, 0, false),
-            true,
+            RowStyle {
+                show_details: true,
+                ..RowStyle::default()
+            },
             SystemTime::UNIX_EPOCH,
-            false,
         ));
         assert!(painted.contains(&format!("{name} ")), "got {painted:?}");
     }
