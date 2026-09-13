@@ -221,6 +221,17 @@ impl App {
             return;
         }
 
+        // A tool page owns the keys it binds, and only those: anything it
+        // declines falls through to the pane's ordinary keymap below, so the
+        // vim vocabulary reads the same in a page as in a terminal.
+        if self.offer_key_to_page(focused, &key) {
+            self.update_window_title();
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
         // Escape in Insert mode: forwarded to the PTY if a foreground process
         // is running (a full-screen app, via `is_at_prompt`, or on Linux any
         // other foreground process group leader) or the pane is mid the

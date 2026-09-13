@@ -147,6 +147,14 @@ Normal mode never forwards keys to the PTY, which is a problem for operators aim
 
 That translation assumes the shell's default emacs-mode bindings. A shell already in vi mode has those chords bound elsewhere, which is what the `prompt-edit-bindings "none"` setting exists for: it tells Winter to decline prompt-line operators and leave the line to the shell, which provides vim editing there anyway. Undo delegates to readline's own undo rather than replaying the edit backwards, so line-editor plugins that redraw on every keystroke repaint once instead of flashing through a rebuild.
 
+## Tool pages
+
+Not every pane is a terminal. A pane can instead hold a *tool page*: content Winter paints itself, as rows of styled text rather than PTY output. `crates/winter-term/src/model/page.rs` defines what a page is, one tool per folder lives under `crates/winter-term/src/tools/`, and a page's own logic stays pure and std-only so it is testable without a window or a filesystem. A page names semantic styles (accent, dim, header, normal) and never a color, so the active theme resolves them.
+
+Page panes sit in a map beside the terminal panes, keyed by `PaneId` the same way modes, nav cursors, and marks already are, and a pane id is in exactly one of the two. That is what keeps the split tree, tabs, focus, and zoom untouched: they only ever deal in ids. A page paints into a grid of its own, which then goes through the same per-pane view the renderer draws a terminal through, so a tool pane costs the renderer nothing new. It is handed its row count before it paints, so a listing longer than the pane returns the window it wants visible: scrolling belongs to the page, which is the only side that knows where its cursor is. A page is not a process, so it leaves the layout before a session snapshot is written rather than being restored as a shell.
+
+A page pane is a fifth mode, which is what keeps its keys honest. Keys reach the page after the globally-intercepted chords and before anything else; a key the page declines falls through to the window-layout chords alone, so splitting, closing, zooming, and moving focus all still work from a page, while a vim motion or a mode switch resolves to nothing rather than acting on a pane that has no grid and no PTY. The mode is a trap door: no event leaves it, so the pane holds its page until it closes.
+
 ## Multiplexer
 
 `crates/winter-term/src/mux/` is a headless PTY session manager. The server owns PTY processes and outlives client disconnects; clients attach to named sessions over a Unix domain socket, or over an SSH tunnel to a remote server.

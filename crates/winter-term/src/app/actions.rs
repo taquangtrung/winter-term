@@ -443,7 +443,7 @@ impl App {
                     self.init_nav_cursor(focused);
                 }
             }
-            Mode::Insert | Mode::BlockFocus => {
+            Mode::Insert | Mode::BlockFocus | Mode::Page => {
                 if new_mode == Mode::Insert {
                     self.align_prompt_to_nav_cursor(focused);
                 }
@@ -814,7 +814,7 @@ impl App {
                 self.selection.visual_kind = kind;
                 self.update_visual_selection(focused);
             }
-            Mode::Insert | Mode::BlockFocus => {}
+            Mode::Insert | Mode::BlockFocus | Mode::Page => {}
         }
         self.dirty = true;
     }

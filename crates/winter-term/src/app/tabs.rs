@@ -248,6 +248,7 @@ impl App {
             return;
         }
         for id in self.tabs.all[index].panes() {
+            self.pages.remove(&id);
             self.panes.remove(&id);
             self.modes.remove(&id);
             self.nav_cursors.remove(&id);

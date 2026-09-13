@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::model::layout::{PaneId, Rect};
 use crate::model::mode::Mode;
+use crate::model::page::{PageContent, PageStyle};
 use crate::model::palette::{Palette, PaletteMode};
 use crate::model::settings_page::{Control, SettingsField, SettingsPage};
 use crate::terminal::block_queue::{BlockEntry, BlockKind};
@@ -56,6 +57,9 @@ const SETTINGS_LEFT_PAD: usize = 4;
 const SETTINGS_NOTE_COL: usize = 28;
 const SETTINGS_RIGHT_PAD: usize = 4;
 const SETTINGS_FIRST_ROW: usize = 3;
+/// How far a page's dim style is blended toward the background.
+const PAGE_DIM_MIX: f32 = 0.45;
+
 /// Footer hint shown along the bottom of the settings page.
 const SETTINGS_HINT: &str = "↑/↓ Move     ←/→ Change     Space Toggle     Enter/Esc Close";
 
@@ -95,11 +99,20 @@ struct PaneViewInput<'a> {
     modes: &'a std::collections::HashMap<PaneId, Mode>,
     nav_cursors: &'a std::collections::HashMap<PaneId, (usize, usize)>,
     overlays: &'a PaneOverlays,
+    page_paints: &'a [PagePaint],
     palette_open: bool,
     panes: &'a std::collections::HashMap<PaneId, crate::terminal::pane::Pane>,
     rects: &'a [(PaneId, Rect)],
     selection: Option<&'a super::Selection>,
     window_focused: bool,
+}
+
+/// One page pane's painted frame: the grid the page rendered itself into, and
+/// the row its cursor line sits on.
+struct PagePaint {
+    cursor_line: Option<usize>,
+    grid: Grid,
+    pane: PaneId,
 }
 
 /// Build one `PaneView` per laid-out pane: what the renderer should draw for
@@ -115,6 +128,7 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
         modes,
         nav_cursors,
         overlays,
+        page_paints,
         palette_open,
         panes,
         rects,
@@ -173,6 +187,8 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                 Mode::Normal => config.cursor.normal,
                 Mode::Visual => config.cursor.visual,
                 Mode::BlockFocus => config.cursor.block_focus,
+                // Unreachable for a terminal pane, whose mode is never Page.
+                Mode::Page => config.cursor.normal,
             };
             let cursor_shape = effective_cursor_shape(
                 !pane.is_at_prompt(),
@@ -235,10 +251,48 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                 selection_block: sel_block,
                 url_underline: config.url_underline,
             });
+        } else if let Some(paint) = page_paints.iter().find(|paint| paint.pane == *id) {
+            views.push(page_pane_view(paint, *rect, *id == focused, config));
         }
     }
 
     views
+}
+
+/// Build the view for a page pane. A page has no terminal caret of its own, so
+/// the cursor is parked out of bounds (suppressing it) and the cursor line is
+/// the only mark of where the page's own selection sits.
+fn page_pane_view<'a>(
+    paint: &'a PagePaint,
+    rect: Rect,
+    focused: bool,
+    config: &crate::config::Config,
+) -> PaneView<'a> {
+    PaneView {
+        bracket_colors: &[],
+        block_band: None,
+        cursor_shape: CursorShape::Block,
+        cursor_unfocused: false,
+        cursor_visible: false,
+        dim: !focused && config.dim_inactive,
+        focused,
+        grid: &paint.grid,
+        hovered_link: 0,
+        labels: None,
+        find_labels: &[],
+        nav_cursor: Some((paint.grid.rows(), paint.grid.cols())),
+        cursor_line_row: paint.cursor_line,
+        nav_cursor_visible: false,
+        rect: App::layout_rect_to_pane(rect),
+        scroll_offset: 0,
+        scrollback_len: 0,
+        search_matches: &[],
+        search_current: &[],
+        sentence_spans: &[],
+        selection: None,
+        selection_block: false,
+        url_underline: false,
+    }
 }
 
 /// Re-rasterize width-wrapped blocks (markdown/CSV/JSON) whose pane width
@@ -500,6 +554,23 @@ impl App {
         let focused = self.tabs.all[self.tabs.active].focused();
         let mode = self.modes.get(&focused).copied().unwrap_or_default();
         let overlays = self.build_pane_overlays(&rects, renderer.theme());
+        // Pages paint themselves into a grid of their own, so the renderer
+        // draws a tool pane through exactly the path a terminal pane takes. A
+        // page is handed its row count first, so it can window a listing longer
+        // than the pane around its own cursor.
+        let mut page_paints: Vec<PagePaint> = Vec::new();
+        for (id, rect) in &rects {
+            let (cols, rows) = renderer.grid_size_for(App::layout_rect_to_pane(*rect));
+            let Some(page) = self.pages.get_mut(id) else {
+                continue;
+            };
+            let content = page.content(rows);
+            page_paints.push(PagePaint {
+                cursor_line: content.cursor_line,
+                grid: build_page_grid(&content, renderer.theme(), cols, rows),
+                pane: *id,
+            });
+        }
         let hovered_pane = self.hovered_pane(&rects);
         let search = self.search.query.as_ref().map(|q| StatusSearch {
             query: q.clone(),
@@ -539,6 +610,7 @@ impl App {
             modes: &self.modes,
             nav_cursors: &self.nav_cursors,
             overlays: &overlays,
+            page_paints: &page_paints,
             palette_open: self.palette.is_some(),
             panes: &self.panes,
             rects: &rects,
@@ -1392,6 +1464,53 @@ fn build_settings_grid(page: &SettingsPage, theme: &Theme, cols: usize, rows: us
     grid
 }
 
+/// Paint a page into a fresh `cols` x `rows` grid: its rows in order, each span
+/// resolved from a semantic style to the theme's colors, clipped at the pane's
+/// last row.
+fn build_page_grid(content: &PageContent, theme: &Theme, cols: usize, rows: usize) -> Grid {
+    let mut grid = Grid::new(cols, rows);
+    for (row, spans) in content.rows.iter().take(rows).enumerate() {
+        let mut col = 0;
+        for span in spans {
+            if col >= cols {
+                break;
+            }
+            put(
+                &mut grid,
+                row,
+                col,
+                &span.text,
+                page_span_style(span.style, theme),
+            );
+            col += span.text.chars().count();
+        }
+    }
+    grid
+}
+
+/// Resolve a page's semantic style against the active theme.
+fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
+    match style {
+        PageStyle::Accent => Style {
+            foreground: theme_rgb(theme.cursor_bg),
+            ..Style::default()
+        },
+        PageStyle::Dim => Style {
+            foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
+            ..Style::default()
+        },
+        PageStyle::Header => Style {
+            bold: true,
+            foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        PageStyle::Normal => Style {
+            foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+    }
+}
+
 /// Paint one field row: an optional accent bar and highlight when selected, the
 /// label, the right-aligned control, and the dim note between them.
 fn draw_field_row(
@@ -1727,6 +1846,39 @@ fn json_to_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::page::{PageRow, PageSpan};
+
+    #[test]
+    fn test_page_grid_lays_spans_out_left_to_right() {
+        let content = PageContent::new(vec![vec![
+            PageSpan::plain("Zoom Pane"),
+            PageSpan::new(PageStyle::Accent, "Shift-Alt-="),
+        ]]);
+        let grid = build_page_grid(&content, &Theme::dark(), 40, 4);
+        let first = grid
+            .to_text()
+            .lines()
+            .next()
+            .unwrap_or_default()
+            .to_string();
+        assert_eq!(first.trim_end(), "Zoom PaneShift-Alt-=");
+    }
+
+    #[test]
+    fn test_page_grid_clips_rows_past_the_pane_height() {
+        // A page longer than its pane must lose the overflow, not write past
+        // the grid's last row.
+        let rows: Vec<PageRow> = (0..10)
+            .map(|i| vec![PageSpan::plain(format!("row{i}"))])
+            .collect();
+        let grid = build_page_grid(&PageContent::new(rows), &Theme::dark(), 20, 3);
+        let text = grid.to_text();
+        assert!(text.contains("row2"), "the last visible row is painted");
+        assert!(
+            !text.contains("row3"),
+            "rows past the pane height are dropped"
+        );
+    }
 
     #[test]
     fn test_band_fit_rows_covers_the_content_within_the_image_row_cap() {

@@ -14,6 +14,7 @@
 //! - [`lifecycle`]: construction, state persistence, quit and reload.
 //! - [`navigation`]: vim-style cursor motions, search, quick-select.
 //! - [`notice`]: window title and transient status notices.
+//! - [`page`]: tool pages held by a pane instead of a terminal.
 //! - [`palette`]: command palette and the pickers built on it.
 //! - [`panes`]: pane creation, splitting, closing, per-frame upkeep.
 //! - [`pointer`]: mouse hit-testing, selection, clipboard, PTY mouse forwarding.
@@ -30,6 +31,7 @@ mod init;
 mod lifecycle;
 mod navigation;
 mod notice;
+mod page;
 mod palette;
 mod panes;
 mod pointer;
@@ -62,6 +64,7 @@ use crate::control::ControlMessage;
 use crate::model::input::{self, Action, KeyCode, PendingPrefix, VisualKind, WindowKeymap};
 use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
+use crate::model::page::Page;
 use crate::model::palette::Palette;
 use crate::model::settings_page::{ChoiceOption, SettingsPage};
 use crate::terminal::pane::Pane;
@@ -243,12 +246,13 @@ fn status_bar(
         Mode::Normal => ("Normal", theme.ansi[4]),
         Mode::Visual => ("Visual", theme.ansi[6]),
         Mode::BlockFocus => ("Block", theme.ansi[5]),
+        Mode::Page => ("Page", theme.ansi[2]),
     };
-    // Visual shares the Normal icon: it is a navigation sub-mode, not a separate
-    // configurable glyph.
+    // Visual and Page share the Normal icon: both are keyboard-driven
+    // navigation, not a separate configurable glyph.
     let mode_icon = match mode {
         Mode::Insert => &icons.insert,
-        Mode::Normal | Mode::Visual => &icons.normal,
+        Mode::Normal | Mode::Page | Mode::Visual => &icons.normal,
         Mode::BlockFocus => &icons.block,
     };
     let mode_label = if !config.show_mode {
@@ -575,6 +579,9 @@ pub struct App {
     /// cursor once the resulting PTY echo is drained.
     pub(crate) nav_resync_pending: bool,
     pub(crate) next_image_id: u64,
+    /// Panes whose content Winter paints itself. A pane id appears here or in
+    /// `panes`, never in both: a page pane has no process behind it.
+    pub(crate) pages: HashMap<PaneId, Box<dyn Page>>,
     pub(crate) panes: HashMap<PaneId, Pane>,
     /// Panes whose last PTY-forwarded Insert-mode key was Tab - likely mid the
     /// shell's own tab-completion (e.g. zsh's menu-select). Lets the next bare

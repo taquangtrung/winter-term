@@ -599,7 +599,9 @@ fn home_dir() -> Option<PathBuf> {
 // Built-in commands
 // ========================================================================
 
-fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
+/// Every built-in command, labelled and annotated with the chord `keymap`
+/// binds it to. The one list the palette and the keys page both read.
+pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
     // (action, label, static shortcut hint: empty means look up from keymap)
     let entries: &[(&str, &str, &str)] = &[
         ("cd_recent", "CD: Recent Directory", ""),
@@ -625,6 +627,7 @@ fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
             "",
         ),
         ("export_scrollback_html", "Export: Scrollback to HTML", ""),
+        ("dir_page", "Dir: Open Working Directory", ""),
         ("focus_down", "Focus Pane Down", ""),
         ("focus_left", "Focus Pane Left", ""),
         ("focus_right", "Focus Pane Right", ""),
@@ -632,6 +635,7 @@ fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ("font_decrease", "Font Size: Decrease", ""),
         ("font_increase", "Font Size: Increase", ""),
         ("font_reset", "Font Size: Reset", ""),
+        ("keys_page", "Keys: Show Every Command", ""),
         ("mux_attach_remote", "Mux: Attach Remote Session...", ""),
         ("mux_detach_session", "Mux: Detach Current Session", ""),
         ("mux_kill_session", "Mux: Kill Background Session...", ""),

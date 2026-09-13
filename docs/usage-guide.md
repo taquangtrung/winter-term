@@ -6,7 +6,7 @@ For what Winter is and how to install it, see the [README](../README.md). For ho
 
 ## Modes
 
-A Winter pane is always in exactly one of four modes, and each pane keeps its own. The mode is shown in the status bar.
+A Winter pane is always in exactly one of five modes, and each pane keeps its own. The mode is shown in the status bar.
 
 | Mode | Who owns the keyboard | Enter it with |
 |---|---|---|
@@ -14,6 +14,7 @@ A Winter pane is always in exactly one of four modes, and each pane keeps its ow
 | **Normal** | Winter. Motions, operators, layout commands. | `Esc` from Insert |
 | **Visual** | Normal, but motions extend a selection. | `v` `V` `Ctrl-v` from Normal |
 | **Block-Focus** | A rich block's WebView. | `Enter` from Normal, on a block |
+| **Page** | A tool page, such as Dir. | Opening a tool; the pane holds it until closed |
 
 Insert is the default, so Winter behaves like a normal terminal until you ask it not to.
 
@@ -186,6 +187,7 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Ctrl-Shift-c` / `Ctrl-Shift-v` | Copy selection, paste |
 | `Ctrl-,` | Open settings |
 | `Ctrl-=` / `Ctrl--` / `Ctrl-0` | Font bigger, smaller, reset |
+| `Ctrl-Shift-d` | Open Dir in a split |
 | `Ctrl-Shift-p` or `Alt-x` | Command palette |
 | `Ctrl-Shift-r` | History palette |
 | `Ctrl-Shift-z` | Pane switcher (then press the digit shown on a pane) |
@@ -193,6 +195,30 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Ctrl-Backspace` | Delete the word before the cursor |
 
 A single-chord binding whose action is not one of the built-in window actions is looked up against the command palette instead, so `"M+q" "mux_new_session"` works.
+
+## Tools
+
+A pane can hold a tool instead of a terminal. Open one from the command palette and it arrives in a split beside the pane you were in, with no shell behind it. The window chords all still work there: split, zoom, close, and `Alt-h/j/k/l` to move focus. `q` closes the tool.
+
+**Dir** (`Ctrl-Shift-d`, or `Dir: Open Working Directory`) lists a directory, rooted at the working directory of the pane it opened from.
+
+| Key | Action |
+|---|---|
+| `j` `k` or `Down` `Up` | Move down, up |
+| `gg` / `G` | First entry, last entry |
+| `Enter` or `l` | Enter a directory, or open a file in `$EDITOR` in a new tab |
+| `h` or `-` | Go up to the parent directory |
+| `Tab` | Expand or collapse the directory under the cursor, in place |
+| `z` | Collapse everything |
+| `.` | Show or hide dotfiles |
+| `,` | Show or hide the size, age, and permission columns |
+| `s` | Cycle the sort: name, time, size |
+| `r` | Re-read the listing |
+| `q` | Close |
+
+Directories sort before files whatever the key, and moving the root, toggling a view option, or folding keeps the cursor on the entry it was already on.
+
+**Keys** (`Keys: Show Every Command`) lists every command and the chord bound to it, read from the keymap in force, so it cannot disagree with what the keys actually do.
 
 ## Configuration
 

@@ -1144,7 +1144,13 @@ mod tests {
         let mut bindings = HashMap::new();
         bindings.insert("C+w x".to_string(), "mux_new_session".to_string());
         let keymap = WindowKeymap::from_config(Some(&bindings), None);
-        assert!(keymap.named.is_empty());
+        assert!(
+            !keymap
+                .named
+                .iter()
+                .any(|(_, name)| name == "mux_new_session"),
+            "the sequence bound nothing, while the defaults' own named chords stay"
+        );
     }
     #[test]
     fn test_chord_hint_reports_a_bound_named_command() {

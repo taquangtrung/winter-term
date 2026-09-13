@@ -381,6 +381,11 @@ pub fn resolve_with(
         Mode::Normal => resolve_normal(key, pending, window),
         Mode::Visual => resolve_visual(key, pending, window),
         Mode::BlockFocus => resolve_block_focus(key, flags, window, is_alt_screen),
+        // A page was already offered this key and declined it, so only the
+        // window-layout chords are left to honor: splitting, closing, zooming,
+        // and moving focus all still have to work from a page pane. Anything
+        // else would act on a pane that has no grid and no PTY.
+        Mode::Page => window.direct_action(key, false).unwrap_or(Action::Ignore),
     }
 }
 
@@ -422,6 +427,53 @@ pub(super) mod test_support {
 
 #[cfg(test)]
 mod tests {
+    use super::test_support::resolve_simple;
+    use super::*;
+
+    #[test]
+    fn test_page_mode_still_honors_the_window_layout_chords() {
+        // A page pane has to stay manageable: `Alt-h` moves focus off it and
+        // `Shift-Alt-\\` splits beside it, exactly as from a terminal pane.
+        let focus_left = Key {
+            alt: true,
+            code: KeyCode::Char('h'),
+            ctrl: false,
+            shift: false,
+        };
+        assert_eq!(
+            resolve_simple(Mode::Page, &focus_left),
+            Action::FocusPane(FocusDir::Left)
+        );
+    }
+
+    #[test]
+    fn test_ctrl_shift_d_opens_the_dir_page_from_any_mode() {
+        // The chord is a named-command binding, not a built-in window action,
+        // so it has to resolve through every mode's window-chord lookup.
+        let chord = Key {
+            alt: false,
+            code: KeyCode::Char('d'),
+            ctrl: true,
+            shift: true,
+        };
+        let expected = Action::RunCommand("dir_page".to_string());
+        for mode in [Mode::Insert, Mode::Normal, Mode::Page, Mode::Visual] {
+            assert_eq!(resolve_simple(mode, &chord), expected, "mode {mode:?}");
+        }
+    }
+
+    #[test]
+    fn test_page_mode_swallows_keys_the_page_declined() {
+        // `i` in Page mode must not reach the Normal-mode resolver: switching a
+        // page pane to Insert would leave its keystrokes with nowhere to go.
+        let insert = Key {
+            alt: false,
+            code: KeyCode::Char('i'),
+            ctrl: false,
+            shift: false,
+        };
+        assert_eq!(resolve_simple(Mode::Page, &insert), Action::Ignore);
+    }
 
     // ---- Kitty keyboard protocol encoding -----------------------------------
 }

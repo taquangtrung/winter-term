@@ -63,6 +63,7 @@ impl App {
             nav_cursors: HashMap::new(),
             nav_resync_pending: false,
             next_image_id: 0,
+            pages: HashMap::new(),
             panes: HashMap::new(),
             pending_tab_completion: HashSet::new(),
             last_alt_screen_escape: None,
@@ -144,6 +145,8 @@ impl App {
                 let new_mode = match mode {
                     Mode::Insert => Mode::Normal,
                     Mode::Normal | Mode::Visual | Mode::BlockFocus => Mode::Insert,
+                    // A page pane has no terminal to toggle into.
+                    Mode::Page => Mode::Page,
                 };
                 self.modes.insert(focused, new_mode);
             }
@@ -155,6 +158,12 @@ impl App {
             }
             "close_pane" => {
                 self.close_pane(focused);
+            }
+            "dir_page" => {
+                self.open_dir_page();
+            }
+            "keys_page" => {
+                self.open_keys_page();
             }
             "copy_cwd" => {
                 self.copy_pane_cwd(focused);
@@ -350,6 +359,7 @@ impl App {
     /// Persist the session and exit the event loop. Shared by the native close
     /// request and the custom window-close control.
     pub(crate) fn quit(&mut self, event_loop: &ActiveEventLoop) {
+        self.close_all_pages();
         if self.config.restore_session {
             Session::save(&self.tabs.all, self.tabs.active, &self.panes);
         }
@@ -363,6 +373,7 @@ impl App {
     /// `restore_session`, since reloading is an explicit request to carry
     /// state across the restart.
     pub(crate) fn reload(&mut self, event_loop: &ActiveEventLoop) {
+        self.close_all_pages();
         Session::save(&self.tabs.all, self.tabs.active, &self.panes);
         if let Ok(exe) = std::env::current_exe() {
             let _ = std::process::Command::new(exe).spawn();

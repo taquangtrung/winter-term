@@ -127,6 +127,9 @@ window {
     // to a pane (1-9) jumps straight to it: no separate binding for that.
     "C+S+z" "select_pane"
 
+    // Tools: a pane holding a tool page instead of a terminal.
+    "C+S+d" "dir_page"
+
     // Jump between prompt blocks.
     "C+S+Up" "prev_block"
     "C+S+Down" "next_block"
