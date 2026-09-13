@@ -137,7 +137,11 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
     } = input;
     let mut views: Vec<PaneView> = Vec::new();
     for (i, (id, rect)) in rects.iter().enumerate() {
-        if let Some(pane) = panes.get(id) {
+        // A page covers the pane's terminal while it is open, so it is checked
+        // first: the grid underneath keeps updating, unseen.
+        if let Some(paint) = page_paints.iter().find(|paint| paint.pane == *id) {
+            views.push(page_pane_view(paint, *rect, *id == focused, config));
+        } else if let Some(pane) = panes.get(id) {
             let (sel_tuple, sel_block) = match selection {
                 Some(s) if s.pane == *id => (
                     Some((s.start_row, s.start_col, s.end_row, s.end_col)),
@@ -251,8 +255,6 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                 selection_block: sel_block,
                 url_underline: config.url_underline,
             });
-        } else if let Some(paint) = page_paints.iter().find(|paint| paint.pane == *id) {
-            views.push(page_pane_view(paint, *rect, *id == focused, config));
         }
     }
 
@@ -395,12 +397,18 @@ fn image_placements(
     panes: &std::collections::HashMap<PaneId, crate::terminal::pane::Pane>,
     rects: &[(PaneId, Rect)],
     cell_height: f32,
+    covered: &[PagePaint],
 ) -> Vec<ImagePlacement> {
     let mut placements: Vec<ImagePlacement> = Vec::new();
     for img in blocks {
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == img.pane_id) else {
             continue;
         };
+        // A tool page owns every row of the pane it covers, the same way an
+        // alternate-screen app does below.
+        if covered.iter().any(|paint| paint.pane == img.pane_id) {
+            continue;
+        }
         let Some(pane) = panes.get(&img.pane_id) else {
             continue;
         };
@@ -561,10 +569,10 @@ impl App {
         let mut page_paints: Vec<PagePaint> = Vec::new();
         for (id, rect) in &rects {
             let (cols, rows) = renderer.grid_size_for(App::layout_rect_to_pane(*rect));
-            let Some(page) = self.pages.get_mut(id) else {
+            let Some(slot) = self.pages.get_mut(id) else {
                 continue;
             };
-            let content = page.content(rows);
+            let content = slot.page.content(rows);
             page_paints.push(PagePaint {
                 cursor_line: content.cursor_line,
                 grid: build_page_grid(&content, renderer.theme(), cols, rows),
@@ -578,12 +586,14 @@ impl App {
             match_total: self.search.match_total,
             reverse: self.search.reverse,
         });
+        let page_name = self.pages.get(&focused).map(|slot| slot.page.title());
         let status = status_bar(
             mode,
             renderer.theme(),
             search,
             notice,
             &self.config.status_bar,
+            page_name.as_deref(),
         );
         let status = status_enabled.then_some(&status);
         let palette_view = self
@@ -599,7 +609,8 @@ impl App {
             return;
         };
         reflow_width_wrapped_blocks(&mut self.image_blocks, &rects, renderer);
-        let placements = image_placements(&self.image_blocks, &self.panes, &rects, ch);
+        let placements =
+            image_placements(&self.image_blocks, &self.panes, &rects, ch, &page_paints);
         let views = build_pane_views(PaneViewInput {
             blink_phase: self.blink_phase,
             config: &self.config,
@@ -797,16 +808,18 @@ impl App {
             .panes()
             .into_iter()
             .collect();
-        // Panes currently showing the alternate screen: their WebView tiles
-        // are hidden for the same reason `image_placements` skips them (a
-        // full-screen app owns the viewport), and they reappear once the app
-        // exits. Tracked in the layout key so the flip itself repositions.
-        let alt_panes: std::collections::HashSet<PaneId> = self
+        // Panes whose viewport something else owns: an alternate-screen app,
+        // or a tool page covering the terminal. Their WebView tiles are hidden
+        // for the same reason `image_placements` skips them, and they reappear
+        // once the app exits or the page closes. Tracked in the layout key so
+        // the flip itself repositions.
+        let mut covered_panes: std::collections::HashSet<PaneId> = self
             .panes
             .iter()
             .filter(|(_, pane)| pane.grid().is_alt_screen())
             .map(|(id, _)| *id)
             .collect();
+        covered_panes.extend(self.pages.keys().copied());
         if let Some(pane) = self.panes.get(&focused) {
             // Tiles are anchored absolutely, so what moves them is the absolute
             // row currently at the top of the viewport: it advances both when
@@ -819,14 +832,14 @@ impl App {
             // Repositioning every tile does a GTK round-trip per WebView; only do
             // it when the scroll position or layout actually changed, otherwise
             // plain typing (which never moves tiles) stalls on GTK IPC.
-            let mut alt_key: Vec<PaneId> = alt_panes.iter().copied().collect();
-            alt_key.sort_by_key(|id| id.0);
+            let mut covered_key: Vec<PaneId> = covered_panes.iter().copied().collect();
+            covered_key.sort_by_key(|id| id.0);
             let layout = (
                 viewport_top,
                 full_rows,
                 ch.to_bits(),
                 pane_y.to_bits(),
-                alt_key,
+                covered_key,
             );
             if self.last_tile_layout.as_ref() != Some(&layout) {
                 self.last_tile_layout = Some(layout);
@@ -836,7 +849,7 @@ impl App {
                     ch,
                     pane_y,
                     &active_panes,
-                    &alt_panes,
+                    &covered_panes,
                 );
             }
         }
@@ -2068,7 +2081,7 @@ mod tests {
         // hiding the rows the full-screen app had drawn there.
         let (mut app, pane_id, rects) = app_with_image_blocks(&[(1, 0, 1)]);
 
-        let placements = image_placements(&app.image_blocks, &app.panes, &rects, 20.0);
+        let placements = image_placements(&app.image_blocks, &app.panes, &rects, 20.0, &[]);
         assert_eq!(placements.len(), 1, "fixture: the block places normally");
 
         app.panes
@@ -2076,7 +2089,7 @@ mod tests {
             .unwrap()
             .grid_mut()
             .enter_alt_screen();
-        let placements = image_placements(&app.image_blocks, &app.panes, &rects, 20.0);
+        let placements = image_placements(&app.image_blocks, &app.panes, &rects, 20.0, &[]);
         assert!(
             placements.is_empty(),
             "an alt-screen pane must not have primary-screen blocks painted over it"
@@ -2087,7 +2100,7 @@ mod tests {
             .unwrap()
             .grid_mut()
             .leave_alt_screen();
-        let placements = image_placements(&app.image_blocks, &app.panes, &rects, 20.0);
+        let placements = image_placements(&app.image_blocks, &app.panes, &rects, 20.0, &[]);
         assert_eq!(
             placements.len(),
             1,

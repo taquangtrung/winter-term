@@ -187,7 +187,7 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Ctrl-Shift-c` / `Ctrl-Shift-v` | Copy selection, paste |
 | `Ctrl-,` | Open settings |
 | `Ctrl-=` / `Ctrl--` / `Ctrl-0` | Font bigger, smaller, reset |
-| `Ctrl-Shift-d` | Open Dir in a split |
+| `Ctrl-Shift-d` | Show Dir over the focused pane (toggle) |
 | `Ctrl-Shift-p` or `Alt-x` | Command palette |
 | `Ctrl-Shift-r` | History palette |
 | `Ctrl-Shift-z` | Pane switcher (then press the digit shown on a pane) |
@@ -198,7 +198,7 @@ A single-chord binding whose action is not one of the built-in window actions is
 
 ## Tools
 
-A pane can hold a tool instead of a terminal. Open one from the command palette and it arrives in a split beside the pane you were in, with no shell behind it. The window chords all still work there: split, zoom, close, and `Alt-h/j/k/l` to move focus. `q` closes the tool.
+A tool opens over the focused pane, covering it. The shell underneath keeps running and comes back the moment you close the tool with `q`, or by pressing the tool's own chord again. The window chords all still work while a tool is up: split, zoom, close, and `Alt-h/j/k/l` to move focus. For a tool beside your shell rather than over it, split first and open it in the new pane.
 
 **Dir** (`Ctrl-Shift-d`, or `Dir: Open Working Directory`) lists a directory, rooted at the working directory of the pane it opened from.
 

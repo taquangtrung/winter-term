@@ -64,7 +64,6 @@ use crate::control::ControlMessage;
 use crate::model::input::{self, Action, KeyCode, PendingPrefix, VisualKind, WindowKeymap};
 use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
-use crate::model::page::Page;
 use crate::model::palette::Palette;
 use crate::model::settings_page::{ChoiceOption, SettingsPage};
 use crate::terminal::pane::Pane;
@@ -239,6 +238,7 @@ fn status_bar(
     search: Option<StatusSearch>,
     notice: Option<StatusNotice>,
     config: &StatusBarConfig,
+    page: Option<&str>,
 ) -> StatusBar {
     let icons = &config.icons;
     let (mode_name, accent) = match mode {
@@ -255,6 +255,9 @@ fn status_bar(
         Mode::Normal | Mode::Page | Mode::Visual => &icons.normal,
         Mode::BlockFocus => &icons.block,
     };
+    // A page names itself in place of the mode: "Dir" says more than "Page"
+    // when the tool is what owns the keyboard.
+    let mode_name = page.filter(|_| mode == Mode::Page).unwrap_or(mode_name);
     let mode_label = if !config.show_mode {
         String::new()
     } else if mode_icon.is_empty() {
@@ -579,9 +582,9 @@ pub struct App {
     /// cursor once the resulting PTY echo is drained.
     pub(crate) nav_resync_pending: bool,
     pub(crate) next_image_id: u64,
-    /// Panes whose content Winter paints itself. A pane id appears here or in
-    /// `panes`, never in both: a page pane has no process behind it.
-    pub(crate) pages: HashMap<PaneId, Box<dyn Page>>,
+    /// Panes a tool page is currently covering. The pane keeps its terminal,
+    /// which goes on running underneath and comes back when the page closes.
+    pub(crate) pages: HashMap<PaneId, page::PageSlot>,
     pub(crate) panes: HashMap<PaneId, Pane>,
     /// Panes whose last PTY-forwarded Insert-mode key was Tab - likely mid the
     /// shell's own tab-completion (e.g. zsh's menu-select). Lets the next bare
@@ -1520,6 +1523,18 @@ mod tests {
     }
 
     #[test]
+    fn test_a_page_names_itself_in_the_status_bar() {
+        // "Page" says nothing about which tool owns the keyboard, and the name
+        // must not leak into the label for an ordinary terminal pane.
+        let theme = Theme::dark();
+        let cfg = StatusBarConfig::default();
+        let page = status_bar(Mode::Page, &theme, None, None, &cfg, Some("Dir"));
+        assert!(page.mode.ends_with("Dir"), "got {:?}", page.mode);
+        let terminal = status_bar(Mode::Insert, &theme, None, None, &cfg, Some("Dir"));
+        assert!(terminal.mode.ends_with("Insert"), "got {:?}", terminal.mode);
+    }
+
+    #[test]
     fn test_leaving_normal_mode_ends_a_search_and_hides_the_forced_status_bar() {
         let mut app = app_with_tabs(1);
         app.config.status_bar.enabled = false;
@@ -1547,20 +1562,20 @@ mod tests {
         let theme = Theme::dark();
         let cfg = StatusBarConfig::default();
         assert_eq!(
-            status_bar(Mode::Insert, &theme, None, None, &cfg).mode,
+            status_bar(Mode::Insert, &theme, None, None, &cfg, None).mode,
             "\u{f03eb} Insert"
         );
         assert_eq!(
-            status_bar(Mode::Normal, &theme, None, None, &cfg).mode,
+            status_bar(Mode::Normal, &theme, None, None, &cfg, None).mode,
             "\u{e795} Normal"
         );
         assert_eq!(
-            status_bar(Mode::BlockFocus, &theme, None, None, &cfg).mode,
+            status_bar(Mode::BlockFocus, &theme, None, None, &cfg, None).mode,
             "\u{f0485} Block"
         );
         assert_ne!(
-            status_bar(Mode::Insert, &theme, None, None, &cfg).accent,
-            status_bar(Mode::Normal, &theme, None, None, &cfg).accent
+            status_bar(Mode::Insert, &theme, None, None, &cfg, None).accent,
+            status_bar(Mode::Normal, &theme, None, None, &cfg, None).accent
         );
     }
 
@@ -1571,7 +1586,7 @@ mod tests {
             show_mode: false,
             ..StatusBarConfig::default()
         };
-        let bar = status_bar(Mode::Normal, &theme, None, None, &cfg);
+        let bar = status_bar(Mode::Normal, &theme, None, None, &cfg, None);
         assert_eq!(bar.mode, "");
     }
 
@@ -1590,10 +1605,11 @@ mod tests {
             }),
             None,
             &cfg,
+            None,
         );
         assert!(active.search.is_some());
 
-        let inactive = status_bar(Mode::Normal, &theme, None, None, &cfg);
+        let inactive = status_bar(Mode::Normal, &theme, None, None, &cfg, None);
         assert!(inactive.search.is_none());
     }
 
@@ -1822,7 +1838,7 @@ mod tests {
             kind: NoticeKind::Info,
             text: "oops".to_string(),
         };
-        let bar = status_bar(Mode::Normal, &theme, None, Some(notice), &cfg);
+        let bar = status_bar(Mode::Normal, &theme, None, Some(notice), &cfg, None);
         assert_eq!(bar.notice.map(|n| n.text), Some("oops".to_string()));
     }
 

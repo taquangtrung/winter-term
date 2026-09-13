@@ -359,7 +359,6 @@ impl App {
     /// Persist the session and exit the event loop. Shared by the native close
     /// request and the custom window-close control.
     pub(crate) fn quit(&mut self, event_loop: &ActiveEventLoop) {
-        self.close_all_pages();
         if self.config.restore_session {
             Session::save(&self.tabs.all, self.tabs.active, &self.panes);
         }
@@ -373,7 +372,6 @@ impl App {
     /// `restore_session`, since reloading is an explicit request to carry
     /// state across the restart.
     pub(crate) fn reload(&mut self, event_loop: &ActiveEventLoop) {
-        self.close_all_pages();
         Session::save(&self.tabs.all, self.tabs.active, &self.panes);
         if let Ok(exe) = std::env::current_exe() {
             let _ = std::process::Command::new(exe).spawn();

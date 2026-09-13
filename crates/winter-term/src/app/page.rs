@@ -1,80 +1,123 @@
-//! Tool pages in panes: opening one in a split, closing it, and offering it
+//! Tool pages over panes: opening one in place, closing it, and offering it
 //! keys before the modal keymap sees them.
 
 use std::path::PathBuf;
 
 use crate::model::input::Key;
-use crate::model::layout::{Direction, PaneId};
+use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
 use crate::model::page::{Page, PageOutcome};
 use crate::tools::dir::DirPage;
 use crate::tools::keys::KeysPage;
 
 use super::App;
-use super::SPLIT_RATIO;
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+/// Tool name recorded for the directory listing, so its own chord toggles it.
+const DIR_TOOL: &str = "dir";
+
+/// Tool name recorded for the keys page.
+const KEYS_TOOL: &str = "keys";
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// A page covering one pane: the page itself, which tool opened it, and the
+/// mode the pane was in, so closing the page puts the pane back as it was.
+pub(crate) struct PageSlot {
+    pub(crate) page: Box<dyn Page>,
+    prior_mode: Mode,
+    tool: &'static str,
+}
 
 // ========================================================================
 // App: tool pages
 // ========================================================================
 
 impl App {
-    /// Open the keys page beside the focused pane.
+    /// Show the keys page over the focused pane, or close it if it is already
+    /// the page showing there.
     pub(crate) fn open_keys_page(&mut self) {
+        if self.close_page_if_showing(KEYS_TOOL) {
+            return;
+        }
         let page = KeysPage::new(&self.window_keymap);
-        self.open_page_in_split(Box::new(page));
+        self.show_page(KEYS_TOOL, Box::new(page));
     }
 
-    /// Open a directory listing beside the focused pane, rooted at the focused
-    /// pane's working directory.
+    /// Show a directory listing over the focused pane, rooted at that pane's
+    /// working directory, or close it if a listing is already showing there.
     pub(crate) fn open_dir_page(&mut self) {
+        if self.close_page_if_showing(DIR_TOOL) {
+            return;
+        }
         let root = self
             .focused_cwd()
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/"));
-        self.open_page_in_split(Box::new(DirPage::new(root)));
+        self.show_page(DIR_TOOL, Box::new(DirPage::new(root)));
     }
 
-    /// Open `page` in a fresh split beside the focused pane, and focus it. The
-    /// new pane spawns no process: the page is the whole content.
-    pub(crate) fn open_page_in_split(&mut self, page: Box<dyn Page>) {
-        let new_id = self.alloc_pane_id();
-        self.tab_mut()
-            .split(Direction::Vertical, SPLIT_RATIO, new_id);
-        self.tab_mut().balance();
-        self.pane_titles.insert(new_id, page.title());
-        self.pages.insert(new_id, page);
-        self.modes.insert(new_id, Mode::Page);
-        if self.renderer.is_some() {
-            self.resize_all_panes();
-        }
+    /// Cover the focused pane with `page`. The pane keeps its process, which
+    /// goes on running underneath, and gets it back when the page closes.
+    pub(crate) fn show_page(&mut self, tool: &'static str, page: Box<dyn Page>) {
+        let pane_id = self.tab().focused();
+        let prior_mode = self.modes.get(&pane_id).copied().unwrap_or_default();
+        self.pages.insert(
+            pane_id,
+            PageSlot {
+                page,
+                prior_mode,
+                tool,
+            },
+        );
+        self.modes.insert(pane_id, Mode::Page);
+        // Rich blocks are anchored to the terminal grid the page now covers,
+        // so their tiles would otherwise float on top of the listing.
+        self.webview_mgr.hide_all();
+        self.last_tile_layout = None;
         self.dirty = true;
     }
 
-    /// Close every open page. A page is not a process and is not restored, so
-    /// it leaves the layout before a session snapshot is taken.
-    pub(crate) fn close_all_pages(&mut self) {
-        let open: Vec<PaneId> = self.pages.keys().copied().collect();
-        for pane_id in open {
-            self.close_pane_in_any_tab(pane_id);
-        }
+    /// Uncover `pane_id`, restoring the mode it was in before the page opened.
+    pub(crate) fn close_page(&mut self, pane_id: PaneId) {
+        let Some(slot) = self.pages.remove(&pane_id) else {
+            return;
+        };
+        self.modes.insert(pane_id, slot.prior_mode);
+        self.last_tile_layout = None;
+        self.dirty = true;
     }
 
-    /// Offer `key` to the page in `pane_id`. Returns whether the key was spent,
-    /// so a key the page declines still reaches the ordinary keymap.
+    /// Close the focused pane's page when `tool` is what opened it, so a tool's
+    /// own chord toggles rather than reopening it. Returns whether it closed.
+    fn close_page_if_showing(&mut self, tool: &'static str) -> bool {
+        let pane_id = self.tab().focused();
+        if self
+            .pages
+            .get(&pane_id)
+            .is_some_and(|slot| slot.tool == tool)
+        {
+            self.close_page(pane_id);
+            return true;
+        }
+        false
+    }
+
+    /// Offer `key` to the page covering `pane_id`. Returns whether the key was
+    /// spent, so a key the page declines still reaches the ordinary keymap.
     pub(crate) fn offer_key_to_page(&mut self, pane_id: PaneId, key: &Key) -> bool {
-        let Some(page) = self.pages.get_mut(&pane_id) else {
+        let Some(slot) = self.pages.get_mut(&pane_id) else {
             return false;
         };
-        let outcome = page.on_key(key);
-        // A listing that descended into a subdirectory is a different page
-        // than the one that opened, so the tab's label follows it.
-        let title = page.title();
-        self.pane_titles.insert(pane_id, title);
-        match outcome {
+        match slot.page.on_key(key) {
             PageOutcome::Close => {
-                self.close_pane_in_any_tab(pane_id);
-                self.dirty = true;
+                self.close_page(pane_id);
                 true
             }
             PageOutcome::Consumed => {
@@ -139,21 +182,52 @@ mod tests {
 
     fn app_with_open_page() -> (App, PaneId) {
         let mut app = App::new();
-        app.open_page_in_split(Box::new(CountingPage::default()));
+        app.show_page("counting", Box::new(CountingPage::default()));
         let pane = app.tab().focused();
         (app, pane)
     }
 
     #[test]
-    fn test_opening_a_page_splits_and_focuses_it_without_a_process() {
+    fn test_a_page_covers_the_focused_pane_without_splitting_it() {
         let (app, pane) = app_with_open_page();
-        assert_eq!(app.tab().panes().len(), 2);
-        assert!(app.pages.contains_key(&pane), "the split holds the page");
-        assert!(
-            !app.panes.contains_key(&pane),
-            "a page pane must never also hold a terminal"
-        );
+        assert_eq!(app.tab().panes().len(), 1, "no new pane is created");
+        assert!(app.pages.contains_key(&pane));
         assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Page));
+    }
+
+    #[test]
+    fn test_closing_a_page_gives_the_pane_back_as_it_was() {
+        // The terminal underneath kept running, so the pane has to return to
+        // the mode it was in rather than being closed or left in Page mode.
+        let mut app = App::new();
+        let pane = app.tab().focused();
+        app.modes.insert(pane, Mode::Normal);
+        app.show_page("counting", Box::new(CountingPage::default()));
+
+        app.close_page(pane);
+        assert!(app.pages.is_empty());
+        assert_eq!(app.tab().panes().len(), 1);
+        assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Normal));
+    }
+
+    #[test]
+    fn test_a_tool_chord_pressed_twice_closes_its_own_page() {
+        let mut app = App::new();
+        let pane = app.tab().focused();
+        app.open_keys_page();
+        assert!(app.pages.contains_key(&pane));
+        app.open_keys_page();
+        assert!(app.pages.is_empty(), "the same tool toggles off");
+    }
+
+    #[test]
+    fn test_another_tool_replaces_the_page_instead_of_toggling() {
+        let mut app = App::new();
+        let pane = app.tab().focused();
+        app.open_keys_page();
+        app.open_dir_page();
+        assert!(app.pages.contains_key(&pane), "the pane still shows a page");
+        assert_eq!(app.pages.len(), 1);
     }
 
     #[test]
@@ -164,42 +238,26 @@ mod tests {
     }
 
     #[test]
-    fn test_page_closing_itself_drops_the_pane_and_its_state() {
+    fn test_a_page_closing_itself_uncovers_the_pane() {
         let (mut app, pane) = app_with_open_page();
         assert!(app.offer_key_to_page(pane, &press(KeyCode::Char('q'))));
         assert!(app.pages.is_empty(), "the page is gone");
-        assert!(!app.modes.contains_key(&pane), "and so is its mode");
-        assert_eq!(app.tab().panes().len(), 1, "the split collapsed");
+        assert_eq!(app.tab().panes().len(), 1, "the pane is not");
     }
 
     #[test]
-    fn test_a_terminal_pane_is_never_offered_a_page_key() {
-        // The two maps are disjoint, so offering a terminal pane's id must not
-        // find a page to hand the key to.
-        let (mut app, page_pane) = app_with_open_page();
-        let terminal = app
-            .tab()
-            .panes()
-            .into_iter()
-            .find(|id| *id != page_pane)
-            .expect("the pane the page split off from");
-        assert!(!app.offer_key_to_page(terminal, &press(KeyCode::Char('x'))));
+    fn test_a_pane_with_no_page_is_never_offered_a_page_key() {
+        // Keys for an uncovered pane must reach its terminal, so the lookup has
+        // to miss rather than find some other pane's page.
+        let (mut app, covered) = app_with_open_page();
+        let other = PaneId(covered.0 + 1);
+        assert!(!app.offer_key_to_page(other, &press(KeyCode::Char('x'))));
     }
 
     #[test]
-    fn test_pages_leave_the_layout_before_a_session_snapshot() {
-        // A page is not a process: left in the saved layout it would come back
-        // as a leaf with nothing behind it.
-        let (mut app, _) = app_with_open_page();
-        app.close_all_pages();
-        assert!(app.pages.is_empty());
-        assert_eq!(app.tab().panes().len(), 1);
-    }
-
-    #[test]
-    fn test_resize_leaves_a_page_pane_alone() {
-        // Resizing walks every laid-out pane; a page has no PTY to signal and
-        // no grid to reflow, so the pass must skip it rather than panic.
+    fn test_resize_leaves_a_covered_pane_showing_its_page() {
+        // Resizing walks every laid-out pane and reflows the grid underneath;
+        // the page covering it must survive the pass.
         let (mut app, pane) = app_with_open_page();
         app.resize_all_panes();
         assert!(app.pages.contains_key(&pane));
