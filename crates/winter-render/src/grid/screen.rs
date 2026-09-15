@@ -31,6 +31,7 @@ impl Grid {
         self.origin_mode = false;
         self.row_wrapped.fill(false);
         self.row_wrap_indent.fill(0);
+        self.row_break.fill(None);
     }
     /// Switch back to the primary screen buffer, restoring the saved state.
     pub fn leave_alt_screen(&mut self) {
@@ -54,6 +55,7 @@ impl Grid {
         self.origin_mode = false;
         self.row_wrapped.fill(false);
         self.row_wrap_indent.fill(0);
+        self.row_break.fill(None);
     }
     /// Whether the alternate screen buffer is active, i.e. a fullscreen
     /// application (vim, less, htop) is running.

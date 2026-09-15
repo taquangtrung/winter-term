@@ -206,6 +206,9 @@ impl App {
             SettingsField::toggle("wrap_indent", "Hanging Indent", self.config.wrap_indent)
                 .in_section("Terminal")
                 .with_note("Indent soft-wrapped continuation lines to match the logical line's indent"),
+            SettingsField::toggle("wrap_words", "Wrap Words", self.config.wrap_words)
+                .in_section("Terminal")
+                .with_note("Break soft wraps at word boundaries instead of mid-word"),
             {
                 let binding_options = vec![
                     ChoiceOption { label: "Emacs".into(), value: "emacs".into() },
@@ -513,6 +516,14 @@ impl App {
                 self.config.wrap_indent = enabled;
                 for pane in self.panes.values_mut() {
                     pane.grid_mut().set_wrap_indent(enabled);
+                }
+                self.dirty = true;
+            }
+            "wrap_words" => {
+                let enabled = value == "true";
+                self.config.wrap_words = enabled;
+                for pane in self.panes.values_mut() {
+                    pane.grid_mut().set_word_wrap(enabled);
                 }
                 self.dirty = true;
             }

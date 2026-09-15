@@ -98,6 +98,12 @@ sentence-highlight #false
 // instead of at column zero. Default: true.
 wrap-indent #true
 
+// Break soft wraps at word boundaries — the partial word after the last space
+// on a full row moves down with the wrap — instead of breaking exactly at the
+// margin mid-word. Applies to ordinary shell output; full-screen apps keep
+// exact wrapping. Default: true.
+wrap-words #true
+
 // ── Cursor ────────────────────────────────────────────────────────────────────
 // Per-mode cursor shapes: "block", "bar" (vertical beam), or "underline".
 cursor {

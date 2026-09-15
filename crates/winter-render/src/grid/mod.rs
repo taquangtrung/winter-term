@@ -54,6 +54,13 @@ pub struct Grid {
     /// DECOM origin mode: when set, absolute cursor positioning (CUP/HVP/VPA) is
     /// relative to the scroll region top and confined within it.
     origin_mode: bool,
+    /// Per-row word-break columns (length == `rows`): `row_break[r]` is `Some(k)`
+    /// when row `r` soft-wrapped at a word boundary, consuming the space at
+    /// column `k` and moving everything after it onto the next row. Read when
+    /// joining a soft-wrapped logical line back into text (copy, reflow), so
+    /// the break contributes the space it consumed instead of gluing the
+    /// words together.
+    row_break: Vec<Option<usize>>,
     /// Number of hanging indent columns on each live row.
     row_wrap_indent: Vec<usize>,
     /// Per-row soft-wrap flags (length == `rows`): `row_wrapped[r]` is true when
@@ -67,6 +74,8 @@ pub struct Grid {
     scroll_offset: usize,
     scroll_top: usize,
     scrollback: Vec<Vec<Cell>>,
+    /// Word-break columns of the scrollback rows, parallel to [`Self::scrollback`].
+    scrollback_break: Vec<Option<usize>>,
     scrollback_wrap_indent: Vec<usize>,
     scrollback_wrapped: Vec<bool>,
     style: Style,
@@ -85,6 +94,10 @@ pub struct Grid {
     trimmed_rows: usize,
     /// Whether soft-wrapped continuation lines inherit the first non-blank indent.
     wrap_indent: bool,
+    /// Whether soft wraps break at word boundaries: the partial word after the
+    /// last space on a full row moves down with the wrap, instead of the row
+    /// breaking exactly at the margin mid-word.
+    word_wrap: bool,
     /// The row remap produced by the last [`Grid::resize`], until the owner
     /// drains it with [`Grid::take_row_remap`]. `None` when no resize has
     /// reflowed the live screen since the last drain (or the last resize was
@@ -173,6 +186,7 @@ impl Grid {
             mouse_sgr: false,
             next_url_scan: None,
             origin_mode: false,
+            row_break: vec![None; rows],
             row_wrap_indent: vec![0; rows],
             row_wrapped: vec![false; rows],
             rows,
@@ -181,11 +195,13 @@ impl Grid {
             scroll_offset: 0,
             scroll_top: 0,
             scrollback: Vec::new(),
+            scrollback_break: Vec::new(),
             scrollback_wrap_indent: Vec::new(),
             scrollback_wrapped: Vec::new(),
             style: Style::default(),
             trimmed_rows: 0,
             wrap_indent: true,
+            word_wrap: true,
             pending_remap: None,
         }
     }

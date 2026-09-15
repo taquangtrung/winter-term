@@ -1,5 +1,7 @@
 //! Dir: a keyboard-driven directory listing in a pane.
 //!
+//! - [`edit`]: the names as editable text (`Ctrl-X Ctrl-Q`): a Vim
+//!   Normal/Insert pair over them, applied as renames.
 //! - [`entry`]: what a listing is made of.
 //! - [`icons`]: the glyph beside an entry's name.
 //! - [`listing`]: ordering and filtering.
@@ -9,6 +11,7 @@
 //! - [`source`]: reading the filesystem.
 //! - [`tree`]: expanded directories and row depth.
 
+pub mod edit;
 pub mod entry;
 pub mod icons;
 pub mod listing;
@@ -22,12 +25,15 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
     find_match, scroll_to_cursor, JobReply, JobRequest, OpenTarget, Page, PageContent, PageIcon,
     PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
 };
+use crate::model::vim::nav::{VimKey, VimNav};
 
+use edit::{EditAction, EditMode, EditState};
 use listing::SortKey;
 use marks::Marks;
 use tree::{Folds, Row};
@@ -64,6 +70,9 @@ const MAX_HISTORY: usize = 100;
 /// The first key of a two-key sequence, waiting for its second.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Leader {
+    /// `Ctrl-X`, followed by `Ctrl-Q`: toggle editing the names, the chord
+    /// Emacs' own `wdired` uses.
+    Edit,
     /// `Ctrl-c`, followed by a digit: expand the tree to that depth.
     Depth,
     /// `z`, followed by a fold command.
@@ -76,6 +85,9 @@ pub struct DirPage {
     /// Directories left behind, most recent last.
     back: Vec<PathBuf>,
     cursor: usize,
+    /// The names as editable text while renaming entries in place, in the
+    /// manner of Emacs' `wdired`.
+    edit: Option<EditState>,
     folds: Folds,
     /// Directories stepped back out of, most recent last.
     forward: Vec<PathBuf>,
@@ -98,6 +110,12 @@ pub struct DirPage {
     /// re-walking on every keystroke would be the expensive mistake.
     sizes: HashMap<PathBuf, u64>,
     sort: SortKey,
+    /// The pane height the last paint saw, in listing rows, for the half-page
+    /// motions. Zero until the first paint, when there is nothing to halve.
+    viewport: usize,
+    /// The shared Vim motion state: the `g` prefix, and the layer the
+    /// listing's unclaimed keys fall through to.
+    nav: VimNav,
 }
 
 // ========================================================================
@@ -110,6 +128,7 @@ impl DirPage {
         let mut page = Self {
             back: Vec::new(),
             cursor: 0,
+            edit: None,
             folds: Folds::new(),
             forward: Vec::new(),
             marks: Marks::new(),
@@ -124,6 +143,8 @@ impl DirPage {
             show_sizes: false,
             sizes: HashMap::new(),
             sort: SortKey::default(),
+            viewport: 0,
+            nav: VimNav::new(),
         };
         page.reload();
         page
@@ -349,6 +370,133 @@ impl DirPage {
             self.collapse_subtree();
         } else {
             self.expand_subtree();
+        }
+    }
+
+    /// The last row of the subtree rooted at `index`, which is `index` itself
+    /// for a collapsed entry: the extent of the "word" `index` names.
+    fn subtree_end(&self, index: usize) -> Option<usize> {
+        let depth = self.rows.get(index)?.depth;
+        let mut end = index;
+        for (i, row) in self.rows.iter().enumerate().skip(index + 1) {
+            if row.depth > depth {
+                end = i;
+            } else {
+                break;
+            }
+        }
+        Some(end)
+    }
+
+    /// `w`/`W`: the next entry at or above the cursor's depth — the next
+    /// word, stepping over the subtree under the cursor rather than into it,
+    /// the way Vim's `w` steps over the word it sits on.
+    fn word_forward(&mut self) {
+        let Some(depth) = self.selected().map(|row| row.depth) else {
+            return;
+        };
+        if let Some(index) = self
+            .rows
+            .iter()
+            .enumerate()
+            .skip(self.cursor + 1)
+            .find(|(_, row)| row.depth <= depth)
+            .map(|(i, _)| i)
+        {
+            self.cursor = index;
+        }
+    }
+
+    /// `b`/`B`: the previous entry at or above the cursor's depth — the
+    /// previous word, stepping back over the whole subtree above rather than
+    /// descending into it.
+    fn word_back(&mut self) {
+        let Some(depth) = self.selected().map(|row| row.depth) else {
+            return;
+        };
+        if let Some(index) = (0..self.cursor)
+            .rev()
+            .find(|&i| self.rows[i].depth <= depth)
+        {
+            self.cursor = index;
+        }
+    }
+
+    /// `e`/`E`: the last row of the current entry's subtree — the end of the
+    /// word the cursor is on. Already there, or on a leaf, it is the end of
+    /// the next word, exactly the way Vim's `e` leaves a word it already sits
+    /// at the end of for the next one.
+    fn word_end(&mut self) {
+        if let Some(end) = self.subtree_end(self.cursor) {
+            if self.cursor < end {
+                self.cursor = end;
+                return;
+            }
+        }
+        let from = self.cursor;
+        self.word_forward();
+        if self.cursor != from {
+            if let Some(end) = self.subtree_end(self.cursor) {
+                self.cursor = end;
+            }
+        }
+    }
+
+    /// `}`/`{`: the next or previous directory row — the listing's paragraph
+    /// motion, since directories sort first and so head every group.
+    fn dir_row(&mut self, forward: bool) {
+        let range: Vec<usize> = if forward {
+            (self.cursor + 1..self.rows.len()).collect()
+        } else {
+            (0..self.cursor).rev().collect()
+        };
+        if let Some(index) = range.into_iter().find(|&i| self.rows[i].entry.is_dir()) {
+            self.cursor = index;
+        }
+    }
+
+    /// `Ctrl-d`/`Ctrl-u` and the page motions: `rows` rows down or up,
+    /// clamped to the listing.
+    fn page_by(&mut self, rows: usize, down: bool) {
+        let step = rows.max(1) as isize;
+        self.move_by(if down { step } else { -step });
+    }
+
+    /// Interpret one of the shared Vim motions over the listing's rows. A
+    /// listing has no columns, so the line motions mean its ends; an entry is
+    /// a word, and an expanded directory's subtree is that word's extent; the
+    /// paragraphs are the directory-headed groups, which is what the
+    /// directories-first sort makes of the rows.
+    fn apply_motion(&mut self, motion: CursorMove) {
+        let last = self.rows.len().saturating_sub(1);
+        match motion {
+            CursorMove::Down => self.move_by(1),
+            CursorMove::Up => self.move_by(-1),
+            CursorMove::WordForward | CursorMove::WordForwardBig => self.word_forward(),
+            CursorMove::WordBack | CursorMove::WordBackBig => self.word_back(),
+            CursorMove::WordEnd | CursorMove::WordEndBig => self.word_end(),
+            CursorMove::ParagraphForward => self.dir_row(true),
+            CursorMove::ParagraphBack => self.dir_row(false),
+            CursorMove::Top | CursorMove::LineStart | CursorMove::FirstNonBlank => {
+                self.cursor = 0;
+            }
+            CursorMove::Bottom | CursorMove::LineEnd => self.cursor = last,
+            CursorMove::HalfPageDown => self.page_by(self.viewport / 2, true),
+            CursorMove::HalfPageUp => self.page_by(self.viewport / 2, false),
+            CursorMove::PageDown => self.page_by(self.viewport, true),
+            CursorMove::PageUp => self.page_by(self.viewport, false),
+            CursorMove::ScreenTop => self.cursor = self.scroll.min(last),
+            CursorMove::ScreenMiddle => self.cursor = (self.scroll + self.viewport / 2).min(last),
+            CursorMove::ScreenBottom => {
+                self.cursor = self
+                    .scroll
+                    .saturating_add(self.viewport.saturating_sub(1))
+                    .min(last);
+            }
+            // The column motions and the rest have no meaning over rows; the
+            // keys that reach them here are the ones the listing has not
+            // claimed for something of its own.
+            _ => {}
         }
     }
 
@@ -638,6 +786,9 @@ impl DirPage {
     fn resolve_pending(&mut self, leader: Leader, key: &Key) -> PageOutcome {
         self.pending = None;
         match (leader, key.code) {
+            (Leader::Edit, KeyCode::Char('q')) if key.ctrl => {
+                self.enter_edit();
+            }
             (Leader::Fold, KeyCode::Char('a')) | (Leader::Fold, KeyCode::Char('A')) => {
                 self.toggle_fold_all()
             }
@@ -704,14 +855,23 @@ impl Page for DirPage {
 
     fn content(&mut self, rows: usize) -> PageContent {
         let now = SystemTime::now();
+        // Remember the viewport for the half-page motions, which key handling
+        // needs between paints.
+        self.viewport = rows.saturating_sub(HEADER_ROWS);
         let mut page_rows = vec![rows::header_row(
             &self.root.to_string_lossy(),
             self.sort,
-            self.show_hidden,
-            self.show_details,
+            rows::HeaderFlags {
+                editing: self.edit.as_ref().map(|edit| match edit.mode() {
+                    EditMode::Normal => "normal",
+                    EditMode::Insert => "insert",
+                }),
+                show_hidden: self.show_hidden,
+                show_details: self.show_details,
+                show_sizes: self.show_sizes,
+            },
             self.marks.len(),
             self.message.as_deref(),
-            self.show_sizes,
         )];
         if self.rows.is_empty() {
             page_rows.push(vec![PageSpan::new(PageStyle::Dim, EMPTY_NOTE)]);
@@ -720,9 +880,11 @@ impl Page for DirPage {
         let visible = rows.saturating_sub(HEADER_ROWS);
         self.scroll = scroll_to_cursor(self.scroll, self.cursor, self.rows.len(), visible);
         let mut icons: Vec<PageIcon> = Vec::new();
-        for row in self.rows.iter().skip(self.scroll).take(visible) {
+        for (index, row) in self.rows.iter().enumerate().skip(self.scroll).take(visible) {
+            let edited = self.edited_name(index, row);
             let (spans, mut icon) = rows::entry_row(
                 row,
+                edited.as_ref(),
                 rows::RowStyle {
                     marked: self.marks.contains(&row.entry.path),
                     show_details: self.show_details,
@@ -742,8 +904,20 @@ impl Page for DirPage {
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
         self.message = None;
+        if self.edit.is_some() {
+            return self.on_edit_key(key);
+        }
         if let Some(leader) = self.pending {
             return self.resolve_pending(leader, key);
+        }
+        if self.nav.in_sequence() {
+            return match self.nav.key(key) {
+                VimKey::Motion(motion) => {
+                    self.apply_motion(motion);
+                    PageOutcome::Consumed
+                }
+                _ => PageOutcome::Consumed,
+            };
         }
         if key.alt {
             return self.on_alt_key(key);
@@ -752,22 +926,6 @@ impl Page for DirPage {
             return self.on_ctrl_key(key);
         }
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.move_by(1);
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.move_by(-1);
-                PageOutcome::Consumed
-            }
-            KeyCode::Home => {
-                self.cursor = 0;
-                PageOutcome::Consumed
-            }
-            KeyCode::End => {
-                self.cursor = self.rows.len().saturating_sub(1);
-                PageOutcome::Consumed
-            }
             KeyCode::Char('z') => {
                 self.pending = Some(Leader::Fold);
                 PageOutcome::Consumed
@@ -850,8 +1008,16 @@ impl Page for DirPage {
             // the slow thing a listing does; with none running it closes.
             KeyCode::Escape if self.show_sizes => self.toggle_sizes(),
             KeyCode::Char('q') | KeyCode::Escape => PageOutcome::Close,
-            // Every other key belongs to the host.
-            _ => PageOutcome::Ignored,
+            // Everything unclaimed falls through to the shared Vim motion
+            // layer, whose motions this listing interprets over its rows.
+            _ => match self.nav.key(key) {
+                VimKey::Motion(motion) => {
+                    self.apply_motion(motion);
+                    PageOutcome::Consumed
+                }
+                VimKey::Pending => PageOutcome::Consumed,
+                VimKey::Unhandled => PageOutcome::Ignored,
+            },
         }
     }
 }
@@ -908,8 +1074,164 @@ impl DirPage {
                 self.pending = Some(Leader::Depth);
                 PageOutcome::Consumed
             }
-            _ => PageOutcome::Ignored,
+            KeyCode::Char('x') => {
+                self.pending = Some(Leader::Edit);
+                PageOutcome::Consumed
+            }
+            // The paging chords the shared layer binds fall through to it;
+            // the rest stay with the window.
+            _ => match self.nav.key(key) {
+                VimKey::Motion(motion) => {
+                    self.apply_motion(motion);
+                    PageOutcome::Consumed
+                }
+                VimKey::Pending => PageOutcome::Consumed,
+                VimKey::Unhandled => PageOutcome::Ignored,
+            },
         }
+    }
+}
+
+// ========================================================================
+// DirPage: editing the names
+// ========================================================================
+
+impl DirPage {
+    /// Turn every listed name into editable text, the caret parked at the end
+    /// of the name under the cursor, where a rename usually begins.
+    fn enter_edit(&mut self) {
+        if self.rows.is_empty() {
+            return;
+        }
+        self.edit = Some(EditState::new(&self.rows, self.cursor));
+    }
+
+    /// Keys while the names are editable text. `Ctrl-X Ctrl-Q` toggles the
+    /// session off from either mode; everything else goes to the editor,
+    /// whose Vim Normal/Insert pair reports row moves and the session's end
+    /// back as an [`EditAction`].
+    fn on_edit_key(&mut self, key: &Key) -> PageOutcome {
+        if self.pending == Some(Leader::Edit) {
+            self.pending = None;
+            if key.ctrl && key.code == KeyCode::Char('q') {
+                self.discard_edit();
+            }
+            return PageOutcome::Consumed;
+        }
+        if key.ctrl && key.code == KeyCode::Char('x') {
+            self.pending = Some(Leader::Edit);
+            return PageOutcome::Consumed;
+        }
+        let row = self.cursor;
+        let action = match self.edit.as_mut() {
+            Some(edit) => edit.on_key(row, key),
+            None => return PageOutcome::Ignored,
+        };
+        match action {
+            EditAction::Consumed => {}
+            EditAction::Ignored => return PageOutcome::Ignored,
+            EditAction::MoveRows(delta) => {
+                self.move_by(delta);
+                self.clamp_edit_caret();
+            }
+            EditAction::MoveToRow(row) => {
+                self.cursor = row.min(self.rows.len().saturating_sub(1));
+                self.clamp_edit_caret();
+            }
+            EditAction::Apply => return self.apply_edits(),
+            EditAction::Leave => self.discard_edit(),
+        }
+        PageOutcome::Consumed
+    }
+
+    /// Keep the edit caret inside the name of the row the cursor moved to.
+    fn clamp_edit_caret(&mut self) {
+        if let Some(edit) = self.edit.as_mut() {
+            edit.move_to_row(self.cursor);
+        }
+    }
+
+    /// Leave edit mode without renaming anything.
+    fn discard_edit(&mut self) {
+        let pending = self.pending_edits().len();
+        self.edit = None;
+        // Names snapping back to the disk's can read as the edits having been
+        // applied; saying they were not is one line of insurance.
+        self.message = (pending > 0).then(|| format!("discarded {pending}"));
+    }
+
+    /// Apply the edited names as renames. Every name is validated before any
+    /// rename runs, so one bad name cannot leave the batch half-applied; the
+    /// renames then run deepest paths first, so renaming a directory never
+    /// orphans the pending rename of an entry inside it.
+    fn apply_edits(&mut self) -> PageOutcome {
+        let pending = self.pending_edits();
+        if pending.is_empty() {
+            self.edit = None;
+            self.message = Some("no changes".to_string());
+            return PageOutcome::Consumed;
+        }
+        let mut renames: Vec<(usize, PathBuf, PathBuf)> = Vec::new();
+        for (index, name) in &pending {
+            let from = self.rows[*index].entry.path.clone();
+            let Some(to) = from
+                .parent()
+                .and_then(|dir| ops::resolve_name(dir, name.as_str()))
+            else {
+                // Stay in edit mode: the name is still on screen, still
+                // editable, and now flagged as the problem.
+                self.message = Some(format!("failed: not a name: {name}"));
+                return PageOutcome::Consumed;
+            };
+            renames.push((*index, from, to));
+        }
+        renames.sort_by_key(|(index, _, _)| std::cmp::Reverse(self.rows[*index].depth));
+        self.edit = None;
+        let mut done = 0;
+        let mut failure = None;
+        for (_, from, to) in renames {
+            // Stop at the first failure with what was already done reported:
+            // carrying on would bury the error under later successes.
+            if let Err(e) = ops::move_entry(&from, &to) {
+                failure = Some(format!("{e} ({done} done)"));
+                break;
+            }
+            done += 1;
+        }
+        self.message = Some(match failure {
+            Some(report) => format!("failed: {report}"),
+            None => format!("renamed {done}"),
+        });
+        self.marks.clear();
+        self.reload_keeping_selection();
+        PageOutcome::Consumed
+    }
+
+    /// The rows whose edited name no longer matches the entry on disk.
+    fn pending_edits(&self) -> Vec<(usize, String)> {
+        let Some(edit) = self.edit.as_ref() else {
+            return Vec::new();
+        };
+        self.rows
+            .iter()
+            .enumerate()
+            .filter_map(|(index, row)| {
+                let name = edit.name(index)?;
+                (name != row.entry.name).then(|| (index, name.to_string()))
+            })
+            .collect()
+    }
+
+    /// How `index`'s name is drawn while editing: the edited text, a caret on
+    /// the cursor's row, and whether the edit has drifted from the disk.
+    fn edited_name(&self, index: usize, row: &Row) -> Option<rows::EditedName> {
+        let edit = self.edit.as_ref()?;
+        let text = edit.name(index)?.to_string();
+        Some(rows::EditedName {
+            caret: (index == self.cursor).then(|| edit.col()),
+            changed: text != row.entry.name,
+            text,
+        })
     }
 }
 
@@ -992,6 +1314,12 @@ mod tests {
             ctrl: true,
             shift: false,
         }
+    }
+
+    /// Toggle the name editor with its `Ctrl-X Ctrl-Q` chord.
+    fn toggle_edit(page: &mut DirPage) {
+        page.on_key(&ctrl(KeyCode::Char('x')));
+        page.on_key(&ctrl(KeyCode::Char('q')));
     }
 
     fn selected_name(page: &DirPage) -> String {
@@ -1700,5 +2028,415 @@ mod tests {
         answer(&mut page, outcome, "absent");
         assert_eq!(page.message.as_deref(), Some("not found: absent"));
         assert_eq!(selected_name(&page), "alpha.txt");
+    }
+
+    #[test]
+    fn test_editing_a_name_and_pressing_enter_renames_the_file() {
+        let tree = TempTree::new("edit-apply");
+        tree.touch("notes.txt");
+        let mut page = DirPage::new(tree.0.clone());
+
+        toggle_edit(&mut page);
+        page.on_key(&press(KeyCode::Char('S')));
+        for ch in "renamed.md".chars() {
+            page.on_key(&press(KeyCode::Char(ch)));
+        }
+        assert!(page.edit.is_some(), "typing alone renames nothing");
+
+        page.on_key(&press(KeyCode::Enter));
+        assert!(page.edit.is_none());
+        assert!(tree.path("renamed.md").exists());
+        assert!(!tree.path("notes.txt").exists());
+        assert_eq!(selected_name(&page), "renamed.md");
+    }
+
+    #[test]
+    fn test_enter_with_nothing_changed_leaves_edit_mode_quietly() {
+        let tree = TempTree::new("edit-none");
+        tree.touch("same.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        toggle_edit(&mut page);
+
+        page.on_key(&press(KeyCode::Char('Z')));
+        page.on_key(&press(KeyCode::Char('Z')));
+        assert!(page.edit.is_none());
+        assert_eq!(page.message.as_deref(), Some("no changes"));
+        assert!(tree.path("same.txt").exists());
+    }
+
+    #[test]
+    fn test_escape_throws_the_edits_away_without_touching_the_disk() {
+        let tree = TempTree::new("edit-discard");
+        tree.touch("keep.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        toggle_edit(&mut page);
+        page.on_key(&press(KeyCode::Char('S')));
+        page.on_key(&press(KeyCode::Char('x')));
+
+        // Escape only leaves Insert for Normal; q is what quits the edit.
+        page.on_key(&press(KeyCode::Escape));
+        assert!(page.edit.is_some(), "Escape returns to Normal mode");
+        page.on_key(&press(KeyCode::Char('q')));
+        assert!(page.edit.is_none());
+        assert_eq!(page.message.as_deref(), Some("discarded 1"));
+        assert!(tree.path("keep.txt").exists());
+        assert!(!tree.path("x").exists());
+        assert_eq!(selected_name(&page), "keep.txt");
+    }
+
+    #[test]
+    fn test_q_also_leaves_edit_mode_without_applying() {
+        // `q` types into a name like any other letter: quitting the edit is
+        // Escape's job, because a filename may hold a `q`.
+        let tree = TempTree::new("edit-q");
+        tree.touch("stay.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        toggle_edit(&mut page);
+        page.on_key(&press(KeyCode::Char('S')));
+
+        for ch in "quick.json".chars() {
+            page.on_key(&press(KeyCode::Char(ch)));
+        }
+        page.on_key(&press(KeyCode::Enter));
+        assert!(tree.path("quick.json").exists(), "every letter typed");
+    }
+
+    #[test]
+    fn test_a_name_emptied_by_editing_is_refused_at_apply() {
+        // An empty name is not a name, and the refusal stays in edit mode so
+        // the mistake can be fixed rather than started over.
+        let tree = TempTree::new("edit-empty");
+        tree.touch("gone.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        toggle_edit(&mut page);
+        page.on_key(&press(KeyCode::Char('S')));
+
+        page.on_key(&press(KeyCode::Enter));
+        assert!(page.edit.is_some(), "still editing, so it can be fixed");
+        let message = page.message.clone().unwrap_or_default();
+        assert!(message.starts_with("failed:"), "got {message:?}");
+        assert!(tree.path("gone.txt").exists());
+
+        for ch in "back.txt".chars() {
+            page.on_key(&press(KeyCode::Char(ch)));
+        }
+        page.on_key(&press(KeyCode::Enter));
+        assert!(page.edit.is_none());
+        assert!(tree.path("back.txt").exists());
+        assert!(!tree.path("gone.txt").exists());
+    }
+
+    #[test]
+    fn test_edits_apply_to_children_before_the_directory_that_holds_them() {
+        // Renaming the directory first would strand the file's pending path:
+        // both renames come from the snapshot, so the deeper one must run
+        // first, exactly as wdir sorts by path depth before applying.
+        let tree = TempTree::new("edit-order");
+        let nested = tree.dir("nested");
+        fs::write(nested.join("leaf.txt"), "x").expect("leaf");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+
+        toggle_edit(&mut page);
+        page.on_key(&press(KeyCode::Char('S')));
+        for ch in "outer".chars() {
+            page.on_key(&press(KeyCode::Char(ch)));
+        }
+        page.on_key(&press(KeyCode::Escape));
+        page.on_key(&press(KeyCode::Char('j')));
+        page.on_key(&press(KeyCode::Char('S')));
+        for ch in "sprout.txt".chars() {
+            page.on_key(&press(KeyCode::Char(ch)));
+        }
+        page.on_key(&press(KeyCode::Enter));
+
+        assert!(tree.path("outer").join("sprout.txt").exists());
+        assert!(!tree.path("nested").exists());
+    }
+
+    #[test]
+    fn test_editing_moves_the_caret_between_names() {
+        let tree = TempTree::new("edit-caret");
+        tree.touch("a.txt");
+        tree.touch("bb.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::End));
+
+        toggle_edit(&mut page);
+        assert_eq!(
+            page.edit.as_ref().expect("editing").col(),
+            6,
+            "where `A` would start: the append position"
+        );
+
+        page.on_key(&press(KeyCode::Char('k')));
+        assert_eq!(selected_name(&page), "a.txt");
+        assert_eq!(
+            page.edit.as_ref().expect("editing").col(),
+            5,
+            "the column Vim keeps across a shorter line"
+        );
+
+        page.on_key(&press(KeyCode::Char('0')));
+        assert_eq!(page.edit.as_ref().expect("editing").col(), 0);
+        page.on_key(&press(KeyCode::Char('l')));
+        assert_eq!(page.edit.as_ref().expect("editing").col(), 1);
+        page.on_key(&press(KeyCode::Char('$')));
+        assert_eq!(
+            page.edit.as_ref().expect("editing").col(),
+            4,
+            "on the last character"
+        );
+    }
+
+    #[test]
+    fn test_the_edited_row_paints_its_caret() {
+        let tree = TempTree::new("edit-paint");
+        tree.touch("name.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        toggle_edit(&mut page);
+        page.on_key(&press(KeyCode::Char('0')));
+
+        let content = page.content(10);
+        let cursor = content.cursor_line.expect("a cursor row");
+        let line = crate::model::page::row_text(&content.rows[cursor]);
+        assert!(line.contains('│'), "got {line:?}");
+    }
+
+    #[test]
+    fn test_applying_edits_clears_marks_pointing_at_old_paths() {
+        // A mark aimed at a path the rename has just left behind would count
+        // toward an operation aimed at nothing.
+        let tree = TempTree::new("edit-marks");
+        tree.touch("before.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Char('m')));
+
+        toggle_edit(&mut page);
+        page.on_key(&press(KeyCode::Char('S')));
+        for ch in "after.txt".chars() {
+            page.on_key(&press(KeyCode::Char(ch)));
+        }
+        page.on_key(&press(KeyCode::Enter));
+        assert!(page.marks.is_empty());
+    }
+
+    #[test]
+    fn test_the_toggle_chord_leaves_the_edit_and_discards() {
+        // The same chord that opens the session closes it, from either mode,
+        // keeping the disk as it is.
+        let tree = TempTree::new("edit-toggle-off");
+        tree.touch("keep.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        toggle_edit(&mut page);
+        page.on_key(&press(KeyCode::Char('S')));
+        page.on_key(&press(KeyCode::Char('x')));
+        assert!(page.edit.is_some(), "fixture: an unsaved edit");
+
+        toggle_edit(&mut page);
+        assert!(page.edit.is_none());
+        assert_eq!(page.message.as_deref(), Some("discarded 1"));
+        assert!(tree.path("keep.txt").exists());
+        assert!(!tree.path("x").exists());
+    }
+
+    #[test]
+    fn test_a_stray_follow_key_abandons_the_chord_instead_of_leaking() {
+        // `Ctrl-X` followed by anything but `Ctrl-Q` must not leave the
+        // leader pending, swallowing the next keystroke.
+        let tree = TempTree::new("edit-stray-chord");
+        tree.touch("a.txt");
+        tree.touch("b.txt");
+        let mut page = DirPage::new(tree.0.clone());
+
+        page.on_key(&ctrl(KeyCode::Char('x')));
+        page.on_key(&press(KeyCode::Char('!')));
+        assert!(page.pending.is_none());
+        page.on_key(&press(KeyCode::Char('j')));
+        assert_eq!(selected_name(&page), "b.txt");
+    }
+
+    #[test]
+    fn test_escape_leaves_insert_for_normal_and_never_discards() {
+        // A vim pair: Escape steps out of Insert; a second Escape is inert in
+        // Normal, so mashing it cannot throw the edits away.
+        let tree = TempTree::new("edit-escape-pair");
+        tree.touch("base.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        toggle_edit(&mut page);
+        page.on_key(&press(KeyCode::Char('A')));
+        page.on_key(&press(KeyCode::Char('2')));
+        assert_eq!(
+            page.edit.as_ref().expect("editing").mode(),
+            edit::EditMode::Insert,
+            "fixture: typing keeps Insert"
+        );
+
+        page.on_key(&press(KeyCode::Escape));
+        page.on_key(&press(KeyCode::Escape));
+        assert_eq!(
+            page.edit.as_ref().expect("editing").mode(),
+            edit::EditMode::Normal,
+            "the first Escape steps out"
+        );
+        page.on_key(&press(KeyCode::Escape));
+        assert!(page.edit.is_some(), "the second is inert");
+        assert_eq!(
+            page.edit.as_ref().and_then(|e| e.name(0)),
+            Some("base.txt2")
+        );
+    }
+
+    #[test]
+    fn test_the_header_names_the_mode_the_editor_is_in() {
+        let tree = TempTree::new("edit-header-mode");
+        tree.touch("name.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        toggle_edit(&mut page);
+        let header = crate::model::page::row_text(&page.content(10).rows[0]);
+        assert!(header.contains("editing:normal"), "got {header:?}");
+
+        page.on_key(&press(KeyCode::Char('A')));
+        let header = crate::model::page::row_text(&page.content(10).rows[0]);
+        assert!(header.contains("editing:insert"), "got {header:?}");
+    }
+
+    /// A listing whose tree gives the word motions something to step over:
+    /// an expanded directory with two children, another directory, two files.
+    fn wordy_tree(tag: &str) -> (TempTree, PathBuf) {
+        let tree = TempTree::new(tag);
+        let nested = tree.dir("nested");
+        fs::write(nested.join("child-a.txt"), "x").expect("child a");
+        fs::write(nested.join("child-b.txt"), "x").expect("child b");
+        tree.dir("other");
+        tree.touch("file1.txt");
+        tree.touch("file2.txt");
+        (tree, nested)
+    }
+
+    #[test]
+    fn test_w_steps_over_the_subtree_under_the_cursor() {
+        // The expanded subtree is the word the cursor sits on: `w` lands past
+        // it, on the next entry at its own depth, not on its first child.
+        let (tree, _) = wordy_tree("word-w");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+        assert_eq!(page.rows.len(), 6, "fixture: nested open with two children");
+
+        page.on_key(&press(KeyCode::Char('w')));
+        assert_eq!(
+            selected_name(&page),
+            "other",
+            "the children were stepped over"
+        );
+
+        page.on_key(&press(KeyCode::Char('w')));
+        assert_eq!(
+            selected_name(&page),
+            "file1.txt",
+            "a leaf steps to the next entry"
+        );
+    }
+
+    #[test]
+    fn test_b_steps_back_over_the_subtree_above_the_cursor() {
+        let (tree, _) = wordy_tree("word-b");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+        page.on_key(&press(KeyCode::End));
+
+        page.on_key(&press(KeyCode::Char('b')));
+        assert_eq!(selected_name(&page), "file1.txt");
+        page.on_key(&press(KeyCode::Char('b')));
+        assert_eq!(selected_name(&page), "other");
+        page.on_key(&press(KeyCode::Char('b')));
+        assert_eq!(
+            selected_name(&page),
+            "nested",
+            "the whole subtree above was stepped over, not descended into"
+        );
+    }
+
+    #[test]
+    fn test_e_lands_at_the_end_of_the_word() {
+        let (tree, _) = wordy_tree("word-e");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+
+        // On the expanded directory: its subtree's last row is the word's end.
+        page.on_key(&press(KeyCode::Char('e')));
+        assert_eq!(selected_name(&page), "child-b.txt");
+
+        // Already at a leaf's end: the next word's end, which for a collapsed
+        // entry is the entry itself.
+        page.on_key(&press(KeyCode::Char('e')));
+        assert_eq!(selected_name(&page), "other");
+    }
+
+    #[test]
+    fn test_the_braces_jump_between_directories() {
+        // Directories sort first and so head every group: they are the
+        // paragraphs of a listing.
+        let (tree, _) = wordy_tree("word-braces");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+
+        page.on_key(&press(KeyCode::Char('}')));
+        assert_eq!(selected_name(&page), "other");
+        page.on_key(&press(KeyCode::Char('}')));
+        assert_eq!(
+            selected_name(&page),
+            "other",
+            "no directory after the last one"
+        );
+
+        page.on_key(&press(KeyCode::Char('{')));
+        assert_eq!(selected_name(&page), "nested");
+        page.on_key(&press(KeyCode::Char('{')));
+        assert_eq!(
+            selected_name(&page),
+            "nested",
+            "no directory before the first"
+        );
+    }
+
+    #[test]
+    fn test_dollar_and_gg_reach_the_ends() {
+        let (tree, _) = wordy_tree("word-ends");
+        let mut page = DirPage::new(tree.0.clone());
+        page.on_key(&press(KeyCode::Tab));
+
+        page.on_key(&press(KeyCode::Char('$')));
+        assert_eq!(selected_name(&page), "file2.txt");
+        page.on_key(&press(KeyCode::Char('g')));
+        page.on_key(&press(KeyCode::Char('g')));
+        assert_eq!(selected_name(&page), "nested");
+    }
+
+    #[test]
+    fn test_the_half_page_motions_move_half_the_pane() {
+        let (tree, _) = wordy_tree("word-halfpage");
+        let mut page = DirPage::new(tree.0.clone());
+        for i in 0..20 {
+            tree.touch(&format!("pad{i:02}.txt"));
+        }
+        page.reload();
+        page.on_key(&press(KeyCode::Tab));
+        page.on_key(&press(KeyCode::Home));
+
+        // The pane holds 10 rows, one of them the header: half of nine is four.
+        page.content(10);
+        page.on_key(&ctrl(KeyCode::Char('d')));
+        assert_eq!(page.cursor, 4, "half a viewport down");
+        page.on_key(&ctrl(KeyCode::Char('u')));
+        assert_eq!(page.cursor, 0, "and back up, clamped at the top");
+    }
+
+    #[test]
+    fn test_editing_an_empty_listing_is_a_no_op() {
+        let tree = TempTree::new("edit-empty-listing");
+        let mut page = DirPage::new(tree.0.clone());
+        toggle_edit(&mut page);
+        assert!(page.edit.is_none());
     }
 }

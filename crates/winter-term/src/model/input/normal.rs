@@ -125,67 +125,51 @@ pub(super) fn motion_action(
         _ => return None,
     }
 
-    let action = match key.code {
-        KeyCode::Char('h') | KeyCode::Left => Action::MoveCursor(M::Left),
-        KeyCode::Char('j') | KeyCode::Down => Action::MoveCursor(M::Down),
-        KeyCode::Char('k') | KeyCode::Up => Action::MoveCursor(M::Up),
-        KeyCode::Char('l') | KeyCode::Right => Action::MoveCursor(M::Right),
-        // `|` with no count is column one, same as `0`.
-        KeyCode::Char('0') | KeyCode::Char('|') | KeyCode::Home => Action::MoveCursor(M::LineStart),
-        KeyCode::Char('$') | KeyCode::End => Action::MoveCursor(M::LineEnd),
-        KeyCode::Char('^') | KeyCode::Char('_') => Action::MoveCursor(M::FirstNonBlank),
-        KeyCode::Char('w') => Action::MoveCursor(M::WordForward),
-        KeyCode::Char('b') => Action::MoveCursor(M::WordBack),
-        KeyCode::Char('e') => Action::MoveCursor(M::WordEnd),
-        KeyCode::Char('W') => Action::MoveCursor(M::WordForwardBig),
-        KeyCode::Char('B') => Action::MoveCursor(M::WordBackBig),
-        KeyCode::Char('E') => Action::MoveCursor(M::WordEndBig),
-        KeyCode::Char('{') => Action::MoveCursor(M::ParagraphBack),
-        KeyCode::Char('}') => Action::MoveCursor(M::ParagraphForward),
-        KeyCode::Char('%') => Action::MoveCursor(M::MatchingBracket),
-        KeyCode::Char('H') => Action::MoveCursor(M::ScreenTop),
-        KeyCode::Char('M') => Action::MoveCursor(M::ScreenMiddle),
-        KeyCode::Char('L') => Action::MoveCursor(M::ScreenBottom),
-        KeyCode::Char('G') => Action::MoveCursor(M::Bottom),
-        KeyCode::PageDown => Action::MoveCursor(M::PageDown),
-        KeyCode::PageUp => Action::MoveCursor(M::PageUp),
-        KeyCode::Char(';') => Action::FindRepeat { reverse: false },
-        KeyCode::Char(',') => Action::FindRepeat { reverse: true },
-        KeyCode::Char('`') => {
-            *pending = PendingPrefix::GotoMark { exact: true };
-            Action::Ignore
-        }
-        KeyCode::Char('\'') => {
-            *pending = PendingPrefix::GotoMark { exact: false };
-            Action::Ignore
-        }
-        KeyCode::Char('f') => {
-            *pending = PendingPrefix::FindForward;
-            Action::Ignore
-        }
-        KeyCode::Char('F') => {
-            *pending = PendingPrefix::FindBackward;
-            Action::Ignore
-        }
-        KeyCode::Char('t') => {
-            *pending = PendingPrefix::TillForward;
-            Action::Ignore
-        }
-        KeyCode::Char('T') => {
-            *pending = PendingPrefix::TillBackward;
-            Action::Ignore
-        }
-        // `g` and `z` open sequences this function owns the motion half of; the
-        // caller's own follow keys (`gt`, `za`, ...) still resolve from the prefix.
-        KeyCode::Char('g') => {
-            *pending = PendingPrefix::G;
-            Action::Ignore
-        }
-        KeyCode::Char('z') => {
-            *pending = PendingPrefix::Z;
-            Action::Ignore
-        }
-        _ => return None,
+    let action = match crate::model::vim::nav::bare_motion(key) {
+        // The bare motions resolve through the shared layer, so a motion key
+        // means the same thing here as it does over a dir listing or a git
+        // view; this resolver keeps only what is not a motion — the repeat
+        // keys and the prefix openers it owns.
+        Some(mv) => Action::MoveCursor(mv),
+        None => match key.code {
+            KeyCode::Char(';') => Action::FindRepeat { reverse: false },
+            KeyCode::Char(',') => Action::FindRepeat { reverse: true },
+            KeyCode::Char('`') => {
+                *pending = PendingPrefix::GotoMark { exact: true };
+                Action::Ignore
+            }
+            KeyCode::Char('\'') => {
+                *pending = PendingPrefix::GotoMark { exact: false };
+                Action::Ignore
+            }
+            KeyCode::Char('f') => {
+                *pending = PendingPrefix::FindForward;
+                Action::Ignore
+            }
+            KeyCode::Char('F') => {
+                *pending = PendingPrefix::FindBackward;
+                Action::Ignore
+            }
+            KeyCode::Char('t') => {
+                *pending = PendingPrefix::TillForward;
+                Action::Ignore
+            }
+            KeyCode::Char('T') => {
+                *pending = PendingPrefix::TillBackward;
+                Action::Ignore
+            }
+            // `g` and `z` open sequences this function owns the motion half of; the
+            // caller's own follow keys (`gt`, `za`, ...) still resolve from the prefix.
+            KeyCode::Char('g') => {
+                *pending = PendingPrefix::G;
+                Action::Ignore
+            }
+            KeyCode::Char('z') => {
+                *pending = PendingPrefix::Z;
+                Action::Ignore
+            }
+            _ => return None,
+        },
     };
     // A pending count repeats motions where repetition is meaningful; anything
     // else (`gg`, `0`, a follow-key opener like `f`) drops it.

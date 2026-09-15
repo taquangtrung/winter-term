@@ -74,12 +74,18 @@ impl Grid {
         for indent in &mut self.row_wrap_indent[first..last] {
             *indent = 0;
         }
+        for brk in &mut self.row_break[first..last] {
+            *brk = None;
+        }
         if matches!(mode, EraseMode::ToEnd | EraseMode::Whole) {
             if let Some(flag) = self.row_wrapped.get_mut(self.cursor.row) {
                 *flag = false;
             }
             if let Some(indent) = self.row_wrap_indent.get_mut(self.cursor.row) {
                 *indent = 0;
+            }
+            if let Some(brk) = self.row_break.get_mut(self.cursor.row) {
+                *brk = None;
             }
         }
     }

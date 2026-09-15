@@ -177,6 +177,13 @@ impl App {
             return name.clone();
         }
         let focused = self.tabs.all[tab_index].focused();
+        // A tool page covering the pane owns what the tab says — the shell's
+        // own title underneath went stale the moment the page opened, and the
+        // tab is the one place a tool's presence is visible when the status
+        // bar is hidden or the pane is not the one being looked at.
+        if let Some(slot) = self.pages.get(&focused) {
+            return slot.tab_label();
+        }
         // An OSC 0/2 title is the app's own presentation of itself (butterfly,
         // for one, puts the open file's name there), so it wins over the
         // process-name/cwd heuristic below.
@@ -628,6 +635,9 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::model::input::{Key, WindowKeymap};
+    use crate::model::page::{Page, PageContent, PageOutcome};
+    use crate::tools::keys::KeysPage;
 
     #[test]
     fn test_modern_has_one_menu_classic_has_several() {
@@ -724,6 +734,53 @@ mod tests {
         // An empty title falls through to the remaining fallbacks.
         app.pane_titles.insert(focused, String::new());
         assert_eq!(app.tab_title(0), "Terminal 1");
+    }
+
+    #[test]
+    fn test_a_tool_page_owns_the_tab_label_while_it_covers_the_pane() {
+        // The shell's title went stale the moment the page opened, so the
+        // tool's own name takes the tab until the page closes.
+        let mut app = App::new();
+        let focused = app.tabs.all[0].focused();
+        app.pane_titles.insert(focused, "user@host:~/notes".into());
+        assert_eq!(app.tab_title(0), "~/notes");
+
+        app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
+        assert_eq!(
+            app.tab_title(0),
+            "Keys",
+            "a title restating the tool is not doubled up"
+        );
+
+        // A tool whose page title says something else names both, so the tab
+        // reads in any font and says which tool is running.
+        struct Titled(&'static str);
+        impl Page for Titled {
+            fn title(&self) -> String {
+                self.0.to_string()
+            }
+            fn content(&mut self, _rows: usize) -> PageContent {
+                PageContent::default()
+            }
+            fn on_key(&mut self, _key: &Key) -> PageOutcome {
+                PageOutcome::Consumed
+            }
+        }
+        app.show_page("dir", Box::new(Titled("winter-term")));
+        assert_eq!(app.tab_title(0), "dir: winter-term");
+
+        app.close_page(focused);
+        assert_eq!(app.tab_title(0), "~/notes", "the shell's title comes back");
+    }
+
+    #[test]
+    fn test_a_renamed_tab_keeps_its_name_over_a_tool_page() {
+        // An explicit name is the user's own act; a tool opening in the pane
+        // must not overwrite it.
+        let mut app = App::new();
+        app.tabs.names.insert(0, "work".to_string());
+        app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
+        assert_eq!(app.tab_title(0), "work");
     }
 
     #[test]

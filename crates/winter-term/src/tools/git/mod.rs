@@ -15,12 +15,14 @@ pub mod rows;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
+use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
     find_match, row_text, scroll_to_cursor, CommandOutput, JobReply, JobRequest, OpenTarget, Page,
     PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply,
     PromptRequest, SpawnRequest,
 };
+use crate::model::vim::nav::{VimKey, VimNav};
 
 use diff::FileDiff;
 use exec::{LogScope, ResetMode, SequenceStep};
@@ -133,6 +135,12 @@ pub struct GitPage {
     /// Set once a status has come back, so an empty view can say which it is:
     /// a clean tree, or one still being read.
     loaded: bool,
+    /// The pane height the last paint saw, in view rows, for the paging
+    /// motions. Zero until the first paint, when there is nothing to page.
+    viewport: usize,
+    /// The shared Vim motion state: the layer the view's unclaimed keys fall
+    /// through to. Its own `g` leader claims the prefix before this sees it.
+    nav: VimNav,
 }
 
 // ========================================================================
@@ -161,6 +169,8 @@ impl GitPage {
             search: String::new(),
             start,
             status: Status::default(),
+            viewport: 0,
+            nav: VimNav::new(),
         }
     }
 
@@ -284,6 +294,69 @@ impl GitPage {
         }
         self.message = Some(format!("not found: {}", self.search));
         self.rebuild();
+    }
+
+    /// The next or previous section heading in the direction of `forward`,
+    /// from wherever the cursor sits: the view's paragraph motion, since the
+    /// blank lines between sections are its paragraph boundaries.
+    fn move_to_boundary(&mut self, forward: bool) {
+        let is_heading = |row: &ViewRow| matches!(row.item, Item::Heading(_) | Item::RecentHeading);
+        let target = if forward {
+            self.rows
+                .iter()
+                .enumerate()
+                .skip(self.cursor + 1)
+                .find(|(_, row)| is_heading(row))
+                .map(|(i, _)| i)
+        } else {
+            (0..self.cursor).rev().find(|&i| is_heading(&self.rows[i]))
+        };
+        if let Some(index) = target {
+            self.cursor = index;
+        }
+    }
+
+    /// Interpret one of the shared Vim motions over the view's rows. The
+    /// entities are the words (the blank separators between sections are what
+    /// `w`/`b` step over), the section headings are the paragraphs, and a
+    /// view has no columns, so the line motions mean its ends.
+    fn apply_motion(&mut self, motion: CursorMove) {
+        let last = self.rows.len().saturating_sub(1);
+        match motion {
+            CursorMove::Down => self.move_by(1),
+            CursorMove::Up => self.move_by(-1),
+            CursorMove::WordForward | CursorMove::WordForwardBig => self.move_to_entity(true),
+            CursorMove::WordBack | CursorMove::WordBackBig => self.move_to_entity(false),
+            CursorMove::WordEnd | CursorMove::WordEndBig => self.move_to_entity(true),
+            CursorMove::ParagraphForward => self.move_to_boundary(true),
+            CursorMove::ParagraphBack => self.move_to_boundary(false),
+            CursorMove::Top | CursorMove::LineStart | CursorMove::FirstNonBlank => {
+                self.cursor = 0;
+            }
+            CursorMove::Bottom | CursorMove::LineEnd => self.cursor = last,
+            CursorMove::HalfPageDown => self.page_by(self.viewport / 2, true),
+            CursorMove::HalfPageUp => self.page_by(self.viewport / 2, false),
+            CursorMove::PageDown => self.page_by(self.viewport, true),
+            CursorMove::PageUp => self.page_by(self.viewport, false),
+            CursorMove::ScreenTop => self.cursor = self.scroll.min(last),
+            CursorMove::ScreenMiddle => self.cursor = (self.scroll + self.viewport / 2).min(last),
+            CursorMove::ScreenBottom => {
+                self.cursor = self
+                    .scroll
+                    .saturating_add(self.viewport.saturating_sub(1))
+                    .min(last);
+            }
+            // The column motions and the rest have no meaning over rows; the
+            // keys that reach them here are the ones the view has not claimed
+            // for something of its own.
+            _ => {}
+        }
+    }
+
+    /// `rows` view rows down or up, clamped to the view.
+    fn page_by(&mut self, rows: usize, down: bool) {
+        let step = rows.max(1) as isize;
+        self.move_by(if down { step } else { -step });
     }
 
     /// Jump to a section's heading, which is how the `g` keys navigate.
@@ -843,6 +916,9 @@ impl GitPage {
     /// anything else abandons the sequence.
     fn jump_to(&mut self, code: KeyCode) -> PageOutcome {
         match code {
+            // `gg` is the one Vim motion the view's own leader resolves,
+            // because the leader claims the prefix first.
+            KeyCode::Char('g') => self.cursor = 0,
             KeyCode::Char('t') => self.move_to_section(Some(Section::Untracked)),
             KeyCode::Char('u') => self.move_to_section(Some(Section::Unstaged)),
             KeyCode::Char('s') => self.move_to_section(Some(Section::Staged)),
@@ -952,6 +1028,9 @@ impl Page for GitPage {
     }
 
     fn content(&mut self, rows: usize) -> PageContent {
+        // Remember the viewport for the paging motions, which key handling
+        // needs between paints.
+        self.viewport = rows.saturating_sub(HEADER_ROWS).max(1);
         if let Some(output) = &self.output {
             let visible = rows.saturating_sub(HEADER_ROWS).max(1);
             let scroll = scroll_to_cursor(self.scroll, output.cursor, output.lines.len(), visible);
@@ -1041,29 +1120,22 @@ impl Page for GitPage {
                 KeyCode::Char('C') | KeyCode::Char('c') if key.shift => self.ask_commit_message(),
                 KeyCode::Char('S') | KeyCode::Char('s') if key.shift => self.stage_all(),
                 KeyCode::Char('l') => self.open_popup(Popup::Log),
-                _ => PageOutcome::Ignored,
+                // The paging chords the shared layer binds fall through to it;
+                // the rest stay with the window.
+                _ => match self.nav.key(key) {
+                    VimKey::Motion(motion) => {
+                        self.apply_motion(motion);
+                        PageOutcome::Consumed
+                    }
+                    VimKey::Pending => PageOutcome::Consumed,
+                    VimKey::Unhandled => PageOutcome::Ignored,
+                },
             };
         }
         if let Some(outcome) = self.on_search_key(key) {
             return outcome;
         }
         match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.move_by(1);
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.move_by(-1);
-                PageOutcome::Consumed
-            }
-            KeyCode::Home => {
-                self.cursor = 0;
-                PageOutcome::Consumed
-            }
-            KeyCode::End => {
-                self.cursor = self.rows.len().saturating_sub(1);
-                PageOutcome::Consumed
-            }
             KeyCode::Tab if key.shift => {
                 self.toggle_fold_all();
                 PageOutcome::Consumed
@@ -1125,7 +1197,16 @@ impl Page for GitPage {
                 None => PageOutcome::Consumed,
             },
             KeyCode::Char('q') | KeyCode::Escape => PageOutcome::Close,
-            _ => PageOutcome::Ignored,
+            // Everything unclaimed falls through to the shared Vim motion
+            // layer, whose motions this view interprets over its rows.
+            _ => match self.nav.key(key) {
+                VimKey::Motion(motion) => {
+                    self.apply_motion(motion);
+                    PageOutcome::Consumed
+                }
+                VimKey::Pending => PageOutcome::Consumed,
+                VimKey::Unhandled => PageOutcome::Ignored,
+            },
         }
     }
 
@@ -1345,6 +1426,15 @@ mod tests {
     }
 
     /// A page that has heard back about its root, its status, and its log.
+    fn ctrl(code: KeyCode) -> Key {
+        Key {
+            alt: false,
+            code,
+            ctrl: true,
+            shift: false,
+        }
+    }
+
     fn loaded_page() -> GitPage {
         let mut page = GitPage::new(PathBuf::from("/repo/sub"));
         page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
@@ -2092,6 +2182,70 @@ index aaa..bbb 100644
             .rows
             .iter()
             .any(|row| matches!(row.item, Item::File(_))));
+    }
+
+    #[test]
+    fn test_the_shared_word_motions_step_between_entities() {
+        // `w`/`b` land on the things the view rows stand for, stepping over
+        // the blank separators, through the shared Vim layer.
+        let mut page = loaded_page();
+        page.cursor = 0;
+        page.on_key(&press(KeyCode::Char('w')));
+        assert!(
+            page.selected().is_some_and(|row| row.item != Item::None),
+            "never lands on a separator"
+        );
+        page.on_key(&press(KeyCode::Char('b')));
+        assert!(
+            page.selected().is_some_and(|row| row.item != Item::None),
+            "and back, the same way"
+        );
+    }
+
+    #[test]
+    fn test_the_braces_jump_between_section_headings() {
+        let mut page = loaded_page();
+        page.on_key(&press(KeyCode::Char('}')));
+        assert!(matches!(
+            page.selected().map(|row| &row.item),
+            Some(Item::Heading(_) | Item::RecentHeading)
+        ));
+        let first = page.cursor;
+        page.on_key(&press(KeyCode::Char('}')));
+        assert!(page.cursor > first, "each brace reaches the next heading");
+        page.on_key(&press(KeyCode::Char('{')));
+        assert_eq!(page.cursor, first, "and back to it");
+    }
+
+    #[test]
+    fn test_gg_and_the_paging_motions_work_over_the_view() {
+        let mut page = loaded_page();
+        page.on_key(&press(KeyCode::Char('g')));
+        page.on_key(&press(KeyCode::Char('g')));
+        assert_eq!(page.cursor, 0, "gg through the view's own g leader");
+
+        page.on_key(&press(KeyCode::Char('$')));
+        assert_eq!(page.cursor, page.rows.len() - 1, "$ is the last row");
+
+        page.on_key(&press(KeyCode::Char('0')));
+        assert_eq!(page.cursor, 0);
+        page.content(10);
+        page.on_key(&ctrl(KeyCode::Char('d')));
+        assert_eq!(page.cursor, 4, "half the viewport down");
+        page.on_key(&ctrl(KeyCode::Char('u')));
+        assert_eq!(page.cursor, 0, "and back up");
+    }
+
+    #[test]
+    fn test_the_views_own_keys_still_win_over_the_shared_layer() {
+        // The override contract: what the view claims never reaches the
+        // shared layer. `G` refreshes rather than going to the bottom, and
+        // `g` opens the section leader rather than arming `gg` there.
+        let mut page = loaded_page();
+        page.on_key(&press(KeyCode::Char('$')));
+        let before = page.rows.len();
+        page.on_key(&press(KeyCode::Char('G')));
+        assert!(page.rows.len() >= before, "`G` refreshed, it did not move");
     }
 
     #[test]

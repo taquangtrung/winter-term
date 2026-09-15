@@ -145,6 +145,11 @@ impl App {
             text.push_str(&line);
             if row < er && !grid.absolute_row_wraps(row) {
                 text.push('\n');
+            } else if row < er && grid.absolute_row_break(row).is_some() {
+                // A word-wrapped row's continuation starts at its word; the
+                // space the break consumed is not in any cell, so put it back
+                // or the copied line glues two words together.
+                text.push(' ');
             }
         }
         let trimmed = text.trim_end().to_string();
@@ -519,6 +524,7 @@ mod tests {
         {
             let grid = pane.grid_mut();
             grid.set_wrap_indent(true);
+            grid.set_word_wrap(false);
             grid.move_to(0, 0);
             for ch in "  01234567XYZ".chars() {
                 grid.print(ch);
@@ -533,5 +539,37 @@ mod tests {
 
         // Soft-wrapped rows should join without newline and skip the hanging indent of 2 spaces
         assert_eq!(app.selected_text().as_deref(), Some("  01234567XYZ"));
+    }
+
+    #[test]
+    fn test_selected_text_puts_the_space_back_at_a_word_wrap_join() {
+        // A word-wrapped row's continuation starts at its word; the space the
+        // break consumed lives in no cell, so the join has to reinsert it or
+        // the copied line glues two words together.
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        let mut pane = crate::terminal::pane::Pane::with_command(
+            10,
+            4,
+            portable_pty::CommandBuilder::new("cat"),
+            winter_render::MAX_SCROLLBACK,
+        )
+        .expect("test pane spawn");
+        {
+            let grid = pane.grid_mut();
+            grid.set_wrap_indent(false);
+            grid.move_to(0, 0);
+            for ch in "aaa bbbbbbb".chars() {
+                grid.print(ch);
+            }
+        }
+        app.panes.insert(id, pane);
+        app.modes.insert(id, crate::model::mode::Mode::Visual);
+        // Anchor at row 0, col 0; cursor at row 1, col 6 (the last b)
+        app.selection.visual_anchor = Some((0, 0));
+        app.set_nav_cursor(id, (1, 6));
+        app.update_visual_selection(id);
+
+        assert_eq!(app.selected_text().as_deref(), Some("aaa bbbbbbb"));
     }
 }

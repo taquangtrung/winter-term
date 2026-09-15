@@ -357,6 +357,7 @@ Changes apply on save, without a restart. `winter --reload` asks a running insta
 | `rainbow-parens` | Color brackets by nesting depth |
 | `sentence-highlight` | Alternating bands over sentences, as a reading aid |
 | `wrap-indent` | Hang the continuation of a soft-wrapped line under its start |
+| `wrap-words` | Break soft wraps at word boundaries instead of mid-word |
 | `prompt-edit-bindings` | `"emacs"` (default) or `"none"`, see above |
 | `icons` | Tool-pane entry icons: `"svg"` (default), `"font"`, or `"none"` |
 | `cursor { ... }` | `blink`, `hide-in-inactive`, plus the shape per mode: `insert`, `normal`, `visual`, `block-focus` |

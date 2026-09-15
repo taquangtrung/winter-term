@@ -87,6 +87,21 @@ impl PageSlot {
             None => title,
         }
     }
+
+    /// How the tab bar names the pane while the page covers it: the tool's
+    /// name rather than the status bar's glyph, so the tab reads in any font
+    /// and names the tool even where the page's title alone would not — a dir
+    /// page titled "winter-term" says a directory, not that `dir` is the one
+    /// listing it. A title that merely restates the tool's name ("Keys") is
+    /// dropped rather than doubled up.
+    pub(crate) fn tab_label(&self) -> String {
+        let title = self.page.title();
+        if title.eq_ignore_ascii_case(self.tool) {
+            title
+        } else {
+            format!("{}: {}", self.tool, title)
+        }
+    }
 }
 
 // ========================================================================

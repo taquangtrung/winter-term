@@ -19,6 +19,7 @@ impl Grid {
         self.scrollback.clear();
         self.scrollback_wrapped.clear();
         self.scrollback_wrap_indent.clear();
+        self.scrollback_break.clear();
         self.scroll_offset = 0;
     }
     /// Scroll the scroll region up by `n` rows. The top row of the region is
@@ -38,6 +39,8 @@ impl Grid {
                     .push(self.row_wrapped.get(row).copied().unwrap_or(false));
                 self.scrollback_wrap_indent
                     .push(self.row_wrap_indent.get(row).copied().unwrap_or(0));
+                self.scrollback_break
+                    .push(self.row_break.get(row).copied().flatten());
             }
             if self.scrollback.len() > self.max_scrollback {
                 let excess = self.scrollback.len() - self.max_scrollback;
@@ -45,6 +48,7 @@ impl Grid {
                 self.scrollback.drain(0..excess);
                 self.scrollback_wrapped.drain(0..excess);
                 self.scrollback_wrap_indent.drain(0..excess);
+                self.scrollback_break.drain(0..excess);
             }
         }
         let region_len = bottom + 1 - top;
@@ -66,12 +70,16 @@ impl Grid {
         if shift < region_len {
             self.row_wrapped.copy_within(top + shift..=bottom, top);
             self.row_wrap_indent.copy_within(top + shift..=bottom, top);
+            self.row_break.copy_within(top + shift..=bottom, top);
         }
         for flag in &mut self.row_wrapped[(bottom + 1 - shift)..=bottom] {
             *flag = false;
         }
         for indent in &mut self.row_wrap_indent[(bottom + 1 - shift)..=bottom] {
             *indent = 0;
+        }
+        for brk in &mut self.row_break[(bottom + 1 - shift)..=bottom] {
+            *brk = None;
         }
         self.scroll_offset = 0;
     }
@@ -100,12 +108,17 @@ impl Grid {
                 .copy_within(top..=bottom - shift, top + shift);
             self.row_wrap_indent
                 .copy_within(top..=bottom - shift, top + shift);
+            self.row_break
+                .copy_within(top..=bottom - shift, top + shift);
         }
         for flag in &mut self.row_wrapped[top..top + shift] {
             *flag = false;
         }
         for indent in &mut self.row_wrap_indent[top..top + shift] {
             *indent = 0;
+        }
+        for brk in &mut self.row_break[top..top + shift] {
+            *brk = None;
         }
     }
     /// How many rows of scrollback history are available.
@@ -188,12 +201,17 @@ impl Grid {
                 .copy_within(row..=bottom - shift, row + shift);
             self.row_wrap_indent
                 .copy_within(row..=bottom - shift, row + shift);
+            self.row_break
+                .copy_within(row..=bottom - shift, row + shift);
         }
         for flag in &mut self.row_wrapped[row..row + shift] {
             *flag = false;
         }
         for indent in &mut self.row_wrap_indent[row..row + shift] {
             *indent = 0;
+        }
+        for brk in &mut self.row_break[row..row + shift] {
+            *brk = None;
         }
     }
     /// Insert `n` blank rows at screen row `row`, shifting the rows below it
@@ -216,14 +234,18 @@ impl Grid {
                 .push(self.row_wrapped.get(bottom).copied().unwrap_or(false));
             self.scrollback_wrap_indent
                 .push(self.row_wrap_indent.get(bottom).copied().unwrap_or(0));
+            self.scrollback_break
+                .push(self.row_break.get(bottom).copied().flatten());
             self.copy_cells_within(row * self.cols..bottom * self.cols, (row + 1) * self.cols);
             self.row_wrapped.copy_within(row..bottom, row + 1);
             self.row_wrap_indent.copy_within(row..bottom, row + 1);
+            self.row_break.copy_within(row..bottom, row + 1);
             for i in row * self.cols..row * self.cols + self.cols {
                 self.cells[i] = self.blank_cell();
             }
             self.row_wrapped[row] = false;
             self.row_wrap_indent[row] = 0;
+            self.row_break[row] = None;
         }
         if self.scrollback.len() > self.max_scrollback {
             let excess = self.scrollback.len() - self.max_scrollback;
@@ -231,6 +253,7 @@ impl Grid {
             self.scrollback.drain(0..excess);
             self.scrollback_wrapped.drain(0..excess);
             self.scrollback_wrap_indent.drain(0..excess);
+            self.scrollback_break.drain(0..excess);
         }
         if self.cursor.row >= row {
             self.cursor.row = (self.cursor.row + n).min(self.rows - 1);
@@ -261,6 +284,7 @@ impl Grid {
         );
         self.row_wrapped.copy_within(row + n..self.rows, row);
         self.row_wrap_indent.copy_within(row + n..self.rows, row);
+        self.row_break.copy_within(row + n..self.rows, row);
         for r in row + moved..self.rows {
             let start = r * self.cols;
             for i in start..start + self.cols {
@@ -268,6 +292,7 @@ impl Grid {
             }
             self.row_wrapped[r] = false;
             self.row_wrap_indent[r] = 0;
+            self.row_break[r] = None;
         }
         if self.cursor.row >= row + n {
             self.cursor.row -= n;
@@ -307,12 +332,16 @@ impl Grid {
         if shift <= bottom - row {
             self.row_wrapped.copy_within(row + shift..=bottom, row);
             self.row_wrap_indent.copy_within(row + shift..=bottom, row);
+            self.row_break.copy_within(row + shift..=bottom, row);
         }
         for flag in &mut self.row_wrapped[(bottom + 1 - shift)..=bottom] {
             *flag = false;
         }
         for indent in &mut self.row_wrap_indent[(bottom + 1 - shift)..=bottom] {
             *indent = 0;
+        }
+        for brk in &mut self.row_break[(bottom + 1 - shift)..=bottom] {
+            *brk = None;
         }
     }
     /// Top of the scroll region (0-based row).

@@ -7,7 +7,7 @@ mod quick_select;
 pub(crate) mod reading;
 pub(crate) mod search;
 pub(crate) mod swoop;
-mod vim;
+pub(crate) mod vim;
 
 use std::collections::HashMap;
 

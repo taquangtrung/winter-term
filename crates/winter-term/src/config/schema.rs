@@ -43,6 +43,7 @@ pub(super) struct KdlConfig {
     pub(crate) window_controls_side: Option<String>,
     pub(crate) window_title_template: Option<String>,
     pub(crate) wrap_indent: Option<bool>,
+    pub(crate) wrap_words: Option<bool>,
     pub(crate) opacity: Option<f32>,
     pub(crate) theme: Option<String>,
     pub(crate) status_bar: Option<KdlStatusBar>,

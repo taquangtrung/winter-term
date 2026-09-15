@@ -244,6 +244,11 @@ pub struct Config {
     /// Indent soft-wrapped continuation lines to match the logical line's
     /// first non-blank column. Default: `true`.
     pub wrap_indent: bool,
+    /// Break soft wraps at word boundaries: the partial word after the last
+    /// space on a full row moves down with the wrap, instead of the row
+    /// breaking exactly at the margin mid-word. Applies to the primary screen
+    /// only; full-screen apps keep exact wrapping. Default: `true`.
+    pub wrap_words: bool,
 }
 
 /// Where the icon beside an entry in a tool page comes from.
@@ -703,6 +708,7 @@ impl Config {
                 .filter(|s| !s.trim().is_empty())
                 .unwrap_or_else(|| DEFAULT_WINDOW_TITLE_TEMPLATE.to_string()),
             wrap_indent: kdl.wrap_indent.unwrap_or(true),
+            wrap_words: kdl.wrap_words.unwrap_or(true),
         };
         (config, None)
     }
@@ -773,6 +779,7 @@ impl Config {
         ));
         out.push_str(&format!("url-underline {}\n", kdl_bool(self.url_underline)));
         out.push_str(&format!("wrap-indent {}\n", kdl_bool(self.wrap_indent)));
+        out.push_str(&format!("wrap-words {}\n", kdl_bool(self.wrap_words)));
         out.push_str(&format!("dim-inactive {}\n", kdl_bool(self.dim_inactive)));
         out.push_str(&format!("icons {}\n", kdl_string(self.icons.as_value())));
         out.push_str(&format!(
@@ -1003,6 +1010,7 @@ impl Default for Config {
             window_controls_side: ControlsSide::default(),
             window_title_template: DEFAULT_WINDOW_TITLE_TEMPLATE.to_string(),
             wrap_indent: true,
+            wrap_words: true,
         }
     }
 }
@@ -1619,6 +1627,19 @@ status-bar {
         let kdl = disabled.to_kdl();
         let restored = Config::parse(&kdl);
         assert!(!restored.wrap_indent);
+    }
+
+    #[test]
+    fn test_wrap_words_parses_and_round_trips() {
+        let c = Config::default();
+        assert!(c.wrap_words, "wrap_words defaults to true");
+
+        let disabled = Config::parse(r#"wrap-words #false"#);
+        assert!(!disabled.wrap_words);
+
+        let kdl = disabled.to_kdl();
+        let restored = Config::parse(&kdl);
+        assert!(!restored.wrap_words);
     }
 
     #[test]

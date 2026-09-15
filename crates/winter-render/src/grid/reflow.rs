@@ -21,6 +21,32 @@ impl Grid {
     pub fn wrap_indent(&self) -> bool {
         self.wrap_indent
     }
+    /// Configure whether soft wraps break at word boundaries.
+    pub fn with_word_wrap(mut self, enabled: bool) -> Self {
+        self.word_wrap = enabled;
+        self
+    }
+    /// Enable or disable breaking soft wraps at word boundaries.
+    pub fn set_word_wrap(&mut self, enabled: bool) {
+        self.word_wrap = enabled;
+    }
+    /// Whether soft wraps currently break at word boundaries.
+    pub fn word_wrap(&self) -> bool {
+        self.word_wrap
+    }
+    /// The word-break column of absolute line `abs_row`: `Some(k)` when that
+    /// row soft-wrapped at a word boundary, consuming the space at column
+    /// `k`. Joining the logical line back into text contributes a space
+    /// there, so a word-wrapped line copies with its words apart.
+    pub fn absolute_row_break(&self, abs_row: usize) -> Option<usize> {
+        let row = self.to_retained_row(abs_row)?;
+        if row < self.scrollback_break.len() {
+            self.scrollback_break[row]
+        } else {
+            let live_row = row.saturating_sub(self.scrollback.len());
+            self.row_break.get(live_row).copied().flatten()
+        }
+    }
     /// The hanging indent width of visible `row`, in columns.
     pub fn row_wrap_indent(&self, row: usize) -> usize {
         if row >= self.rows {
@@ -92,6 +118,7 @@ impl Grid {
     /// alternate-screen (primary) buffer can be reflowed alongside the live
     /// buffer when the grid is resized.
     pub(super) fn reflow_buffer(
+        word_wrap: bool,
         old_size: (usize, usize),
         src: &[Cell],
         wrapped: &[bool],
@@ -102,6 +129,7 @@ impl Grid {
         let (cols, rows) = new_size;
         let (cur_row, cur_col) = cursor;
         let mut g = Grid::new(old_cols, old_rows);
+        g.word_wrap = word_wrap;
         g.cells = src.to_vec();
         g.row_wrapped = wrapped.to_vec();
         g.cursor.row = cur_row.min(old_rows.saturating_sub(1));
@@ -163,7 +191,17 @@ impl Grid {
             } else {
                 0
             };
-            for c in 0..old_cols {
+            // A word-broken row's cells after the break are blank residue: the
+            // word moved down. Contributing them would re-insert phantom spaces
+            // into the replayed line (and re-wrap it differently); contributing
+            // through the break cell keeps the space the break consumed, so
+            // the replay re-breaks at the same word.
+            let row_end = self
+                .row_break
+                .get(r)
+                .and_then(|brk| brk.map(|k| (k + 1).min(old_cols)))
+                .unwrap_or(old_cols);
+            for c in 0..row_end {
                 if r == self.cursor.row && c == self.cursor.col {
                     cursor_target = Some((lines.len(), cur.len()));
                 }
@@ -208,6 +246,7 @@ impl Grid {
         self.rows = rows;
         self.row_wrap_indent = vec![0; rows];
         self.row_wrapped = vec![false; rows];
+        self.row_break = vec![None; rows];
         self.cursor = Cursor::default();
         self.scroll_offset = 0;
         self.scroll_top = 0;
@@ -314,6 +353,7 @@ impl Grid {
         if let Some(alt) = self.alt_buffer.as_mut() {
             let wrapped = vec![false; old_rows];
             let (cells, _wrapped, cr, cc, alt_remap) = Self::reflow_buffer(
+                self.word_wrap,
                 (old_cols, old_rows),
                 &alt.cells,
                 &wrapped,
@@ -516,7 +556,9 @@ mod tests {
     #[test]
     fn test_wrap_indent_continuation_line_indents_to_first_non_blank() {
         // Grid cols = 10, rows = 3. Line starts with 2 leading spaces: "  abc12345" (10 chars).
-        let mut grid = Grid::new(10, 3).with_wrap_indent(true);
+        let mut grid = Grid::new(10, 3)
+            .with_wrap_indent(true)
+            .with_word_wrap(false);
         for ch in "  abc12345XYZ".chars() {
             grid.print(ch);
         }
@@ -533,7 +575,9 @@ mod tests {
     }
     #[test]
     fn test_wrap_indent_disabled_starts_at_column_zero() {
-        let mut grid = Grid::new(10, 3).with_wrap_indent(false);
+        let mut grid = Grid::new(10, 3)
+            .with_wrap_indent(false)
+            .with_word_wrap(false);
         for ch in "  abc12345XYZ".chars() {
             grid.print(ch);
         }
@@ -546,7 +590,9 @@ mod tests {
     #[test]
     fn test_wrap_indent_multi_row_inherits_first_line_indent() {
         // 10-column grid: 2 leading spaces, then fills 2 full rows and spills into 3rd row.
-        let mut grid = Grid::new(10, 4).with_wrap_indent(true);
+        let mut grid = Grid::new(10, 4)
+            .with_wrap_indent(true)
+            .with_word_wrap(false);
         // Row 0: "  01234567" (10 chars)
         // Row 1: "  89ABCDEF" (10 chars, 2 indent + 8 content)
         // Row 2: "  GH"
@@ -593,7 +639,9 @@ mod tests {
     }
     #[test]
     fn test_wrap_indent_scrollback_retains_wrap_and_indent() {
-        let mut grid = Grid::new(10, 2).with_wrap_indent(true);
+        let mut grid = Grid::new(10, 2)
+            .with_wrap_indent(true)
+            .with_word_wrap(false);
         for ch in "  01234567XYZ".chars() {
             grid.print(ch);
         }
@@ -614,6 +662,37 @@ mod tests {
         assert!(
             !grid.wrap_indent(),
             "the setter must agree with the builder"
+        );
+    }
+
+    #[test]
+    fn test_word_wrap_reflects_the_configured_setting() {
+        assert!(Grid::new(8, 2).word_wrap(), "on by default");
+        assert!(!Grid::new(8, 2).with_word_wrap(false).word_wrap());
+        let mut grid = Grid::new(8, 2);
+        grid.set_word_wrap(false);
+        assert!(!grid.word_wrap(), "the setter must agree with the builder");
+    }
+
+    #[test]
+    fn test_resize_replays_a_word_wrapped_line_at_word_boundaries() {
+        // The reflow reconstructs the logical line — including the space each
+        // break consumed — so re-wrapping at a new width breaks at words
+        // again instead of gluing the carried words onto their neighbors.
+        let mut grid = Grid::new(10, 4);
+        for ch in "aaa bbb ccc ddd".chars() {
+            grid.print(ch);
+        }
+        assert_eq!(row_text(&grid, 0), "aaa bbb");
+        assert_eq!(row_text(&grid, 1), "ccc ddd");
+
+        grid.resize(14, 4);
+        assert_eq!(row_text(&grid, 0), "aaa bbb ccc");
+        assert_eq!(row_text(&grid, 1), "ddd");
+        assert_eq!(
+            grid.absolute_row_break(grid.to_absolute_row(0)),
+            Some(11),
+            "the re-wrapped break is recorded where it now falls"
         );
     }
 

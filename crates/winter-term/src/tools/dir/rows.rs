@@ -5,7 +5,7 @@ use std::time::{Duration, SystemTime};
 
 use crate::model::page::{PageIcon, PageIconKind, PageRow, PageSpan, PageStyle};
 
-use super::entry::{EntryKind, Meta};
+use super::entry::{Entry, EntryKind, Meta};
 use super::icons::icon_for;
 use super::listing::SortKey;
 use super::tree::Row;
@@ -29,6 +29,10 @@ const INDENT: usize = 2;
 /// Drawn at the start of a marked row.
 const MARK: &str = "*";
 
+/// Drawn inside an edited name where the next keystroke lands, the same glyph
+/// the host's prompt line draws for its own caret.
+const CARET: &str = "│";
+
 /// Keeps an unmarked row's name aligned with the marked ones.
 const UNMARKED: &str = " ";
 
@@ -51,6 +55,23 @@ const SIZE_UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
 const SIZE_STEP: u64 = 1024;
 
 // ========================================================================
+// Data Structures
+// ========================================================================
+
+/// What the header reports about the listing's state, beyond where it is.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct HeaderFlags {
+    /// Which mode the name editor is in, when it is open at all.
+    pub editing: Option<&'static str>,
+    /// Whether dotfiles are listed.
+    pub show_hidden: bool,
+    /// Whether the detail columns are shown.
+    pub show_details: bool,
+    /// Whether directory sizes are being walked and shown.
+    pub show_sizes: bool,
+}
+
+// ========================================================================
 // Functions
 // ========================================================================
 
@@ -59,33 +80,54 @@ const SIZE_STEP: u64 = 1024;
 pub fn header_row(
     root: &str,
     sort: SortKey,
-    show_hidden: bool,
-    show_details: bool,
+    flags: HeaderFlags,
     marked: usize,
     message: Option<&str>,
-    show_sizes: bool,
 ) -> PageRow {
-    let mut flags = format!("sort:{}", sort.label());
+    let HeaderFlags {
+        editing,
+        show_hidden,
+        show_details,
+        show_sizes,
+    } = flags;
+    let mut text = format!("sort:{}", sort.label());
+    if let Some(mode) = editing {
+        text.push_str(&format!("  editing:{mode}"));
+    }
     if show_hidden {
-        flags.push_str("  dotfiles");
+        text.push_str("  dotfiles");
     }
     if show_details {
-        flags.push_str("  details");
+        text.push_str("  details");
     }
     if show_sizes {
-        flags.push_str("  sizes");
+        text.push_str("  sizes");
     }
     if marked > 0 {
-        flags.push_str(&format!("  {marked} marked"));
+        text.push_str(&format!("  {marked} marked"));
     }
     let mut spans = vec![
         PageSpan::new(PageStyle::Header, format!("{root}  ")),
-        PageSpan::new(PageStyle::Dim, flags),
+        PageSpan::new(PageStyle::Dim, text),
     ];
     if let Some(message) = message {
         spans.push(PageSpan::new(PageStyle::Accent, format!("  {message}")));
     }
     spans
+}
+
+/// One row's name as the edit mode is drawing it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct EditedName {
+    /// The name as edited so far, without the `/` or `@` the listing decorates
+    /// kinds with: the text being edited is exactly the name.
+    pub text: String,
+    /// Where the caret sits, in characters within `text`, or `None` on a row
+    /// the listing's cursor is not on.
+    pub caret: Option<usize>,
+    /// Whether the name still differs from the entry's own, which draws it as
+    /// marked for the rename to come.
+    pub changed: bool,
 }
 
 /// How one row is drawn: what is on, and what has been measured for it.
@@ -107,7 +149,12 @@ pub struct RowStyle {
 /// The icon's columns are left blank here whatever the icon setting is, so the
 /// name and the detail columns land in the same place however the host ends up
 /// drawing it, and changing the setting never reflows the listing.
-pub fn entry_row(row: &Row, style: RowStyle, now: SystemTime) -> (PageRow, PageIcon) {
+pub fn entry_row(
+    row: &Row,
+    edit: Option<&EditedName>,
+    style: RowStyle,
+    now: SystemTime,
+) -> (PageRow, PageIcon) {
     let indent = " ".repeat(row.depth * INDENT);
     let glyph = if row.entry.is_dir() {
         if row.expanded {
@@ -118,10 +165,21 @@ pub fn entry_row(row: &Row, style: RowStyle, now: SystemTime) -> (PageRow, PageI
     } else {
         GLYPH_NONE
     };
-    let name = match row.entry.kind {
-        EntryKind::Dir => format!("{}/", row.entry.name),
-        EntryKind::File => row.entry.name.clone(),
-        EntryKind::Symlink => format!("{}@", row.entry.name),
+    let (name, name_style, caret) = match edit {
+        Some(edited) => (
+            edited.text.clone(),
+            if edited.changed {
+                PageStyle::Marked
+            } else {
+                name_style(row.entry.kind)
+            },
+            edited.caret,
+        ),
+        None => (
+            kind_decorated_name(&row.entry),
+            name_style(row.entry.kind),
+            None,
+        ),
     };
     let mark = if style.marked { MARK } else { UNMARKED };
     let icon_col = mark.chars().count() + indent.chars().count() + glyph.chars().count();
@@ -142,26 +200,46 @@ pub fn entry_row(row: &Row, style: RowStyle, now: SystemTime) -> (PageRow, PageI
     };
     // The icon's own columns, plus one blank keeping the name off the artwork.
     let reserved = " ".repeat(PageIcon::WIDTH + 1);
-    let label = format!("{mark}{indent}{glyph}{reserved}{name}");
-    let name_style = if style.marked {
-        PageStyle::Marked
-    } else {
-        name_style(row.entry.kind)
-    };
-    let mut spans = vec![PageSpan::new(name_style, label.clone())];
+    let prefix = format!("{mark}{indent}{glyph}{reserved}");
+    let mut spans = Vec::new();
+    match caret {
+        None => spans.push(PageSpan::new(name_style, format!("{prefix}{name}"))),
+        Some(at) => {
+            // The caret is its own span so it stands out against the name, and
+            // the name is split by character so a multibyte one is not cut.
+            let before: String = name.chars().take(at).collect();
+            let after: String = name.chars().skip(at).collect();
+            spans.push(PageSpan::new(name_style, format!("{prefix}{before}")));
+            spans.push(PageSpan::new(PageStyle::Accent, CARET.to_string()));
+            if !after.is_empty() {
+                spans.push(PageSpan::new(name_style, after));
+            }
+        }
+    }
+    let label_len = prefix.chars().count() + name.chars().count() + usize::from(caret.is_some());
     let trailing = match (style.show_details, style.size) {
         (true, size) => Some(details(row, now, size)),
         (false, Some(size)) => Some(format!("{:>8}", format_size(size))),
         (false, None) => walking_note(row, style),
     };
     if let Some(trailing) = trailing {
-        let gap = DETAIL_COL.saturating_sub(label.chars().count()).max(1);
+        let gap = DETAIL_COL.saturating_sub(label_len).max(1);
         spans.push(PageSpan::new(
             PageStyle::Dim,
             format!("{}{}", " ".repeat(gap), trailing),
         ));
     }
     (spans, icon)
+}
+
+/// The name with the suffix its kind is drawn with: the `/` a directory wears
+/// and the `@` a link does are decoration, not part of the name.
+fn kind_decorated_name(entry: &Entry) -> String {
+    match entry.kind {
+        EntryKind::Dir => format!("{}/", entry.name),
+        EntryKind::File => entry.name.clone(),
+        EntryKind::Symlink => format!("{}@", entry.name),
+    }
 }
 
 /// What a directory shows while its size is still being walked. Nothing at all
@@ -261,7 +339,7 @@ fn name_style(kind: EntryKind) -> PageStyle {
 mod tests {
     /// The spans of a row, dropping the icon these tests do not assert on.
     fn entry_row_only(row: &Row, style: RowStyle, now: SystemTime) -> PageRow {
-        entry_row(row, style, now).0
+        entry_row(row, None, style, now).0
     }
 
     use super::*;
@@ -418,5 +496,89 @@ mod tests {
             SystemTime::UNIX_EPOCH,
         ));
         assert!(painted.contains(&format!("{name} ")), "got {painted:?}");
+    }
+
+    #[test]
+    fn test_an_edited_name_draws_a_caret_and_drops_the_kind_suffix() {
+        // The `/` a directory usually wears is decoration, not part of the
+        // text being edited: leaving it on would put the caret a column off
+        // the name and let a backspace eat a slash that was never really
+        // there. The caret lands between the name's halves, never inside a
+        // character, and the name is split by character to keep it so.
+        let dir = row("src", EntryKind::Dir, 0, false);
+        let edited = EditedName {
+            text: "source".to_string(),
+            caret: Some(3),
+            changed: true,
+        };
+        let painted = text(
+            entry_row(
+                &dir,
+                Some(&edited),
+                RowStyle::default(),
+                SystemTime::UNIX_EPOCH,
+            )
+            .0,
+        );
+        assert!(painted.contains("sou│rce"), "got {painted:?}");
+        assert!(!painted.contains('/'), "got {painted:?}");
+    }
+
+    #[test]
+    fn test_an_edited_name_is_marked_until_it_matches_the_entry_again() {
+        // A pending rename is something selected for an operation, which is
+        // what the marked style is for; matching again puts the kind's own
+        // style back.
+        let file = row("notes.txt", EntryKind::File, 0, false);
+        let changed = EditedName {
+            text: "draft.md".to_string(),
+            caret: None,
+            changed: true,
+        };
+        let spans = entry_row(
+            &file,
+            Some(&changed),
+            RowStyle::default(),
+            SystemTime::UNIX_EPOCH,
+        )
+        .0;
+        assert!(
+            spans.iter().any(|span| span.style == PageStyle::Marked),
+            "got {spans:?}"
+        );
+
+        let same = EditedName {
+            text: "notes.txt".to_string(),
+            caret: None,
+            changed: false,
+        };
+        let spans = entry_row(
+            &file,
+            Some(&same),
+            RowStyle::default(),
+            SystemTime::UNIX_EPOCH,
+        )
+        .0;
+        assert!(
+            spans.iter().all(|span| span.style != PageStyle::Marked),
+            "got {spans:?}"
+        );
+    }
+
+    #[test]
+    fn test_the_header_says_when_the_names_are_editable() {
+        let plain = header_row("/tmp", SortKey::Name, HeaderFlags::default(), 0, None);
+        assert!(!text(plain).contains("editing"));
+        let editing = header_row(
+            "/tmp",
+            SortKey::Name,
+            HeaderFlags {
+                editing: Some("insert"),
+                ..HeaderFlags::default()
+            },
+            0,
+            None,
+        );
+        assert!(text(editing).contains("editing"));
     }
 }

@@ -20,7 +20,10 @@ impl Grid {
         }
         0
     }
-    /// Auto-wrap the current row into the next row, applying hanging indent if enabled.
+    /// Auto-wrap the current row into the next row, applying hanging indent if
+    /// enabled. With word wrap on, the wrap breaks at the row's last word
+    /// boundary instead of exactly at the margin: the partial word after the
+    /// last breakable space moves down with the wrap (see [`Self::take_word_break`]).
     pub(super) fn auto_wrap(&mut self) {
         self.cursor.wrap_pending = false;
         let prev_row = self.cursor.row;
@@ -37,6 +40,17 @@ impl Grid {
         } else {
             0
         };
+        // Word wrap is a primary-screen behavior only: a full-screen app
+        // addresses the grid by exact coordinates, and moving its cells would
+        // desync the screen model it is silently redrawing against.
+        let carried = if self.word_wrap && self.alt_buffer.is_none() {
+            self.take_word_break(prev_row, indent)
+        } else {
+            if let Some(brk) = self.row_break.get_mut(prev_row) {
+                *brk = None;
+            }
+            Vec::new()
+        };
         self.cursor.col = 0;
         self.line_feed();
         if indent > 0 && self.cursor.row < self.rows {
@@ -45,6 +59,64 @@ impl Grid {
             }
             self.cursor.col = indent;
         }
+        if !carried.is_empty() && self.cursor.row < self.rows {
+            let row = self.cursor.row;
+            let carried_len = carried.len();
+            for (offset, cell) in carried.into_iter().enumerate() {
+                if let Some(index) = self.index(row, self.cursor.col + offset) {
+                    self.cells[index] = cell;
+                }
+            }
+            // The carried word may fill the continuation row exactly; park at
+            // its last column the way a printed glyph would, so the next
+            // character wraps rather than addressing a column past the edge.
+            self.cursor.col += carried_len;
+            if self.cursor.col >= self.cols {
+                self.cursor.col = self.cols.saturating_sub(1);
+                self.cursor.wrap_pending = true;
+            }
+        }
+    }
+    /// Choose where a word break falls on `row`, given the indent the
+    /// continuation will start at: the rightmost breakable blank cell `k`
+    /// whose following cells (the partial word) still fit beside that indent.
+    /// The space at `k` is consumed by the break (recorded in
+    /// [`Self::row_break`], for joining the line back into text), the cells
+    /// after it are blanked and returned for the continuation row, and the
+    /// row itself ends at `k`. An empty `Vec` means no cells moved — the wrap
+    /// lands at the margin exactly as it would with word wrap off (no
+    /// breakable space, or one too far left for the word to fit below).
+    fn take_word_break(&mut self, row: usize, indent: usize) -> Vec<Cell> {
+        let mut break_col = None;
+        for col in (0..self.cols).rev() {
+            let Some(index) = self.index(row, col) else {
+                continue;
+            };
+            let cell = &self.cells[index];
+            if cell.width == CellWidth::Single && is_breakable_blank(cell.ch) {
+                // The partial word after `col` is `cols - 1 - col` cells wide;
+                // it must fit on the next row beside the hanging indent.
+                if indent + (self.cols - 1 - col) <= self.cols {
+                    break_col = Some(col);
+                    break;
+                }
+            }
+        }
+        let Some(k) = break_col else {
+            if let Some(brk) = self.row_break.get_mut(row) {
+                *brk = None;
+            }
+            return Vec::new();
+        };
+        if let Some(brk) = self.row_break.get_mut(row) {
+            *brk = Some(k);
+        }
+        let row_start = row * self.cols;
+        let carried = self.cells[row_start + k + 1..row_start + self.cols].to_vec();
+        for index in &mut self.cells[row_start + k..row_start + self.cols] {
+            *index = Cell::default();
+        }
+        carried
     }
     /// Print a character at the cursor and advance, wrapping and scrolling as
     /// needed. Uses deferred (pending) line wrap matching VT100/xterm semantics:
@@ -290,6 +362,12 @@ pub(super) fn is_skin_tone_modifier(c: char) -> bool {
 pub(super) fn is_regional_indicator(c: char) -> bool {
     ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)
 }
+/// Whether `ch` can be consumed as the space a word break happens at: a
+/// blank cell. A spacer half of a double-width glyph is excluded by the
+/// caller's width check, never here.
+fn is_breakable_blank(ch: char) -> bool {
+    ch == '\0' || ch.is_whitespace()
+}
 /// Append `c` to `cell`'s combining tail, creating it if this is the first.
 pub(super) fn append_tail(cell: &mut Cell, c: char) {
     let mut tail = cell.tail.take().map_or_else(String::new, String::from);
@@ -304,6 +382,7 @@ pub(super) fn append_tail(cell: &mut Cell, c: char) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::test_support::row_text;
 
     #[test]
     fn test_print_advances_cursor_and_wraps() {
@@ -509,6 +588,122 @@ mod tests {
         assert_eq!(grid.visible_line_end(0), 1);
         // A row with no printed content reports column 0.
         assert_eq!(grid.visible_line_end(1), 0);
+    }
+
+    #[test]
+    fn test_word_wrap_moves_the_partial_word_down_with_the_wrap() {
+        // "aaa bbbbbb" fills the row; the next character belongs to the same
+        // word as the tail, so the wrap breaks at the space and carries
+        // "bbbbbb" down instead of splitting it across the margin.
+        let mut grid = Grid::new(10, 3);
+        for ch in "aaa bbbbbbb".chars() {
+            grid.print(ch);
+        }
+        assert_eq!(row_text(&grid, 0), "aaa");
+        assert_eq!(row_text(&grid, 1), "bbbbbbb");
+        assert!(grid.row_wraps(0), "still one logical line");
+        assert_eq!(grid.absolute_row_break(grid.to_absolute_row(0)), Some(3));
+    }
+
+    #[test]
+    fn test_word_wrap_without_a_space_falls_back_to_the_margin() {
+        // One unbreakable word fills the row: breaking it anywhere is as good
+        // as the margin, so the wrap lands exactly there like always.
+        let mut grid = Grid::new(6, 3);
+        for ch in "aaaaaabb".chars() {
+            grid.print(ch);
+        }
+        assert_eq!(row_text(&grid, 0), "aaaaaa");
+        assert_eq!(row_text(&grid, 1), "bb");
+        assert_eq!(grid.absolute_row_break(grid.to_absolute_row(0)), None);
+    }
+
+    #[test]
+    fn test_word_wrap_breaks_at_the_rightmost_space_not_the_first() {
+        // "aa bb cc" fills the row exactly; the break must take the last
+        // space, carrying only "cc" down, so the first row holds as much as
+        // fits rather than as little as the first word needs.
+        let mut grid = Grid::new(8, 3);
+        for ch in "aa bb ccc".chars() {
+            grid.print(ch);
+        }
+        assert_eq!(row_text(&grid, 0), "aa bb");
+        assert_eq!(row_text(&grid, 1), "ccc");
+    }
+
+    #[test]
+    fn test_word_wrap_can_be_turned_off() {
+        let mut grid = Grid::new(10, 3).with_word_wrap(false);
+        for ch in "aaa bbbbbbb".chars() {
+            grid.print(ch);
+        }
+        assert_eq!(row_text(&grid, 0), "aaa bbbbbb");
+        assert_eq!(row_text(&grid, 1), "b");
+        assert_eq!(grid.absolute_row_break(grid.to_absolute_row(0)), None);
+    }
+
+    #[test]
+    fn test_word_wrap_skips_the_alternate_screen() {
+        // A full-screen app addresses the grid by exact coordinates; moving
+        // its cells under it would desync the screen it is redrawing against.
+        let mut grid = Grid::new(10, 3);
+        grid.enter_alt_screen();
+        for ch in "aaa bbbbbbb".chars() {
+            grid.print(ch);
+        }
+        assert_eq!(row_text(&grid, 0), "aaa bbbbbb");
+        assert_eq!(row_text(&grid, 1), "b");
+    }
+
+    #[test]
+    fn test_word_wrap_carries_the_word_beside_the_hanging_indent() {
+        // With hanging indent on, the carried word lands at the indent; the
+        // break's word must fit beside it or the wrap falls back to the
+        // margin rather than pushing the word off the row.
+        let mut grid = Grid::new(10, 4);
+        for ch in "  aa bbbbbb".chars() {
+            grid.print(ch);
+        }
+        assert_eq!(grid.row_wrap_indent(1), 2, "fixture: the indent is 2");
+        assert_eq!(row_text(&grid, 0), "  aa");
+        assert_eq!(row_text(&grid, 1), "  bbbbbb");
+    }
+
+    #[test]
+    fn test_a_carried_word_that_fills_the_row_parks_and_wraps_the_next_char() {
+        // The carried word exactly fills the continuation row: the character
+        // after it wraps onto the next row rather than addressing a column
+        // past the edge, where it would be dropped on the floor.
+        let mut grid = Grid::new(4, 4);
+        for ch in "a bbbcc".chars() {
+            grid.print(ch);
+        }
+        assert_eq!(row_text(&grid, 0), "a");
+        assert_eq!(row_text(&grid, 1), "bbbc");
+        assert_eq!(row_text(&grid, 2), "c");
+        let (row, col) = grid.cursor();
+        assert!(col < 4, "the cursor stays inside the row at ({row}, {col})");
+    }
+
+    #[test]
+    fn test_word_wrap_keeps_a_wide_glyphs_halves_together_when_carried() {
+        // The carried cells move as a block, so a double-width glyph and its
+        // spacer arrive on the continuation row still adjacent.
+        let mut grid = Grid::new(8, 3);
+        for ch in "aa 世bbbb".chars() {
+            grid.print(ch);
+        }
+        // The row filled with "aa", a space, the wide glyph, and "bbb";
+        // the break at the space carries 世 and its spacer down whole.
+        grid.print('c');
+        assert_eq!(row_text(&grid, 0), "aa");
+        assert_eq!(grid.cell(1, 0).unwrap().ch, '世');
+        assert_eq!(grid.cell(1, 1).unwrap().width, CellWidth::Spacer);
+        assert_eq!(grid.cell(1, 2).unwrap().ch, 'b');
+        assert_eq!(grid.cell(1, 3).unwrap().ch, 'b');
+        assert_eq!(grid.cell(1, 4).unwrap().ch, 'b');
+        assert_eq!(grid.cell(1, 5).unwrap().ch, 'b');
+        assert_eq!(grid.cell(1, 6).unwrap().ch, 'c');
     }
 
     /// Used to place the cursor at the first real character of a row.

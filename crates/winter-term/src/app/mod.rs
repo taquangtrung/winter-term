@@ -31,7 +31,7 @@ mod geometry;
 mod init;
 mod jobs;
 mod lifecycle;
-mod navigation;
+pub(crate) mod navigation;
 mod notice;
 mod page;
 mod page_cursor;
