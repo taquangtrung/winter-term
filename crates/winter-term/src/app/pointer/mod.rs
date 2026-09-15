@@ -136,6 +136,58 @@ impl App {
         None
     }
 
+    /// The on-screen rectangle of one pane in the active tab.
+    pub(crate) fn pane_rect(&self, pane: PaneId) -> Option<PaneRect> {
+        let vp = self.viewport_rect();
+        let layout_vp = Rect::new(vp.x, vp.y, vp.width, vp.height);
+        self.tab()
+            .rects(layout_vp)
+            .into_iter()
+            .find(|(id, _)| *id == pane)
+            .map(|(_, rect)| Self::layout_rect_to_pane(rect))
+    }
+
+    /// The cell a held drag is pointing at, clamped into the pane the drag
+    /// started in.
+    ///
+    /// Unlike [`Self::pane_at_pixel`], this does not give up once the pointer
+    /// leaves the pane. A drag that runs off the bottom edge selects through
+    /// to the end of the last row, and one that runs off the top selects back
+    /// to the start of the first, which is how a drag past the edge behaves in
+    /// every other terminal. Resolving only the pane under the pointer froze
+    /// the selection at whatever column the pointer happened to cross the edge
+    /// at, so the last (or first) line came out half-selected and dragging
+    /// further did nothing at all.
+    pub(crate) fn drag_cell_at(&self, x: f32, y: f32) -> Option<(PaneId, usize, usize)> {
+        if let Some((pane, rect)) = self.pane_at_pixel(x, y) {
+            let (row, col) = self.pixel_to_cell(x, y, rect);
+            return Some((pane, row, col));
+        }
+        // Outside every pane: the drag still belongs to the pane it started
+        // in, named by the press, or by the span already being extended when
+        // the button has been held since before this window had focus.
+        let pane = self
+            .pointer
+            .press_cell
+            .map(|(id, _, _)| id)
+            .or_else(|| self.selection.span.as_ref().map(|sel| sel.pane))?;
+        let rect = self.pane_rect(pane)?;
+        let grid = self.panes.get(&pane)?.grid();
+        let last_row = grid.rows().saturating_sub(1);
+        let last_col = grid.cols().saturating_sub(1);
+        if y < rect.y {
+            return Some((pane, 0, 0));
+        }
+        if y >= rect.y + rect.height {
+            return Some((pane, last_row, last_col));
+        }
+        // Beside the pane rather than above or below it: the row the pointer
+        // is level with still counts, with the column pinned to the edge.
+        let clamped_x = x.clamp(rect.x, rect.x + rect.width);
+        let (row, col) = self.pixel_to_cell(clamped_x, y, rect);
+        Some((pane, row.min(last_row), col.min(last_col)))
+    }
+
     /// The hyperlink URL of the cell currently under the pointer, if any.
     pub(crate) fn hovered_link_at(&self, x: f32, y: f32) -> Option<String> {
         let (pane_id, pane_rect) = self.pane_at_pixel(x, y)?;
@@ -164,6 +216,41 @@ mod tests {
             ..Default::default()
         };
         assert_eq!(pointer.drag_anchor(PaneId(1), (57, 12)), (40, 3));
+    }
+
+    #[test]
+    fn test_drag_cell_at_runs_a_drag_off_the_edge_to_the_end_of_the_line() {
+        // Regression: resolving the drag target with `pane_at_pixel` alone
+        // returned `None` the moment the pointer left the pane, so a drag
+        // carried past the bottom edge stopped at whatever column it happened
+        // to cross at and left the last line half-selected. Past the bottom
+        // the drag should reach the end of the last row, and past the top the
+        // start of the first.
+        let mut app = App::new();
+        // The default tab lays out a single pane, `PaneId(0)`.
+        let pane = PaneId(0);
+        app.panes.insert(
+            pane,
+            crate::terminal::pane::Pane::with_command(
+                40,
+                10,
+                portable_pty::CommandBuilder::new("true"),
+                winter_render::MAX_SCROLLBACK,
+            )
+            .expect("test pane spawn"),
+        );
+        app.pointer.press_cell = Some((pane, 0, 5));
+        let rect = app.pane_rect(pane).expect("the pane is laid out");
+        let (cols, rows) = {
+            let grid = app.panes[&pane].grid();
+            (grid.cols(), grid.rows())
+        };
+
+        let below = app.drag_cell_at(rect.x + 10.0, rect.y + rect.height + 200.0);
+        assert_eq!(below, Some((pane, rows - 1, cols - 1)));
+
+        let above = app.drag_cell_at(rect.x + 10.0, rect.y - 200.0);
+        assert_eq!(above, Some((pane, 0, 0)));
     }
 
     #[test]

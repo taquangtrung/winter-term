@@ -14,8 +14,57 @@ use super::input::Key;
 pub struct PageContent {
     /// The row to band as the cursor line, counted from the first page row.
     pub cursor_line: Option<usize>,
+    /// Icons to draw over the rows, one per row that has one.
+    pub icons: Vec<PageIcon>,
     /// Every line of the page.
     pub rows: Vec<PageRow>,
+}
+
+/// An icon a page wants drawn beside one of its rows.
+///
+/// A page names *what* the icon is and where it goes, never how it is drawn:
+/// the host resolves that against the `icons` setting, painting a glyph into
+/// the row, rasterizing the bundled artwork over it, or neither. The row's
+/// text always leaves [`PageIcon::WIDTH`] columns clear at `col`, so every
+/// column downstream sits in the same place whichever way the icon is drawn.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PageIcon {
+    /// Column of the icon's left edge.
+    pub col: usize,
+    /// The glyph to draw when the icon style is a font, in place of artwork.
+    pub glyph: char,
+    /// What the icon depicts.
+    pub kind: PageIconKind,
+    /// Row within the page's returned rows.
+    pub row: usize,
+}
+
+impl PageIcon {
+    /// Columns an icon occupies: the artwork is square and a cell is roughly
+    /// half as wide as it is tall, so one cell would squash it.
+    pub const WIDTH: usize = 2;
+}
+
+/// What a [`PageIcon`] depicts, in terms the icon set can resolve.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum PageIconKind {
+    /// A directory, whose artwork differs by whether it is expanded.
+    Dir {
+        /// Whether the directory's children are listed beneath it.
+        expanded: bool,
+        /// The directory's own name, without a path.
+        name: String,
+    },
+    /// A file, named so the icon set can match it by name or extension.
+    File {
+        /// The file's name, without a path.
+        name: String,
+    },
+    /// A Git working-tree status, named as the bundled set spells it.
+    Git {
+        /// The status stem, e.g. `git-modified`.
+        status: String,
+    },
 }
 
 /// One rendered line: styled runs laid out left to right from column zero.
@@ -330,8 +379,15 @@ impl PageContent {
     pub fn new(rows: Vec<PageRow>) -> Self {
         Self {
             cursor_line: None,
+            icons: Vec::new(),
             rows,
         }
+    }
+
+    /// Attach the icons the host should draw over these rows.
+    pub fn with_icons(mut self, icons: Vec<PageIcon>) -> Self {
+        self.icons = icons;
+        self
     }
 
     /// Band `row` as the cursor line, counted from the first returned row.

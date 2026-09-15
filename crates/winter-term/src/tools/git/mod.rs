@@ -18,8 +18,8 @@ use std::path::PathBuf;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
     find_match, row_text, scroll_to_cursor, CommandOutput, JobReply, JobRequest, OpenTarget, Page,
-    PageContent, PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
-    SpawnRequest,
+    PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply,
+    PromptRequest, SpawnRequest,
 };
 
 use diff::FileDiff;
@@ -33,6 +33,10 @@ use rows::{FileRow, Item, ViewRow};
 // ========================================================================
 
 /// Prompt tags, one per question the view asks.
+/// Characters of a commit hash shown in a view's title: enough to identify it
+/// at a glance without crowding out the subject beside it.
+const COMMIT_TITLE_HASH_LEN: usize = 8;
+
 const ASK_BRANCH_CHECKOUT: &str = "branch-checkout";
 const ASK_BRANCH_CREATE: &str = "branch-create";
 const ASK_BRANCH_CREATE_HERE: &str = "branch-create-here";
@@ -386,6 +390,24 @@ impl GitPage {
             return PageOutcome::Consumed;
         }
         PageOutcome::Job(exec::stage(root, &paths))
+    }
+
+    /// Stage everything, the way Magic's stage-all does: every untracked file
+    /// when the cursor is in that section, every tracked change anywhere
+    /// else. Splitting the two halves keeps an unasked-for file from being
+    /// swept into the index unread.
+    fn stage_all(&self) -> PageOutcome {
+        let Some(root) = &self.root else {
+            return PageOutcome::Consumed;
+        };
+        if self.section_at_cursor() == Some(Section::Untracked) {
+            let paths = self.paths_in(Section::Untracked);
+            if paths.is_empty() {
+                return PageOutcome::Consumed;
+            }
+            return PageOutcome::Job(exec::stage(root, &paths));
+        }
+        PageOutcome::Job(exec::stage_all_tracked(root))
     }
 
     fn unstage(&self, all: bool) -> PageOutcome {
@@ -895,6 +917,15 @@ impl GitPage {
                 self.show_output("Log", &output.stdout, true);
                 PageOutcome::Consumed
             }
+            exec::TAG_SHOW => {
+                if output.stdout.trim().is_empty() {
+                    self.message = Some("nothing to show".to_string());
+                    self.rebuild();
+                } else {
+                    self.show_output(&commit_title(&output.stdout), &output.stdout, false);
+                }
+                PageOutcome::Consumed
+            }
             exec::TAG_REMOTE_URL => {
                 let url = browser_url(output.stdout.trim());
                 match url {
@@ -955,18 +986,23 @@ impl Page for GitPage {
         }
         let visible = rows.saturating_sub(HEADER_ROWS);
         self.scroll = scroll_to_cursor(self.scroll, self.cursor, self.rows.len(), visible);
-        let painted = self
-            .rows
-            .iter()
-            .skip(self.scroll)
-            .take(visible.max(1))
-            .map(|row| row.spans.clone())
-            .collect();
-        let mut painted: Vec<Vec<PageSpan>> = painted;
+        let mut painted: Vec<Vec<PageSpan>> = Vec::new();
+        let mut icons: Vec<PageIcon> = Vec::new();
+        for row in self.rows.iter().skip(self.scroll).take(visible.max(1)) {
+            if let Some(icon) = &row.icon {
+                icons.push(PageIcon {
+                    row: painted.len(),
+                    ..icon.clone()
+                });
+            }
+            painted.push(row.spans.clone());
+        }
         if let Some(popup) = self.popup {
             painted.extend(popup.rows());
         }
-        PageContent::new(painted).with_cursor_line(self.cursor - self.scroll)
+        PageContent::new(painted)
+            .with_icons(icons)
+            .with_cursor_line(self.cursor - self.scroll)
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
@@ -1003,6 +1039,7 @@ impl Page for GitPage {
         if key.ctrl {
             return match key.code {
                 KeyCode::Char('C') | KeyCode::Char('c') if key.shift => self.ask_commit_message(),
+                KeyCode::Char('S') | KeyCode::Char('s') if key.shift => self.stage_all(),
                 KeyCode::Char('l') => self.open_popup(Popup::Log),
                 _ => PageOutcome::Ignored,
             };
@@ -1035,6 +1072,12 @@ impl Page for GitPage {
             KeyCode::Enter => match self.selected().map(|row| row.item.clone()) {
                 Some(Item::File(file)) => self.open(&file.path),
                 Some(Item::Hunk(hunk)) => self.open(&hunk.path),
+                // A commit has no file to open, so Enter reads it instead:
+                // what it changed, and the patch that changed it.
+                Some(Item::Commit(hash)) => match self.root.clone() {
+                    Some(root) => PageOutcome::Job(exec::show_commit(&root, &hash)),
+                    None => PageOutcome::Consumed,
+                },
                 _ => PageOutcome::Consumed,
             },
             KeyCode::Char('g') => {
@@ -1157,6 +1200,39 @@ impl Page for GitPage {
 // Helpers
 // ========================================================================
 
+/// Name the view showing one commit, from the `git show` output itself.
+///
+/// The abbreviated hash and the subject, which is what identifies a commit to a
+/// reader. Taken from the output rather than from the row the cursor was on, so
+/// the title cannot disagree with what is underneath it.
+fn commit_title(shown: &str) -> String {
+    let mut hash = String::new();
+    let mut subject = String::new();
+    for line in shown.lines() {
+        match line.strip_prefix("commit ") {
+            Some(rest) if hash.is_empty() => {
+                hash = rest.split_whitespace().next().unwrap_or(rest).to_string();
+                hash.truncate(COMMIT_TITLE_HASH_LEN);
+            }
+            // The subject is the first indented line of the message block, which
+            // is the first thing after the headers that is neither blank nor a
+            // header of its own.
+            _ => {
+                if !hash.is_empty() && subject.is_empty() {
+                    if let Some(text) = line.strip_prefix("    ") {
+                        subject = text.trim().to_string();
+                    }
+                }
+            }
+        }
+    }
+    match (hash.is_empty(), subject.is_empty()) {
+        (true, _) => "Commit".to_string(),
+        (false, true) => format!("Commit {hash}"),
+        (false, false) => format!("Commit {hash}  {subject}"),
+    }
+}
+
 /// Turn a git remote URL into one a browser can open: an `ssh` remote becomes
 /// its `https` form, and anything else is left alone if it already is one.
 fn browser_url(remote: &str) -> Option<String> {
@@ -1243,6 +1319,15 @@ mod tests {
         }
     }
 
+    fn ctrl_shift(c: char) -> Key {
+        Key {
+            alt: false,
+            code: KeyCode::Char(c),
+            ctrl: true,
+            shift: true,
+        }
+    }
+
     fn reply(tag: &'static str, stdout: &str) -> JobReply {
         JobReply::Command(CommandOutput {
             code: Some(0),
@@ -1316,6 +1401,26 @@ mod tests {
             .expect("the unstaged heading");
         let command = command_of(&page.on_key(&press(KeyCode::Char('s'))));
         assert_eq!(command.args, ["add", "--", "working.rs"]);
+    }
+
+    #[test]
+    fn test_stage_all_from_the_untracked_section_stages_only_untracked_files() {
+        // Magic's stage-all splits by section: from untracked it stages the
+        // files that section lists, by name.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "new.rs");
+        let command = command_of(&page.on_key(&ctrl_shift('S')));
+        assert_eq!(command.args, ["add", "--", "new.rs"]);
+    }
+
+    #[test]
+    fn test_stage_all_elsewhere_stages_tracked_changes_only() {
+        // Anywhere else it is `add -u`, so an untracked file stays that way
+        // until asked for by name.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        let command = command_of(&page.on_key(&ctrl_shift('S')));
+        assert_eq!(command.args, ["add", "-u"]);
     }
 
     #[test]
@@ -1786,6 +1891,68 @@ index aaa..bbb 100644
             .clone()
             .unwrap_or_default()
             .starts_with("failed:"));
+    }
+
+    #[test]
+    fn test_enter_on_a_commit_reads_it() {
+        // Enter opens the file under the cursor, and a commit row has no file:
+        // it used to be swallowed, so a commit was the one row Enter did
+        // nothing on.
+        let mut page = loaded_page();
+        page.cursor = page
+            .rows
+            .iter()
+            .position(|row| matches!(row.item, Item::Commit(_)))
+            .expect("a commit row");
+        let command = command_of(&page.on_key(&press(KeyCode::Enter)));
+        assert_eq!(command.tag, exec::TAG_SHOW);
+        assert_eq!(command.args.first().map(String::as_str), Some("show"));
+        assert_eq!(command.args.last().map(String::as_str), Some("abc1234"));
+        assert!(
+            command.args.iter().any(|arg| arg == "--stat"),
+            "the summary comes before the patch: {:?}",
+            command.args
+        );
+    }
+
+    #[test]
+    fn test_a_commit_read_fills_the_view_under_its_own_title() {
+        let mut page = loaded_page();
+        // Joined rather than written as one literal: `git show` output is
+        // indentation-sensitive (the subject is the message block's four-space
+        // indent), and a continued string literal cannot carry that faithfully.
+        let shown = [
+            "commit abc1234567890",
+            "Author: Someone <a@b.c>",
+            "Date:   2026-09-15 12:00:00 +0000",
+            "",
+            "    do the thing",
+            "",
+            " src/a.rs | 2 +-",
+        ]
+        .join("\n");
+        assert_eq!(
+            page.on_job(reply(exec::TAG_SHOW, &shown)),
+            PageOutcome::Consumed
+        );
+        let output = page
+            .output
+            .as_ref()
+            .expect("the commit replaced the status view");
+        assert_eq!(output.title, "Commit abc12345  do the thing");
+        assert!(output.lines.iter().any(|line| line.contains("src/a.rs")));
+    }
+
+    #[test]
+    fn test_an_empty_commit_read_says_so_instead_of_blanking_the_view() {
+        let mut page = loaded_page();
+        page.on_job(reply(
+            exec::TAG_SHOW,
+            "   
+",
+        ));
+        assert!(page.output.is_none(), "the status view stays");
+        assert_eq!(page.message.as_deref(), Some("nothing to show"));
     }
 
     #[test]

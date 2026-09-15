@@ -11,6 +11,7 @@ use crate::tools::dir::DirPage;
 use crate::tools::git::GitPage;
 use crate::tools::grep::GrepPage;
 use crate::tools::keys::KeysPage;
+use winter_render::Grid;
 
 use super::App;
 
@@ -57,6 +58,17 @@ pub(crate) struct ActivePrompt {
 /// mode the pane was in, so closing the page puts the pane back as it was.
 pub(crate) struct PageSlot {
     pub(crate) page: Box<dyn Page>,
+    /// The row the page last banded as its cursor line, so a text cursor
+    /// starts where the user was already looking.
+    pub(crate) cursor_line: Option<usize>,
+    /// The grid the page was last painted into, retained so that selecting
+    /// over the pane reads what is on screen.
+    ///
+    /// A page draws over a pane whose terminal is still running underneath.
+    /// Without this, a selection resolved against `panes[..].grid()` names the
+    /// shell output hidden behind the page, and copying a listing silently
+    /// yields whatever scrolled past before the tool opened.
+    pub(crate) painted: Option<Grid>,
     prior_mode: Mode,
     tool: &'static str,
 }
@@ -143,6 +155,8 @@ impl App {
             pane_id,
             PageSlot {
                 page,
+                cursor_line: None,
+                painted: None,
                 prior_mode,
                 tool,
             },
@@ -160,9 +174,14 @@ impl App {
         let Some(slot) = self.pages.remove(&pane_id) else {
             return;
         };
-        // A question, and any work in flight, belong to the page that asked.
+        // A question, a text cursor, and any work in flight all belong to the
+        // page that opened them: a cursor outliving its page would go on
+        // swallowing keys for rows that are no longer painted.
         if self.page_prompt.as_ref().is_some_and(|p| p.pane == pane_id) {
             self.page_prompt = None;
+        }
+        if self.page_cursor.as_ref().is_some_and(|c| c.pane == pane_id) {
+            self.stop_page_cursor();
         }
         self.jobs.cancel_for(pane_id);
         self.modes.insert(pane_id, slot.prior_mode);

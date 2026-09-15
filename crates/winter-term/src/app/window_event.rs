@@ -231,11 +231,37 @@ impl App {
             return;
         }
 
+        // The page text cursor takes every key while it is up, ahead of the
+        // page itself: sharing keys would move the selection and the listing
+        // at once. See `page_cursor`.
+        if self.handle_page_cursor_key(&key) {
+            self.update_window_title();
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
         // A tool page owns the keys it binds, and only those: anything it
         // declines falls through to the pane's ordinary keymap below, so the
         // vim vocabulary reads the same in a page as in a terminal.
         if self.offer_key_to_page(focused, &key) {
             self.update_window_title();
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
+
+        // `v` in a page the tool did not bind it in starts a text cursor, the
+        // way it starts a Visual selection in a terminal pane.
+        if mode == Mode::Page
+            && key.code == KeyCode::Char('v')
+            && !key.alt
+            && !key.ctrl
+            && !key.shift
+        {
+            self.start_page_cursor(focused);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -512,9 +538,8 @@ impl App {
                         // Anchor any drag that follows at the press, not at
                         // the first motion event: see `PointerState::press_cell`.
                         self.pointer.press_cell = self
-                            .panes
-                            .get(&pane_id)
-                            .map(|p| (pane_id, p.grid().to_absolute_row(row), col));
+                            .selection_grid(pane_id)
+                            .map(|grid| (pane_id, grid.to_absolute_row(row), col));
                         let now = Instant::now();
                         if let Some((prev_time, prev_x, prev_y)) = self.pointer.last_click {
                             let dist = ((x - prev_x).powi(2) + (y - prev_y).powi(2)).sqrt();
@@ -643,15 +668,15 @@ impl App {
         }
 
         if self.pointer.mouse_down {
-            if let Some((pane_id, pane_rect)) = self.pane_at_pixel(x, y) {
-                let (row, col) = self.pixel_to_cell(x, y, pane_rect);
+            // Resolved against the pane the drag started in, not just the one
+            // under the pointer, so running off an edge keeps selecting.
+            if let Some((pane_id, row, col)) = self.drag_cell_at(x, y) {
                 // Selection rows are absolute (see `Grid::to_absolute_row`)
                 // so they keep naming the same line if auto-scroll (or a
                 // wheel scroll) moves the view mid-drag.
                 let abs_row = self
-                    .panes
-                    .get(&pane_id)
-                    .map(|p| p.grid().to_absolute_row(row))
+                    .selection_grid(pane_id)
+                    .map(|grid| grid.to_absolute_row(row))
                     .unwrap_or(row);
                 if let Some(sel) = &mut self.selection.span {
                     sel.end_row = abs_row;
@@ -714,16 +739,24 @@ impl App {
 
         let focused = self.tab().focused();
         if self.panes.get(&focused).is_some_and(|p| p.mouse_tracking()) {
+            self.drop_selection_in_pane(focused);
             self.forward_mouse_scroll(scroll_lines, focused);
             return;
         }
 
         if scroll_lines != 0 {
+            let alt_screen = self
+                .panes
+                .get(&focused)
+                .is_some_and(|p| p.grid().is_alt_screen());
+            if alt_screen {
+                self.drop_selection_in_pane(focused);
+            }
             if let Some(pane) = self.panes.get_mut(&focused) {
                 // Alt-screen apps (vim, less, etc.) own their viewport: send
                 // arrow keys so they respond to the scroll gesture instead of
                 // us scrolling their non-existent scrollback.
-                if pane.grid().is_alt_screen() {
+                if alt_screen {
                     let arrow = if scroll_lines > 0 {
                         b"\x1b[A" as &[u8]
                     } else {

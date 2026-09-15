@@ -34,6 +34,7 @@ mod lifecycle;
 mod navigation;
 mod notice;
 mod page;
+mod page_cursor;
 mod palette;
 mod panes;
 mod pointer;
@@ -589,6 +590,15 @@ pub struct App {
     /// cursor once the resulting PTY echo is drained.
     pub(crate) nav_resync_pending: bool,
     pub(crate) next_image_id: u64,
+    /// GPU texture ids for icons already rasterized, keyed by icon name and the
+    /// pixel box they were drawn for. `None` records an icon that failed to
+    /// rasterize, so a broken document is not retried every frame.
+    ///
+    /// Cleared when the cell size changes, because every entry was rasterized
+    /// for the old one: see [`App::icon_texture`].
+    pub(crate) icon_textures: HashMap<(String, u32, u32), Option<u64>>,
+    /// The pixel box `icon_textures` was filled for.
+    pub(crate) icon_texture_box: (u32, u32),
     /// Panes a tool page is currently covering. The pane keeps its terminal,
     /// which goes on running underneath and comes back when the page closes.
     pub(crate) pages: HashMap<PaneId, page::PageSlot>,
@@ -596,6 +606,9 @@ pub struct App {
     pub(crate) jobs: jobs::Jobs,
     /// The question a page is waiting on an answer to, if any.
     pub(crate) page_prompt: Option<page::ActivePrompt>,
+    /// The Vim-style text cursor over a page, while one is up. At most one
+    /// exists: it belongs to whichever page pane `v` was pressed in.
+    pub(crate) page_cursor: Option<page_cursor::PageCursor>,
     pub(crate) panes: HashMap<PaneId, Pane>,
     /// Panes whose last PTY-forwarded Insert-mode key was Tab - likely mid the
     /// shell's own tab-completion (e.g. zsh's menu-select). Lets the next bare
@@ -2492,6 +2505,122 @@ mod tests {
         app.auto_scroll_selection();
 
         assert_eq!(app.panes[&id].grid().scroll_offset(), 0);
+    }
+
+    #[test]
+    fn test_scrolling_a_full_screen_app_drops_the_stale_selection() {
+        // Regression: a selection names absolute grid rows, which follow the
+        // text through Winter's own scrolling but cannot follow a full-screen
+        // app scrolling its own content. The wheel goes to the app, the app
+        // repaints, the grid rows never move, and the highlight was left
+        // sitting over whatever the app painted there: copying it returned
+        // text the user never pointed at.
+        let mut app = App::new();
+        // The default tab lays out a single pane, `PaneId(0)`.
+        let id = PaneId(0);
+        let mut pane = pane_with_scrollback();
+        pane.grid_mut().enter_alt_screen();
+        // DECSET ?1000: the app asks for mouse reporting, so the wheel is
+        // forwarded to it rather than scrolling Winter's own view.
+        pane.grid_mut().set_private_mode(1000, true);
+        app.panes.insert(id, pane);
+        app.selection.span = Some(Selection {
+            block: false,
+            start_row: 3,
+            start_col: 0,
+            end_row: 5,
+            end_col: 10,
+            pane: id,
+        });
+
+        app.on_mouse_wheel(winit::event::MouseScrollDelta::LineDelta(0.0, -1.0));
+
+        assert!(
+            app.selection.span.is_none(),
+            "the text under the highlight is about to change, so the selection goes"
+        );
+    }
+
+    #[test]
+    fn test_auto_scroll_selection_leaves_the_drag_end_alone_on_the_alt_screen() {
+        // Regression: the alternate screen has no history of its own, so an
+        // edge auto-scroll tick moves nothing. It used to extend the drag to
+        // the edge cell anyway, on every ~16ms tick, overwriting what the
+        // pointer's own motion had just set. A drag over the top row of any
+        // full-screen app (vim, htop, a TUI agent) collapsed to the cell it
+        // started on and would not grow.
+        let mut app = App::new();
+        let id = PaneId(1);
+        let mut pane = pane_with_scrollback();
+        pane.grid_mut().enter_alt_screen();
+        app.panes.insert(id, pane);
+        app.pointer.mouse_down = true;
+        let anchor = app.panes[&id].grid().to_absolute_row(0);
+        app.selection.span = Some(Selection {
+            block: false,
+            start_row: anchor,
+            start_col: 2,
+            end_row: anchor,
+            end_col: 30,
+            pane: id,
+        });
+        app.pointer.cursor_pos = (10.0, 23.0);
+
+        app.auto_scroll_selection();
+
+        assert_eq!(
+            app.panes[&id].grid().scroll_offset(),
+            0,
+            "the retained scrollback belongs to the primary buffer, so a \
+             full-screen app's viewport must not scroll into it"
+        );
+        let sel = app.selection.span.as_ref().expect("selection still active");
+        assert_eq!(
+            (sel.end_row, sel.end_col),
+            (anchor, 30),
+            "a tick that scrolled nothing leaves the drag's live end to the pointer"
+        );
+    }
+
+    #[test]
+    fn test_auto_scroll_selection_leaves_the_drag_end_alone_once_history_runs_out() {
+        // The same failure on the primary screen: once the view is already at
+        // the oldest retained row there is nothing left to scroll, and the
+        // drag must keep following the pointer instead of being pinned to the
+        // top-left cell.
+        let mut app = App::new();
+        let id = PaneId(1);
+        app.panes.insert(
+            id,
+            Pane::with_command(
+                40,
+                10,
+                portable_pty::CommandBuilder::new("true"),
+                winter_render::MAX_SCROLLBACK,
+            )
+            .expect("test pane spawn"),
+        );
+        assert_eq!(
+            app.panes[&id].grid().scrollback_len(),
+            0,
+            "fixture needs a pane with no history to consume"
+        );
+        app.pointer.mouse_down = true;
+        let anchor = app.panes[&id].grid().to_absolute_row(0);
+        app.selection.span = Some(Selection {
+            block: false,
+            start_row: anchor,
+            start_col: 2,
+            end_row: anchor,
+            end_col: 30,
+            pane: id,
+        });
+        app.pointer.cursor_pos = (10.0, 23.0);
+
+        app.auto_scroll_selection();
+
+        let sel = app.selection.span.as_ref().expect("selection still active");
+        assert_eq!((sel.end_row, sel.end_col), (anchor, 30));
     }
 
     #[test]

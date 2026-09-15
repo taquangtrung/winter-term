@@ -241,7 +241,9 @@ A directory's size is not something the filesystem knows, so `Shift-Alt-s` walks
 
 An operation acts on the marked entries, or on the entry under the cursor when nothing is marked, never both: the header shows how many are marked and what the last operation reported. A name typed into a prompt is a name, so `../elsewhere` is refused rather than reaching outside the listing, and nothing overwrites an existing entry. Copy and move take a new name for one target and a destination directory for several. Moving the root clears the marks, since a mark held over would count toward an operation in a listing it was never part of.
 
-Directories sort before files whatever the key, and moving the root, toggling a view option, or folding keeps the cursor on the entry it was already on. Each entry carries a glyph for what it is (folder, link, source, script, config, image, archive, or an executable), drawn from the range every Nerd Font carries, so a patched terminal font shows them and the status bar's own mode glyphs already assume one.
+Directories sort before files whatever the key, and moving the root, toggling a view option, or folding keeps the cursor on the entry it was already on. A block cursor sits on the active row's first non-blank column and follows it as you move, so a tool pane shows where a selection would start before you ask for one. `v` starts selecting from there, for copying out of a listing: `hjkl` and the arrows move and extend, `w` and `b` step words, `0`, `$`, `g` and `G` jump, `V` switches to whole lines, a second `v` drops the selection, `y` or `Enter` copies and leaves, and `Esc` cancels. While selecting it answers every key ahead of the tool, so the motions mean what they do in Vim rather than what the listing binds them to; chorded keys still reach the window, so splitting, zooming, and moving focus work from inside it. Dragging with the mouse selects the same rows.
+
+Each entry carries an icon for what it is. The `icons` setting chooses where it comes from: `"svg"` (the default) draws bundled artwork keyed by extension, exact filename, or directory name, which needs nothing of the terminal font; `"font"` draws a Nerd Font glyph for the entry's broad category, which scales, themes, and copies like any other character but needs a patched font, as the status bar's own mode glyphs already do; `"none"` draws neither.
 
 **Git** (`Ctrl-Shift-g`, or `Git: Status`) shows the working tree of the repository the pane's directory sits in, as foldable sections. A file changed both in the index and in the working tree appears in both, which is what lets one half be staged without the other. Every command runs from the repository root, off the event-loop thread, and the view re-reads the tree after anything that changed it; a failure is reported in the header rather than swallowed.
 
@@ -254,6 +256,7 @@ Directories sort before files whatever the key, and moving the root, toggling a 
 | `n` / `N` | Next, previous match |
 | `Tab` / `Shift-Tab` | Fold the section, fold everything |
 | `Enter` | Open the file under the cursor in `$EDITOR` |
+| `Enter` on a commit | Read the commit: message, files changed, then the patch |
 | `Tab` on a file | Show its diff, hunk by hunk |
 | `s` / `S` | Stage the target, stage everything |
 | `u` / `U` | Unstage the target, unstage everything |
@@ -263,6 +266,7 @@ Directories sort before files whatever the key, and moving the root, toggling a 
 | `P` / `F` / `f` | Push, pull with rebase, fetch all |
 | `G` | Re-read the working tree |
 | `Ctrl-Shift-c` | Commit what is staged, with a one-line message |
+| `Ctrl-Shift-s` | Stage all: untracked files when the cursor is in that section, tracked changes otherwise |
 | `!` | Run any git command |
 | `Alt-b` | Blame the file under the cursor |
 | `Alt-y` | Show every ref |
@@ -354,6 +358,7 @@ Changes apply on save, without a restart. `winter --reload` asks a running insta
 | `sentence-highlight` | Alternating bands over sentences, as a reading aid |
 | `wrap-indent` | Hang the continuation of a soft-wrapped line under its start |
 | `prompt-edit-bindings` | `"emacs"` (default) or `"none"`, see above |
+| `icons` | Tool-pane entry icons: `"svg"` (default), `"font"`, or `"none"` |
 | `cursor { ... }` | `blink`, `hide-in-inactive`, plus the shape per mode: `insert`, `normal`, `visual`, `block-focus` |
 | `status-bar { ... }` | `show`, `show-mode`, and the per-mode icons |
 | `clipboard-read` | Let programs read the clipboard through OSC 52 |

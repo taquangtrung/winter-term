@@ -24,8 +24,8 @@ use std::time::SystemTime;
 
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    find_match, scroll_to_cursor, JobReply, JobRequest, OpenTarget, Page, PageContent, PageOutcome,
-    PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
+    find_match, scroll_to_cursor, JobReply, JobRequest, OpenTarget, Page, PageContent, PageIcon,
+    PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
 };
 
 use listing::SortKey;
@@ -719,8 +719,9 @@ impl Page for DirPage {
         }
         let visible = rows.saturating_sub(HEADER_ROWS);
         self.scroll = scroll_to_cursor(self.scroll, self.cursor, self.rows.len(), visible);
-        page_rows.extend(self.rows.iter().skip(self.scroll).take(visible).map(|row| {
-            rows::entry_row(
+        let mut icons: Vec<PageIcon> = Vec::new();
+        for row in self.rows.iter().skip(self.scroll).take(visible) {
+            let (spans, mut icon) = rows::entry_row(
                 row,
                 rows::RowStyle {
                     marked: self.marks.contains(&row.entry.path),
@@ -729,9 +730,14 @@ impl Page for DirPage {
                     size: self.dir_size(row),
                 },
                 now,
-            )
-        }));
-        PageContent::new(page_rows).with_cursor_line(HEADER_ROWS + self.cursor - self.scroll)
+            );
+            icon.row = page_rows.len();
+            page_rows.push(spans);
+            icons.push(icon);
+        }
+        PageContent::new(page_rows)
+            .with_icons(icons)
+            .with_cursor_line(HEADER_ROWS + self.cursor - self.scroll)
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {

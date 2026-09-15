@@ -115,6 +115,13 @@ cursor {
 // Dim inactive panes by blending their colors toward the background. Default: false.
 dim-inactive #false
 
+// Where the icon beside each entry in a tool page (Dir, Git) comes from.
+//   "font" - Nerd Font glyphs, drawn as ordinary text. Needs a patched font.
+//   "svg"  - bundled SVG icons. Always draw, but blur at small cell sizes.
+//   "none" - no icon column.
+// Default: "svg".
+icons "svg"
+
 // ── Status bar ────────────────────────────────────────────────────────────────
 status-bar {
     // Show or hide the entire status bar (freeing its reserved row when hidden).

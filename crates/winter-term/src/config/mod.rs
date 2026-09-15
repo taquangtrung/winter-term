@@ -183,6 +183,10 @@ pub struct Config {
     pub font_weight: Option<String>,
     /// Weight used for bold text.
     pub font_weight_bold: Option<String>,
+    /// Where a tool page's per-entry icons come from. Default:
+    /// [`IconStyle::Svg`], the icons Winter bundles, which draw whatever the
+    /// terminal font is.
+    pub icons: IconStyle,
     /// User keybindings, keyed by mode and then by chord.
     pub keybindings: HashMap<String, HashMap<String, String>>,
     /// Enable OpenType ligatures in the font renderer. Defaults to `false`:
@@ -240,6 +244,25 @@ pub struct Config {
     /// Indent soft-wrapped continuation lines to match the logical line's
     /// first non-blank column. Default: `true`.
     pub wrap_indent: bool,
+}
+
+/// Where the icon beside an entry in a tool page comes from.
+///
+/// The two sources fail in opposite directions, which is why this is a setting
+/// rather than a choice made once. A glyph is a real cell: it scales with the
+/// font, takes the theme's foreground color, and stays crisp at any size, but
+/// it is only there if the configured font is patched. An SVG always draws and
+/// carries its own color, but it is an overlay rather than a cell, and a
+/// detailed multi-color icon turns to mush once the cell is small enough.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum IconStyle {
+    /// No icon column at all.
+    None,
+    /// Nerd Font glyphs drawn as ordinary styled text.
+    Font,
+    /// Bundled SVG icons rasterized to the cell box.
+    #[default]
+    Svg,
 }
 
 /// Which line-editor bindings Winter assumes the shell uses when it realizes a
@@ -647,6 +670,11 @@ impl Config {
             clipboard_read: kdl.clipboard_read.unwrap_or(false),
             palette_match_underline: kdl.palette_match_underline.unwrap_or(false),
             pane_border_width: kdl.pane_border_width.map(|w| w.max(1.0)).unwrap_or(1.0),
+            icons: kdl
+                .icons
+                .as_deref()
+                .map(IconStyle::from_value)
+                .unwrap_or_default(),
             paste_on_right_click: kdl.paste_on_right_click.unwrap_or(false),
             prompt_edit_bindings: kdl
                 .prompt_edit_bindings
@@ -746,6 +774,7 @@ impl Config {
         out.push_str(&format!("url-underline {}\n", kdl_bool(self.url_underline)));
         out.push_str(&format!("wrap-indent {}\n", kdl_bool(self.wrap_indent)));
         out.push_str(&format!("dim-inactive {}\n", kdl_bool(self.dim_inactive)));
+        out.push_str(&format!("icons {}\n", kdl_string(self.icons.as_value())));
         out.push_str(&format!(
             "restore-session {}\n",
             kdl_bool(self.restore_session)
@@ -888,6 +917,28 @@ impl Config {
     }
 }
 
+impl IconStyle {
+    /// Parse the `icons` value. An unrecognized word keeps the default rather
+    /// than silently dropping the icon column.
+    pub(crate) fn from_value(value: &str) -> Self {
+        match value {
+            "none" | "off" => IconStyle::None,
+            "svg" => IconStyle::Svg,
+            "font" | "glyph" | "nerd" => IconStyle::Font,
+            _ => IconStyle::Svg,
+        }
+    }
+
+    /// The canonical spelling written back by [`Config::to_kdl`].
+    fn as_value(self) -> &'static str {
+        match self {
+            IconStyle::None => "none",
+            IconStyle::Font => "font",
+            IconStyle::Svg => "svg",
+        }
+    }
+}
+
 impl PromptEditBindings {
     /// Parse the `prompt-edit-bindings` value. An unrecognized word keeps the
     /// default rather than silently disabling prompt editing.
@@ -926,6 +977,7 @@ impl Default for Config {
             font_size: 15.0,
             font_weight: None,
             font_weight_bold: None,
+            icons: IconStyle::default(),
             keybindings: HashMap::new(),
             ligatures: false,
             clipboard_read: false,
@@ -1596,6 +1648,31 @@ status-bar {
         let kdl = enabled.to_kdl();
         let restored = Config::parse(&kdl);
         assert!(restored.sentence_highlight);
+    }
+
+    #[test]
+    fn test_icons_parse_and_round_trip() {
+        // Bundled artwork by default: it draws whatever font the user has,
+        // where the glyphs need a patched one.
+        assert_eq!(Config::default().icons, IconStyle::Svg);
+
+        for (written, expected) in [
+            ("svg", IconStyle::Svg),
+            ("font", IconStyle::Font),
+            ("none", IconStyle::None),
+        ] {
+            let parsed = Config::parse(&format!("icons {written:?}"));
+            assert_eq!(parsed.icons, expected, "parsing {written:?}");
+            assert_eq!(
+                Config::parse(&parsed.to_kdl()).icons,
+                expected,
+                "round-tripping {written:?} through the writer"
+            );
+        }
+
+        // An unreadable value keeps the icon column rather than silently
+        // dropping it, which would read as icons being broken.
+        assert_eq!(Config::parse(r#"icons "wat""#).icons, IconStyle::Svg);
     }
 
     #[test]

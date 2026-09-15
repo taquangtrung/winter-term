@@ -33,6 +33,47 @@ fn copy_confirmation(text: &str) -> String {
 // ========================================================================
 
 impl App {
+    /// The grid a selection over `pane` reads: the rows a page last painted
+    /// when one covers the pane, else the pane's own terminal grid.
+    ///
+    /// A page draws over a pane whose shell keeps running underneath, so the
+    /// two grids hold different text. Resolving against the terminal's meant a
+    /// drag over a listing highlighted nothing and copied whatever output was
+    /// hidden behind it.
+    ///
+    /// Both are addressed the same way afterwards: a page's grid has no
+    /// scrollback, so `to_absolute_row` over it is the identity and
+    /// `absolute_cell` is an ordinary cell lookup.
+    pub(crate) fn selection_grid(&self, pane: PaneId) -> Option<&winter_render::Grid> {
+        match self.pages.get(&pane).and_then(|slot| slot.painted.as_ref()) {
+            Some(painted) => Some(painted),
+            None => self.panes.get(&pane).map(|pane| pane.grid()),
+        }
+    }
+
+    /// Drop any selection held in `pane`, because what it names is about to
+    /// stop being the text the user picked.
+    ///
+    /// A selection is a pair of absolute grid rows, which is enough to follow
+    /// the text through Winter's own scrolling. It cannot follow a full-screen
+    /// app scrolling its *own* content: from here that is an ordinary repaint,
+    /// with the grid rows unmoved and different text now under them. The
+    /// highlight would sit over whatever the app painted there, and copying it
+    /// would yield text the user never pointed at, so the selection is dropped
+    /// at the gesture that is about to cause the repaint. Other terminals
+    /// resolve the same problem the same way.
+    pub(crate) fn drop_selection_in_pane(&mut self, pane: PaneId) {
+        if self
+            .selection
+            .span
+            .as_ref()
+            .is_some_and(|sel| sel.pane == pane)
+        {
+            self.selection.span = None;
+            self.dirty = true;
+        }
+    }
+
     /// The selected text, and its line/character counts. Rows in `self.selection.span`
     /// are absolute (see [`winter_render::Grid::to_absolute_row`]), so this reads
     /// via `absolute_cell` rather than the scroll-position-dependent `visible_cell`
@@ -40,8 +81,7 @@ impl App {
     /// the view has since scrolled.
     pub(crate) fn selected_text(&self) -> Option<String> {
         let sel = self.selection.span.as_ref()?;
-        let pane = self.panes.get(&sel.pane)?;
-        let grid = pane.grid();
+        let grid = self.selection_grid(sel.pane)?;
 
         if sel.block {
             let (sr, er) = (
@@ -273,10 +313,9 @@ impl App {
     /// `row` is the viewport row under the click; the resulting `Selection` is
     /// stored with its absolute row (see [`winter_render::Grid::to_absolute_row`]).
     pub(crate) fn select_word_at(&mut self, pane_id: PaneId, row: usize, col: usize) {
-        let Some(pane) = self.panes.get(&pane_id) else {
+        let Some(grid) = self.selection_grid(pane_id) else {
             return;
         };
-        let grid = pane.grid();
         let abs_row = grid.to_absolute_row(row);
         let ch = grid.cell(row, col).map(|c| c.ch).unwrap_or(' ');
         if !WORD_CHARS.contains(ch) {

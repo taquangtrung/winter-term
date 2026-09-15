@@ -109,12 +109,21 @@ impl App {
     /// outside the current page can be reached, and pulled into the
     /// selection, without the pointer leaving the window. Because `Selection`
     /// rows are absolute ([`winter_render::Grid::to_absolute_row`]),
-    /// re-deriving the edge row from the post-scroll view on every call grows
-    /// `end_row` further each time rather than snapping back to a fixed
-    /// viewport position. Scrolling itself is throttled to one line per
+    /// re-deriving the edge row from each post-scroll view grows `end_row`
+    /// further each time rather than snapping back to a fixed viewport
+    /// position. Scrolling itself is throttled to one line per
     /// [`AUTO_SCROLL_INTERVAL`] via `pointer.auto_scroll_next`; a no-op when the
     /// button isn't held, there's no active selection, or the pointer isn't
     /// within [`AUTO_SCROLL_EDGE_MARGIN`] of an edge.
+    ///
+    /// Extending the selection is a *consequence* of scrolling, so it happens
+    /// only on a tick that actually moved the view. A tick that scrolled
+    /// nothing leaves the span alone and lets the pointer's own motion own the
+    /// live end: otherwise, with no history left to consume, this would pin
+    /// `end` to the edge cell ~60 times a second and the drag could never grow
+    /// past the cell it started on. That is the common case on the alternate
+    /// screen, which has no history at all, so a drag over the top row of any
+    /// full-screen app collapsed to a single cell.
     pub(crate) fn auto_scroll_selection(&mut self) {
         if !self.pointer.mouse_down {
             return;
@@ -149,14 +158,19 @@ impl App {
         let lines = (1 + extra).min(AUTO_SCROLL_MAX_LINES_PER_TICK);
 
         let now = Instant::now();
-        if now >= self.pointer.auto_scroll_next {
-            self.pointer.auto_scroll_next = now + AUTO_SCROLL_INTERVAL;
-            let grid = pane.grid_mut();
-            if scroll_up {
-                grid.scroll_up_history(lines);
-            } else {
-                grid.scroll_down_history(lines);
-            }
+        if now < self.pointer.auto_scroll_next {
+            return;
+        }
+        self.pointer.auto_scroll_next = now + AUTO_SCROLL_INTERVAL;
+        let grid = pane.grid_mut();
+        let before = grid.scroll_offset();
+        if scroll_up {
+            grid.scroll_up_history(lines);
+        } else {
+            grid.scroll_down_history(lines);
+        }
+        if grid.scroll_offset() == before {
+            return;
         }
 
         let grid = pane.grid();

@@ -2,7 +2,7 @@
 
 use winit::keyboard::{Key, NamedKey};
 
-use crate::config::{PromptEditBindings, TitleBarStyle, DEFAULT_WINDOW_TITLE_TEMPLATE};
+use crate::config::{IconStyle, PromptEditBindings, TitleBarStyle, DEFAULT_WINDOW_TITLE_TEMPLATE};
 use crate::model::settings_page::{ChoiceOption, SettingsField, SettingsPage};
 use winter_render::{ControlsSide, CursorShape, MenuStyle};
 
@@ -223,6 +223,21 @@ impl App {
                 )
                 .in_section("Terminal")
                 .with_note("Which line-editor chords Vim operators send to the shell. Choose None if your shell is in vi mode")
+            },
+            {
+                let icon_options = vec![
+                    ChoiceOption { label: "Font".into(), value: "font".into() },
+                    ChoiceOption { label: "SVG".into(), value: "svg".into() },
+                    ChoiceOption { label: "None".into(), value: "none".into() },
+                ];
+                let idx = match self.config.icons {
+                    IconStyle::Font => 0,
+                    IconStyle::Svg => 1,
+                    IconStyle::None => 2,
+                };
+                SettingsField::choice("icons", "Tool page icons", icon_options, idx)
+                    .in_section("Terminal")
+                    .with_note("Where the icon beside each entry comes from. Font needs a patched terminal font; SVG always draws but blurs at small cell sizes")
             },
             SettingsField::toggle(
                 "palette_match_underline",
@@ -543,6 +558,9 @@ impl App {
             }
             "prompt_edit_bindings" => {
                 self.config.prompt_edit_bindings = PromptEditBindings::from_value(value);
+            }
+            "icons" => {
+                self.config.icons = IconStyle::from_value(value);
             }
             "clipboard_read" => {
                 self.config.clipboard_read = value == "true";

@@ -23,6 +23,7 @@ path = "src/main.rs"
 [dependencies]
 anyhow.workspace = true
 arboard = "3"
+flate2 = "1"
 open = "5"
 base64.workspace = true
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
@@ -47,6 +48,9 @@ gtk = "0.18"
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1"
+
+[build-dependencies]
+flate2 = "1"
 
 [target.'cfg(windows)'.build-dependencies]
 winresource.workspace = true

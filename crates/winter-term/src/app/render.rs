@@ -3,9 +3,10 @@
 use base64::Engine;
 use serde_json::Value;
 
+use crate::config::IconStyle;
 use crate::model::layout::{PaneId, Rect};
 use crate::model::mode::Mode;
-use crate::model::page::{PageContent, PageStyle};
+use crate::model::page::{PageContent, PageIcon, PageStyle};
 use crate::model::palette::{Palette, PaletteMode};
 use crate::model::settings_page::{Control, SettingsField, SettingsPage};
 use crate::terminal::block_queue::{BlockEntry, BlockKind};
@@ -100,6 +101,10 @@ struct PaneViewInput<'a> {
     nav_cursors: &'a std::collections::HashMap<PaneId, (usize, usize)>,
     overlays: &'a PaneOverlays,
     page_paints: &'a [PagePaint],
+    /// Where the Vim-style text cursor sits, for the one page that has one.
+    page_cursors: &'a std::collections::HashMap<PaneId, (usize, usize)>,
+    /// The open pages, for the grid each one last painted into.
+    pages: &'a std::collections::HashMap<PaneId, super::page::PageSlot>,
     palette_open: bool,
     panes: &'a std::collections::HashMap<PaneId, crate::terminal::pane::Pane>,
     rects: &'a [(PaneId, Rect)],
@@ -111,7 +116,9 @@ struct PaneViewInput<'a> {
 /// the row its cursor line sits on.
 struct PagePaint {
     cursor_line: Option<usize>,
-    grid: Grid,
+    /// Icons to rasterize over the painted rows. Empty unless the icon style
+    /// calls for artwork; a glyph style has already been drawn into the grid.
+    icons: Vec<PageIcon>,
     pane: PaneId,
 }
 
@@ -128,7 +135,9 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
         modes,
         nav_cursors,
         overlays,
+        page_cursors,
         page_paints,
+        pages,
         palette_open,
         panes,
         rects,
@@ -140,7 +149,17 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
         // A page covers the pane's terminal while it is open, so it is checked
         // first: the grid underneath keeps updating, unseen.
         if let Some(paint) = page_paints.iter().find(|paint| paint.pane == *id) {
-            views.push(page_pane_view(paint, *rect, *id == focused, config));
+            if let Some(grid) = pages.get(id).and_then(|slot| slot.painted.as_ref()) {
+                views.push(page_pane_view(
+                    paint,
+                    grid,
+                    *rect,
+                    *id == focused,
+                    config,
+                    selection.filter(|s| s.pane == *id),
+                    page_cursors.get(id).copied(),
+                ));
+            }
         } else if let Some(pane) = panes.get(id) {
             let (sel_tuple, sel_block) = match selection {
                 Some(s) if s.pane == *id => (
@@ -261,15 +280,29 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
     views
 }
 
-/// Build the view for a page pane. A page has no terminal caret of its own, so
-/// the cursor is parked out of bounds (suppressing it) and the cursor line is
-/// the only mark of where the page's own selection sits.
+/// Build the view for a page pane.
+///
+/// A page has no terminal caret of its own, so the cursor is parked out of
+/// bounds (suppressing it) and the cursor line marks where the page's own
+/// selection sits. A text selection over the page is drawn here the same way a
+/// terminal pane draws one: the rows it names are the page's, so it has to be
+/// resolved against the grid the page painted rather than the pane's.
 fn page_pane_view<'a>(
     paint: &'a PagePaint,
+    grid: &'a Grid,
     rect: Rect,
     focused: bool,
     config: &crate::config::Config,
+    selection: Option<&'a super::Selection>,
+    text_cursor: Option<(usize, usize)>,
 ) -> PaneView<'a> {
+    let (sel_tuple, sel_block) = match selection {
+        Some(s) => (
+            Some((s.start_row, s.start_col, s.end_row, s.end_col)),
+            s.block,
+        ),
+        None => (None, false),
+    };
     PaneView {
         bracket_colors: &[],
         block_band: None,
@@ -278,21 +311,24 @@ fn page_pane_view<'a>(
         cursor_visible: false,
         dim: !focused && config.dim_inactive,
         focused,
-        grid: &paint.grid,
+        grid,
         hovered_link: 0,
         labels: None,
         find_labels: &[],
-        nav_cursor: Some((paint.grid.rows(), paint.grid.cols())),
+        // Out of bounds when there is no text cursor, which suppresses it: a
+        // page has no caret of its own, so the cursor line is the only mark of
+        // where the page's own selection sits.
+        nav_cursor: Some(text_cursor.unwrap_or((grid.rows(), grid.cols()))),
         cursor_line_row: paint.cursor_line,
-        nav_cursor_visible: false,
+        nav_cursor_visible: text_cursor.is_some(),
         rect: App::layout_rect_to_pane(rect),
         scroll_offset: 0,
         scrollback_len: 0,
         search_matches: &[],
         search_current: &[],
         sentence_spans: &[],
-        selection: None,
-        selection_block: false,
+        selection: sel_tuple,
+        selection_block: sel_block,
         url_underline: false,
     }
 }
@@ -571,6 +607,7 @@ impl App {
         // draws a tool pane through exactly the path a terminal pane takes. A
         // page is handed its row count first, so it can window a listing longer
         // than the pane around its own cursor.
+        let icon_style = self.config.icons;
         let mut page_paints: Vec<PagePaint> = Vec::new();
         for (id, rect) in &rects {
             let (cols, rows) = renderer.grid_size_for(App::layout_rect_to_pane(*rect));
@@ -578,9 +615,23 @@ impl App {
                 continue;
             };
             let content = slot.page.content(rows);
+            // Kept on the slot rather than in the paint, so that selecting over
+            // the pane after this frame reads the rows the user can see.
+            slot.cursor_line = content.cursor_line;
+            slot.painted = Some(build_page_grid(
+                &content,
+                renderer.theme(),
+                cols,
+                rows,
+                icon_style,
+            ));
             page_paints.push(PagePaint {
                 cursor_line: content.cursor_line,
-                grid: build_page_grid(&content, renderer.theme(), cols, rows),
+                icons: if icon_style == IconStyle::Svg {
+                    content.icons.clone()
+                } else {
+                    Vec::new()
+                },
                 pane: *id,
             });
         }
@@ -609,13 +660,33 @@ impl App {
         // Gathered before the renderer is held mutably: the bands read app
         // state the views below borrow alongside it.
         let focused_bands = self.block_bands(focused);
+        // Rasterized before the renderer is taken mutably below, since filling
+        // the icon cache needs it mutably too.
+        let icon_placements = self.page_icon_placements(&page_paints, &rects, (cw, ch));
+        // Every page pane shows a block cursor, not only one that `v` has
+        // started a text cursor in. The row band says which entry is current;
+        // the cursor says which cell a selection would start from, and without
+        // it a page looks like it has no cursor at all.
+        let page_cursors: std::collections::HashMap<PaneId, (usize, usize)> = self
+            .pages
+            .iter()
+            .filter_map(|(id, slot)| {
+                if let Some(cursor) = self.page_cursor.as_ref().filter(|c| c.pane == *id) {
+                    return Some((*id, (cursor.row, cursor.col)));
+                }
+                let row = slot.cursor_line?;
+                let grid = slot.painted.as_ref()?;
+                Some((*id, (row, super::page_cursor::first_non_blank(grid, row))))
+            })
+            .collect();
 
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
         reflow_width_wrapped_blocks(&mut self.image_blocks, &rects, renderer);
-        let placements =
+        let mut placements =
             image_placements(&self.image_blocks, &self.panes, &rects, ch, &page_paints);
+        placements.extend(icon_placements);
         let views = build_pane_views(PaneViewInput {
             blink_phase: self.blink_phase,
             config: &self.config,
@@ -626,7 +697,9 @@ impl App {
             modes: &self.modes,
             nav_cursors: &self.nav_cursors,
             overlays: &overlays,
+            page_cursors: &page_cursors,
             page_paints: &page_paints,
+            pages: &self.pages,
             palette_open: self.palette.is_some(),
             panes: &self.panes,
             rects: &rects,
@@ -788,6 +861,90 @@ impl App {
             search_matches: search_match_data,
             sentence_spans: sentence_span_data,
         }
+    }
+
+    /// The GPU texture for one icon at one pixel box, rasterizing it the first
+    /// time it is asked for.
+    ///
+    /// The whole cache is dropped when the box changes, which happens only on a
+    /// font-size or DPI change: every texture in it was rasterized for the old
+    /// box, and an icon scaled from the wrong size is exactly the blur that
+    /// rasterizing per size exists to avoid.
+    fn icon_texture(&mut self, name: &str, box_w: u32, box_h: u32) -> Option<u64> {
+        if self.icon_texture_box != (box_w, box_h) {
+            for id in self.icon_textures.values().flatten() {
+                if let Some(renderer) = self.renderer.as_mut() {
+                    renderer.free_image(*id);
+                }
+            }
+            self.icon_textures.clear();
+            self.icon_texture_box = (box_w, box_h);
+        }
+        let key = (name.to_string(), box_w, box_h);
+        if let Some(cached) = self.icon_textures.get(&key) {
+            return *cached;
+        }
+        let id = self.next_image_id;
+        let uploaded = crate::icons::svg(name).is_some_and(|svg| {
+            self.renderer
+                .as_mut()
+                .is_some_and(|renderer| renderer.upload_svg_in_box(id, &svg, box_w, box_h))
+        });
+        let slot = uploaded.then(|| {
+            self.next_image_id += 1;
+            id
+        });
+        self.icon_textures.insert(key, slot);
+        slot
+    }
+
+    /// Quads for every icon the pages want drawn this frame.
+    ///
+    /// Recomputed from scratch each frame rather than anchored, because a page
+    /// repaints its rows from its own model every frame anyway: there is no
+    /// scrollback row for an icon to drift away from.
+    fn page_icon_placements(
+        &mut self,
+        paints: &[PagePaint],
+        rects: &[(PaneId, Rect)],
+        cell: (f32, f32),
+    ) -> Vec<ImagePlacement> {
+        let (cw, ch) = cell;
+        let box_w = (cw * PageIcon::WIDTH as f32).round().max(1.0) as u32;
+        let box_h = ch.round().max(1.0) as u32;
+        let mut placements = Vec::new();
+        for paint in paints {
+            let Some((_, rect)) = rects.iter().find(|(id, _)| *id == paint.pane) else {
+                continue;
+            };
+            let pane_rect = App::layout_rect_to_pane(*rect);
+            for icon in &paint.icons {
+                let Some(name) = crate::icons::name_for(&icon.kind) else {
+                    continue;
+                };
+                let Some(id) = self.icon_texture(&name, box_w, box_h) else {
+                    continue;
+                };
+                let x = pane_rect.x + icon.col as f32 * cw;
+                let y = pane_rect.y + icon.row as f32 * ch;
+                // Clipped out rather than drawn past the pane's last row.
+                if y + ch > pane_rect.y + pane_rect.height || x + cw > pane_rect.x + pane_rect.width
+                {
+                    continue;
+                }
+                placements.push(ImagePlacement {
+                    alpha: 1.0,
+                    height: box_h as f32,
+                    id,
+                    v_max: 1.0,
+                    v_min: 0.0,
+                    width: box_w as f32,
+                    x,
+                    y,
+                });
+            }
+        }
+        placements
     }
 
     /// Which pane the mouse pointer is over, if any.
@@ -1485,7 +1642,13 @@ fn build_settings_grid(page: &SettingsPage, theme: &Theme, cols: usize, rows: us
 /// Paint a page into a fresh `cols` x `rows` grid: its rows in order, each span
 /// resolved from a semantic style to the theme's colors, clipped at the pane's
 /// last row.
-fn build_page_grid(content: &PageContent, theme: &Theme, cols: usize, rows: usize) -> Grid {
+fn build_page_grid(
+    content: &PageContent,
+    theme: &Theme,
+    cols: usize,
+    rows: usize,
+    icons: IconStyle,
+) -> Grid {
     let mut grid = Grid::new(cols, rows);
     for (row, spans) in content.rows.iter().take(rows).enumerate() {
         let mut col = 0;
@@ -1501,6 +1664,28 @@ fn build_page_grid(content: &PageContent, theme: &Theme, cols: usize, rows: usiz
                 page_span_style(span.style, theme),
             );
             col += span.text.chars().count();
+        }
+    }
+    // A glyph is a real cell, so it goes into the grid the page just painted
+    // and is selected, copied and themed like any other character. It keeps the
+    // style already on the cell rather than imposing one, so the band on a
+    // marked row runs through it unbroken.
+    if icons == IconStyle::Font {
+        for icon in &content.icons {
+            if icon.row >= rows || icon.col >= cols {
+                continue;
+            }
+            let style = grid
+                .cell(icon.row, icon.col)
+                .map(|cell| cell.style)
+                .unwrap_or_else(|| page_span_style(PageStyle::Normal, theme));
+            put(
+                &mut grid,
+                icon.row,
+                icon.col,
+                &icon.glyph.to_string(),
+                style,
+            );
         }
     }
     grid
@@ -1878,7 +2063,7 @@ mod tests {
             PageSpan::plain("Zoom Pane"),
             PageSpan::new(PageStyle::Accent, "Shift-Alt-="),
         ]]);
-        let grid = build_page_grid(&content, &Theme::dark(), 40, 4);
+        let grid = build_page_grid(&content, &Theme::dark(), 40, 4, IconStyle::None);
         let first = grid
             .to_text()
             .lines()
@@ -1889,13 +2074,47 @@ mod tests {
     }
 
     #[test]
+    fn test_page_grid_draws_a_font_icon_into_the_reserved_columns() {
+        // The page leaves the icon's columns blank whatever the setting is, so
+        // a glyph style has to paint the glyph in, and only then: painting it
+        // under `Svg` would leave a glyph showing through the artwork, and
+        // under `None` would put back the column the setting removes.
+        let content =
+            PageContent::new(vec![vec![PageSpan::plain("   name")]]).with_icons(vec![PageIcon {
+                col: 0,
+                glyph: 'X',
+                kind: crate::model::page::PageIconKind::File {
+                    name: "name".to_string(),
+                },
+                row: 0,
+            }]);
+        let painted = |style| {
+            build_page_grid(&content, &Theme::dark(), 20, 2, style)
+                .to_text()
+                .lines()
+                .next()
+                .unwrap_or_default()
+                .to_string()
+        };
+        assert!(painted(IconStyle::Font).starts_with('X'));
+        assert!(painted(IconStyle::Svg).starts_with("   name"));
+        assert!(painted(IconStyle::None).starts_with("   name"));
+    }
+
+    #[test]
     fn test_page_grid_clips_rows_past_the_pane_height() {
         // A page longer than its pane must lose the overflow, not write past
         // the grid's last row.
         let rows: Vec<PageRow> = (0..10)
             .map(|i| vec![PageSpan::plain(format!("row{i}"))])
             .collect();
-        let grid = build_page_grid(&PageContent::new(rows), &Theme::dark(), 20, 3);
+        let grid = build_page_grid(
+            &PageContent::new(rows),
+            &Theme::dark(),
+            20,
+            3,
+            IconStyle::None,
+        );
         let text = grid.to_text();
         assert!(text.contains("row2"), "the last visible row is painted");
         assert!(

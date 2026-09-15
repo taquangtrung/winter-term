@@ -20,6 +20,7 @@ pub(super) struct KdlConfig {
     pub(crate) font_size: Option<f32>,
     pub(crate) font_weight: Option<String>,
     pub(crate) font_weight_bold: Option<String>,
+    pub(crate) icons: Option<String>,
     pub(crate) keybindings: Option<HashMap<String, HashMap<String, String>>>,
     pub(crate) menu_style: Option<String>,
     pub(crate) scrollback_lines: Option<u64>,

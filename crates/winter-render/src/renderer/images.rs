@@ -66,6 +66,52 @@ impl GpuRenderer {
         Some((width, height))
     }
 
+    /// Rasterize an SVG to fill a fixed pixel box, preserving its aspect ratio
+    /// and centering it in whatever room is left over.
+    ///
+    /// Separate from [`Self::upload_svg`], which rasterizes at the document's
+    /// intrinsic size because a content block is scaled to the pane afterwards.
+    /// An icon has to be sharp at one specific size instead, which means
+    /// rasterizing to that size rather than sampling a texture down to it.
+    pub fn upload_svg_in_box(&mut self, id: u64, svg: &[u8], box_w: u32, box_h: u32) -> bool {
+        let fontdb = self.svg_fontdb();
+        let options = resvg::usvg::Options {
+            fontdb,
+            ..Default::default()
+        };
+        let Ok(tree) = resvg::usvg::Tree::from_data(svg, &options) else {
+            return false;
+        };
+        let size = tree.size();
+        if size.width() <= 0.0 || size.height() <= 0.0 {
+            return false;
+        }
+        let width = box_w.clamp(1, MAX_SVG_DIM);
+        let height = box_h.clamp(1, MAX_SVG_DIM);
+        let Some(mut pixmap) = resvg::tiny_skia::Pixmap::new(width, height) else {
+            return false;
+        };
+
+        let scale = (width as f32 / size.width()).min(height as f32 / size.height());
+        let transform = resvg::tiny_skia::Transform::from_translate(
+            (width as f32 - size.width() * scale) / 2.0,
+            (height as f32 - size.height() * scale) / 2.0,
+        )
+        .pre_scale(scale, scale);
+        resvg::render(&tree, transform, &mut pixmap.as_mut());
+
+        // tiny-skia stores premultiplied alpha; the image pass blends straight
+        // alpha, so demultiply on the way out.
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for pixel in pixmap.pixels() {
+            let color = pixel.demultiply();
+            rgba.extend_from_slice(&[color.red(), color.green(), color.blue(), color.alpha()]);
+        }
+        self.image_pass
+            .upload(&self.device, &self.queue, id, &rgba, width, height);
+        true
+    }
+
     /// The system-font database for SVG text, scanned once on first use and
     /// then reused.
     pub(super) fn svg_fontdb(&mut self) -> std::sync::Arc<resvg::usvg::fontdb::Database> {

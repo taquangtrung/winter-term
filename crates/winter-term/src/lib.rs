@@ -12,6 +12,7 @@
 pub mod app;
 pub mod config;
 pub mod control;
+pub(crate) mod icons;
 pub mod model;
 pub mod mux;
 pub(crate) mod paths;

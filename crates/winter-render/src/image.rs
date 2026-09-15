@@ -23,7 +23,7 @@ use wgpu::{
 // ========================================================================
 
 const IMAGE_SHADER: &str = include_str!("image.wgsl");
-const MAX_QUADS: usize = 256;
+const MAX_QUADS: usize = 1024;
 const VERTEX_BYTES: usize = 20;
 const VERTS_PER_QUAD: u32 = 6;
 

@@ -1,7 +1,7 @@
 //! Painting the status view: the header, each section, and the entries under
 //! it, plus the mapping from a row back to what it stands for.
 
-use crate::model::page::{PageRow, PageSpan, PageStyle};
+use crate::model::page::{PageIcon, PageIconKind, PageRow, PageSpan, PageStyle};
 
 use super::diff::FileDiff;
 use super::parse::{Commit, FileStatus, Section, Status};
@@ -27,6 +27,11 @@ const HUNK_INDENT: &str = "    ";
 
 /// Column the change code is drawn in, before the path.
 const CODE_WIDTH: usize = 2;
+
+/// Glyph drawn for a file row when the icon style is a font rather than
+/// artwork. One generic file: the Git view is about what changed, and a
+/// per-language glyph set belongs to the listing tools.
+const FILE_GLYPH: char = '\u{f016}';
 
 // ========================================================================
 // Data Structures
@@ -72,11 +77,16 @@ pub struct FileRow {
     pub section: Section,
 }
 
-/// One painted row: its spans, and what it stands for.
+/// One painted row: its spans, what it stands for, and the icon the host
+/// should draw over the columns the spans left clear for it.
 #[derive(Clone, Debug)]
 pub struct ViewRow {
     /// What acting on this row acts on.
     pub item: Item,
+    /// The icon to draw beside the row, for the rows that have one. Its `row`
+    /// is filled in by whoever assembles the page, which is the only place the
+    /// row's final position is known.
+    pub icon: Option<PageIcon>,
     /// The row's painted spans.
     pub spans: PageRow,
 }
@@ -163,6 +173,7 @@ fn header_row(status: &Status, message: Option<&str>) -> ViewRow {
         spans.push(PageSpan::new(PageStyle::Accent, format!("  {message}")));
     }
     ViewRow {
+        icon: None,
         item: Item::None,
         spans,
     }
@@ -175,6 +186,7 @@ fn heading_row(title: &str, count: usize, collapsed: bool, item: Item) -> ViewRo
         GLYPH_EXPANDED
     };
     ViewRow {
+        icon: None,
         item,
         spans: vec![
             PageSpan::new(PageStyle::Header, format!("{glyph}{title}")),
@@ -188,7 +200,19 @@ fn file_row(file: &FileStatus) -> ViewRow {
         Some(from) => format!("{from} → {}", file.path),
         None => file.path.clone(),
     };
+    // The status letter stays: it says what changed, where the icon says what
+    // kind of file it is. The icon's columns follow it, blank, with one more
+    // keeping the name off the artwork.
+    let reserved = " ".repeat(PageIcon::WIDTH + 1);
     ViewRow {
+        icon: Some(PageIcon {
+            col: ENTRY_INDENT.chars().count() + CODE_WIDTH,
+            glyph: FILE_GLYPH,
+            kind: PageIconKind::File {
+                name: leaf_name(&file.path).to_string(),
+            },
+            row: 0,
+        }),
         item: Item::File(FileRow {
             path: file.path.clone(),
             section: file.section,
@@ -198,9 +222,15 @@ fn file_row(file: &FileStatus) -> ViewRow {
                 code_style(file.section),
                 format!("{ENTRY_INDENT}{:<CODE_WIDTH$}", file.code),
             ),
-            PageSpan::plain(name),
+            PageSpan::plain(format!("{reserved}{name}")),
         ],
     }
+}
+
+/// The last path segment, which is what the icon set matches names against: a
+/// table keyed on `Cargo.toml` never fires for `crates/winter-term/Cargo.toml`.
+fn leaf_name(path: &str) -> &str {
+    path.rsplit(['/', '\\']).next().unwrap_or(path)
 }
 
 /// Every row of one file's diff: each hunk's header, then its lines, all
@@ -215,6 +245,7 @@ fn hunk_rows(file: &FileRow, diff: &FileDiff) -> Vec<ViewRow> {
         });
         let (added, removed) = hunk.counts();
         rows.push(ViewRow {
+            icon: None,
             item: item.clone(),
             spans: vec![
                 PageSpan::new(PageStyle::Header, format!("{HUNK_INDENT}{}", hunk.header)),
@@ -222,6 +253,7 @@ fn hunk_rows(file: &FileRow, diff: &FileDiff) -> Vec<ViewRow> {
             ],
         });
         rows.extend(hunk.lines.iter().map(|line| ViewRow {
+            icon: None,
             item: item.clone(),
             spans: vec![PageSpan::new(
                 line_style(line),
@@ -243,6 +275,7 @@ fn line_style(line: &str) -> PageStyle {
 
 fn commit_row(commit: &Commit) -> ViewRow {
     ViewRow {
+        icon: None,
         item: Item::Commit(commit.hash.clone()),
         spans: vec![
             PageSpan::new(PageStyle::Accent, format!("{ENTRY_INDENT}{} ", commit.hash)),
@@ -253,6 +286,7 @@ fn commit_row(commit: &Commit) -> ViewRow {
 
 fn blank_row() -> ViewRow {
     ViewRow {
+        icon: None,
         item: Item::None,
         spans: Vec::new(),
     }

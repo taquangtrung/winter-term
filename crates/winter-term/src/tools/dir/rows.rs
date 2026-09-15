@@ -3,7 +3,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use crate::model::page::{PageRow, PageSpan, PageStyle};
+use crate::model::page::{PageIcon, PageIconKind, PageRow, PageSpan, PageStyle};
 
 use super::entry::{EntryKind, Meta};
 use super::icons::icon_for;
@@ -102,8 +102,12 @@ pub struct RowStyle {
 }
 
 /// One entry: its mark, fold glyph, indented name, and the detail columns when
-/// they are on.
-pub fn entry_row(row: &Row, style: RowStyle, now: SystemTime) -> PageRow {
+/// they are on, with the icon the host should draw over the reserved columns.
+///
+/// The icon's columns are left blank here whatever the icon setting is, so the
+/// name and the detail columns land in the same place however the host ends up
+/// drawing it, and changing the setting never reflows the listing.
+pub fn entry_row(row: &Row, style: RowStyle, now: SystemTime) -> (PageRow, PageIcon) {
     let indent = " ".repeat(row.depth * INDENT);
     let glyph = if row.entry.is_dir() {
         if row.expanded {
@@ -120,7 +124,25 @@ pub fn entry_row(row: &Row, style: RowStyle, now: SystemTime) -> PageRow {
         EntryKind::Symlink => format!("{}@", row.entry.name),
     };
     let mark = if style.marked { MARK } else { UNMARKED };
-    let label = format!("{mark}{indent}{glyph}{} {name}", icon_for(&row.entry));
+    let icon_col = mark.chars().count() + indent.chars().count() + glyph.chars().count();
+    let icon = PageIcon {
+        col: icon_col,
+        glyph: icon_for(&row.entry),
+        kind: if row.entry.is_dir() {
+            PageIconKind::Dir {
+                expanded: row.expanded,
+                name: row.entry.name.clone(),
+            }
+        } else {
+            PageIconKind::File {
+                name: row.entry.name.clone(),
+            }
+        },
+        row: 0,
+    };
+    // The icon's own columns, plus one blank keeping the name off the artwork.
+    let reserved = " ".repeat(PageIcon::WIDTH + 1);
+    let label = format!("{mark}{indent}{glyph}{reserved}{name}");
     let name_style = if style.marked {
         PageStyle::Marked
     } else {
@@ -139,7 +161,7 @@ pub fn entry_row(row: &Row, style: RowStyle, now: SystemTime) -> PageRow {
             format!("{}{}", " ".repeat(gap), trailing),
         ));
     }
-    spans
+    (spans, icon)
 }
 
 /// What a directory shows while its size is still being walked. Nothing at all
@@ -237,6 +259,11 @@ fn name_style(kind: EntryKind) -> PageStyle {
 
 #[cfg(test)]
 mod tests {
+    /// The spans of a row, dropping the icon these tests do not assert on.
+    fn entry_row_only(row: &Row, style: RowStyle, now: SystemTime) -> PageRow {
+        entry_row(row, style, now).0
+    }
+
     use super::*;
     use crate::tools::dir::entry::Entry;
     use std::path::PathBuf;
@@ -297,14 +324,14 @@ mod tests {
     #[test]
     fn test_nesting_indents_and_marks_the_expanded_directory() {
         let now = SystemTime::UNIX_EPOCH;
-        let dir = text(entry_row(
+        let dir = text(entry_row_only(
             &row("src", EntryKind::Dir, 0, true),
             RowStyle::default(),
             now,
         ));
         assert!(dir.starts_with(" ⌄ "), "got {dir:?}");
         assert!(dir.ends_with(" src/"), "got {dir:?}");
-        let file = text(entry_row(
+        let file = text(entry_row_only(
             &row("main.rs", EntryKind::File, 1, false),
             RowStyle::default(),
             now,
@@ -318,7 +345,7 @@ mod tests {
 
     #[test]
     fn test_a_marked_row_leads_with_its_mark() {
-        let painted = text(entry_row(
+        let painted = text(entry_row_only(
             &row("notes.txt", EntryKind::File, 0, false),
             RowStyle {
                 marked: true,
@@ -334,7 +361,7 @@ mod tests {
         // A directory's own `len` is meaningless, so the detail column shows a
         // dash until a walk has something to put there.
         let dir = row("src", EntryKind::Dir, 0, false);
-        let unwalked = text(entry_row(
+        let unwalked = text(entry_row_only(
             &dir,
             RowStyle {
                 show_details: true,
@@ -344,7 +371,7 @@ mod tests {
         ));
         assert!(unwalked.contains('-'), "got {unwalked:?}");
 
-        let walked = text(entry_row(
+        let walked = text(entry_row_only(
             &dir,
             RowStyle {
                 show_details: true,
@@ -359,10 +386,14 @@ mod tests {
     #[test]
     fn test_a_directory_being_walked_says_so_only_when_sizes_are_on() {
         let dir = row("src", EntryKind::Dir, 0, false);
-        let quiet = text(entry_row(&dir, RowStyle::default(), SystemTime::UNIX_EPOCH));
+        let quiet = text(entry_row_only(
+            &dir,
+            RowStyle::default(),
+            SystemTime::UNIX_EPOCH,
+        ));
         assert!(quiet.ends_with("src/"), "got {quiet:?}");
 
-        let walking = text(entry_row(
+        let walking = text(entry_row_only(
             &dir,
             RowStyle {
                 show_sizes: true,
@@ -378,7 +409,7 @@ mod tests {
         // The detail columns are placed by padding to a fixed column; a name
         // past that column must still not run into its own size field.
         let name = "a".repeat(DETAIL_COL + 10);
-        let painted = text(entry_row(
+        let painted = text(entry_row_only(
             &row(&name, EntryKind::File, 0, false),
             RowStyle {
                 show_details: true,

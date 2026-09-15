@@ -37,6 +37,9 @@ pub const TAG_DIFF: &str = "diff";
 /// Tag naming a discard request.
 pub const TAG_DISCARD: &str = "discard";
 
+/// Tag naming one commit's details, which fill the view under its own title.
+pub const TAG_SHOW: &str = "show";
+
 /// Tag naming a fetch request.
 pub const TAG_FETCH: &str = "fetch";
 
@@ -188,6 +191,13 @@ pub fn stage(root: &Path, paths: &[String]) -> JobRequest {
         args.extend(paths.iter().cloned());
     }
     owned_request(root, TAG_STAGE, args)
+}
+
+/// Stage every tracked change, the way Magic's stage-all does outside the
+/// untracked section. `-u` is what keeps untracked files out: those are
+/// staged only by name, so nothing lands in the index unread.
+pub fn stage_all_tracked(root: &Path) -> JobRequest {
+    request(root, TAG_STAGE, ["add", "-u"])
 }
 
 /// Unstage `paths`, leaving the working tree alone. An empty list unstages
@@ -468,6 +478,28 @@ pub fn blame(root: &Path, path: &str) -> JobRequest {
     )
 }
 
+/// One commit in full: its author, date and message, the files it touched, and
+/// the patch itself.
+///
+/// `--stat` before the patch so the view opens on a summary of what changed
+/// rather than on the first hunk of the first file, which is what makes a long
+/// commit readable from the top.
+pub fn show_commit(root: &Path, rev: &str) -> JobRequest {
+    owned(
+        root,
+        TAG_SHOW,
+        vec![
+            "show",
+            "--no-color",
+            "--no-ext-diff",
+            "--stat",
+            "--patch",
+            "--date=iso",
+            rev,
+        ],
+    )
+}
+
 /// A whole diff, for reading rather than staging.
 pub fn diff_all(root: &Path, staged: bool, rev: Option<&str>) -> JobRequest {
     let mut args = vec!["diff".to_string(), "--no-color".to_string()];
@@ -542,6 +574,14 @@ mod tests {
         // Without `--`, a file named like an option is read as one.
         let one = args_of(&stage(Path::new("/repo"), &["--force".to_string()]));
         assert_eq!(one, ["add", "--", "--force"]);
+    }
+
+    #[test]
+    fn test_stage_all_tracked_leaves_untracked_files_alone() {
+        // `add .` would sweep untracked files into the index unread, which is
+        // what the plain stage-everything key is for.
+        let args = args_of(&stage_all_tracked(Path::new("/repo")));
+        assert_eq!(args, ["add", "-u"]);
     }
 
     #[test]

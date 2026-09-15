@@ -117,16 +117,31 @@ impl Grid {
         self.scroll_offset
     }
     /// Scroll up in history by `n` rows, clamped to the available scrollback.
+    /// Ignored on the alternate screen, which has no history of its own: the
+    /// retained rows belong to the primary buffer, so scrolling a full-screen
+    /// app's viewport into them paints unrelated shell output over the app.
     pub fn scroll_up_history(&mut self, n: usize) {
+        if self.alt_buffer.is_some() {
+            return;
+        }
         let max = self.scrollback.len();
         self.scroll_offset = (self.scroll_offset + n).min(max);
     }
-    /// Scroll down in history by `n` rows, clamped to 0.
+    /// Scroll down in history by `n` rows, clamped to 0. Ignored on the
+    /// alternate screen, for the reason on [`Self::scroll_up_history`].
     pub fn scroll_down_history(&mut self, n: usize) {
+        if self.alt_buffer.is_some() {
+            return;
+        }
         self.scroll_offset = self.scroll_offset.saturating_sub(n);
     }
     /// Set the scroll offset directly, clamped to the available scrollback.
+    /// Ignored on the alternate screen, for the reason on
+    /// [`Self::scroll_up_history`].
     pub fn set_scroll_offset(&mut self, offset: usize) {
+        if self.alt_buffer.is_some() {
+            return;
+        }
         self.scroll_offset = offset.min(self.scrollback.len());
     }
     /// Confine scrolling to rows `top..=bottom`, each clamped to the grid
@@ -323,6 +338,42 @@ mod tests {
     use super::super::{Color, Style};
     use super::*;
     use crate::grid::test_support::*;
+
+    #[test]
+    fn test_history_scrolling_is_ignored_on_the_alt_screen() {
+        // The scrollback that survives `enter_alt_screen` is the *primary*
+        // buffer's. Scrolling a full-screen app's viewport into it painted
+        // unrelated shell output over the app, so history scrolling is inert
+        // until the app exits and the primary buffer comes back.
+        let mut grid = Grid::new(4, 2);
+        for line in ["a", "b", "c", "d"] {
+            for ch in line.chars() {
+                grid.print(ch);
+            }
+            grid.carriage_return();
+            grid.line_feed();
+        }
+        assert!(grid.scrollback_len() > 0, "fixture needs history");
+
+        grid.enter_alt_screen();
+        grid.scroll_up_history(1);
+        assert_eq!(
+            grid.scroll_offset(),
+            0,
+            "no history on the alternate screen"
+        );
+        grid.set_scroll_offset(1);
+        assert_eq!(
+            grid.scroll_offset(),
+            0,
+            "nor by setting the offset directly"
+        );
+
+        // The primary buffer keeps its history, reachable again on return.
+        grid.leave_alt_screen();
+        grid.scroll_up_history(1);
+        assert_eq!(grid.scroll_offset(), 1);
+    }
 
     #[test]
     fn test_deferred_wrap_cleared_by_carriage_return_for_spinner() {
