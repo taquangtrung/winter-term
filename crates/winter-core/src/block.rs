@@ -162,7 +162,10 @@ impl CommandBlock {
     }
 
     /// How many terminal rows this block occupies, given a column width.
-    pub fn row_count(&self, cols: usize) -> usize {
+    /// With `word_wrap` set, lines fold at their last space that fits — the
+    /// same fold the grid makes — so the count tracks the rows the output
+    /// really paints; without it, a line breaks exactly at the margin.
+    pub fn row_count(&self, cols: usize, word_wrap: bool) -> usize {
         let text = self.plain_text();
         if text.is_empty() {
             return if self.command.is_empty() { 0 } else { 1 };
@@ -171,8 +174,10 @@ impl CommandBlock {
         for line in text.split('\n') {
             if cols == 0 {
                 rows += 1;
+            } else if word_wrap {
+                rows += wrapped_row_count(line, cols);
             } else {
-                rows += line.len().max(1).div_ceil(cols);
+                rows += line.chars().count().max(1).div_ceil(cols);
             }
         }
         rows.max(1)
@@ -202,6 +207,41 @@ impl CommandBlock {
         }
         None
     }
+}
+
+/// How many screen rows a line takes `cols` wide, folding before the last
+/// word that starts inside a line — the same greedy fold the grid's word
+/// wrap makes, so block row estimates track the rows painted output really
+/// occupies. Only a word with no room at all breaks mid-word.
+fn wrapped_row_count(line: &str, cols: usize) -> usize {
+    let chars: Vec<char> = line.chars().collect();
+    let mut rows = 0;
+    let mut pos = 0;
+    while pos < chars.len() {
+        let end = if chars.len() - pos <= cols {
+            chars.len()
+        } else {
+            let limit = pos + cols;
+            let mut end = limit;
+            for w in (pos + 1..=limit).rev() {
+                if !chars[w - 1].is_whitespace() || chars[w].is_whitespace() {
+                    continue;
+                }
+                end = w;
+                break;
+            }
+            end
+        };
+        rows += 1;
+        if end == chars.len() {
+            break;
+        }
+        pos = end;
+        while pos < chars.len() && chars[pos].is_whitespace() {
+            pos += 1;
+        }
+    }
+    rows.max(1)
 }
 
 // ============================================================================
@@ -278,27 +318,49 @@ mod tests {
     fn test_row_count_single_line() {
         let mut block = CommandBlock::default();
         block.append_text("hello");
-        assert_eq!(block.row_count(80), 1);
+        assert_eq!(block.row_count(80, true), 1);
     }
 
     #[test]
     fn test_row_count_wraps_long_line() {
         let mut block = CommandBlock::default();
         block.append_text("abcdefgh");
-        assert_eq!(block.row_count(4), 2);
+        assert_eq!(block.row_count(4, true), 2);
+        assert_eq!(block.row_count(4, false), 2);
+    }
+
+    #[test]
+    fn test_row_count_folds_at_words_when_word_wrap_is_on() {
+        // "aa bb cc" in four cells: the fold takes the space after "aa" and
+        // again the one after "bb", so the words land whole on three rows
+        // instead of breaking mid-word across two.
+        let mut block = CommandBlock::default();
+        block.append_text("aa bb cc");
+        assert_eq!(block.row_count(4, true), 3);
+        // Without word wrap the same line breaks exactly at the margin.
+        assert_eq!(block.row_count(4, false), 2);
+    }
+
+    #[test]
+    fn test_row_count_counts_chars_not_bytes() {
+        // A line's length is measured in characters, not bytes, or the
+        // estimate drifts on any non-ASCII output.
+        let mut block = CommandBlock::default();
+        block.append_text("\u{4e16}\u{4e16}\u{4e16}"); // 世世世
+        assert_eq!(block.row_count(2, false), 2);
     }
 
     #[test]
     fn test_row_count_multi_line() {
         let mut block = CommandBlock::default();
         block.append_text("abc\ndef\nghi");
-        assert_eq!(block.row_count(80), 3);
+        assert_eq!(block.row_count(80, true), 3);
     }
 
     #[test]
     fn test_row_count_empty_block() {
         let block = CommandBlock::default();
-        assert_eq!(block.row_count(80), 0);
+        assert_eq!(block.row_count(80, true), 0);
     }
 
     #[test]
@@ -307,7 +369,7 @@ mod tests {
             command: "ls".to_string(),
             ..CommandBlock::default()
         };
-        assert_eq!(block.row_count(80), 1);
+        assert_eq!(block.row_count(80, true), 1);
     }
 
     #[test]

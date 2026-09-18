@@ -294,6 +294,26 @@ pub enum Action {
     ToggleFold,
     /// Copy the block under the cursor to the clipboard.
     YankBlock,
+    /// `yy`: copy the whole line the cursor is on.
+    YankLine {
+        /// The register it lands in, or `None` for the clipboard.
+        register: Option<char>,
+    },
+    /// `y{motion}`: copy the text between the cursor and where the motion
+    /// lands.
+    YankMotion {
+        /// Where the yank reaches to.
+        motion: CursorMove,
+        /// The register it lands in, or `None` for the clipboard.
+        register: Option<char>,
+    },
+    /// `yi{object}`/`ya{object}`: copy the text object under the cursor.
+    YankTextObject {
+        /// Which object, and whether the `a` form.
+        spec: TextObjectSpec,
+        /// The register it lands in, or `None` for the clipboard.
+        register: Option<char>,
+    },
     /// Copy the current selection to the clipboard.
     YankSelection,
     /// Yank the visual selection into named register (`"{reg}y`).

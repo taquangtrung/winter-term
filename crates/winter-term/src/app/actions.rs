@@ -130,6 +130,15 @@ impl App {
                     self.find_char_move(target, focused);
                 }
             }
+            Action::YankLine { register } => {
+                self.yank_line(focused, register);
+            }
+            Action::YankMotion { motion, register } => {
+                self.yank_motion(focused, motion, register);
+            }
+            Action::YankTextObject { spec, register } => {
+                self.yank_text_object(focused, spec, register);
+            }
             Action::YankSelection => {
                 self.copy_selection();
                 self.finish_visual_yank(focused);
@@ -555,6 +564,23 @@ impl App {
     /// Leave Visual mode after a yank: remember the span for `gv`, then clear
     /// it and the anchor.
     fn finish_visual_yank(&mut self, focused: PaneId) {
+        // The selection's own ends are the yank's, which Vim marks `[` and `]`.
+        if let Some(span) = self.selection.span.clone() {
+            let (first, last) = if (span.start_row, span.start_col) <= (span.end_row, span.end_col)
+            {
+                (
+                    (span.start_row, span.start_col),
+                    (span.end_row, span.end_col),
+                )
+            } else {
+                (
+                    (span.end_row, span.end_col),
+                    (span.start_row, span.start_col),
+                )
+            };
+            self.set_auto_mark(focused, '[', first);
+            self.set_auto_mark(focused, ']', last);
+        }
         self.remember_visual(focused);
         self.modes
             .insert(focused, Mode::Visual.apply(ModeEvent::Escape));

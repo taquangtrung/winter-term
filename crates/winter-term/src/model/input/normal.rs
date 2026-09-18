@@ -59,6 +59,22 @@ pub(super) fn count_repeats(mv: CursorMove) -> bool {
             | CursorMove::ParagraphForward
     )
 }
+/// The mark a key names, or `None` where it names none.
+///
+/// A letter is its own mark, the one `m` set. The rest are the marks Winter
+/// keeps on its own as Vim does, under the name Vim gives them: `.` the last
+/// change, `^` where Insert was left, `[` and `]` the ends of the last yank,
+/// and — spelled either `` ` `` or `'`, both of which Vim accepts — where the
+/// last jump started.
+pub(super) fn mark_name(c: char) -> Option<char> {
+    match c {
+        'a'..='z' => Some(c),
+        '`' | '\'' => Some('\''),
+        '.' | '^' | '[' | ']' => Some(c),
+        _ => None,
+    }
+}
+
 /// Build the char-search action for the key that follows `f`/`F`/`t`/`T`. A
 /// printable character is the search target; anything else cancels the search.
 pub(super) fn find_char_action(key: &Key, forward: bool, till: bool) -> Action {
@@ -114,9 +130,10 @@ pub(super) fn motion_action(
         }
         PendingPrefix::GotoMark { exact } => {
             return Some(match key.code {
-                KeyCode::Char(c) if c.is_ascii_lowercase() => {
-                    Action::GotoMark(GotoMark::new(c, exact))
-                }
+                KeyCode::Char(c) => match mark_name(c) {
+                    Some(mark) => Action::GotoMark(GotoMark::new(mark, exact)),
+                    None => Action::Ignore,
+                },
                 _ => Action::Ignore,
             });
         }
@@ -190,6 +207,8 @@ fn text_object(code: KeyCode) -> Option<TextObject> {
     match code {
         KeyCode::Char('w') => Some(TextObject::Word),
         KeyCode::Char('W') => Some(TextObject::WordBig),
+        KeyCode::Char('p') => Some(TextObject::Paragraph),
+        KeyCode::Char('s') => Some(TextObject::Sentence),
         KeyCode::Char(c @ ('"' | '\'' | '`')) => Some(TextObject::Quotes(c)),
         KeyCode::Char('(' | ')' | 'b') => Some(TextObject::Brackets('(', ')')),
         KeyCode::Char('[' | ']') => Some(TextObject::Brackets('[', ']')),
@@ -331,7 +350,11 @@ fn resolve_bare_key(key: &Key, pending: &mut PendingPrefix) -> Action {
         KeyCode::Char('#') => Action::SearchWord { forward: false },
         KeyCode::Char('n') => Action::SearchNext,
         KeyCode::Char('N') => Action::SearchPrevious,
-        KeyCode::Char('y') => Action::YankBlock,
+        KeyCode::Char('y') => {
+            *pending = PendingPrefix::Yank { register: None };
+            Action::Ignore
+        }
+        KeyCode::Char('Y') => Action::YankLine { register: None },
         KeyCode::Char(']') => {
             *pending = PendingPrefix::BracketClose;
             Action::Ignore
@@ -417,6 +440,59 @@ pub(super) fn resolve_normal(
             Some(object) => Action::ChangeTextObject(TextObjectSpec::new(around, object)),
             None => Action::Ignore,
         },
+        PendingPrefix::Yank { register } => match key.code {
+            KeyCode::Char('y') => Action::YankLine { register },
+            KeyCode::Char('s') => {
+                *pending = PendingPrefix::YieldSurround { around: false };
+                Action::Ignore
+            }
+            KeyCode::Char('w') | KeyCode::Char('e') => Action::YankMotion {
+                motion: CursorMove::WordEnd,
+                register,
+            },
+            KeyCode::Char('W') | KeyCode::Char('E') => Action::YankMotion {
+                motion: CursorMove::WordEndBig,
+                register,
+            },
+            KeyCode::Char('b') => Action::YankMotion {
+                motion: CursorMove::WordBack,
+                register,
+            },
+            KeyCode::Char('B') => Action::YankMotion {
+                motion: CursorMove::WordBackBig,
+                register,
+            },
+            KeyCode::Char('$') => Action::YankMotion {
+                motion: CursorMove::LineEnd,
+                register,
+            },
+            KeyCode::Char('0') => Action::YankMotion {
+                motion: CursorMove::LineStart,
+                register,
+            },
+            KeyCode::Char('i') => {
+                *pending = PendingPrefix::YankObject {
+                    around: false,
+                    register,
+                };
+                Action::Ignore
+            }
+            KeyCode::Char('a') => {
+                *pending = PendingPrefix::YankObject {
+                    around: true,
+                    register,
+                };
+                Action::Ignore
+            }
+            _ => Action::Ignore,
+        },
+        PendingPrefix::YankObject { around, register } => match text_object(key.code) {
+            Some(object) => Action::YankTextObject {
+                spec: TextObjectSpec::new(around, object),
+                register,
+            },
+            None => Action::Ignore,
+        },
         PendingPrefix::Delete => match key.code {
             KeyCode::Char('d') => Action::DeleteLine,
             KeyCode::Char('s') => {
@@ -471,6 +547,10 @@ pub(super) fn resolve_normal(
             KeyCode::Char(';') => Action::ChangeOlder,
             KeyCode::Char(',') => Action::ChangeNewer,
             KeyCode::Char('x') => Action::OpenUnderCursor,
+            // The block yank `y` gave up when it became an operator. It lives
+            // with the other keys that act on what Winter knows and Vim does
+            // not: the prompt, the swoop, the block under the cursor.
+            KeyCode::Char('y') => Action::YankBlock,
             KeyCode::Char('s') => Action::ToggleSwoop,
             KeyCode::Char('p') => Action::JumpToPrompt,
             KeyCode::Char('P') => Action::JumpToPreviousPrompt,
@@ -490,7 +570,12 @@ pub(super) fn resolve_normal(
             _ => Action::Ignore,
         },
         PendingPrefix::WithRegister(reg) => match key.code {
-            KeyCode::Char('y') => Action::YankSelectionRegister(reg),
+            KeyCode::Char('y') => {
+                *pending = PendingPrefix::Yank {
+                    register: Some(reg),
+                };
+                Action::Ignore
+            }
             KeyCode::Char('p') => Action::PasteRegister {
                 register: reg,
                 after: true,
@@ -1019,12 +1104,92 @@ mod tests {
         );
     }
     #[test]
-    fn test_y_yanks_block() {
+    fn test_y_opens_the_yank_operator_and_gy_yanks_the_block() {
+        // `y` is an operator now, so the block yank it used to be moved to the
+        // `g` keys, where the rest of Winter's own commands live.
+        let mut pending = PendingPrefix::None;
         assert_eq!(
-            resolve_simple(Mode::Normal, &key(KeyCode::Char('y'))),
+            resolve(Mode::Normal, &key(KeyCode::Char('y')), &mut pending, 0),
+            Action::Ignore
+        );
+        assert_eq!(pending, PendingPrefix::Yank { register: None });
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('y')), &mut pending, 0),
+            Action::YankLine { register: None }
+        );
+
+        let mut pending = PendingPrefix::None;
+        resolve(Mode::Normal, &key(KeyCode::Char('g')), &mut pending, 0);
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('y')), &mut pending, 0),
             Action::YankBlock
         );
     }
+
+    #[test]
+    fn test_the_yank_operator_takes_a_motion_an_object_and_a_register() {
+        let yank = |keys: &str| -> Action {
+            let mut pending = PendingPrefix::None;
+            let mut action = Action::Ignore;
+            for ch in keys.chars() {
+                action = resolve(Mode::Normal, &key(KeyCode::Char(ch)), &mut pending, 0);
+            }
+            action
+        };
+        assert_eq!(
+            yank("yw"),
+            Action::YankMotion {
+                motion: CursorMove::WordEnd,
+                register: None
+            }
+        );
+        assert_eq!(
+            yank("y$"),
+            Action::YankMotion {
+                motion: CursorMove::LineEnd,
+                register: None
+            }
+        );
+        assert_eq!(
+            yank("yip"),
+            Action::YankTextObject {
+                spec: TextObjectSpec::new(false, TextObject::Paragraph),
+                register: None
+            }
+        );
+        assert_eq!(
+            yank("yis"),
+            Action::YankTextObject {
+                spec: TextObjectSpec::new(false, TextObject::Sentence),
+                register: None
+            }
+        );
+        assert_eq!(
+            yank("\"ayaw"),
+            Action::YankTextObject {
+                spec: TextObjectSpec::new(true, TextObject::Word),
+                register: Some('a')
+            },
+            "a register named before the operator follows it through"
+        );
+    }
+    #[test]
+    fn test_ys_reaches_the_surround_prompt() {
+        // `ys` had no way in at all while `y` resolved straight to a block
+        // yank: the surround state it opens was documented but unreachable.
+        let mut pending = PendingPrefix::None;
+        for ch in "ysiw".chars() {
+            resolve(Mode::Normal, &key(KeyCode::Char(ch)), &mut pending, 0);
+        }
+        assert_eq!(
+            resolve(Mode::Normal, &key(KeyCode::Char('"')), &mut pending, 0),
+            Action::SurroundTextObject {
+                spec: TextObjectSpec::new(false, TextObject::Word),
+                delimiter: '"'
+            }
+        );
+    }
+
     #[test]
     fn test_za_toggles_fold() {
         let mut pending = PendingPrefix::None;

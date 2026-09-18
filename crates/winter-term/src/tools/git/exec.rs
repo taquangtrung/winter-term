@@ -493,9 +493,9 @@ pub fn blame(root: &Path, path: &str) -> JobRequest {
 /// One commit in full: its author, date and message, the files it touched, and
 /// the patch itself.
 ///
-/// `--stat` before the patch so the view opens on a summary of what changed
-/// rather than on the first hunk of the first file, which is what makes a long
-/// commit readable from the top.
+/// No `--shortstat`: the view counts the commit's own hunks instead, which is
+/// the unit it lets the reader open, where git's line totals count something
+/// nothing in the view acts on.
 pub fn show_commit(root: &Path, rev: &str) -> JobRequest {
     owned(
         root,
@@ -504,7 +504,6 @@ pub fn show_commit(root: &Path, rev: &str) -> JobRequest {
             "show",
             "--no-color",
             "--no-ext-diff",
-            "--shortstat",
             "--patch",
             "--date=iso",
             rev,

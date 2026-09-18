@@ -61,14 +61,16 @@ fn assert_invariants(term: &Terminal, context: &str) {
     // These are the accessors the GUI calls every frame; none may panic.
     let _ = term.scrollback().plain_text();
     let _ = term.scrollback().to_json();
-    let _ = term.scrollback().block_row_offsets(80);
+    let _ = term.scrollback().block_row_offsets(80, true);
     let _ = term.scrollback().search("x");
 
     for (index, block) in blocks.iter().enumerate() {
         // `row_count` divides by the column width; a zero-width call is what
         // a pane collapsed to nothing would produce.
-        let _ = block.row_count(0);
-        let _ = block.row_count(80);
+        let _ = block.row_count(0, true);
+        let _ = block.row_count(80, true);
+        let _ = block.row_count(0, false);
+        let _ = block.row_count(80, false);
         let _ = block.plain_text();
         assert!(
             !block.elided || block.output.is_empty(),

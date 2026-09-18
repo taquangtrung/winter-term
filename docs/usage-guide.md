@@ -64,7 +64,9 @@ When the target character occurs more than once, Winter shows a labelled overlay
 
 | Keys | Action |
 |---|---|
-| `d` `c` | Delete, change (followed by a motion or text object) |
+| `d` `c` `y` | Delete, change, yank (followed by a motion or text object) |
+| `yy` or `Y` | Yank the whole line |
+| `"{reg}y{motion}` | Yank into register `{reg}` |
 | `D` `C` | Delete, change to end of line |
 | `dd` `cc` | Delete, change the whole line |
 | `S` | Change the whole line |
@@ -76,9 +78,13 @@ When the target character occurs more than once, Winter shows a labelled overlay
 
 Text objects follow `i` (inner) or `a` (around) after an operator, so `diw` deletes a word and `ci"` changes the text inside quotes.
 
+`d` and `c` reach only the line the shell is editing (see [prompt line editing](#prompt-line-editing)); `y` reads the whole buffer, so `yiw`, `yap` and `yy` copy out of the scrollback without going through Visual first. What a yank took stays lit for a moment, so you can see what landed in the register. `ap` takes the blank lines after the paragraph as well, which over command output is one block of it plus the gap to the next. A sentence is read within its own row, and only a stop followed by a blank or the row's end ends one, so a version number or a file name stays in one piece.
+
 | Object | Selects |
 |---|---|
 | `w` `W` | Word, big word |
+| `p` | Paragraph: the run of lines around the cursor that are all blank or all not |
+| `s` | Sentence: up to a `.`, `!` or `?` and the quotes or brackets closing after it |
 | `"` `'` `` ` `` | The quoted run, using that quote character |
 | `(` `)` `b` | The parenthesised run |
 | `[` `]` | The bracketed run |
@@ -122,12 +128,16 @@ Text objects follow `i` (inner) or `a` (around) after an operator, so `diw` dele
 | `m{a-z}` | Set a mark |
 | `` `{a-z} `` | Jump to a mark, exact column |
 | `'{a-z}` | Jump to a mark, first non-blank |
+| `` `` `` or `''` | Back to where the last jump started |
+| `` `. `` | The last change |
+| `` `^ `` | Where Insert was last left |
+| `` `[ `` `` `] `` | The start and end of the last yank |
 | `"{reg}` | Use register `{reg}` for the next yank or paste |
 | `p` | Paste |
 | `Ctrl-o` `Ctrl-i` | Jump backward, forward through the jumplist |
 | `g;` `g,` | Step back, forward through the changelist |
 
-Marks and the jumplist are per pane. Registers are shared across every pane, so a yank in one pastes in another.
+The marks named with punctuation are kept for you rather than set by hand, the way Vim keeps its own. Marks and the jumplist are per pane. Registers are shared across every pane, so a yank in one pastes in another.
 
 ### `g` commands
 
@@ -136,6 +146,7 @@ Marks and the jumplist are per pane. Registers are shared across every pane, so 
 | `gt` `gT` | Next tab, previous tab |
 | `g<` `g>` | Move the current tab left, right |
 | `gx` | Open the URL or path under the cursor |
+| `gy` | Yank the block under the cursor |
 | `gs` | Buffer swoop: fuzzy line search over the pane |
 | `gn` `gN` | Select the next, previous search match |
 | `gv` | Restore the last Visual selection |
@@ -149,7 +160,7 @@ Blocks come from [shell integration](#shell-integration); without it the whole s
 | Keys | Action |
 |---|---|
 | `]b` `[b` | Next block, previous block |
-| `y` | Yank the block under the cursor |
+| `gy` | Yank the block under the cursor |
 | `q` | Quick-select: label every block, press a label to act on it |
 | `Enter` | Focus a rich block, handing keys to its WebView |
 
@@ -200,6 +211,8 @@ A single-chord binding whose action is not one of the built-in window actions is
 ## Tools
 
 A tool opens over the focused pane, covering it. The shell underneath keeps running and comes back the moment you close the tool with `q`, or by pressing the tool's own chord again. The window chords all still work while a tool is up: split, zoom, close, and `Alt-h/j/k/l` to move focus. For a tool beside your shell rather than over it, split first and open it in the new pane.
+
+Every tool answers to `Alt-Shift-,` and `Alt-Shift-.` for the top and the bottom of what it is showing, which are emacs' `M-<` and `M->` under the fingers, so a page is read with either set of habits: the Vim `gg` and `G` reach the same two rows.
 
 Every tool searches the same way. `/` asks for text and moves the cursor to the next row holding it, `n` and `N` step through the rest of the matches and wrap at the ends, and a search that finds nothing says so instead of sitting still. Matching is literal and pays no attention to case: a directory listing matches on the entry's name, every other tool on the whole row as it is painted, so a chord is as findable as the command beside it. A search moves the cursor and nothing else: marks, folds, and everything staged stay as they were. Grep is the one exception to the first part, since its rows already are a search: `/` there asks for a new one.
 
@@ -256,7 +269,7 @@ Each entry carries an icon for what it is. The `icons` setting chooses where it 
 | `n` / `N` | Next, previous match |
 | `Tab` / `Shift-Tab` | Fold the section, fold everything |
 | `Enter` | Open the file under the cursor in `$EDITOR` |
-| `Enter` on a commit | Read the commit: message, files changed, then the patch |
+| `Enter` on a commit | Read the commit: message, then the files it changed, each opening to its patch |
 | `Tab` on a file | Show its diff, hunk by hunk |
 | `s` / `S` | Stage the target, stage everything |
 | `u` / `U` | Unstage the target, unstage everything |
@@ -272,6 +285,10 @@ Each entry carries an icon for what it is. The `icons` setting chooses where it 
 | `Alt-y` | Show every ref |
 | `Alt-g` | Open the remote in a browser |
 | `q` | Close |
+
+The view is read by color as much as by name, the way magic-vscode's own git view is: a section heading wears the hue of what sits under it (cyan staged, yellow unstaged, green untracked, red contested), every other heading and the header block's own labels are blue, a file says what changed to it in that change's own hue, a branch is magenta and one on a remote green, a tag cyan, and anything the upstream has not seen yet — the commits ahead of it and the count saying how many — is red.
+
+A triangle opens every row a fold key acts on, pointing down while what hangs off it shows and right while it is hidden: section headings, file rows, and a commit's hunk headers all carry one. A hunk in the status view does not, since `Tab` there folds the file it belongs to rather than the hunk itself. Opening a row brings what it opened into view: a block that would run past the pane's bottom pulls its own row to the top, where the most of it fits, while one that already shows in full leaves the page where it was.
 
 On a section heading, `s`, `u`, and `x` act on every file in that section. On a hunk, or on any line inside it, they act on that hunk alone: the patch is built from the hunk and fed to `git apply` on standard input, so the rest of the file is untouched. Discarding an untracked file deletes it, since `git restore` cannot reach a path that is not in the index.
 
@@ -298,6 +315,8 @@ These keys open a menu, and the next key picks from it:
 Anything that wants a terminal of its own goes to a new tab: commit and amend in `$EDITOR`, and interactive rebase with its todo list. `o` resets to the commit under the cursor, or asks which one when the cursor is elsewhere.
 
 A log, a listing, a blame, or a diff fills the view; `j`/`k` move through it, `/` searches it, `+` asks for more of a log, `y` copies the first field of a line, which is the commit hash in a log or a blame, and `q` goes back to the status.
+
+A commit read with `Enter` opens shut, the way the status view does: the summary, then a `Changes` heading counting the files it touched, then one band per file, each counting the hunks it holds, each saying in words what the commit did to it (`modified`, `new file`, `deleted`, `renamed`) after its fold triangle and before its icon and path, with the patch waiting behind them. It folds the same way too. `Tab` on the heading takes the whole file list away and brings it back, `Tab` on a file band opens it to its hunk headers and shuts it again, `Tab` on a hunk opens that hunk's body, and `Shift-Tab` acts on the whole commit at once, opening every file and hunk of it, or shutting all of them when none is folded.
 
 **Grep** (`Ctrl-Shift-f`, or `Grep: Search Files`) finds the lines under the pane's working directory that hold some text, grouped under one heading per file.
 

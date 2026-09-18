@@ -102,15 +102,6 @@ impl CommitFile {
             hunks,
         }
     }
-
-    /// How many lines the file's hunks add and remove between them, which is
-    /// what a folded file shows in place of its diff.
-    pub fn counts(&self) -> (usize, usize) {
-        self.hunks
-            .iter()
-            .map(Hunk::counts)
-            .fold((0, 0), |(added, removed), (a, r)| (added + a, removed + r))
-    }
 }
 
 // ========================================================================
@@ -224,13 +215,6 @@ mod tests {
         let content = CommitContent::parse(&sample());
         assert_eq!(content.files[0].hunks.len(), 1);
         assert_eq!(content.files[0].hunks[0].lines, vec!["-old", "+new"]);
-    }
-
-    #[test]
-    fn test_a_files_counts_total_its_hunks() {
-        let content = CommitContent::parse(&sample());
-        assert_eq!(content.files[0].counts(), (1, 1));
-        assert_eq!(content.files[1].counts(), (1, 0));
     }
 
     #[test]

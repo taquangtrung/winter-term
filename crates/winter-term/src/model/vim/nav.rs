@@ -47,10 +47,13 @@ impl VimNav {
 
     /// Offer one key to the shared layer. Window chords (Alt, and the Ctrl
     /// keys the layer does not bind) fall through unhandled so the host keeps
-    /// them.
+    /// them, save for the two Alt chords [`buffer_end`] claims.
     pub fn key(&mut self, key: &Key) -> VimKey {
         if key.alt {
-            return VimKey::Unhandled;
+            return match buffer_end(key) {
+                Some(motion) => VimKey::Motion(motion),
+                None => VimKey::Unhandled,
+            };
         }
         if self.goto {
             self.goto = false;
@@ -84,6 +87,27 @@ impl VimNav {
 // ========================================================================
 // Functions
 // ========================================================================
+
+/// Emacs' `M-<` and `M->` — beginning and end of the buffer — as the two Alt
+/// chords every surface answers to beside its Vim motions, since the pages
+/// are read with both sets of habits and `gg`/`G` are the only way there
+/// otherwise.
+///
+/// Both spellings of each land here: a layout that reports the shifted
+/// punctuation (`<`, `>`) and one that reports the unshifted key with a shift
+/// flag (`,`, `.`) are the same chord under the fingers.
+pub fn buffer_end(key: &Key) -> Option<CursorMove> {
+    if !key.alt {
+        return None;
+    }
+    Some(match key.code {
+        KeyCode::Char('<') => CursorMove::Top,
+        KeyCode::Char('>') => CursorMove::Bottom,
+        KeyCode::Char(',') if key.shift => CursorMove::Top,
+        KeyCode::Char('.') if key.shift => CursorMove::Bottom,
+        _ => return None,
+    })
+}
 
 /// The default key-to-motion mapping every surface shares, factored out of
 /// the terminal's Normal mode so a motion key resolves identically over the
@@ -217,5 +241,31 @@ mod tests {
         // Window chords the layer does not bind stay with the host.
         assert_eq!(nav.key(&alt('h')), VimKey::Unhandled);
         assert_eq!(nav.key(&ctrl('x')), VimKey::Unhandled);
+    }
+
+    #[test]
+    fn test_the_emacs_buffer_ends_resolve_however_the_layout_spells_them() {
+        // `M-<` and `M->` reach the top and the bottom whether the layout
+        // reports the shifted punctuation or the unshifted key with a shift
+        // flag, and the two chords are claimed from the Alt keys the layer
+        // otherwise leaves to the window.
+        let shifted = |c: char| Key {
+            alt: true,
+            code: KeyCode::Char(c),
+            ctrl: false,
+            shift: true,
+        };
+        assert_eq!(buffer_end(&alt('<')), Some(CursorMove::Top));
+        assert_eq!(buffer_end(&alt('>')), Some(CursorMove::Bottom));
+        assert_eq!(buffer_end(&shifted(',')), Some(CursorMove::Top));
+        assert_eq!(buffer_end(&shifted('.')), Some(CursorMove::Bottom));
+
+        // Without Alt they are ordinary text, and an unshifted comma is a key
+        // of its own.
+        assert_eq!(buffer_end(&plain(KeyCode::Char('<'))), None);
+        assert_eq!(buffer_end(&alt(',')), None);
+
+        let mut nav = VimNav::new();
+        assert_eq!(nav.key(&alt('>')), VimKey::Motion(CursorMove::Bottom));
     }
 }

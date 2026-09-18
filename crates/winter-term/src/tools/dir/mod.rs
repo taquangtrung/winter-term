@@ -28,11 +28,11 @@ use std::time::SystemTime;
 use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    find_match, row_height, row_width, wrap_window, JobReply, JobRequest, OpenTarget, Page,
-    PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply,
+    find_match, row_height, row_text, wrap_window, JobReply, JobRequest, OpenTarget, Page,
+    PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PageWindow, PromptMode, PromptReply,
     PromptRequest,
 };
-use crate::model::vim::nav::{VimKey, VimNav};
+use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
 
 use edit::{EditAction, EditMode, EditState};
 use listing::SortKey;
@@ -117,6 +117,10 @@ pub struct DirPage {
     /// The shared Vim motion state: the `g` prefix, and the layer the
     /// listing's unclaimed keys fall through to.
     nav: VimNav,
+    /// A directory just opened whose children the next paint should bring
+    /// into view, if they do not already fit under it. Held until the paint,
+    /// since what fits is only known once the pane's height is.
+    reveal: Option<usize>,
 }
 
 // ========================================================================
@@ -146,6 +150,7 @@ impl DirPage {
             sort: SortKey::default(),
             viewport: 0,
             nav: VimNav::new(),
+            reveal: None,
         };
         page.reload();
         page
@@ -517,9 +522,13 @@ impl DirPage {
         if !row.entry.is_dir() {
             return;
         }
+        let opening = !row.expanded;
         let path = row.entry.path.clone();
         self.folds.toggle(&path);
         self.reload_keeping_selection();
+        if opening {
+            self.reveal = Some(self.cursor);
+        }
     }
 
     fn move_by(&mut self, delta: isize) {
@@ -824,6 +833,25 @@ impl DirPage {
     }
 }
 
+/// Where to scroll so a just-opened directory shows what it opened: the row
+/// itself, once the rows nested under it run past the window's bottom, since
+/// from there the most of them fit. `None` leaves the window alone, which is
+/// the case whenever they already show in full and whenever nothing was
+/// opened at all.
+fn reveal_start(rows: &[Row], window: &PageWindow, at: Option<usize>) -> Option<usize> {
+    let at = at?;
+    let head = rows.get(at)?;
+    let end = rows
+        .iter()
+        .enumerate()
+        .skip(at + 1)
+        .take_while(|(_, row)| row.depth > head.depth)
+        .map(|(index, _)| index)
+        .last()
+        .unwrap_or(at);
+    (end >= window.start + window.count).then_some(at)
+}
+
 impl Page for DirPage {
     fn on_job(&mut self, reply: JobReply) -> PageOutcome {
         match reply {
@@ -878,6 +906,9 @@ impl Page for DirPage {
             page_rows.push(vec![PageSpan::new(PageStyle::Dim, EMPTY_NOTE)]);
             return PageContent::new(page_rows);
         }
+        // Taken before the borrow below, which holds the listing for as long
+        // as the window is being measured.
+        let reveal = self.reveal.take();
         // An entry's spans, built on demand: the wrapping window walks only
         // the rows it may paint, so a listing longer than the pane is not
         // built in full to measure it.
@@ -897,13 +928,12 @@ impl Page for DirPage {
             )
             .0
         };
-        let window = wrap_window(
-            self.scroll,
-            self.cursor,
-            self.rows.len(),
-            rows.saturating_sub(HEADER_ROWS),
-            |index| row_height(row_width(&entry_spans(index)), cols, wrap, 0),
-        );
+        let visible = rows.saturating_sub(HEADER_ROWS);
+        let height = |index: usize| row_height(&row_text(&entry_spans(index)), cols, wrap, 0);
+        let mut window = wrap_window(self.scroll, self.cursor, self.rows.len(), visible, height);
+        if let Some(start) = reveal_start(&self.rows, &window, reveal) {
+            window = wrap_window(start, self.cursor, self.rows.len(), visible, height);
+        }
         self.scroll = window.start;
         let mut icons: Vec<PageIcon> = Vec::new();
         for (index, row) in self
@@ -1060,6 +1090,10 @@ impl Page for DirPage {
 
 impl DirPage {
     fn on_alt_key(&mut self, key: &Key) -> PageOutcome {
+        if let Some(motion) = buffer_end(key) {
+            self.apply_motion(motion);
+            return PageOutcome::Consumed;
+        }
         match key.code {
             KeyCode::Char('n') => {
                 if let Some(next) = self.sibling_after(self.cursor) {
@@ -1358,6 +1392,53 @@ mod tests {
         page.selected()
             .map(|row| row.entry.name.clone())
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_the_emacs_buffer_ends_reach_the_first_and_last_entry() {
+        let tree = TempTree::new("buffer_ends");
+        tree.touch("a.txt");
+        tree.touch("b.txt");
+        tree.touch("c.txt");
+        let mut page = DirPage::new(tree.0.clone());
+
+        page.on_key(&alt(KeyCode::Char('>')));
+        assert_eq!(selected_name(&page), "c.txt");
+        page.on_key(&alt(KeyCode::Char('<')));
+        assert_eq!(selected_name(&page), "a.txt");
+    }
+
+    #[test]
+    fn test_opening_a_directory_scrolls_its_children_into_a_short_pane() {
+        // Unfolding at the bottom of the pane used to leave the children
+        // below the fold: the cursor stayed on the directory, which was
+        // already visible, so nothing scrolled.
+        let tree = TempTree::new("reveal");
+        tree.dir("a-first");
+        tree.dir("b-second");
+        let last = tree.dir("c-last");
+        for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+            fs::write(last.join(name), "x").expect("child");
+        }
+        let mut page = DirPage::new(tree.0.clone());
+
+        // A pane with room for the three directories and nothing else, with
+        // the cursor on the last of them.
+        page.on_key(&press(KeyCode::Char('j')));
+        page.on_key(&press(KeyCode::Char('j')));
+        assert_eq!(selected_name(&page), "c-last", "sorted after the other two");
+        page.content(4, 80, false);
+        page.on_key(&press(KeyCode::Tab));
+        let painted: Vec<String> = page
+            .content(4, 80, false)
+            .rows
+            .iter()
+            .map(row_text)
+            .collect();
+        assert!(
+            painted.iter().any(|row| row.contains("a.txt")),
+            "the children the fold opened are on screen, got {painted:?}"
+        );
     }
 
     #[test]

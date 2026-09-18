@@ -263,10 +263,31 @@ pub enum PageStyle {
     AddedEdit,
     /// Emphasized, in the theme's accent color.
     Accent,
+    /// A file a change added, where a view names what happened to it.
+    ChangeAdded,
+    /// A file a change left conflicted or unmerged.
+    ChangeConflict,
+    /// A file a change deleted.
+    ChangeDeleted,
+    /// A file a change edited in place.
+    ChangeModified,
+    /// A file a change moved or renamed.
+    ChangeRenamed,
     /// De-emphasized: metadata, hints, and inactive detail.
     Dim,
     /// A title or a column header.
     Header,
+    /// The heading over paths a merge left contested.
+    HeadingConflict,
+    /// The heading over changes that are staged.
+    HeadingStaged,
+    /// The heading over changes that are not staged.
+    HeadingUnstaged,
+    /// A heading over rows that are not a kind of change, and the labels of a
+    /// header block's own lines, which read as headings of a sort.
+    HeadingPlain,
+    /// The heading over paths nothing tracks.
+    HeadingUntracked,
     /// A hunk's header line: the band a hunk sits under.
     Hunk,
     /// Selected by the user for an operation to act on.
@@ -286,6 +307,10 @@ pub enum PageStyle {
     RefRemote,
     /// A tag, beside a commit.
     RefTag,
+    /// Work one side of a branch pair has and the other does not: the marker
+    /// on a commit the upstream has not seen, and the counts saying how far
+    /// the two have drifted apart.
+    Unpushed,
     /// A file's row in a diff: the band its changes sit under, bright while
     /// they show beneath it.
     Section,
@@ -383,28 +408,79 @@ pub fn row_text(row: &PageRow) -> String {
     row.iter().map(|span| span.text.as_str()).collect()
 }
 
-/// How many cells a painted row occupies across the pane: the sum of its
-/// spans' text.
-pub fn row_width(row: &PageRow) -> usize {
-    row.iter().map(|span| span.text.chars().count()).sum()
-}
-
 /// The column a wrapped row's continuation starts at, clamped so at least one
 /// column of text remains however narrow the pane or wide the indent.
 pub fn wrap_start(indent: usize, cols: usize) -> usize {
     indent.min(cols.saturating_sub(1))
 }
 
+/// The half-open char ranges a row's text paints as, one per screen row,
+/// wrapped to a pane `cols` wide. A fold lands before the last word that
+/// starts inside the line, and only when the part of it overflowing the
+/// margin would fit beside the continuation's indent — the same choice the
+/// terminal grid's own word wrap makes — so words move down whole, a diff
+/// marker keeps its line, and only a word with no room at all breaks
+/// mid-word. Continuations after the first start at the row's wrap indent
+/// (clamped by [`wrap_start`], so every line holds at least one column and
+/// wrapping always terminates). With `wrap` off, the whole text is one line
+/// whatever the pane's width.
+pub fn wrapped_lines(chars: &[char], cols: usize, wrap: bool, indent: usize) -> Vec<(usize, usize)> {
+    if !wrap || cols == 0 || chars.len() <= cols {
+        return vec![(0, chars.len())];
+    }
+    let cont = wrap_start(indent, cols);
+    let mut lines = Vec::new();
+    let mut pos = 0;
+    let mut room = cols;
+    while pos < chars.len() {
+        let end = if chars.len() - pos <= room {
+            chars.len()
+        } else {
+            // The line must fold. The fold lands before the last word that
+            // starts inside the line, and only when the part overflowing the
+            // margin fits beside the continuation's indent — the same choice
+            // the grid's own word wrap makes, so a diff marker keeps its
+            // place and a word too long for the indent stays split at the
+            // margin. Leading whitespace is never a break. With no word
+            // boundary in reach, the line breaks exactly at the margin, so
+            // wrapping always terminates.
+            let limit = pos + room;
+            let mut end = limit;
+            for w in (pos + 1..=limit).rev() {
+                if !chars[w - 1].is_whitespace() || chars[w].is_whitespace() {
+                    continue;
+                }
+                if limit - w <= cols - cont {
+                    end = w;
+                    break;
+                }
+            }
+            end
+        };
+        lines.push((pos, end));
+        if end == chars.len() {
+            break;
+        }
+        pos = end;
+        while pos < chars.len() && chars[pos].is_whitespace() {
+            pos += 1;
+        }
+        room = cols - cont;
+    }
+    lines
+}
+
 /// How many screen rows a painted row takes in a pane `cols` wide: one,
 /// unless it wraps, in which case one per line it spills onto — the first
 /// filling the pane, the rest starting at the row's wrap indent and so
-/// holding less.
-pub fn row_height(width: usize, cols: usize, wrap: bool, indent: usize) -> usize {
-    if !wrap || cols == 0 || width <= cols {
+/// holding less. Counts the lines [`wrapped_lines`] paints, so the height a
+/// page measures its rows by is the height they paint at.
+pub fn row_height(text: &str, cols: usize, wrap: bool, indent: usize) -> usize {
+    if !wrap || cols == 0 || text.chars().count() <= cols {
         return 1;
     }
-    let room = cols - wrap_start(indent, cols);
-    1 + (width - cols).div_ceil(room)
+    let chars: Vec<char> = text.chars().collect();
+    wrapped_lines(&chars, cols, wrap, indent).len()
 }
 
 /// The window of a page's rows to paint in a pane, so the cursor stays
@@ -474,7 +550,8 @@ pub trait Page {
     /// rows it pins, and how wide the pane is: a page longer than its pane
     /// returns the window it wants visible, so scrolling stays where the
     /// cursor is, and when `wrap` is set a row wider than `cols` wraps onto
-    /// the next screen row rather than clipping at the pane's edge.
+    /// the next screen row — folding at its last word boundary — rather than
+    /// clipping at the pane's edge.
     fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> PageContent;
 
     /// Offer a key to the page.
@@ -648,11 +725,12 @@ mod tests {
 
     #[test]
     fn test_an_indented_wrap_holds_less_per_continuation_line() {
-        // A 17-cell row in a 10-cell pane: unindented it spills one cell onto
-        // a second line; with the continuation starting five cells in, that
-        // line holds only five, so the row takes three.
-        assert_eq!(row_height(17, 10, true, 0), 2);
-        assert_eq!(row_height(17, 10, true, 5), 3);
+        // A 17-cell row of one unbreakable word in a 10-cell pane: without an
+        // indent it spills seven cells onto a second line; with the
+        // continuation starting five cells in, that line holds only five, so
+        // the row takes three.
+        assert_eq!(row_height(&"x".repeat(17), 10, true, 0), 2);
+        assert_eq!(row_height(&"x".repeat(17), 10, true, 5), 3);
     }
 
     #[test]
@@ -661,7 +739,56 @@ mod tests {
         // text, so wrapping still terminates.
         assert_eq!(wrap_start(10, 10), 9);
         assert_eq!(wrap_start(4, 10), 4);
-        assert_eq!(row_height(12, 10, true, 10), 3);
+        assert_eq!(row_height(&"x".repeat(12), 10, true, 10), 3);
+    }
+
+    #[test]
+    fn test_a_row_folds_at_its_last_space_that_fits() {
+        // "aa bb ccc" in eight cells: the fold lands before "ccc", the last
+        // word that fits to start a line, so the first line holds "aa bb" and
+        // carries "ccc" down whole rather than splitting it across the margin.
+        let chars: Vec<char> = "aa bb ccc".chars().collect();
+        assert_eq!(wrapped_lines(&chars, 8, true, 0), vec![(0, 6), (6, 9)]);
+        assert_eq!(row_height("aa bb ccc", 8, true, 0), 2);
+    }
+
+    #[test]
+    fn test_a_word_too_long_for_the_indent_stays_at_the_margin() {
+        // The grid's own word wrap carries a word down only when the part
+        // overflowing the margin fits beside the continuation's indent:
+        // "-oldoldoldold" beside a five-cell indent does not, so the fold
+        // falls back to the margin and the marker keeps its line.
+        let chars: Vec<char> = "    -oldoldoldold".chars().collect();
+        assert_eq!(
+            wrapped_lines(&chars, 10, true, 5),
+            vec![(0, 10), (10, 15), (15, 17)]
+        );
+    }
+
+    #[test]
+    fn test_a_word_longer_than_a_line_breaks_at_the_margin() {
+        // No space in reach: the word breaks mid-word exactly at the margin,
+        // the way the terminal grid's own wrap falls back to.
+        let chars: Vec<char> = "aaaaaa".chars().collect();
+        assert_eq!(wrapped_lines(&chars, 4, true, 0), vec![(0, 4), (4, 6)]);
+    }
+
+    #[test]
+    fn test_the_fold_lands_before_the_word_not_on_the_spaces() {
+        // A fold never starts a continuation on whitespace: the spaces end
+        // the line they fold at, and a row ending in spaces does not spill
+        // them onto a line of their own.
+        let chars: Vec<char> = "a  b".chars().collect();
+        assert_eq!(wrapped_lines(&chars, 1, true, 0), vec![(0, 1), (3, 4)]);
+        let trailing: Vec<char> = "word ".chars().collect();
+        assert_eq!(wrapped_lines(&trailing, 4, true, 0), vec![(0, 4)]);
+    }
+
+    #[test]
+    fn test_wrapping_off_keeps_one_line_however_wide() {
+        let chars: Vec<char> = "aaa bbb ccc".chars().collect();
+        assert_eq!(wrapped_lines(&chars, 4, false, 0), vec![(0, 11)]);
+        assert_eq!(row_height("aaa bbb ccc", 4, false, 0), 1);
     }
 
     #[test]

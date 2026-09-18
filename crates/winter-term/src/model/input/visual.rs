@@ -67,6 +67,12 @@ pub(super) fn resolve_visual(
             KeyCode::Char('W') => {
                 Action::SelectTextObject(TextObjectSpec::new(around, TextObject::WordBig))
             }
+            KeyCode::Char('p') => {
+                Action::SelectTextObject(TextObjectSpec::new(around, TextObject::Paragraph))
+            }
+            KeyCode::Char('s') => {
+                Action::SelectTextObject(TextObjectSpec::new(around, TextObject::Sentence))
+            }
             KeyCode::Char(c @ ('"' | '\'' | '`')) => {
                 Action::SelectTextObject(TextObjectSpec::new(around, TextObject::Quotes(c)))
             }

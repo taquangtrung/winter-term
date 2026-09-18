@@ -33,8 +33,14 @@ impl GotoMark {
 pub enum TextObject {
     /// A bracket pair, given as its opening and closing characters.
     Brackets(char, char),
+    /// A paragraph: the run of lines around the cursor that are all blank or
+    /// all not, which over a terminal's output is one block of it.
+    Paragraph,
     /// A quoted run delimited by this character.
     Quotes(char),
+    /// A sentence: up to a `.`, `!` or `?` and the quotes or brackets that
+    /// close after it.
+    Sentence,
     /// A word, where punctuation breaks the run.
     Word,
     /// A WORD, where only whitespace breaks the run.

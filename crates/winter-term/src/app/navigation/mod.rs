@@ -11,13 +11,14 @@ pub(crate) mod vim;
 
 use std::collections::HashMap;
 
-use crate::model::input::{self, CursorMove, FindChar, TextObject, VisualKind};
+use crate::model::input::{self, CursorMove, FindChar, TextObject, TextObjectSpec, VisualKind};
 use crate::model::layout::PaneId;
 use crate::model::mode::{Mode, ModeEvent};
 
 use super::prompt_edit::PromptDelete;
 use super::App;
 use super::FindLabel;
+use super::Selection;
 
 pub(crate) use search::SearchState;
 
@@ -247,6 +248,18 @@ fn is_change_action(action: &input::Action) -> bool {
     )
 }
 
+/// The cell one step before `(row, col)` in a grid `cols` wide: the column to
+/// its left, or the end of the row above when it sits in the first one. What
+/// an exclusive backward motion yanks up to, since the cursor's own cell is
+/// not taken.
+fn cell_before(cols: usize, (row, col): (usize, usize)) -> (usize, usize) {
+    match (col, row) {
+        (0, 0) => (0, 0),
+        (0, _) => (row - 1, cols.saturating_sub(1)),
+        _ => (row, col - 1),
+    }
+}
+
 /// The motions whose origin belongs on the jumplist: whole-viewport jumps and
 /// paragraph/bracket hops, but not ordinary character/word/line moves, which
 /// would bury every useful jump under noise.
@@ -345,6 +358,17 @@ impl App {
         };
         let origin = (pane.grid().to_absolute_row(row), col);
         self.vim.jump_lists.entry(focused).or_default().push(origin);
+        // Where the jump started is also Vim's own `` ` ``/`'` mark, which is
+        // how you get back without walking the whole jumplist.
+        self.set_auto_mark(focused, '\'', origin);
+    }
+
+    /// Write one of the marks Winter keeps without being asked, the ones Vim
+    /// names with punctuation rather than a letter. They live in the same
+    /// table `m` writes to, so a jump to one is the jump to any other; only
+    /// their names keep them apart from the letters a reader owns.
+    pub(crate) fn set_auto_mark(&mut self, focused: PaneId, name: char, pos: (usize, usize)) {
+        self.vim.marks.insert((focused, name), pos);
     }
 
     /// `Ctrl+O`: step the cursor back to the previous recorded jump origin,
@@ -434,6 +458,7 @@ impl App {
                     .insert(focused, LastChange::Action(action.clone()));
                 if let Some(pos) = self.live_jump_position(focused) {
                     self.vim.change_lists.entry(focused).or_default().push(pos);
+                    self.set_auto_mark(focused, '.', pos);
                 }
             }
             _ => {}
@@ -456,6 +481,10 @@ impl App {
                 .entry(focused)
                 .or_default()
                 .push(anchor);
+            // Where the typing began is both the last change and the place
+            // Insert was left, which Vim marks `.` and `^`.
+            self.set_auto_mark(focused, '.', anchor);
+            self.set_auto_mark(focused, '^', anchor);
         }
         self.vim
             .last_changes
@@ -808,6 +837,126 @@ impl App {
     }
 
     /// Select the specified text object (`iw`, `a"`, `i(`, etc.) around or inside the cursor.
+    /// `yy`: copy the whole line the cursor is on.
+    pub(crate) fn yank_line(&mut self, focused: PaneId, register: Option<char>) {
+        let Some(pane) = self.panes.get(&focused) else {
+            return;
+        };
+        let grid = pane.grid();
+        let (row, _) = self.nav_cursor(focused).unwrap_or_else(|| grid.cursor());
+        let abs_row = grid.to_absolute_row(row);
+        let last_col = grid.cols().saturating_sub(1);
+        self.yank_absolute_span(focused, (abs_row, 0), (abs_row, last_col), register);
+    }
+
+    /// `y{motion}`: copy the text between the cursor and where the motion
+    /// lands. A backward motion yanks up to the cursor without taking the cell
+    /// it sits on, the way Vim's own exclusive motions do.
+    pub(crate) fn yank_motion(
+        &mut self,
+        focused: PaneId,
+        motion: CursorMove,
+        register: Option<char>,
+    ) {
+        let cursor = self.nav_cursor(focused);
+        let Some(pane) = self.panes.get_mut(&focused) else {
+            return;
+        };
+        // The word motions take the grid mutably: at the viewport's edge they
+        // scroll to reach the line they land on, exactly as the same motion
+        // does when it moves the cursor.
+        let grid = pane.grid_mut();
+        let rows = grid.rows();
+        let (row, col) = cursor.unwrap_or_else(|| grid.cursor());
+        let landing = match motion {
+            CursorMove::WordEnd => vim::motion_word_end(grid, rows, row, col, false),
+            CursorMove::WordEndBig => vim::motion_word_end(grid, rows, row, col, true),
+            CursorMove::WordBack => vim::motion_word_back(grid, row, col, false),
+            CursorMove::WordBackBig => vim::motion_word_back(grid, row, col, true),
+            CursorMove::LineEnd => (row, vim::nav_line_end(grid, row)),
+            CursorMove::LineStart => (row, 0),
+            // Only the motions the yank operator offers reach here.
+            _ => return,
+        };
+        let cols = grid.cols();
+        let (start, end) = if landing < (row, col) {
+            (landing, cell_before(cols, (row, col)))
+        } else {
+            ((row, col), landing)
+        };
+        if end < start {
+            return;
+        }
+        let start = (grid.to_absolute_row(start.0), start.1);
+        let end = (grid.to_absolute_row(end.0), end.1);
+        self.yank_absolute_span(focused, start, end, register);
+    }
+
+    /// `yi{object}`/`ya{object}`: copy the text object under the cursor.
+    pub(crate) fn yank_text_object(
+        &mut self,
+        focused: PaneId,
+        spec: TextObjectSpec,
+        register: Option<char>,
+    ) {
+        let cursor = self.nav_cursor(focused);
+        let Some(pane) = self.panes.get(&focused) else {
+            return;
+        };
+        let grid = pane.grid();
+        let (row, col) = cursor.unwrap_or_else(|| grid.cursor());
+        let abs_row = grid.to_absolute_row(row);
+        let Some((start, end)) =
+            vim::text_object_span(grid, abs_row, col, spec.around, spec.object)
+        else {
+            return;
+        };
+        if end < start {
+            return;
+        }
+        self.yank_absolute_span(focused, start, end, register);
+    }
+
+    /// Copy the text between two absolute positions into `register`, or the
+    /// clipboard when there is none, and leave it lit for a moment so what the
+    /// yank took is visible rather than only reported.
+    pub(crate) fn yank_absolute_span(
+        &mut self,
+        focused: PaneId,
+        start: (usize, usize),
+        end: (usize, usize),
+        register: Option<char>,
+    ) {
+        let Some(grid) = self.selection_grid(focused) else {
+            return;
+        };
+        let last_col = grid.cols().saturating_sub(1);
+        self.selection.span = Some(Selection {
+            block: false,
+            end_col: end.1.min(last_col),
+            end_row: end.0,
+            pane: focused,
+            start_col: start.1.min(last_col),
+            start_row: start.0,
+        });
+        let Some(text) = self.selected_text() else {
+            self.selection.span = None;
+            return;
+        };
+        self.set_auto_mark(focused, '[', start);
+        self.set_auto_mark(focused, ']', end);
+        match register {
+            // The clipboard registers and the unnamed one mean the clipboard,
+            // which is what a yank with no register named goes to as well.
+            Some(reg) if !matches!(reg, '+' | '*' | '"') => {
+                self.vim.registers.insert(reg, text);
+                self.set_notice(format!("Yanked into register \"{reg}"));
+            }
+            _ => self.copy_selection(),
+        }
+        self.flash_yank();
+    }
+
     pub(crate) fn select_text_object(&mut self, focused: PaneId, around: bool, object: TextObject) {
         let Some(pane) = self.panes.get(&focused) else {
             return;
@@ -1278,6 +1427,127 @@ mod tests {
         app.modes.insert(id, Mode::Normal);
         app.set_nav_cursor(id, (cursor_row, 0));
         (app, id)
+    }
+
+    #[test]
+    fn test_the_yank_operator_takes_a_word_a_paragraph_and_a_line() {
+        // What `y` is for in a terminal: copying out of the output without
+        // going through Visual first.
+        let (mut app, id) = app_with_paragraphs(0);
+        let yank = |app: &mut App, action: input::Action| -> Option<String> {
+            app.handle_action(action, id);
+            app.vim.registers.get(&'r').cloned()
+        };
+
+        assert_eq!(
+            yank(
+                &mut app,
+                input::Action::YankTextObject {
+                    spec: TextObjectSpec::new(false, TextObject::Word),
+                    register: Some('r'),
+                }
+            )
+            .as_deref(),
+            Some("alpha")
+        );
+        assert_eq!(
+            yank(
+                &mut app,
+                input::Action::YankTextObject {
+                    spec: TextObjectSpec::new(false, TextObject::Paragraph),
+                    register: Some('r'),
+                }
+            )
+            .as_deref(),
+            Some("alpha\nbeta"),
+            "the paragraph is the run of lines up to the blank one"
+        );
+        assert_eq!(
+            yank(
+                &mut app,
+                input::Action::YankLine {
+                    register: Some('r')
+                }
+            )
+            .as_deref(),
+            Some("alpha")
+        );
+    }
+
+    #[test]
+    fn test_a_yank_lights_what_it_took_until_the_flash_burns_out() {
+        let (mut app, id) = app_with_paragraphs(0);
+
+        app.handle_action(
+            input::Action::YankTextObject {
+                spec: TextObjectSpec::new(false, TextObject::Word),
+                register: Some('r'),
+            },
+            id,
+        );
+        let lit = app.selection.span.clone().expect("the yank's own span");
+        assert_eq!((lit.start_col, lit.end_col), (0, 4), "the word it took");
+        assert!(app.yank_flash.is_some(), "and it is lit");
+
+        // Nothing expires while the deadline holds; once it passes, the
+        // highlight goes and the selection with it.
+        assert!(app.expire_yank_flash().is_some());
+        assert!(app.selection.span.is_some());
+        app.yank_flash = Some((lit, std::time::Instant::now()));
+        assert!(app.expire_yank_flash().is_none());
+        assert!(app.selection.span.is_none(), "the flash cleared it");
+    }
+
+    #[test]
+    fn test_a_selection_made_after_a_yank_outlives_its_flash() {
+        // The flash only ever puts out its own light: a drag or a Visual
+        // selection started since owns the span, and clearing it under the
+        // reader would be worse than a highlight that overstays.
+        let (mut app, id) = app_with_paragraphs(0);
+        app.handle_action(
+            input::Action::YankTextObject {
+                spec: TextObjectSpec::new(false, TextObject::Word),
+                register: Some('r'),
+            },
+            id,
+        );
+        let flashed = app.yank_flash.clone().expect("a flash").0;
+        app.yank_flash = Some((flashed, std::time::Instant::now()));
+        app.handle_action(
+            input::Action::SelectTextObject(TextObjectSpec::new(false, TextObject::Paragraph)),
+            id,
+        );
+
+        assert!(app.expire_yank_flash().is_none());
+        assert!(
+            app.selection.span.is_some(),
+            "the newer selection is still there"
+        );
+    }
+
+    #[test]
+    fn test_the_marks_winter_keeps_on_its_own_hold_the_jump_and_the_yank() {
+        let (mut app, id) = app_with_paragraphs(3);
+
+        // A jump records where it started under `'`, which is how `` ` `` and
+        // `''` get back without walking the jumplist.
+        app.handle_action(input::Action::MoveCursor(CursorMove::Top), id);
+        assert_eq!(app.vim.marks.get(&(id, '\'')), Some(&(3, 0)));
+
+        // A yank records its own ends under `[` and `]`.
+        app.handle_action(
+            input::Action::YankTextObject {
+                spec: TextObjectSpec::new(false, TextObject::Paragraph),
+                register: Some('r'),
+            },
+            id,
+        );
+        assert_eq!(app.vim.marks.get(&(id, '[')), Some(&(0, 0)));
+        assert_eq!(
+            app.vim.marks.get(&(id, ']')).map(|&(row, _)| row),
+            Some(1),
+            "the last row the paragraph covered"
+        );
     }
 
     #[test]

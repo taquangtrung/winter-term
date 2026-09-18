@@ -613,7 +613,138 @@ pub(super) fn text_object_span(
         TextObject::WordBig => text_object_word(grid, row, col, true, around),
         TextObject::Quotes(q) => text_object_quotes(grid, row, col, q, around),
         TextObject::Brackets(o, c) => text_object_brackets(grid, row, col, o, c, around),
+        TextObject::Paragraph => text_object_paragraph(grid, row, around),
+        TextObject::Sentence => text_object_sentence(grid, row, col, around),
     }
+}
+
+/// The sentence `col` sits in, within its own row.
+///
+/// Vim's rule for where one ends: a `.`, `!` or `?`, any closing quotes and
+/// brackets after it, then a blank or the row's end. `is` stops at the
+/// sentence; `as` takes the blanks that follow it, or the ones before it when
+/// none follow. On the blanks between two sentences, `is` takes the run of
+/// them alone, the way `iw` takes a run of blanks between words.
+fn text_object_sentence(
+    grid: &Grid,
+    row: usize,
+    col: usize,
+    around: bool,
+) -> Option<((usize, usize), (usize, usize))> {
+    // Trailing blanks are the row's padding, not part of a sentence: without
+    // dropping them the last sentence of a row would run to the pane's edge,
+    // and `as` would find blanks after it that are not really there.
+    let mut line = absolute_row_chars(grid, row);
+    while line.last().is_some_and(|c| c.is_whitespace()) {
+        line.pop();
+    }
+    if line.is_empty() {
+        return None;
+    }
+    let col = col.min(line.len() - 1);
+    let (mut start, end, after) = sentence_spans(&line)
+        .into_iter()
+        .find(|&(start, _, after)| col >= start && col < after)?;
+    if col >= end && !around {
+        return Some(((row, end), (row, after.saturating_sub(1))));
+    }
+    if around && after == end {
+        while start > 0 && line[start - 1].is_whitespace() {
+            start -= 1;
+        }
+    }
+    let last = if around { after } else { end };
+    Some(((row, start), (row, last.max(start + 1) - 1)))
+}
+
+/// Every sentence of `line`, as `(start, end, after)`: where it begins, where
+/// its text stops, and where the blanks following it stop. The tail of a row
+/// that ends no sentence is one of its own, so a cursor anywhere on the row
+/// lands in exactly one span.
+fn sentence_spans(line: &[char]) -> Vec<(usize, usize, usize)> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    let mut at = 0;
+    while at < line.len() {
+        let Some(end) = sentence_end_at(line, at) else {
+            at += 1;
+            continue;
+        };
+        let mut after = end;
+        while after < line.len() && line[after].is_whitespace() {
+            after += 1;
+        }
+        spans.push((start, end, after));
+        start = after;
+        at = after.max(at + 1);
+    }
+    if start < line.len() {
+        spans.push((start, line.len(), line.len()));
+    }
+    spans
+}
+
+/// Where the sentence ending at `at` stops: one past its `.`, `!` or `?` and
+/// the closing quotes and brackets that follow, when a blank or the row's end
+/// comes next. `None` where `at` ends no sentence, which is what keeps a
+/// decimal point or a file extension from splitting one.
+fn sentence_end_at(line: &[char], at: usize) -> Option<usize> {
+    if !matches!(line[at], '.' | '!' | '?') {
+        return None;
+    }
+    let mut end = at + 1;
+    while end < line.len() && matches!(line[end], ')' | ']' | '"' | '\'') {
+        end += 1;
+    }
+    match line.get(end) {
+        None => Some(end),
+        Some(c) if c.is_whitespace() => Some(end),
+        Some(_) => None,
+    }
+}
+
+/// The whole lines of the paragraph `row` sits in: the run of rows around it
+/// that are all blank or all not, which over a terminal's output is one block
+/// of output, one command's worth of it, or the gap between two.
+///
+/// `around` takes the blank rows that follow the run as well, and the ones
+/// before it when none follow — vim's own `ap`, where `ip` stops at the
+/// paragraph itself.
+fn text_object_paragraph(
+    grid: &Grid,
+    row: usize,
+    around: bool,
+) -> Option<((usize, usize), (usize, usize))> {
+    let total = grid.scrollback_len() + grid.rows();
+    if row >= total {
+        return None;
+    }
+    let blank = absolute_row_is_blank(grid, row);
+    let same = |r: usize| absolute_row_is_blank(grid, r) == blank;
+    let mut start = row;
+    while start > 0 && same(start - 1) {
+        start -= 1;
+    }
+    let mut end = row;
+    while end + 1 < total && same(end + 1) {
+        end += 1;
+    }
+    if around {
+        let mut after = end;
+        while after + 1 < total && !same(after + 1) {
+            after += 1;
+        }
+        if after > end {
+            end = after;
+        } else {
+            while start > 0 && !same(start - 1) {
+                start -= 1;
+            }
+        }
+    }
+    // Whole rows: the span runs to the pane's last column, and the text the
+    // yank reads back drops the blank padding past each row's own end.
+    Some(((start, 0), (end, grid.cols().saturating_sub(1))))
 }
 /// Normalize delimiter character to its opening and closing pair, and whether it is a quote.
 pub(super) fn surround_pair_chars(d: char) -> Option<(char, char, bool)> {
@@ -649,6 +780,58 @@ pub(super) fn surround_pair_positions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A grid one row deep holding `line`, for the row-local text objects.
+    fn grid_with(line: &str) -> Grid {
+        let mut grid = Grid::new(line.chars().count() + 10, 3);
+        for ch in line.chars() {
+            grid.print(ch);
+        }
+        grid
+    }
+
+    #[test]
+    fn test_a_sentence_ends_at_its_stop_and_the_quotes_that_close_after_it() {
+        // Two sentences on one row, the first closing inside a quote: `is`
+        // takes the sentence, `as` takes the blanks after it too.
+        let grid = grid_with("One two. \"Three four.\" Five");
+        let text = |span: ((usize, usize), (usize, usize))| -> String {
+            let line = absolute_row_chars(&grid, 0);
+            line[span.0 .1..=span.1 .1].iter().collect()
+        };
+
+        let first = text_object_sentence(&grid, 0, 2, false).expect("the first sentence");
+        assert_eq!(text(first), "One two.");
+        let around = text_object_sentence(&grid, 0, 2, true).expect("with its blanks");
+        assert_eq!(text(around), "One two. ");
+
+        let second = text_object_sentence(&grid, 0, 12, false).expect("the second");
+        assert_eq!(
+            text(second),
+            "\"Three four.\"",
+            "the quote closing after the stop belongs to it"
+        );
+    }
+
+    #[test]
+    fn test_a_stop_inside_a_word_does_not_end_a_sentence() {
+        // `.` only ends one when a blank or the row's end follows, which is
+        // what keeps a version number or a file name in one piece.
+        let grid = grid_with("Run cargo test v1.2.3 now");
+        let span = text_object_sentence(&grid, 0, 0, false).expect("one sentence");
+        let line = absolute_row_chars(&grid, 0);
+        let text: String = line[span.0 .1..=span.1 .1].iter().collect();
+        assert_eq!(text, "Run cargo test v1.2.3 now");
+    }
+
+    #[test]
+    fn test_as_takes_the_blanks_before_when_none_follow() {
+        let grid = grid_with("First. Second.");
+        let span = text_object_sentence(&grid, 0, 10, true).expect("the last sentence");
+        let line = absolute_row_chars(&grid, 0);
+        let text: String = line[span.0 .1..=span.1 .1].iter().collect();
+        assert_eq!(text, " Second.");
+    }
 
     #[test]
     fn test_nav_line_end_extends_to_shell_cursor_for_trailing_space() {

@@ -22,18 +22,18 @@ use std::path::PathBuf;
 use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    find_match, row_height, row_text, row_width, wrap_window, CommandOutput, JobReply, JobRequest,
-    OpenTarget, Page, PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PromptMode,
+    find_match, row_height, row_text, wrap_window, CommandOutput, JobReply, JobRequest, OpenTarget,
+    Page, PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PageWindow, PromptMode,
     PromptReply, PromptRequest, SpawnRequest,
 };
-use crate::model::vim::nav::{VimKey, VimNav};
+use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
 
 use commit::CommitContent;
 use diff::FileDiff;
 use exec::{LogScope, ResetMode, SequenceStep};
 use parse::{Commit, Section, Status};
 use popup::Popup;
-use rows::{FileRow, Item, ViewRow};
+use rows::{CommitFolds, FileRow, Item, ViewRow};
 
 // ========================================================================
 // Constants
@@ -77,10 +77,10 @@ const LOG_PAGE: usize = 50;
 const DEFAULT_REMOTE: &str = "origin";
 
 /// Shown while the first status has not come back yet.
-const LOADING: &str = "  reading the repository...";
+const LOADING: &str = "reading the repository...";
 
 /// Shown when the directory the view opened in is not in a repository.
-const NOT_A_REPO: &str = "  not a git repository";
+const NOT_A_REPO: &str = "not a git repository";
 
 /// Rows of header above the first section.
 const HEADER_ROWS: usize = 1;
@@ -113,6 +113,9 @@ pub struct Output {
     /// different depth without re-running `git show`. `None` for every other
     /// kind of output.
     commit: Option<CommitContent>,
+    /// Whether the heading over `commit`'s files is shut, which hides every
+    /// one of them.
+    changes_shut: bool,
     /// Files of `commit` showing no diff.
     folded_files: HashSet<usize>,
     /// `(file, hunk)` pairs of `commit` showing only their header.
@@ -163,6 +166,10 @@ pub struct GitPage {
     /// The shared Vim motion state: the layer the view's unclaimed keys fall
     /// through to. Its own `g` leader claims the prefix before this sees it.
     nav: VimNav,
+    /// A row just opened whose contents the next paint should bring into
+    /// view, if they do not already fit under it. Held until the paint, since
+    /// what fits is only known once the pane's width and height are.
+    reveal: Option<usize>,
 }
 
 // ========================================================================
@@ -193,6 +200,7 @@ impl GitPage {
             status: Status::default(),
             viewport: 0,
             nav: VimNav::new(),
+            reveal: None,
         }
     }
 
@@ -244,6 +252,7 @@ impl GitPage {
             // The commit-view items only ever appear in an output view, which
             // has its own key handling and never asks for working-tree targets.
             Some(Item::Commit(_))
+            | Some(Item::CommitChanges)
             | Some(Item::CommitFile(_))
             | Some(Item::CommitHunk(_, _))
             | Some(Item::RecentHeading)
@@ -424,14 +433,25 @@ impl GitPage {
             }
             // A commit view folds through its own handler, over its own fold
             // sets, so these cannot be reached from the status view's rows.
-            Some(Item::CommitFile(_)) | Some(Item::CommitHunk(_, _)) | Some(Item::None) | None => {
-                PageOutcome::Consumed
-            }
+            Some(Item::CommitChanges)
+            | Some(Item::CommitFile(_))
+            | Some(Item::CommitHunk(_, _))
+            | Some(Item::None)
+            | None => PageOutcome::Consumed,
         }
     }
 
+    /// The row a file's band sits on, if the view is showing one for it.
+    fn row_of_file(&self, file: &FileRow) -> Option<usize> {
+        self.rows
+            .iter()
+            .position(|row| matches!(&row.item, Item::File(row_file) if row_file == file))
+    }
+
     fn toggle_section(&mut self, key: Option<Section>) {
-        if !self.collapsed.remove(&key) {
+        if self.collapsed.remove(&key) {
+            self.reveal = Some(self.cursor);
+        } else {
             self.collapsed.insert(key);
         }
         self.rebuild();
@@ -444,6 +464,7 @@ impl GitPage {
             return PageOutcome::Consumed;
         }
         self.expanded.insert(file.clone());
+        self.reveal = Some(self.cursor);
         if self.diffs.contains_key(&file) {
             self.rebuild();
             return PageOutcome::Consumed;
@@ -707,6 +728,13 @@ impl GitPage {
             return PageOutcome::Consumed;
         };
         let last = output.lines.len().saturating_sub(1);
+        if let Some(motion) = buffer_end(key) {
+            output.cursor = match motion {
+                CursorMove::Top => 0,
+                _ => last,
+            };
+            return PageOutcome::Consumed;
+        }
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 output.cursor = (output.cursor + 1).min(last);
@@ -743,23 +771,60 @@ impl GitPage {
                     PageOutcome::Yank(value)
                 }
             }
+            // Fold or unfold the whole commit at once, the same key the status
+            // view folds its sections with. Anything folded means the view is
+            // part-way shut, so the key opens all of it; nothing folded means
+            // it shuts every file down to its band, which is the commit read
+            // as a list of what it touched.
+            KeyCode::Tab if key.shift => {
+                let Some(count) = output.commit.as_ref().map(|commit| commit.files.len()) else {
+                    // No commit, so nothing foldable: a log, a blame, or a
+                    // diff is the lines it came back as.
+                    return PageOutcome::Consumed;
+                };
+                let open = !output.changes_shut
+                    && output.folded_files.is_empty()
+                    && output.folded_hunks.is_empty();
+                output.changes_shut = false;
+                output.folded_files.clear();
+                output.folded_hunks.clear();
+                if open {
+                    // Shut to the file list rather than to the heading: the
+                    // list of what the commit touched is what a shut commit is
+                    // read for, and the heading alone says nothing.
+                    output.folded_files.extend(0..count);
+                }
+                repaint_commit(output);
+                PageOutcome::Consumed
+            }
             // Fold or unfold what the cursor is on. A file row shuts its whole
             // diff away; a hunk row shuts the hunk's body but keeps the header,
             // so the file still says what it contains.
             KeyCode::Tab => {
-                match output.rows.get(output.cursor).map(|row| row.item.clone()) {
+                let opened = match output.rows.get(output.cursor).map(|row| row.item.clone()) {
+                    Some(Item::CommitChanges) => {
+                        output.changes_shut = !output.changes_shut;
+                        !output.changes_shut
+                    }
                     Some(Item::CommitFile(file)) => {
-                        if !output.folded_files.remove(&file) {
+                        let opened = output.folded_files.remove(&file);
+                        if !opened {
                             output.folded_files.insert(file);
                         }
+                        opened
                     }
                     Some(Item::CommitHunk(file, hunk)) => {
-                        if !output.folded_hunks.remove(&(file, hunk)) {
+                        let opened = output.folded_hunks.remove(&(file, hunk));
+                        if !opened {
                             output.folded_hunks.insert((file, hunk));
                         }
+                        opened
                     }
                     // Nothing foldable under the cursor.
                     _ => return PageOutcome::Consumed,
+                };
+                if opened {
+                    self.reveal = Some(output.cursor);
                 }
                 // Keep the cursor on the row it was on: folding a file leaves
                 // its band in place, so the reader does not lose their spot.
@@ -785,6 +850,7 @@ impl GitPage {
             rows: Vec::new(),
             title: title.to_string(),
             commit: None,
+            changes_shut: false,
             folded_files: HashSet::new(),
             folded_hunks: HashSet::new(),
         });
@@ -802,6 +868,7 @@ impl GitPage {
             rows,
             title: title.to_string(),
             commit: None,
+            changes_shut: false,
             folded_files: HashSet::new(),
             folded_hunks: HashSet::new(),
         });
@@ -809,7 +876,20 @@ impl GitPage {
 
     /// Show one commit, kept as content rather than as lines so its files and
     /// hunks can be folded and unfolded in place.
+    ///
+    /// It opens shut: every file down to its band and every hunk down to its
+    /// header, so a commit reads first as the list of what it touched and the
+    /// patch is asked for a piece at a time. The status view opens the same
+    /// way, and a commit touching thirty files is unreadable as a wall of
+    /// diff. `Tab` opens what the cursor is on, `Shift-Tab` all of it.
     fn show_commit(&mut self, title: &str, content: CommitContent) {
+        let folded_files = (0..content.files.len()).collect();
+        let folded_hunks = content
+            .files
+            .iter()
+            .enumerate()
+            .flat_map(|(file, entry)| (0..entry.hunks.len()).map(move |hunk| (file, hunk)))
+            .collect();
         let mut output = Output {
             cursor: 0,
             lines: Vec::new(),
@@ -817,8 +897,9 @@ impl GitPage {
             rows: Vec::new(),
             title: title.to_string(),
             commit: Some(content),
-            folded_files: HashSet::new(),
-            folded_hunks: HashSet::new(),
+            changes_shut: false,
+            folded_files,
+            folded_hunks,
         };
         repaint_commit(&mut output);
         self.output = Some(output);
@@ -1060,8 +1141,12 @@ impl GitPage {
             }
             exec::TAG_DIFF => {
                 if let Some(file) = self.pending_diff.take() {
-                    self.diffs.insert(file, diff::parse_diff(&output.stdout));
+                    self.diffs
+                        .insert(file.clone(), diff::parse_diff(&output.stdout));
                     self.rebuild();
+                    // The diff is only now there to show, so the row that
+                    // asked for it takes its turn at being brought into view.
+                    self.reveal = self.row_of_file(&file);
                 }
                 self.request_stale_diff()
             }
@@ -1158,14 +1243,9 @@ impl Page for GitPage {
         self.viewport = rows.saturating_sub(HEADER_ROWS).max(1);
         if let Some(output) = &self.output {
             let visible = rows.saturating_sub(HEADER_ROWS).max(1);
-            let widths: Vec<usize> = output
-                .lines
-                .iter()
-                .map(|line| line.chars().count())
-                .collect();
-            let window = wrap_window(self.scroll, output.cursor, widths.len(), visible, |index| {
+            let height = |index: usize| {
                 row_height(
-                    widths[index],
+                    &output.lines[index],
                     cols,
                     wrap,
                     output
@@ -1174,7 +1254,17 @@ impl Page for GitPage {
                         .map(|row| row.wrap_indent)
                         .unwrap_or(0),
                 )
-            });
+            };
+            let mut window = wrap_window(
+                self.scroll,
+                output.cursor,
+                output.lines.len(),
+                visible,
+                height,
+            );
+            if let Some(start) = reveal_start(&output.rows, &window, self.reveal.take()) {
+                window = wrap_window(start, output.cursor, output.lines.len(), visible, height);
+            }
             self.scroll = window.start;
             let mut header = vec![
                 PageSpan::new(PageStyle::Header, output.title.clone()),
@@ -1225,15 +1315,18 @@ impl Page for GitPage {
             let note = if self.loaded { NOT_A_REPO } else { LOADING };
             return PageContent::new(vec![vec![PageSpan::new(PageStyle::Dim, note)]]);
         }
-        let widths: Vec<usize> = self.rows.iter().map(|row| row_width(&row.spans)).collect();
         let indents: Vec<usize> = self.rows.iter().map(|row| row.wrap_indent).collect();
-        let window = wrap_window(
-            self.scroll,
-            self.cursor,
-            widths.len(),
-            rows.saturating_sub(HEADER_ROWS),
-            |index| row_height(widths[index], cols, wrap, indents[index]),
-        );
+        let texts: Vec<String> = self
+            .rows
+            .iter()
+            .map(|row| row_text(&row.spans))
+            .collect();
+        let visible = rows.saturating_sub(HEADER_ROWS);
+        let height = |index: usize| row_height(&texts[index], cols, wrap, indents[index]);
+        let mut window = wrap_window(self.scroll, self.cursor, self.rows.len(), visible, height);
+        if let Some(start) = reveal_start(&self.rows, &window, self.reveal.take()) {
+            window = wrap_window(start, self.cursor, self.rows.len(), visible, height);
+        }
         self.scroll = window.start;
         let mut painted: Vec<Vec<PageSpan>> = Vec::new();
         let mut wrap_indents: Vec<usize> = Vec::new();
@@ -1277,6 +1370,10 @@ impl Page for GitPage {
             return self.on_output_key(key);
         }
         if key.alt {
+            if let Some(motion) = buffer_end(key) {
+                self.apply_motion(motion);
+                return PageOutcome::Consumed;
+            }
             return match key.code {
                 KeyCode::Char('n') => {
                     self.move_to_entity(true);
@@ -1468,11 +1565,30 @@ impl Page for GitPage {
 /// folding a file removes a variable number of rows, and rebuilding from the
 /// content is the only way the row list, the search text, and the fold sets
 /// cannot drift apart.
+/// Where to scroll so a just-opened row shows what it opened: the row itself,
+/// once the block it heads runs past the window's bottom, since from there the
+/// most of that block fits. `None` leaves the window alone, which is the case
+/// whenever the block already shows in full — an unfold near the top of the
+/// pane must not shift the page out from under the reader — and whenever
+/// nothing was opened at all.
+fn reveal_start(rows: &[ViewRow], window: &PageWindow, at: Option<usize>) -> Option<usize> {
+    let at = at?;
+    let end = rows::block_end(rows, at);
+    (end >= window.start + window.count).then_some(at)
+}
+
 fn repaint_commit(output: &mut Output) {
     let Some(content) = &output.commit else {
         return;
     };
-    output.rows = rows::commit_view_rows(content, &output.folded_files, &output.folded_hunks);
+    output.rows = rows::commit_view_rows(
+        content,
+        CommitFolds {
+            shut: output.changes_shut,
+            files: &output.folded_files,
+            hunks: &output.folded_hunks,
+        },
+    );
     output.lines = output.rows.iter().map(|row| row_text(&row.spans)).collect();
     output.cursor = output.cursor.min(output.rows.len().saturating_sub(1));
 }
@@ -1862,6 +1978,64 @@ index aaa..bbb 100644
     }
 
     #[test]
+    fn test_opening_a_file_scrolls_its_diff_into_a_short_pane() {
+        // Unfolding at the bottom of the pane used to leave the diff below
+        // the fold: the cursor stayed on the band, which was already visible,
+        // so nothing scrolled and the rows just opened were off screen.
+        let mut page = page_with_diff();
+        let painted = |page: &mut GitPage| -> Vec<String> {
+            page.content(6, 80, false)
+                .rows
+                .iter()
+                .map(row_text)
+                .collect()
+        };
+        // Fold it away, scroll so the band sits at the pane's bottom, then
+        // open it again.
+        page.on_key(&press(KeyCode::Tab));
+        painted(&mut page);
+        page.on_key(&press(KeyCode::Tab));
+        let rows = painted(&mut page);
+        assert!(
+            rows.iter().any(|row| row.contains("@@")),
+            "the diff the fold opened is on screen, got {rows:?}"
+        );
+    }
+
+    #[test]
+    fn test_opening_a_file_already_showing_in_full_leaves_the_page_alone() {
+        // The scroll only moves for a block that runs past the pane's bottom:
+        // one that fits must not shift the page under the reader.
+        let mut page = page_with_diff();
+        page.content(40, 80, false);
+        let before = page.scroll;
+        page.on_key(&press(KeyCode::Tab));
+        page.content(40, 80, false);
+        page.on_key(&press(KeyCode::Tab));
+        page.content(40, 80, false);
+        assert_eq!(page.scroll, before, "a pane with room to spare stays put");
+    }
+
+    #[test]
+    fn test_opening_a_commits_file_scrolls_its_hunks_into_a_short_pane() {
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+        output_cursor_on(&mut page, "src/a.rs");
+        page.content(5, 80, false);
+        page.on_key(&press(KeyCode::Tab));
+        let rows: Vec<String> = page
+            .content(5, 80, false)
+            .rows
+            .iter()
+            .map(row_text)
+            .collect();
+        assert!(
+            rows.iter().any(|row| row.contains("@@")),
+            "the hunks the fold opened are on screen, got {rows:?}"
+        );
+    }
+
+    #[test]
     fn test_expanding_a_file_reads_its_diff_from_the_right_side() {
         // A staged file's diff is the index one; asking for the working-tree
         // diff there would show changes that are not staged.
@@ -1975,7 +2149,7 @@ index aaa..bbb 100644
             "the removed line's wrapped rows push the band down"
         );
         assert!(
-            wrapped.wrap_indents.contains(&5),
+            wrapped.wrap_indents.contains(&1),
             "the hunk's lines carry their marker column, got {:?}",
             wrapped.wrap_indents
         );
@@ -2323,8 +2497,8 @@ index aaa..bbb 100644
         assert_eq!(command.args.first().map(String::as_str), Some("show"));
         assert_eq!(command.args.last().map(String::as_str), Some("abc1234"));
         assert!(
-            command.args.iter().any(|arg| arg == "--shortstat"),
-            "the summary and its totals come before the patch: {:?}",
+            !command.args.iter().any(|arg| arg == "--shortstat"),
+            "no line totals: the view counts the commit's own hunks, {:?}",
             command.args
         );
     }
@@ -2369,7 +2543,6 @@ index aaa..bbb 100644
             "",
             "    do the thing",
             "",
-            " 1 file changed, 2 insertions(+), 1 deletion(-)",
             "diff --git a/src/a.rs b/src/a.rs",
             "index 111..222 100644",
             "--- a/src/a.rs",
@@ -2385,6 +2558,8 @@ index aaa..bbb 100644
             page.on_job(reply(exec::TAG_SHOW, &shown)),
             PageOutcome::Consumed
         );
+        // A commit opens shut, so open all of it to read what it paints.
+        page.on_key(&shift(KeyCode::Tab));
         let output = page
             .output
             .as_ref()
@@ -2430,6 +2605,10 @@ index aaa..bbb 100644
     /// A `git show` of one file with two hunks, for the fold tests.
     const SHOWN_TWO_HUNKS: &str = "commit abc1234567890\n\n    do the thing\ndiff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,2 +1,2 @@\n-    old();\n+    new();\n@@ -9,2 +9,2 @@\n-    second();\n+    third();\n";
 
+    /// A commit touching two files, so folding every file at once is visible
+    /// as more than folding the one.
+    const SHOWN_TWO_FILES: &str = "commit abc1234567890\n\n    do the thing\ndiff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,2 +1,2 @@\n-    old();\n+    new();\ndiff --git a/src/b.rs b/src/b.rs\n--- a/src/b.rs\n+++ b/src/b.rs\n@@ -1,2 +1,2 @@\n-    second();\n+    third();\n";
+
     /// Put the cursor on the first row whose text contains `needle`.
     fn output_cursor_on(page: &mut GitPage, needle: &str) {
         let output = page.output.as_mut().expect("an output view");
@@ -2447,22 +2626,58 @@ index aaa..bbb 100644
     }
 
     #[test]
-    fn test_tab_on_a_commits_file_folds_its_diff_away_and_back() {
+    fn test_tab_on_a_commits_heading_shuts_every_file_under_it() {
+        // The heading is the commit's own section, the way the working tree's
+        // sections are: one key takes the whole file list away and brings it
+        // back, with the count left saying what is behind it.
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_FILES));
+        assert!(
+            output_has(&page, "src/a.rs"),
+            "the files show to begin with"
+        );
+
+        output_cursor_on(&mut page, "Changes");
+        assert_eq!(page.on_key(&press(KeyCode::Tab)), PageOutcome::Consumed);
+        assert!(
+            !output_has(&page, "src/a.rs") && !output_has(&page, "src/b.rs"),
+            "the file list is away"
+        );
+        assert!(
+            output_has(&page, "Changes (2)"),
+            "the heading stays, still counting what it holds"
+        );
+
+        page.on_key(&press(KeyCode::Tab));
+        assert!(
+            output_has(&page, "src/a.rs") && output_has(&page, "src/b.rs"),
+            "and comes back"
+        );
+    }
+
+    #[test]
+    fn test_a_commit_opens_shut_and_tab_opens_it_one_layer_at_a_time() {
         let mut page = loaded_page();
         page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
-        assert!(output_has(&page, "new();"), "the diff shows to begin with");
+        assert!(
+            output_has(&page, "src/a.rs"),
+            "the commit opens as the files it touched"
+        );
+        assert!(
+            !output_has(&page, "@@") && !output_has(&page, "new();"),
+            "with neither their hunks nor their diffs"
+        );
 
         output_cursor_on(&mut page, "src/a.rs");
         let at = page.output.as_ref().unwrap().cursor;
         assert_eq!(page.on_key(&press(KeyCode::Tab)), PageOutcome::Consumed);
-
         assert!(
-            !output_has(&page, "new();"),
-            "folding the file hides its diff"
+            output_has(&page, "@@"),
+            "the file opens to its hunk headers"
         );
         assert!(
-            output_has(&page, "src/a.rs"),
-            "its band stays, so it can be opened again"
+            !output_has(&page, "new();"),
+            "which are themselves still shut"
         );
         assert_eq!(
             page.output.as_ref().unwrap().cursor,
@@ -2470,14 +2685,27 @@ index aaa..bbb 100644
             "the cursor stays on the band it acted on"
         );
 
+        output_cursor_on(&mut page, "@@ -1,2 +1,2 @@");
         page.on_key(&press(KeyCode::Tab));
-        assert!(output_has(&page, "new();"), "a second Tab opens it again");
+        assert!(output_has(&page, "new();"), "the hunk opens to its body");
+
+        output_cursor_on(&mut page, "src/a.rs");
+        page.on_key(&press(KeyCode::Tab));
+        assert!(
+            !output_has(&page, "@@"),
+            "the file shuts all of it away again"
+        );
+        assert!(
+            output_has(&page, "src/a.rs"),
+            "its band stays, so it can be opened again"
+        );
     }
 
     #[test]
     fn test_tab_on_a_commits_hunk_folds_only_that_hunk() {
         let mut page = loaded_page();
         page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+        page.on_key(&shift(KeyCode::Tab));
 
         output_cursor_on(&mut page, "@@ -1,2 +1,2 @@");
         page.on_key(&press(KeyCode::Tab));
@@ -2504,6 +2732,65 @@ index aaa..bbb 100644
             before,
             "the view is unchanged"
         );
+    }
+
+    #[test]
+    fn test_shift_tab_folds_every_file_of_a_commit_and_opens_them_again() {
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_FILES));
+        assert!(
+            !output_has(&page, "new();") && !output_has(&page, "third();"),
+            "the commit opens shut"
+        );
+
+        assert_eq!(page.on_key(&shift(KeyCode::Tab)), PageOutcome::Consumed);
+        assert!(
+            output_has(&page, "new();") && output_has(&page, "third();"),
+            "one key opens every file and hunk of it"
+        );
+
+        page.on_key(&shift(KeyCode::Tab));
+        assert!(
+            !output_has(&page, "new();") && !output_has(&page, "third();"),
+            "a second Shift-Tab shuts all of it again"
+        );
+        assert!(
+            output_has(&page, "src/a.rs") && output_has(&page, "src/b.rs"),
+            "the bands stay, so the commit still says what it touched"
+        );
+    }
+
+    #[test]
+    fn test_shift_tab_opens_a_part_way_folded_commit_rather_than_shutting_it() {
+        // One hunk folded by hand means the view is already part-way shut, so
+        // the key that acts on all of it opens it rather than folding further.
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+        page.on_key(&shift(KeyCode::Tab));
+        output_cursor_on(&mut page, "@@ -1,2 +1,2 @@");
+        page.on_key(&press(KeyCode::Tab));
+        assert!(!output_has(&page, "new();"), "that hunk's body is away");
+
+        page.on_key(&shift(KeyCode::Tab));
+        assert!(
+            output_has(&page, "new();") && output_has(&page, "third();"),
+            "every hunk is back"
+        );
+    }
+
+    #[test]
+    fn test_shift_tab_leaves_an_output_view_with_nothing_to_fold_alone() {
+        // A blame, a log, or a listing is the lines it came back as: there is
+        // no commit under it to fold, and the key must not disturb the view.
+        let mut page = loaded_page();
+        page.on_job(reply(
+            exec::TAG_BLAME,
+            "abc1234 (Someone 2026-09-18) fn main() {",
+        ));
+        let before = page.output.as_ref().expect("the blame").lines.clone();
+
+        assert_eq!(page.on_key(&shift(KeyCode::Tab)), PageOutcome::Consumed);
+        assert_eq!(page.output.as_ref().unwrap().lines, before);
     }
 
     #[test]
@@ -2535,6 +2822,7 @@ index aaa..bbb 100644
         // or the pane keeps drawing the unfolded view.
         let mut page = loaded_page();
         page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+        page.on_key(&shift(KeyCode::Tab));
         let drawn = |page: &mut GitPage| -> String {
             page.content(40, 100, false)
                 .rows
@@ -2707,6 +2995,26 @@ index aaa..bbb 100644
             .rows
             .iter()
             .any(|row| matches!(row.item, Item::File(_))));
+    }
+
+    #[test]
+    fn test_the_emacs_buffer_ends_reach_both_ends_of_either_view() {
+        // `M->` and `M-<` land on the last and first row, in the status view
+        // and in an output view alike: both are read top to bottom, and the
+        // Vim `G`/`gg` pair is otherwise the only way there.
+        let mut page = loaded_page();
+        page.cursor = 0;
+        page.on_key(&alt_char('>'));
+        assert_eq!(page.cursor, page.rows.len() - 1, "the last row");
+        page.on_key(&alt_char('<'));
+        assert_eq!(page.cursor, 0, "and back to the first");
+
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_FILES));
+        page.on_key(&alt_char('>'));
+        let output = page.output.as_ref().expect("the commit view");
+        assert_eq!(output.cursor, output.lines.len() - 1);
+        page.on_key(&alt_char('<'));
+        assert_eq!(page.output.as_ref().unwrap().cursor, 0);
     }
 
     #[test]

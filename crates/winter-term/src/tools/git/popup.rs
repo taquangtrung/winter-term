@@ -7,9 +7,6 @@ use crate::model::page::{PageRow, PageSpan, PageStyle};
 // Constants
 // ========================================================================
 
-/// Indent the choices sit at, under the menu's title.
-const CHOICE_INDENT: &str = "  ";
-
 /// Separates a choice's key from its label.
 const KEY_GAP: &str = "  ";
 
@@ -147,7 +144,7 @@ impl Popup {
         ];
         rows.extend(self.choices().iter().map(|(key, label)| {
             vec![
-                PageSpan::new(PageStyle::Accent, format!("{CHOICE_INDENT}{key}")),
+                PageSpan::new(PageStyle::Accent, key.to_string()),
                 PageSpan::new(PageStyle::Dim, format!("{KEY_GAP}{label}")),
             ]
         }));

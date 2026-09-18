@@ -20,10 +20,10 @@ use super::words::{decorate, Segment};
 /// Heading of the recent-commits section.
 const RECENT_TITLE: &str = "Recent commits";
 
-/// Marks a section whose entries are hidden.
+/// Marks a row whose contents are hidden.
 const GLYPH_COLLAPSED: &str = "▶ ";
 
-/// Marks a section whose entries are shown.
+/// Marks a row whose contents are shown.
 const GLYPH_EXPANDED: &str = "▼ ";
 
 /// Column the values in the status header's label block start at, so `Repo:`,
@@ -59,32 +59,28 @@ const MARK_UNPUSHED: &str = "↑ ";
 /// Heading of the log view's commit list.
 const LOG_TITLE: &str = "Commit logs";
 
+/// Heading over the files a commit touched, which folds them all away at once.
+const CHANGES_TITLE: &str = "Changes";
+
 /// What the log view says when more commits can be loaded.
 const LOG_MORE: &str = "Press '+' to display more commits";
-
-/// Indent every entry sits at, under its heading.
-const ENTRY_INDENT: &str = "  ";
 
 /// The one column a diff line's marker takes, which a wrapped continuation
 /// starts past.
 const MARKER_WIDTH: usize = 1;
 
-/// The four-space indent `git show` gives a commit's message lines.
+/// The four-space indent `git show` gives a commit's message lines, which the
+/// summary takes back off: every row of the view starts at the pane's left
+/// edge, so the columns go to the text rather than to nesting.
 const MESSAGE_INDENT: &str = "    ";
-
-/// Indent a diff line sits at, under its file, in the status view — where a
-/// hunk hangs off a file that hangs off a section, and the indent is what
-/// shows that nesting.
-const HUNK_INDENT: &str = "    ";
-
-/// Indent a diff line sits at in a commit view: none. A commit shows one
-/// commit's files with no section tree above them, so there is no nesting for
-/// an indent to convey, and giving the columns back to the code means fewer
-/// long lines wrap.
-const COMMIT_HUNK_INDENT: &str = "";
 
 /// Column the change code is drawn in, before the path.
 const CODE_WIDTH: usize = 2;
+
+/// Width a commit's change name is padded to, before the icon and the path,
+/// so every path of a commit starts at the same column whatever happened to
+/// its file. Twelve, the width the same listing uses in magic-vscode.
+const STATUS_WIDTH: usize = 12;
 
 /// Glyph drawn for a file row when the icon style is a font rather than
 /// artwork. One generic file: the Git view is about what changed, and a
@@ -108,6 +104,8 @@ const DETAIL_MARKS: [&str; 3] = ["index ", "old mode ", "new mode "];
 /// it is acting on.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Item {
+    /// The heading over every file a commit touched.
+    CommitChanges,
     /// A file of the commit view, by its index in the commit's file list.
     CommitFile(usize),
     /// A hunk of the commit view, by its file's index and its own index within
@@ -257,7 +255,10 @@ fn header_block(
     if let Some(root) = root {
         rows.push(label_row(
             LABEL_REPO,
-            vec![PageSpan::plain(abbreviate_home(root))],
+            vec![PageSpan::new(
+                PageStyle::HeadingPlain,
+                abbreviate_home(root),
+            )],
         ));
     }
     // The subject of the commit HEAD points at, which the log tail already
@@ -287,7 +288,7 @@ fn header_block(
     };
     if status.ahead > 0 || status.behind > 0 {
         merge.push(PageSpan::new(
-            PageStyle::Accent,
+            PageStyle::Unpushed,
             format!(" ↑{} ↓{}", status.ahead, status.behind),
         ));
     }
@@ -316,7 +317,7 @@ fn header_block(
 /// One labelled header line: the label padded to [`LABEL_WIDTH`], then `value`.
 fn label_row(label: &str, value: Vec<PageSpan>) -> ViewRow {
     let mut spans = vec![PageSpan::new(
-        PageStyle::Header,
+        PageStyle::HeadingPlain,
         format!("{label:<LABEL_WIDTH$}"),
     )];
     spans.extend(value);
@@ -344,28 +345,59 @@ fn abbreviate_home(path: &Path) -> String {
     }
 }
 
-fn heading_row(title: &str, count: usize, collapsed: bool, item: Item) -> ViewRow {
-    let glyph = if collapsed {
+/// The triangle a foldable row opens with: pointing right while what hangs off
+/// it is hidden, down while it shows. Every row a fold key acts on carries one
+/// and no other row does, so the mark says both that the row folds and which
+/// way it currently stands, the way magic-vscode's tree marks its own.
+fn fold_glyph(folded: bool) -> &'static str {
+    if folded {
         GLYPH_COLLAPSED
     } else {
         GLYPH_EXPANDED
+    }
+}
+
+/// The column a row's own text starts at, past its fold mark.
+fn fold_width() -> usize {
+    GLYPH_EXPANDED.chars().count()
+}
+
+fn heading_row(title: &str, count: usize, collapsed: bool, item: Item) -> ViewRow {
+    let glyph = fold_glyph(collapsed);
+    let style = match item {
+        Item::Heading(section) => heading_style(section),
+        // The recent commits are not a kind of change, so they take the hue
+        // every heading without one of its own wears.
+        _ => PageStyle::HeadingPlain,
     };
     ViewRow {
         icon: None,
         item,
         spans: vec![
-            PageSpan::new(PageStyle::Header, format!("{glyph}{title}")),
+            PageSpan::new(style, format!("{glyph}{title}")),
             PageSpan::new(PageStyle::Dim, format!(" ({count})")),
         ],
         wrap_indent: 0,
     }
 }
 
+/// The hue a section's heading wears: what sits under it, said in color, the
+/// way magic-vscode colors its own headings. Staged and unstaged are the pair
+/// read against each other most often, so they are furthest apart.
+fn heading_style(section: Section) -> PageStyle {
+    match section {
+        Section::Staged => PageStyle::HeadingStaged,
+        Section::Unstaged => PageStyle::HeadingUnstaged,
+        Section::Unmerged => PageStyle::HeadingConflict,
+        Section::Untracked => PageStyle::HeadingUntracked,
+    }
+}
+
 /// A file's row: a band the file's changes sit under, bright while they show
-/// beneath it and receded once folded shut. The status letter stays on the
-/// band — it says what changed, where the icon says what kind of file it is —
-/// and the icon's columns follow it, blank, with one more keeping the name
-/// off the artwork.
+/// beneath it and receded once folded shut. Its fold mark opens the row, then
+/// the status letter — which says what changed, where the icon says what kind
+/// of file it is — and the icon's columns follow it, blank, with one more
+/// keeping the name off the artwork.
 fn file_row(file: &FileStatus, expanded: bool) -> ViewRow {
     let name = match &file.renamed_from {
         Some(from) => format!("{from} → {}", file.path),
@@ -377,9 +409,10 @@ fn file_row(file: &FileStatus, expanded: bool) -> ViewRow {
     } else {
         PageStyle::SectionFolded
     };
+    let mark = fold_glyph(!expanded);
     ViewRow {
         icon: Some(PageIcon {
-            col: ENTRY_INDENT.chars().count() + CODE_WIDTH,
+            col: fold_width() + CODE_WIDTH,
             glyph: FILE_GLYPH,
             kind: PageIconKind::File {
                 name: leaf_name(&file.path).to_string(),
@@ -390,11 +423,52 @@ fn file_row(file: &FileStatus, expanded: bool) -> ViewRow {
             path: file.path.clone(),
             section: file.section,
         }),
-        spans: vec![PageSpan::new(
-            band,
-            format!("{ENTRY_INDENT}{:<CODE_WIDTH$}{reserved}{name}", file.code),
-        )],
+        spans: vec![
+            PageSpan::new(
+                change_style(file.code),
+                format!("{mark}{:<CODE_WIDTH$}", file.code),
+            ),
+            PageSpan::new(band, format!("{reserved}{name}")),
+        ],
         wrap_indent: 0,
+    }
+}
+
+/// The last row of the block `index` heads: the run of rows after it that
+/// appeared when it was opened, which is what has to be brought into view once
+/// it is. A row that heads nothing is its own block.
+pub fn block_end(rows: &[ViewRow], index: usize) -> usize {
+    let Some(head) = rows.get(index) else {
+        return index;
+    };
+    let mut end = index;
+    for (at, row) in rows.iter().enumerate().skip(index + 1) {
+        if !hangs_off(&head.item, &row.item) {
+            break;
+        }
+        end = at;
+    }
+    end
+}
+
+/// Whether `row` is one of the rows `head` shows when it is open: a section's
+/// files and their hunks, a file's own hunks, a commit's files and hunks, and
+/// the commits under the recent heading.
+fn hangs_off(head: &Item, row: &Item) -> bool {
+    match (head, row) {
+        (Item::Heading(section), Item::File(file)) => file.section == *section,
+        (Item::Heading(section), Item::Hunk(hunk)) => hunk.section == *section,
+        (Item::File(file), Item::Hunk(hunk)) => {
+            hunk.path == file.path && hunk.section == file.section
+        }
+        (Item::RecentHeading, Item::Commit(_)) => true,
+        (Item::CommitChanges, Item::CommitFile(_) | Item::CommitHunk(_, _)) => true,
+        (Item::CommitFile(file), Item::CommitFile(other)) => file == other,
+        (Item::CommitFile(file), Item::CommitHunk(other, _)) => file == other,
+        (Item::CommitHunk(file, hunk), Item::CommitHunk(other, index)) => {
+            (file, hunk) == (other, index)
+        }
+        _ => false,
     }
 }
 
@@ -415,7 +489,7 @@ fn hunk_rows(file: &FileRow, diff: &FileDiff) -> Vec<ViewRow> {
             section: file.section,
         });
         rows.extend(
-            hunk_lines(hunk, HUNK_INDENT)
+            hunk_lines(hunk, None)
                 .into_iter()
                 .map(|(spans, wrap_indent)| ViewRow {
                     icon: None,
@@ -432,16 +506,21 @@ fn hunk_rows(file: &FileRow, diff: &FileDiff) -> Vec<ViewRow> {
 /// lines word-decorated, each reserving its marker column when it wraps —
 /// the hunk body every view that shows a diff paints.
 ///
-/// `indent` is the column the hunk sits at, which differs by view: the status
-/// view nests a hunk under its file inside a section tree, so it passes
-/// [`HUNK_INDENT`]; a commit view has no such tree and paints its diff flush
-/// left, so it passes `""`.
-fn hunk_lines(hunk: &Hunk, indent: &str) -> Vec<(PageRow, usize)> {
+/// A hunk sits flush left whichever view shows it. What a line belongs to is
+/// read off its band above, not off an indent, and the columns an indent
+/// would take are columns of diff that would otherwise wrap.
+///
+/// `fold` is the mark the header opens with, and whether it opens with one at
+/// all: a commit folds a hunk on its own, so its headers carry a triangle
+/// saying which way they stand, while the status view folds a hunk by folding
+/// the file it belongs to, so a triangle there would mark a fold no key makes.
+fn hunk_lines(hunk: &Hunk, fold: Option<bool>) -> Vec<(PageRow, usize)> {
     let (added, removed) = hunk.counts();
+    let mark = fold.map(fold_glyph).unwrap_or_default();
     let mut rows = vec![(
         vec![PageSpan::new(
             PageStyle::Hunk,
-            format!("{indent}{}  +{added} -{removed}", hunk.header),
+            format!("{mark}{}  +{added} -{removed}", hunk.header),
         )],
         0,
     )];
@@ -452,10 +531,7 @@ fn hunk_lines(hunk: &Hunk, indent: &str) -> Vec<(PageRow, usize)> {
             .map(|(line, segments)| {
                 // A wrapped diff line continues past its marker, so the
                 // spilled text lines up under the text, not the marker.
-                (
-                    line_spans(line, &segments, indent),
-                    indent.chars().count() + MARKER_WIDTH,
-                )
+                (line_spans(line, &segments), MARKER_WIDTH)
             }),
     );
     rows
@@ -490,7 +566,7 @@ pub fn diff_rows(lines: &[String]) -> (Vec<PageRow>, Vec<usize>) {
             lines[flushed.clone()]
                 .iter()
                 .zip(decorate(&lines[flushed.clone()]))
-                .map(|(line, segments)| line_spans(line, &segments, "")),
+                .map(|(line, segments)| line_spans(line, &segments)),
         );
         wrap_indents.extend(std::iter::repeat_n(MARKER_WIDTH, flushed.len()));
         block = 0..0;
@@ -509,7 +585,7 @@ pub fn diff_rows(lines: &[String]) -> (Vec<PageRow>, Vec<usize>) {
         lines[block.clone()]
             .iter()
             .zip(decorate(&lines[block]))
-            .map(|(line, segments)| line_spans(line, &segments, "")),
+            .map(|(line, segments)| line_spans(line, &segments)),
     );
     wrap_indents.extend(std::iter::repeat_n(MARKER_WIDTH, flushed));
     (rows, wrap_indents)
@@ -531,21 +607,29 @@ pub fn diff_view_rows(lines: &[String]) -> Vec<ViewRow> {
         .collect()
 }
 
+/// How far a commit is opened, one level at a time: the heading over its
+/// files, then each file, then each hunk.
+#[derive(Clone, Copy, Debug)]
+pub struct CommitFolds<'a> {
+    /// Whether the heading is shut, which hides every file under it.
+    pub shut: bool,
+    /// Files showing no diff, by their index in the commit.
+    pub files: &'a HashSet<usize>,
+    /// `(file, hunk)` pairs showing only their header.
+    pub hunks: &'a HashSet<(usize, usize)>,
+}
+
 /// The rows of a commit's content: the summary `git show` opens with —
-/// identity, author, date, message, change totals — then each file's changes
-/// under a band of its own, carrying the file's icon, with the same hunk bodies
-/// the status view paints for the working tree. A commit then reads the way the
-/// tree does, not the way a patch does: bands and word-decorated lines, no
-/// `diff --git` or `index` noise.
+/// identity, author, date, message — then a heading saying how many files it
+/// touched, then each file's changes under a band of its own, carrying the
+/// file's icon, with the same hunk bodies the status view paints for the
+/// working tree. A commit then reads the way the tree does, not the way a
+/// patch does: bands and word-decorated lines, no `diff --git` or `index`
+/// noise.
 ///
-/// `folded_files` holds the indices of files showing no diff, and `folded_hunks`
-/// the `(file, hunk)` pairs showing only their header, so the same content can be
-/// drawn at whatever depth the reader has opened it to.
-pub fn commit_view_rows(
-    content: &CommitContent,
-    folded_files: &HashSet<usize>,
-    folded_hunks: &HashSet<(usize, usize)>,
-) -> Vec<ViewRow> {
+/// `folds` says how far the reader has opened it, so the same content draws at
+/// whatever depth they left it at.
+pub fn commit_view_rows(content: &CommitContent, folds: CommitFolds) -> Vec<ViewRow> {
     let mut rows: Vec<ViewRow> = Vec::new();
     for (index, line) in content.summary.iter().enumerate() {
         rows.push(ViewRow {
@@ -555,16 +639,31 @@ pub fn commit_view_rows(
             wrap_indent: 0,
         });
     }
+    // The heading the files hang off, counted the way the status view counts
+    // its sections. A commit with no file at all — a merge, or an empty one —
+    // has nothing to head.
+    if content.files.is_empty() {
+        return rows;
+    }
+    rows.push(heading_row(
+        CHANGES_TITLE,
+        content.files.len(),
+        folds.shut,
+        Item::CommitChanges,
+    ));
+    if folds.shut {
+        return rows;
+    }
     for (file_index, file) in content.files.iter().enumerate() {
-        let shut = folded_files.contains(&file_index);
+        let shut = folds.files.contains(&file_index);
         rows.push(commit_file_row(file, file_index, shut));
         if shut {
             continue;
         }
         for (hunk_index, hunk) in file.hunks.iter().enumerate() {
             let item = Item::CommitHunk(file_index, hunk_index);
-            let hunk_shut = folded_hunks.contains(&(file_index, hunk_index));
-            let lines = hunk_lines(hunk, COMMIT_HUNK_INDENT);
+            let hunk_shut = folds.hunks.contains(&(file_index, hunk_index));
+            let lines = hunk_lines(hunk, Some(hunk_shut));
             // A folded hunk keeps its header, which carries the counts, and
             // drops the body: enough to say what is there without showing it.
             let take = if hunk_shut { 1 } else { lines.len() };
@@ -594,22 +693,33 @@ pub fn commit_view_rows(
     rows
 }
 
-/// One line of the summary `git show` opens a commit with: the identity line
-/// as a heading, the message as ordinary text, and the rest — author, dates,
-/// the change totals — receded.
+/// One line of the summary `git show` opens a commit with, dedented: the
+/// identity line as a heading, the message as ordinary text, and the rest —
+/// author, dates, the change totals — receded.
+///
+/// git indents a commit's message by [`MESSAGE_INDENT`] and its shortstat by
+/// one column; both come off, so the summary starts where every other row
+/// does. Only that prefix comes off a message line, so indentation the author
+/// wrote into the message survives.
 fn summary_row(line: &str, identity: bool) -> PageRow {
+    let message = line.starts_with(MESSAGE_INDENT);
+    let text = match message {
+        true => &line[MESSAGE_INDENT.len()..],
+        false => line.trim_start(),
+    };
     if identity {
-        vec![PageSpan::new(PageStyle::Header, line)]
-    } else if line.starts_with(MESSAGE_INDENT) || line.trim().is_empty() {
-        vec![PageSpan::plain(line)]
+        vec![PageSpan::new(PageStyle::Header, text)]
+    } else if message || text.is_empty() {
+        vec![PageSpan::plain(text)]
     } else {
-        vec![PageSpan::new(PageStyle::Dim, line)]
+        vec![PageSpan::new(PageStyle::Dim, text)]
     }
 }
 
-/// A file's band in a commit: its change code, its icon, its path, and what its
-/// hunks add and remove — the row the status view gives a file, standing in for
-/// the `diff --git` and `---`/`+++` lines it replaces.
+/// A file's band in a commit: its fold mark, what the commit did to it, its
+/// icon, its path, and what its hunks add and remove — the row the status view
+/// gives a file, standing in for the `diff --git` and `---`/`+++` lines it
+/// replaces.
 ///
 /// Bright while its diff shows beneath it and receded once folded shut, the same
 /// way the working tree's file rows read, so one habit covers both views.
@@ -620,10 +730,10 @@ fn commit_file_row(file: &CommitFile, index: usize, folded: bool) -> ViewRow {
     } else {
         PageStyle::Section
     };
-    let (added, removed) = file.counts();
+    let mark = fold_glyph(folded);
     ViewRow {
         icon: Some(PageIcon {
-            col: ENTRY_INDENT.chars().count() + CODE_WIDTH,
+            col: fold_width() + STATUS_WIDTH,
             glyph: FILE_GLYPH,
             kind: PageIconKind::File {
                 name: leaf_name(&file.path).to_string(),
@@ -633,15 +743,44 @@ fn commit_file_row(file: &CommitFile, index: usize, folded: bool) -> ViewRow {
         item: Item::CommitFile(index),
         spans: vec![
             PageSpan::new(
-                band,
-                format!(
-                    "{ENTRY_INDENT}{:<CODE_WIDTH$}{reserved}{}",
-                    file.code, file.path
-                ),
+                change_style(file.code),
+                format!("{mark}{:<STATUS_WIDTH$}", status_label(file.code)),
             ),
-            PageSpan::new(PageStyle::Dim, format!("  +{added} -{removed}")),
+            PageSpan::new(band, format!("{reserved}{}", file.path)),
+            PageSpan::new(PageStyle::Dim, format!(" ({})", file.hunks.len())),
         ],
         wrap_indent: 0,
+    }
+}
+
+/// What a commit did to a file, written out. `git show` says it in a letter,
+/// which has to be looked up to be read; the band says the word the letter
+/// stands for instead, the way magic-vscode's change list does. A letter the
+/// parser does not produce reads as a plain change, which is the weakest
+/// thing any of them means.
+/// The hue a change's name and fold mark wear, by what the change was: the
+/// colors magic-vscode gives its own change list, which read as a legend once
+/// learned — green arriving, red leaving, blue edited in place, yellow moved,
+/// magenta contested. A copy and an untracked file are both new where they
+/// stand, and a type change is a modification, so they share those. Anything
+/// else is painted as a modification, the weakest thing a code can mean.
+fn change_style(code: char) -> PageStyle {
+    match code {
+        '?' | 'A' | 'C' => PageStyle::ChangeAdded,
+        'D' => PageStyle::ChangeDeleted,
+        'R' => PageStyle::ChangeRenamed,
+        'U' => PageStyle::ChangeConflict,
+        _ => PageStyle::ChangeModified,
+    }
+}
+
+fn status_label(code: char) -> &'static str {
+    match code {
+        'A' => "new file",
+        'D' => "deleted",
+        'M' => "modified",
+        'R' => "renamed",
+        _ => "changed",
     }
 }
 
@@ -664,10 +803,12 @@ fn line_span(lines: &[String], index: usize, in_hunk: bool) -> PageSpan {
     if line.starts_with(HUNK_MARK) {
         return PageSpan::new(PageStyle::Hunk, line.clone());
     }
-    // Inside a hunk, a space-prefixed line is context, which reads as neither
-    // arriving nor leaving.
+    // Inside a hunk, a space-prefixed line is context: ordinary text, since
+    // it is the code the changes around it are read against. What carries the
+    // eye is the tint on the lines that did change, not a fade on the ones
+    // that did not.
     if in_hunk && line.starts_with(' ') {
-        return PageSpan::new(PageStyle::Dim, line.clone());
+        return PageSpan::new(PageStyle::Normal, line.clone());
     }
     // The file-pair lines only count as header when they truly pair: a
     // removed line of body text can itself begin `-- `.
@@ -689,11 +830,11 @@ fn line_span(lines: &[String], index: usize, in_hunk: bool) -> PageSpan {
 /// stretches the edit touched wear it harder, so the eye lands on what
 /// actually changed. A line the word diff says nothing about paints as one
 /// span, all of it in its side's tint.
-fn line_spans(line: &str, segments: &[Segment], indent: &str) -> PageRow {
+fn line_spans(line: &str, segments: &[Segment]) -> PageRow {
     let (base, edit) = line_styles(line);
     let marker = line.chars().next().unwrap_or(' ');
     let mut spans = PageRow::new();
-    push_span(&mut spans, base, &format!("{indent}{marker}"));
+    push_span(&mut spans, base, &marker.to_string());
     for segment in segments {
         let style = if segment.changed { edit } else { base };
         push_span(&mut spans, style, &segment.text);
@@ -723,7 +864,7 @@ fn line_styles(line: &str) -> (PageStyle, PageStyle) {
     match line.chars().next() {
         Some('+') => (PageStyle::Added, PageStyle::AddedEdit),
         Some('-') => (PageStyle::Removed, PageStyle::RemovedEdit),
-        Some(_) | None => (PageStyle::Dim, PageStyle::Dim),
+        Some(_) | None => (PageStyle::Normal, PageStyle::Normal),
     }
 }
 
@@ -736,11 +877,11 @@ fn line_styles(line: &str) -> (PageStyle, PageStyle) {
 fn commit_rows_decorated(commit: &Commit, now: i64, unpushed: bool) -> Vec<ViewRow> {
     let item = Item::Commit(commit.hash.clone());
     let mut spans = vec![
-        PageSpan::new(PageStyle::Accent, format!("{ENTRY_INDENT}{} ", commit.hash)),
+        PageSpan::new(PageStyle::Accent, format!("{} ", commit.hash)),
         PageSpan::new(PageStyle::Dim, GRAPH_MARK),
     ];
     if unpushed {
-        spans.push(PageSpan::new(PageStyle::Accent, MARK_UNPUSHED));
+        spans.push(PageSpan::new(PageStyle::Unpushed, MARK_UNPUSHED));
     }
     for entry in &commit.refs {
         spans.push(PageSpan::new(
@@ -748,10 +889,17 @@ fn commit_rows_decorated(commit: &Commit, now: i64, unpushed: bool) -> Vec<ViewR
             format!("{} ", entry.name),
         ));
     }
-    spans.push(PageSpan::plain(commit.subject.clone()));
-    // The author line starts under the graph column: past the entry indent, the
-    // hash, and the space after it.
-    let indent = ENTRY_INDENT.chars().count() + commit.hash.chars().count() + 1;
+    // An unpushed commit carries its color across the whole subject, not just
+    // the marker: the row says at a glance which commits the upstream has yet
+    // to see, the way magic-vscode's log does.
+    let subject = match unpushed {
+        true => PageSpan::new(PageStyle::Unpushed, commit.subject.clone()),
+        false => PageSpan::plain(commit.subject.clone()),
+    };
+    spans.push(subject);
+    // The author line starts under the graph column: past the hash and the
+    // space after it.
+    let indent = commit.hash.chars().count() + 1;
     let authorship = ViewRow {
         icon: None,
         item: item.clone(),
@@ -794,14 +942,17 @@ pub fn log_rows(commits: &[Commit], root: Option<&Path>, now: i64, more: bool) -
     if let Some(root) = root {
         rows.push(label_row(
             LABEL_REPO,
-            vec![PageSpan::plain(abbreviate_home(root))],
+            vec![PageSpan::new(
+                PageStyle::HeadingPlain,
+                abbreviate_home(root),
+            )],
         ));
         rows.push(blank_row());
     }
     rows.push(ViewRow {
         icon: None,
         item: Item::None,
-        spans: vec![PageSpan::new(PageStyle::Header, LOG_TITLE)],
+        spans: vec![PageSpan::new(PageStyle::HeadingPlain, LOG_TITLE)],
         wrap_indent: 0,
     });
     for commit in commits {
@@ -1071,16 +1222,16 @@ mod tests {
         assert_eq!(commit_rows.len(), 2, "a commit takes two rows");
         assert_eq!(
             text(commit_rows[0]),
-            "  abc1234 * do the thing",
+            "abc1234 * do the thing",
             "the identity line carries the hash, the graph mark, and the subject"
         );
         assert_eq!(
             text(commit_rows[1]),
-            "          Someone   1 hour",
+            "        Someone   1 hour",
             "the authorship line sits under the graph column"
         );
         assert_eq!(
-            commit_rows[1].wrap_indent, 10,
+            commit_rows[1].wrap_indent, 8,
             "both rows wrap to the column their text starts at"
         );
     }
@@ -1107,7 +1258,7 @@ mod tests {
             .iter()
             .find(|row| row.item == Item::Commit("abc1234".to_string()))
             .expect("the commit row");
-        assert_eq!(text(row), "  abc1234 * main origin/main v1.0 do the thing");
+        assert_eq!(text(row), "abc1234 * main origin/main v1.0 do the thing");
         let styles: Vec<PageStyle> = row.spans.iter().map(|span| span.style).collect();
         assert!(styles.contains(&PageStyle::RefHead), "got {styles:?}");
         assert!(styles.contains(&PageStyle::RefRemote), "got {styles:?}");
@@ -1152,8 +1303,8 @@ mod tests {
         let rows = log_rows(&commits, None, NOW, true);
         let lines: Vec<String> = rows.iter().map(text).collect();
         assert_eq!(lines[0], LOG_TITLE, "the list is headed");
-        assert_eq!(lines[1], "  abc1234 * do the thing");
-        assert_eq!(lines[2], "          Someone   1 hour");
+        assert_eq!(lines[1], "abc1234 * do the thing");
+        assert_eq!(lines[2], "        Someone   1 hour");
         assert_eq!(
             lines.last().map(String::as_str),
             Some(LOG_MORE),
@@ -1170,10 +1321,10 @@ mod tests {
         };
         let rows = hunk_rows(&file, &diff);
         // The hunk's header band wraps from the pane's edge like any row;
-        // its body lines reserve the indent and marker their text sits after.
+        // its body lines reserve the marker column their text sits after.
         assert_eq!(rows[0].wrap_indent, 0);
-        assert_eq!(rows[1].wrap_indent, 5);
-        assert_eq!(rows[2].wrap_indent, 5);
+        assert_eq!(rows[1].wrap_indent, MARKER_WIDTH);
+        assert_eq!(rows[2].wrap_indent, MARKER_WIDTH);
     }
 
     #[test]
@@ -1193,13 +1344,26 @@ mod tests {
         lines.iter().map(|line| line.to_string()).collect()
     }
 
-    /// The commit view with everything open, which is how it first draws.
+    /// The commit view with everything open. The page itself first draws one
+    /// shut, and opens it from there.
     fn commit_view(lines: &[String]) -> Vec<ViewRow> {
         commit_view_rows(
             &CommitContent::parse(lines),
-            &HashSet::new(),
-            &HashSet::new(),
+            opened(&HashSet::new(), &HashSet::new()),
         )
+    }
+
+    /// The folds of a commit whose heading is open, with `files` and `hunks`
+    /// shut under it.
+    fn opened<'a>(
+        files: &'a HashSet<usize>,
+        hunks: &'a HashSet<(usize, usize)>,
+    ) -> CommitFolds<'a> {
+        CommitFolds {
+            shut: false,
+            files,
+            hunks,
+        }
     }
 
     #[test]
@@ -1211,7 +1375,6 @@ mod tests {
             "",
             "    do the thing",
             "",
-            " 2 files changed, 10 insertions(+), 2 deletions(-)",
         ]);
         let rows = commit_view(&lines);
         assert_eq!(
@@ -1227,14 +1390,10 @@ mod tests {
             vec![PageSpan::new(PageStyle::Dim, "Author: Someone <a@b.c>")],
             "the headers recede"
         );
-        assert_eq!(rows[4].spans, vec![PageSpan::plain("    do the thing")]);
         assert_eq!(
-            rows[6].spans,
-            vec![PageSpan::new(
-                PageStyle::Dim,
-                " 2 files changed, 10 insertions(+), 2 deletions(-)"
-            )],
-            "the totals recede with the rest of the summary"
+            rows[4].spans,
+            vec![PageSpan::plain("do the thing")],
+            "the message loses the four columns git indented it by"
         );
         assert!(rows.iter().all(|row| row.wrap_indent == 0));
         assert!(
@@ -1244,7 +1403,302 @@ mod tests {
     }
 
     #[test]
-    fn test_each_file_gets_a_band_with_its_code_and_hunk_count() {
+    fn test_a_commits_files_hang_off_one_counted_heading() {
+        // The commit reads as the status view does: a heading saying how many
+        // files it touched, each band saying how many hunks it holds. Both
+        // count in the units the keys act in, where git's own line totals
+        // count something no key here opens.
+        let lines = shown(&[
+            "commit abc",
+            "",
+            "    message",
+            "diff --git a/a.rs b/a.rs",
+            "--- a/a.rs",
+            "+++ b/a.rs",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+            "@@ -9 +9 @@",
+            "-second",
+            "+third",
+            "diff --git a/b.rs b/b.rs",
+            "--- a/b.rs",
+            "+++ b/b.rs",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+        ]);
+        let rows = commit_view(&lines);
+        let line = |needle: &str| -> String {
+            rows.iter()
+                .map(text)
+                .find(|row| row.contains(needle))
+                .unwrap_or_else(|| panic!("no row for {needle}"))
+        };
+        assert_eq!(line(CHANGES_TITLE), "▼ Changes (2)", "two files under it");
+        assert!(line("a.rs").ends_with(" (2)"), "got {:?}", line("a.rs"));
+        assert!(line("b.rs").ends_with(" (1)"), "got {:?}", line("b.rs"));
+        assert!(
+            !rows.iter().any(|row| text(row).contains("changed,")),
+            "and nothing said in lines changed"
+        );
+
+        // A commit with no file at all heads nothing.
+        let bare = commit_view(&shown(&["commit abc", "", "    message"]));
+        assert!(bare.iter().all(|row| !text(row).contains(CHANGES_TITLE)));
+    }
+
+    #[test]
+    fn test_a_section_heading_wears_the_hue_of_what_it_holds() {
+        // The headings are what the eye lands on first, so each says which
+        // section it is by color as well as by name, and the count beside it
+        // stays receded.
+        let files = vec![
+            file(Section::Staged, "s.rs", 'M'),
+            file(Section::Unstaged, "u.rs", 'M'),
+            file(Section::Untracked, "n.rs", '?'),
+            file(Section::Unmerged, "c.rs", 'U'),
+        ];
+        let rows = built(&status_with(files), &[], &open, &no_diffs);
+        let heading = |section: Section| -> &ViewRow {
+            rows.iter()
+                .find(|row| row.item == Item::Heading(section))
+                .unwrap_or_else(|| panic!("no heading for {section:?}"))
+        };
+        assert_eq!(
+            heading(Section::Staged).spans[0].style,
+            PageStyle::HeadingStaged
+        );
+        assert_eq!(
+            heading(Section::Unstaged).spans[0].style,
+            PageStyle::HeadingUnstaged
+        );
+        assert_eq!(
+            heading(Section::Untracked).spans[0].style,
+            PageStyle::HeadingUntracked
+        );
+        assert_eq!(
+            heading(Section::Unmerged).spans[0].style,
+            PageStyle::HeadingConflict
+        );
+        assert_eq!(
+            heading(Section::Staged).spans[1].style,
+            PageStyle::Dim,
+            "the count stays receded"
+        );
+
+        // A heading over rows that are not a kind of change takes the hue
+        // every other heading of a git view wears.
+        let rows = built(
+            &status_with(Vec::new()),
+            &[commit("abc1234", "do the thing")],
+            &open,
+            &no_diffs,
+        );
+        let recent = rows
+            .iter()
+            .find(|row| row.item == Item::RecentHeading)
+            .expect("the recent heading");
+        assert_eq!(recent.spans[0].style, PageStyle::HeadingPlain);
+    }
+
+    #[test]
+    fn test_an_unpushed_commit_carries_its_color_across_the_row() {
+        let status = Status {
+            ahead: 1,
+            behind: 0,
+            branch: Some("main".to_string()),
+            files: Vec::new(),
+            upstream: Some("origin/main".to_string()),
+        };
+        let commits = vec![commit("newer12", "not pushed"), commit("older34", "pushed")];
+        let rows = built(&status, &commits, &open, &no_diffs);
+        let styles = |hash: &str| -> Vec<PageStyle> {
+            rows.iter()
+                .find(|row| row.item == Item::Commit(hash.to_string()))
+                .expect("the commit row")
+                .spans
+                .iter()
+                .map(|span| span.style)
+                .collect()
+        };
+        let ahead = styles("newer12");
+        assert!(
+            ahead.iter().filter(|s| **s == PageStyle::Unpushed).count() >= 2,
+            "the marker and the subject both, got {ahead:?}"
+        );
+        assert!(
+            styles("older34")
+                .iter()
+                .all(|style| *style != PageStyle::Unpushed),
+            "a commit the upstream already has reads plainly"
+        );
+    }
+
+    #[test]
+    fn test_a_change_is_told_by_the_hue_its_name_wears() {
+        // The name and the mark before it carry the change's own color, so a
+        // commit's file list reads as a legend rather than as words to be
+        // parsed one at a time. The path keeps the band's own color: it says
+        // which file, not what happened to it.
+        let lines = shown(&[
+            "commit abc",
+            "",
+            "    message",
+            "diff --git a/kept.rs b/kept.rs",
+            "--- a/kept.rs",
+            "+++ b/kept.rs",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+            "diff --git a/gone.rs b/gone.rs",
+            "deleted file mode 100644",
+            "--- a/gone.rs",
+            "+++ /dev/null",
+            "@@ -1 +0,0 @@",
+            "-old",
+            "diff --git a/new.rs b/new.rs",
+            "new file mode 100644",
+            "--- /dev/null",
+            "+++ b/new.rs",
+            "@@ -0,0 +1 @@",
+            "+fresh",
+        ]);
+        let rows = commit_view(&lines);
+        let hue = |needle: &str| -> PageStyle {
+            rows.iter()
+                .find(|row| text(row).contains(needle))
+                .unwrap_or_else(|| panic!("no band for {needle}"))
+                .spans[0]
+                .style
+        };
+        assert_eq!(hue("kept.rs"), PageStyle::ChangeModified);
+        assert_eq!(hue("gone.rs"), PageStyle::ChangeDeleted);
+        assert_eq!(hue("new.rs"), PageStyle::ChangeAdded);
+
+        // The working tree's own codes reach the same colors, including the
+        // two the commit view never produces.
+        assert_eq!(change_style('?'), PageStyle::ChangeAdded);
+        assert_eq!(change_style('U'), PageStyle::ChangeConflict);
+        assert_eq!(change_style('R'), PageStyle::ChangeRenamed);
+    }
+
+    #[test]
+    fn test_a_folds_mark_points_the_way_the_row_stands() {
+        // The mark is the only thing on a band that says whether what hangs
+        // off it is showing, since a shut band and an open one otherwise read
+        // the same, and it has to follow the fold rather than the row's kind.
+        let lines = shown(&[
+            "commit abc",
+            "",
+            "    message",
+            "diff --git a/f.rs b/f.rs",
+            "--- a/f.rs",
+            "+++ b/f.rs",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+        ]);
+        let content = CommitContent::parse(&lines);
+        let band = |rows: &[ViewRow], needle: &str| -> String {
+            text(
+                rows.iter()
+                    .find(|row| text(row).contains(needle))
+                    .unwrap_or_else(|| panic!("no row for {needle}")),
+            )
+        };
+
+        let open = commit_view_rows(&content, opened(&HashSet::new(), &HashSet::new()));
+        assert!(band(&open, "f.rs").starts_with(GLYPH_EXPANDED));
+        assert!(band(&open, "@@").starts_with(GLYPH_EXPANDED));
+
+        let shut_hunk = HashSet::from([(0, 0)]);
+        let hunk_shut = commit_view_rows(&content, opened(&HashSet::new(), &shut_hunk));
+        assert!(
+            band(&hunk_shut, "f.rs").starts_with(GLYPH_EXPANDED),
+            "the file is still open"
+        );
+        assert!(
+            band(&hunk_shut, "@@").starts_with(GLYPH_COLLAPSED),
+            "its hunk is not"
+        );
+
+        let shut_file = HashSet::from([0]);
+        let file_shut = commit_view_rows(&content, opened(&shut_file, &HashSet::new()));
+        assert!(band(&file_shut, "f.rs").starts_with(GLYPH_COLLAPSED));
+    }
+
+    #[test]
+    fn test_a_status_file_row_marks_whether_its_diff_is_showing() {
+        let status = status_with(vec![file(Section::Staged, "f.rs", 'M')]);
+        let shut = built(&status, &[], &open, &no_diffs);
+        let row = shut
+            .iter()
+            .find(|row| matches!(row.item, Item::File(_)))
+            .expect("the file row");
+        assert!(
+            text(row).starts_with(GLYPH_COLLAPSED),
+            "a file whose diff has never been read reads as shut, got {:?}",
+            text(row)
+        );
+
+        let diff = parse_diff("--- a/f.rs\n+++ b/f.rs\n@@ -1 +1 @@\n-old\n+new\n");
+        let with_diff = |_file: &FileRow| Some(diff.clone());
+        let open_rows = built(&status, &[], &open, &with_diff);
+        let row = open_rows
+            .iter()
+            .find(|row| matches!(row.item, Item::File(_)))
+            .expect("the file row");
+        assert!(
+            text(row).starts_with(GLYPH_EXPANDED),
+            "one showing its diff reads as open, got {:?}",
+            text(row)
+        );
+    }
+
+    #[test]
+    fn test_a_bands_path_starts_at_one_column_whatever_happened_to_its_file() {
+        // The change is written out, and the words are not all one length, so
+        // the column a path starts at has to come from the padding rather than
+        // from the word before it: a list of paths that steps in and out with
+        // what happened to each one cannot be read down.
+        let lines = shown(&[
+            "commit abc",
+            "",
+            "    message",
+            "diff --git a/gone.rs b/gone.rs",
+            "deleted file mode 100644",
+            "--- a/gone.rs",
+            "+++ /dev/null",
+            "@@ -1 +0,0 @@",
+            "-old",
+            "diff --git a/kept.rs b/kept.rs",
+            "--- a/kept.rs",
+            "+++ b/kept.rs",
+            "@@ -1 +1 @@",
+            "-old",
+            "+new",
+        ]);
+        let rows = commit_view(&lines);
+        let band = |needle: &str| -> String {
+            let opens_with = format!("{GLYPH_EXPANDED}{needle}");
+            text(
+                rows.iter()
+                    .find(|row| text(row).starts_with(&opens_with))
+                    .unwrap_or_else(|| panic!("no band saying {needle}")),
+            )
+        };
+        let deleted = band("deleted");
+        let modified = band("modified");
+        assert_eq!(
+            deleted.find("gone.rs"),
+            modified.find("kept.rs"),
+            "both paths start at the same column, got {deleted:?} and {modified:?}"
+        );
+    }
+
+    #[test]
+    fn test_each_file_gets_a_band_with_its_change_and_hunk_count() {
         let lines = shown(&[
             "commit abc",
             "",
@@ -1269,18 +1723,24 @@ mod tests {
             .expect("the kept file's band");
         assert_eq!(
             kept.spans[0],
-            PageSpan::new(PageStyle::Section, "  M    kept.rs"),
-            "a modified file carries its code and path"
+            PageSpan::new(PageStyle::ChangeModified, "▼ modified    "),
+            "the fold mark and the change's name lead the band, in the hue \
+             that change wears"
         );
         assert_eq!(
             kept.spans[1],
-            PageSpan::new(PageStyle::Dim, "  +1 -1"),
-            "the band totals what its hunks change"
+            PageSpan::new(PageStyle::Section, "   kept.rs"),
+            "the path follows on the band itself"
+        );
+        assert_eq!(
+            kept.spans[2],
+            PageSpan::new(PageStyle::Dim, " (1)"),
+            "the band counts the hunks it holds"
         );
         assert_eq!(
             kept.icon,
             Some(PageIcon {
-                col: ENTRY_INDENT.chars().count() + CODE_WIDTH,
+                col: fold_width() + STATUS_WIDTH,
                 glyph: FILE_GLYPH,
                 kind: PageIconKind::File {
                     name: "kept.rs".to_string()
@@ -1300,8 +1760,8 @@ mod tests {
             .expect("the added file's band");
         assert_eq!(
             added.spans[0],
-            PageSpan::new(PageStyle::Section, "  A    added.txt"),
-            "a new file says so with the status view's code"
+            PageSpan::new(PageStyle::ChangeAdded, "▼ new file    "),
+            "a new file says so in the words git writes it as"
         );
         assert_eq!(
             added.icon.as_ref().map(|icon| &icon.kind),
@@ -1364,8 +1824,9 @@ mod tests {
             "+new",
         ]);
         let content = CommitContent::parse(&lines);
-        let open = commit_view_rows(&content, &HashSet::new(), &HashSet::new());
-        let shut = commit_view_rows(&content, &HashSet::from([0]), &HashSet::new());
+        let open = commit_view_rows(&content, opened(&HashSet::new(), &HashSet::new()));
+        let shut_file = HashSet::from([0]);
+        let shut = commit_view_rows(&content, opened(&shut_file, &HashSet::new()));
 
         assert!(open.iter().any(|row| text(row).contains("+new")));
         assert!(
@@ -1377,9 +1838,9 @@ mod tests {
             .find(|row| row.item == Item::CommitFile(0))
             .expect("the band survives the fold");
         assert_eq!(
-            band.spans[0].style,
+            band.spans[1].style,
             PageStyle::SectionFolded,
-            "a shut file's band recedes, the way the working tree's does"
+            "a shut file's path recedes, the way the working tree's does"
         );
         assert!(
             text(band).contains("f.rs"),
@@ -1388,9 +1849,9 @@ mod tests {
         assert_eq!(
             open.iter()
                 .find(|row| row.item == Item::CommitFile(0))
-                .map(|row| row.spans[0].style),
+                .map(|row| row.spans[1].style),
             Some(PageStyle::Section),
-            "an open file's band is the bright one"
+            "an open file's path is the bright one"
         );
     }
 
@@ -1409,7 +1870,8 @@ mod tests {
         ]);
         let content = CommitContent::parse(&lines);
         // Shut the first hunk only, so the second proves folding is per-hunk.
-        let rows = commit_view_rows(&content, &HashSet::new(), &HashSet::from([(0, 0)]));
+        let shut_hunk = HashSet::from([(0, 0)]);
+        let rows = commit_view_rows(&content, opened(&HashSet::new(), &shut_hunk));
         let lines: Vec<String> = rows.iter().map(text).collect();
 
         assert!(
@@ -1427,7 +1889,7 @@ mod tests {
     }
 
     #[test]
-    fn test_a_commits_diff_sits_flush_left_while_the_trees_stays_indented() {
+    fn test_every_view_paints_its_diff_flush_left() {
         let lines = shown(&[
             "commit abc",
             "",
@@ -1450,8 +1912,9 @@ mod tests {
             .expect("the hunk header");
         assert_eq!(
             text(header),
-            "@@ -1,2 +1,2 @@  +1 -1",
-            "a commit's hunk header starts at the left margin"
+            "▼ @@ -1,2 +1,2 @@  +1 -1",
+            "a commit's hunk header starts at the left margin, behind the mark \
+             saying it folds"
         );
 
         // Body lines start with their bare marker, no leading blanks.
@@ -1468,21 +1931,26 @@ mod tests {
             );
         }
 
-        // The working-tree view keeps the nesting its section tree needs.
+        // The working-tree view paints the same hunk the same way: what a line
+        // belongs to is read off the band above it, not off an indent.
         let diff = parse_diff("--- a/f.rs\n+++ b/f.rs\n@@ -1,2 +1,2 @@\n context\n-old\n+new\n");
         let file = FileRow {
             path: "f.rs".to_string(),
             section: Section::Staged,
         };
         let tree = hunk_rows(&file, &diff);
-        assert!(
-            text(&tree[0]).starts_with(HUNK_INDENT),
-            "the status view still indents a hunk under its file"
+        assert_eq!(
+            text(&tree[0]),
+            "@@ -1,2 +1,2 @@  +1 -1",
+            "the status view's hunk header starts at the left margin too, and \
+             carries no mark: folding there acts on the file, not the hunk"
         );
         assert_eq!(
-            tree[1].wrap_indent,
-            HUNK_INDENT.chars().count() + MARKER_WIDTH
+            text(&tree[1]),
+            " context",
+            "its body carries only its marker"
         );
+        assert_eq!(tree[1].wrap_indent, MARKER_WIDTH);
     }
 
     #[test]
@@ -1498,7 +1966,7 @@ mod tests {
             .iter()
             .find(|row| text(row).contains("logo.png"))
             .expect("the band");
-        assert_eq!(band.spans[0].style, PageStyle::Section);
+        assert_eq!(band.spans[1].style, PageStyle::Section);
         assert_eq!(
             rows.last().map(|row| row.spans.clone()),
             Some(vec![PageSpan::new(
@@ -1526,7 +1994,7 @@ mod tests {
         assert_eq!(
             removed.spans,
             vec![
-                PageSpan::new(PageStyle::Removed, "    -    "),
+                PageSpan::new(PageStyle::Removed, "-    "),
                 PageSpan::new(PageStyle::RemovedEdit, "old"),
                 PageSpan::new(PageStyle::Removed, "();"),
             ]
@@ -1538,12 +2006,12 @@ mod tests {
         assert_eq!(
             added.spans,
             vec![
-                PageSpan::new(PageStyle::Added, "    +    "),
+                PageSpan::new(PageStyle::Added, "+    "),
                 PageSpan::new(PageStyle::AddedEdit, "new"),
                 PageSpan::new(PageStyle::Added, "();"),
             ]
         );
-        assert_eq!(text(added), "    +    new();");
+        assert_eq!(text(added), "+    new();");
     }
 
     #[test]
@@ -1564,7 +2032,7 @@ mod tests {
         assert_eq!(
             added.spans,
             vec![
-                PageSpan::new(PageStyle::Added, "    +"),
+                PageSpan::new(PageStyle::Added, "+"),
                 PageSpan::new(PageStyle::AddedEdit, "    added();"),
             ]
         );
@@ -1591,9 +2059,12 @@ mod tests {
             rows[4],
             vec![PageSpan::new(PageStyle::Hunk, "@@ -1,3 +1,3 @@")]
         );
-        // Context reads as neither arriving nor leaving, and the changed
-        // lines carry only their edit in the harder tint.
-        assert_eq!(rows[5], vec![PageSpan::new(PageStyle::Dim, " fn main() {")]);
+        // Context is ordinary text, where the header detail above it recedes,
+        // and the changed lines carry only their edit in the harder tint.
+        assert_eq!(
+            rows[5],
+            vec![PageSpan::new(PageStyle::Normal, " fn main() {")]
+        );
         assert_eq!(
             rows[6],
             vec![

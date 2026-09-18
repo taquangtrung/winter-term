@@ -109,12 +109,14 @@ impl Scrollback {
 
     /// For each block, the starting row offset assuming the first block starts at
     /// row 0. Used by the app layer to scroll to a specific block boundary.
-    pub fn block_row_offsets(&self, cols: usize) -> Vec<usize> {
+    /// `word_wrap` picks the fold the estimate counts with — the same flag the
+    /// grid renders under — so the offsets track the rows on screen.
+    pub fn block_row_offsets(&self, cols: usize, word_wrap: bool) -> Vec<usize> {
         let mut offsets = Vec::with_capacity(self.blocks.len());
         let mut row = 0;
         for block in &self.blocks {
             offsets.push(row);
-            row += block.row_count(cols);
+            row += block.row_count(cols, word_wrap);
         }
         offsets
     }
@@ -666,7 +668,7 @@ mod tests {
         sb.print("ls");
         sb.output_start();
         sb.print("output\n");
-        let offsets = sb.block_row_offsets(80);
+        let offsets = sb.block_row_offsets(80, true);
         assert_eq!(offsets.len(), 2);
         assert_eq!(offsets[0], 0);
         assert!(offsets[1] > 0);

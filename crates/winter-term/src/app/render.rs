@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::config::IconStyle;
 use crate::model::layout::{PaneId, Rect};
 use crate::model::mode::Mode;
-use crate::model::page::{wrap_start, PageContent, PageIcon, PageStyle};
+use crate::model::page::{wrap_start, wrapped_lines, PageContent, PageIcon, PageStyle};
 use crate::model::palette::{Palette, PaletteMode};
 use crate::model::settings_page::{Control, SettingsField, SettingsPage};
 use crate::terminal::block_queue::{BlockEntry, BlockKind};
@@ -74,13 +74,14 @@ const PAGE_DIFF_EDIT_MIX: f32 = 0.38;
 /// than a file's band, so the hunk reads as sitting under its file.
 const PAGE_HUNK_MIX: f32 = 0.22;
 
-/// How far a file's band is blended toward the theme's cyan, bright while the
-/// file's diff shows beneath it.
-const PAGE_SECTION_MIX: f32 = 0.55;
-
-/// How far a folded file's band blends less, so a shut row reads as receded
-/// beside the ones whose changes are showing.
-const PAGE_SECTION_FOLDED_MIX: f32 = 0.35;
+/// How far a file's band is blended toward the theme's cyan.
+///
+/// Kept well short of the cyan itself: the change's name is painted on this
+/// band in its own hue, and a band bright enough to read as a solid bar
+/// washes those hues out — worst on the red a deletion carries. Still kept
+/// clear of [`PAGE_HUNK_MIX`], so a file's band reads as the louder row where
+/// one sits directly above a hunk's.
+const PAGE_SECTION_MIX: f32 = 0.34;
 
 /// The ANSI palette slots a diff's colors are drawn from: red and green for
 /// the sides, blue and cyan for the header bands, yellow for a tag's ref.
@@ -88,6 +89,7 @@ const ANSI_RED: usize = 1;
 const ANSI_GREEN: usize = 2;
 const ANSI_YELLOW: usize = 3;
 const ANSI_BLUE: usize = 4;
+const ANSI_MAGENTA: usize = 5;
 const ANSI_CYAN: usize = 6;
 
 /// Footer hint shown along the bottom of the settings page.
@@ -1695,44 +1697,53 @@ fn build_page_grid(
         // room its leading span gives the diff marker.
         let indent = wrap_start(content.wrap_indents.get(index).copied().unwrap_or(0), cols);
         let lead = spans.first().map(|span| page_span_style(span.style, theme));
-        let mut col = 0;
+        // The row flattened across its spans, each char carrying its own
+        // style: wrapping works on words, which straddle spans, so the fold
+        // is chosen over the whole row and each painted piece keeps the
+        // color of the span it came from.
+        let mut chars = Vec::new();
+        let mut styles = Vec::new();
         for span in spans {
             let style = page_span_style(span.style, theme);
-            let text: Vec<char> = span.text.chars().collect();
-            let mut written = 0;
-            while written < text.len() {
-                if col >= cols {
-                    if !wrap {
-                        // The rest of this row is clipped at the pane's edge.
-                        // The row still took its one screen row, though, so
-                        // the rows under it must not paint over what survived
-                        // the clipping.
-                        screen += 1;
-                        if screen >= rows {
-                            break 'page;
-                        }
-                        continue 'page;
-                    }
-                    screen += 1;
-                    if screen >= rows {
-                        break 'page;
-                    }
-                    col = indent;
-                    if indent > 0 {
-                        // The indent keeps the row's own tint, from its leading
-                        // span, so a wrapped line reads as one tinted line
-                        // rather than one that loses its color at the fold.
-                        if let Some(style) = lead {
-                            let gutter = " ".repeat(indent);
-                            put(&mut grid, screen, 0, &gutter, style);
-                        }
+            for ch in span.text.chars() {
+                chars.push(ch);
+                styles.push(style);
+            }
+        }
+        for (line, (start, end)) in wrapped_lines(&chars, cols, wrap, indent)
+            .iter()
+            .copied()
+            .enumerate()
+        {
+            let mut col = 0;
+            if line > 0 {
+                screen += 1;
+                if screen >= rows {
+                    break 'page;
+                }
+                col = indent;
+                if indent > 0 {
+                    // The indent keeps the row's own tint, from its leading
+                    // span, so a wrapped line reads as one tinted line
+                    // rather than one that loses its color at the fold.
+                    if let Some(style) = lead {
+                        let gutter = " ".repeat(indent);
+                        put(&mut grid, screen, 0, &gutter, style);
                     }
                 }
-                let take = (cols - col).min(text.len() - written);
-                let piece: String = text[written..written + take].iter().collect();
+            }
+            // Paint the line a same-style run at a time, so a span the fold
+            // split still colors both of its pieces.
+            let mut at = start;
+            while at < end {
+                let style = styles[at];
+                let run_end = (at + 1..end)
+                    .find(|&i| styles[i] != style)
+                    .unwrap_or(end);
+                let piece: String = chars[at..run_end].iter().collect();
                 put(&mut grid, screen, col, &piece, style);
-                written += take;
-                col += take;
+                col += run_end - at;
+                at = run_end;
             }
         }
         screen += 1;
@@ -1783,6 +1794,16 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
+        // What a change did to a file is told by hue and carried in bold, the
+        // colors magic-vscode's change list uses resolved against the theme's
+        // own palette rather than pinned to its hex: green for what arrived,
+        // red for what left, blue for what was edited where it stands, yellow
+        // for what moved, magenta for what is still contested.
+        PageStyle::ChangeAdded => change_style(theme, ANSI_GREEN),
+        PageStyle::ChangeConflict => change_style(theme, ANSI_MAGENTA),
+        PageStyle::ChangeDeleted => change_style(theme, ANSI_RED),
+        PageStyle::ChangeModified => change_style(theme, ANSI_BLUE),
+        PageStyle::ChangeRenamed => change_style(theme, ANSI_YELLOW),
         PageStyle::Dim => Style {
             foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
             ..Style::default()
@@ -1792,6 +1813,20 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
+        // A section's heading wears the hue of what sits under it, the way
+        // magic-vscode's own headings do: cyan for what is staged, yellow for
+        // what is not, green for what is untracked, red for what a merge left
+        // contested. The count beside it stays receded, so the color says
+        // which section without the row shouting.
+        PageStyle::HeadingConflict => heading_style(theme, ANSI_RED),
+        PageStyle::HeadingStaged => heading_style(theme, ANSI_CYAN),
+        PageStyle::HeadingUnstaged => heading_style(theme, ANSI_YELLOW),
+        PageStyle::HeadingUntracked => heading_style(theme, ANSI_GREEN),
+        // Everything else a git view heads a block with — the recent commits,
+        // a log's title, and the labels the header block is read down — is
+        // blue, which is where magic-vscode's grammar sends every heading it
+        // has no change color for.
+        PageStyle::HeadingPlain => heading_style(theme, ANSI_BLUE),
         PageStyle::Hunk => Style {
             background: mix_rgb(theme.background, theme.ansi[ANSI_BLUE], PAGE_HUNK_MIX),
             foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
@@ -1818,40 +1853,72 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
-        // The four ref styles are told apart by hue rather than by weight, the
-        // way a git log's own decoration colors are, with only the checked-out
-        // branch also carrying bold so the eye lands on it first.
+        // The four ref styles are told apart by hue rather than by weight,
+        // with only the checked-out branch also carrying bold so the eye lands
+        // on it first. The hues are magic-vscode's: a branch here is magenta,
+        // one on a remote green, and a tag cyan, which keeps a local name and
+        // the remote one beside it from reading as the same thing.
         PageStyle::RefHead => Style {
             bold: true,
-            foreground: theme_rgb(theme.ansi[ANSI_CYAN]),
+            foreground: theme_rgb(theme.ansi[ANSI_MAGENTA]),
             ..Style::default()
         },
         PageStyle::RefLocal => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_GREEN]),
+            foreground: theme_rgb(theme.ansi[ANSI_MAGENTA]),
             ..Style::default()
         },
         PageStyle::RefRemote => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_RED]),
+            foreground: theme_rgb(theme.ansi[ANSI_GREEN]),
             ..Style::default()
         },
         PageStyle::RefTag => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_YELLOW]),
+            foreground: theme_rgb(theme.ansi[ANSI_CYAN]),
             ..Style::default()
         },
         PageStyle::Section => Style {
-            background: mix_rgb(theme.background, theme.ansi[ANSI_CYAN], PAGE_SECTION_MIX),
+            background: section_band(theme),
             foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        PageStyle::Unpushed => Style {
+            foreground: theme_rgb(theme.ansi[ANSI_RED]),
             ..Style::default()
         },
         PageStyle::SectionFolded => Style {
-            background: mix_rgb(
-                theme.background,
-                theme.ansi[ANSI_CYAN],
-                PAGE_SECTION_FOLDED_MIX,
-            ),
-            foreground: theme_rgb(theme.foreground),
+            background: section_band(theme),
+            foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
             ..Style::default()
         },
+    }
+}
+
+/// The band a file's row is painted on, the same whichever way the row is
+/// folded: the fold triangle at its head says which, and a band that changed
+/// color with it would break the row into two tones, since the change's name
+/// beside the triangle carries a hue of its own.
+fn section_band(theme: &Theme) -> Color {
+    mix_rgb(theme.background, theme.ansi[ANSI_CYAN], PAGE_SECTION_MIX)
+}
+
+/// How a section's heading is painted: its own hue, in bold, since a heading
+/// is the loudest row of the block it opens.
+fn heading_style(theme: &Theme, ansi: usize) -> Style {
+    Style {
+        bold: true,
+        foreground: theme_rgb(theme.ansi[ansi]),
+        ..Style::default()
+    }
+}
+
+/// How a change's name is painted where it heads a file's band: its own hue,
+/// in bold, over the band the rest of the row sits on, so the row reads as one
+/// bar with the change called out on it.
+fn change_style(theme: &Theme, ansi: usize) -> Style {
+    Style {
+        background: section_band(theme),
+        bold: true,
+        foreground: theme_rgb(theme.ansi[ansi]),
+        ..Style::default()
     }
 }
 
@@ -2272,6 +2339,42 @@ mod tests {
         let text = clipped.to_text();
         assert!(text.contains("abcde"), "the first line, got {text:?}");
         assert!(!text.contains("fghij"), "the edge clips the rest");
+    }
+
+    #[test]
+    fn test_a_wrapped_row_folds_at_its_last_word_boundary() {
+        // "the quick brown fox" in ten cells folds after "quick", the last
+        // word that fits, and the space the fold lands on vanishes with it.
+        let content = PageContent::new(vec![vec![PageSpan::plain("the quick brown fox")]]);
+        let grid = build_page_grid(&content, &Theme::dark(), 10, 2, IconStyle::None, true);
+        let text = grid.to_text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0].trim_end(), "the quick", "folds at the space");
+        assert_eq!(lines[1].trim_end(), "brown fox", "carries the word down");
+    }
+
+    #[test]
+    fn test_a_fold_splits_spans_but_keeps_each_pieces_style() {
+        // The fold lands inside the second span, and both of its pieces keep
+        // the span's color: words wrap, colors follow the words. The break
+        // lands before "bbb", not after it — the space past the margin belongs
+        // to the fold, exactly where the grid's own wrap would take it.
+        let content = PageContent::new(vec![vec![
+            PageSpan::plain("aaa "),
+            PageSpan::new(PageStyle::Accent, "bbb ccc"),
+        ]]);
+        let theme = Theme::dark();
+        let grid = build_page_grid(&content, &theme, 7, 2, IconStyle::None, true);
+        let text = grid.to_text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0].trim_end(), "aaa");
+        assert_eq!(lines[1].trim_end(), "bbb ccc");
+        let plain = page_span_style(PageStyle::Normal, &theme);
+        let accent = page_span_style(PageStyle::Accent, &theme);
+        assert_eq!(grid.cell(0, 0).map(|c| c.style), Some(plain));
+        assert_eq!(grid.cell(0, 3).map(|c| c.style), Some(plain), "the span's own space");
+        assert_eq!(grid.cell(1, 0).map(|c| c.style), Some(accent), "the piece after the fold");
+        assert_eq!(grid.cell(1, 6).map(|c| c.style), Some(accent), "the span's tail on the same line");
     }
 
     #[test]

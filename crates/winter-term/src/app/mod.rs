@@ -100,6 +100,10 @@ pub(crate) const STATUS_BAR_ROWS: usize = 1;
 /// How long a transient status-bar notice stays on screen before it expires
 /// and the bar returns to showing the pane title.
 const NOTICE_DURATION: Duration = Duration::from_secs(3);
+/// How long the span a yank took stays lit. Long enough to register as
+/// "that is what was copied", short enough to be gone before the next
+/// keystroke's motion, which is vim-highlightedyank's own default.
+const YANK_FLASH_DURATION: Duration = Duration::from_millis(150);
 /// Pixel margin from the top/bottom of the content viewport within which a
 /// held-button selection drag auto-scrolls the pane's scrollback.
 const AUTO_SCROLL_EDGE_MARGIN: f32 = 24.0;
@@ -542,6 +546,10 @@ pub struct App {
     /// a Vim edit aimed at the non-editable scrollback area) or an info
     /// confirmation (e.g. "Copied to clipboard").
     pub(crate) notice: Option<(String, NoticeKind, Instant)>,
+    /// The span a yank just took and the instant its highlight burns out. The
+    /// span is kept so the expiry only clears a selection still showing what
+    /// the yank copied, never one made since.
+    pub(crate) yank_flash: Option<(Selection, Instant)>,
     /// A config diagnostic from startup, held until the window exists.
     /// A notice raised in `App::new` would start its expiry clock before GPU
     /// init and could lapse before the first frame ever paints.
@@ -751,7 +759,7 @@ pub(crate) struct FindLabel {
     pub row: usize,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Selection {
     pub block: bool,
     pub end_col: usize,
@@ -1164,6 +1172,11 @@ impl ApplicationHandler for App {
         } else {
             next_poll
         };
+        // A yank's highlight goes out on its own deadline, and the loop wakes
+        // for it rather than leaving it lit until the next PTY poll.
+        if let Some(deadline) = self.expire_yank_flash() {
+            wakeup = wakeup.min(deadline);
+        }
         if let Some(since) = self.pending_since {
             if self.pending.hint().is_some() {
                 let hint_deadline = since + std::time::Duration::from_millis(1000);

@@ -1,12 +1,13 @@
 //! Keys: every built-in command beside the chord bound to it, read from the
 //! keymap in force rather than from a hand-maintained list.
 
-use crate::model::input::{Key, KeyCode, WindowKeymap};
+use crate::model::input::{CursorMove, Key, KeyCode, WindowKeymap};
 use crate::model::page::{
-    find_match, row_height, row_text, row_width, wrap_window, Page, PageContent, PageOutcome,
+    find_match, row_height, row_text, wrap_window, Page, PageContent, PageOutcome,
     PageRow, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::palette::builtin_commands;
+use crate::model::vim::nav::buffer_end;
 
 // ========================================================================
 // Constants
@@ -153,13 +154,13 @@ impl Page for KeysPage {
             .iter()
             .map(|cmd| self.command_row(cmd))
             .collect();
-        let widths: Vec<usize> = all.iter().map(row_width).collect();
+        let texts: Vec<String> = all.iter().map(row_text).collect();
         let window = wrap_window(
             self.scroll,
             self.selected,
-            widths.len(),
+            texts.len(),
             rows.saturating_sub(HEADER_ROWS),
-            |index| row_height(widths[index], cols, wrap, 0),
+            |index| row_height(&texts[index], cols, wrap, 0),
         );
         self.scroll = window.start;
         let mut page_rows = vec![self.title_row(), PageRow::new()];
@@ -175,6 +176,13 @@ impl Page for KeysPage {
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
         self.message = None;
+        if let Some(motion) = buffer_end(key) {
+            self.selected = match motion {
+                CursorMove::Top => 0,
+                _ => self.commands.len().saturating_sub(1),
+            };
+            return PageOutcome::Consumed;
+        }
         match key.code {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.move_down();
@@ -257,6 +265,21 @@ mod tests {
             ctrl: false,
             shift: false,
         }
+    }
+
+    #[test]
+    fn test_the_emacs_buffer_ends_reach_the_first_and_last_command() {
+        let alt = |c: char| Key {
+            alt: true,
+            code: KeyCode::Char(c),
+            ctrl: false,
+            shift: false,
+        };
+        let mut page = page_with_rows(5);
+        page.on_key(&alt('>'));
+        assert_eq!(page.selected, 4);
+        page.on_key(&alt('<'));
+        assert_eq!(page.selected, 0);
     }
 
     #[test]

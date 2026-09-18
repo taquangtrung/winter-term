@@ -3,12 +3,13 @@
 
 use std::path::{Path, PathBuf};
 
-use crate::model::input::{Key, KeyCode};
+use crate::model::input::{CursorMove, Key, KeyCode};
 use crate::model::page::{
-    row_height, row_width, wrap_window, JobReply, JobRequest, OpenTarget, Page, PageContent,
+    row_height, row_text, wrap_window, JobReply, JobRequest, OpenTarget, Page, PageContent,
     PageOutcome, PageRow, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest, SearchHit,
     SearchRequest, SearchResult,
 };
+use crate::model::vim::nav::buffer_end;
 
 // ========================================================================
 // Constants
@@ -19,12 +20,6 @@ const ASK_QUERY: &str = "query";
 
 /// Rows of header above the first result.
 const HEADER_ROWS: usize = 1;
-
-/// Left margin every row starts at.
-const LEFT_PAD: &str = "  ";
-
-/// Indent a matching line sits at, under the file it came from.
-const HIT_INDENT: &str = "    ";
 
 /// Width the line numbers are padded to, so the texts they label line up.
 const LINE_WIDTH: usize = 5;
@@ -209,7 +204,7 @@ impl GrepPage {
     fn header_row(&self) -> PageRow {
         let mut spans = vec![PageSpan::new(
             PageStyle::Header,
-            format!("{LEFT_PAD}{}", self.root.to_string_lossy()),
+            self.root.to_string_lossy(),
         )];
         if self.query.is_empty() {
             spans.push(PageSpan::new(PageStyle::Dim, format!("  {EMPTY_HINT}")));
@@ -247,13 +242,17 @@ impl Page for GrepPage {
         if self.rows.is_empty() {
             return PageContent::new(page_rows);
         }
-        let widths: Vec<usize> = self.rows.iter().map(|row| row_width(&row.spans)).collect();
+        let texts: Vec<String> = self
+            .rows
+            .iter()
+            .map(|row| row_text(&row.spans))
+            .collect();
         let window = wrap_window(
             self.scroll,
             self.cursor,
-            widths.len(),
+            texts.len(),
             rows.saturating_sub(HEADER_ROWS),
-            |index| row_height(widths[index], cols, wrap, 0),
+            |index| row_height(&texts[index], cols, wrap, 0),
         );
         self.scroll = window.start;
         page_rows.extend(
@@ -269,6 +268,13 @@ impl Page for GrepPage {
     fn on_key(&mut self, key: &Key) -> PageOutcome {
         self.message = None;
         if key.alt {
+            if let Some(motion) = buffer_end(key) {
+                self.cursor = match motion {
+                    CursorMove::Top => 0,
+                    _ => self.rows.len().saturating_sub(1),
+                };
+                return PageOutcome::Consumed;
+            }
             return match key.code {
                 KeyCode::Char('n') => {
                     self.move_to_row(true, true);
@@ -354,19 +360,13 @@ impl Page for GrepPage {
 
 /// A file's row: its path, shortened against the root it was searched under.
 fn heading_row(root: &Path, path: &Path) -> PageRow {
-    vec![PageSpan::new(
-        PageStyle::Header,
-        format!("{LEFT_PAD}{}", relative_to(root, path)),
-    )]
+    vec![PageSpan::new(PageStyle::Header, relative_to(root, path))]
 }
 
 /// A match's row: the line number, then the line.
 fn hit_row(hit: &SearchHit) -> PageRow {
     vec![
-        PageSpan::new(
-            PageStyle::Dim,
-            format!("{HIT_INDENT}{:>LINE_WIDTH$}: ", hit.line),
-        ),
+        PageSpan::new(PageStyle::Dim, format!("{:>LINE_WIDTH$}: ", hit.line)),
         PageSpan::plain(hit.text.clone()),
     ]
 }
@@ -412,6 +412,19 @@ mod tests {
             ctrl: false,
             shift: false,
         }
+    }
+
+    #[test]
+    fn test_the_emacs_buffer_ends_reach_the_first_and_last_row() {
+        let mut page = page_with(vec![
+            hit("a.rs", 1, "thing"),
+            hit("a.rs", 9, "thing again"),
+            hit("b.rs", 3, "thing"),
+        ]);
+        page.on_key(&alt(KeyCode::Char('>')));
+        assert_eq!(page.cursor, page.rows.len() - 1);
+        page.on_key(&alt(KeyCode::Char('<')));
+        assert_eq!(page.cursor, 0);
     }
 
     fn hit(path: &str, line: usize, text: &str) -> SearchHit {

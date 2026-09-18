@@ -94,6 +94,18 @@ pub enum PendingPrefix {
     TillForward,
     /// Awaiting the second key of a `z` sequence (fold and scroll commands).
     Z,
+    /// The yank operator `y`, awaiting the motion or object it applies to.
+    Yank {
+        /// The register it will land in, or `None` for the clipboard.
+        register: Option<char>,
+    },
+    /// Awaiting the object key of a yank operator (`yi`/`ya`).
+    YankObject {
+        /// True for the `a` (around) form, false for `i` (inner).
+        around: bool,
+        /// The register the yank will land in, or `None` for the clipboard.
+        register: Option<char>,
+    },
 }
 impl PendingPrefix {
     /// Human-readable prefix title and valid continuation pairs `(key, label)`
@@ -170,6 +182,29 @@ impl PendingPrefix {
                     ("a", "a text object"),
                     ("g", "search match gn/gN"),
                     ("s", "delete surrounding"),
+                ],
+            )),
+            PendingPrefix::Yank { .. } => Some((
+                "y",
+                &[
+                    ("y", "yank line"),
+                    ("w / e", "yank word forward"),
+                    ("b", "yank word back"),
+                    ("$", "yank to end of line"),
+                    ("0", "yank to start of line"),
+                    ("i", "inner text object"),
+                    ("a", "a text object"),
+                    ("s", "surround"),
+                ],
+            )),
+            PendingPrefix::YankObject { .. } => Some((
+                "y",
+                &[
+                    ("w / W", "word, WORD"),
+                    ("p", "paragraph"),
+                    ("s", "sentence"),
+                    ("\" / ' / `", "quoted run"),
+                    ("( / [ / { / <", "bracketed run"),
                 ],
             )),
             PendingPrefix::DeleteG => Some((
