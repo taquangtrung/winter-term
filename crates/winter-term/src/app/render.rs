@@ -528,9 +528,10 @@ fn image_placements(
 
 /// The renderer's view of the command palette: its filtered items, the query
 /// behind them, and the empty-state message matching what it searches over.
-fn palette_view(palette: &Palette, match_underline: bool) -> PaletteView {
+fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) -> PaletteView {
     let empty_message = match palette.mode {
         PaletteMode::History => "No matching history",
+        PaletteMode::PagePick => "Nothing matches",
         PaletteMode::Panes => "No matching panes",
         PaletteMode::RecentDirs => "No recent directories",
         PaletteMode::Swoop => "No matching lines",
@@ -542,6 +543,9 @@ fn palette_view(palette: &Palette, match_underline: bool) -> PaletteView {
     };
     PaletteView {
         empty_message: empty_message.to_string(),
+        // A page's list is headed by what it is a list of; the command
+        // palette needs no naming and is drawn without a heading.
+        title: pick.unwrap_or_default().to_string(),
         items: palette
             .filtered
             .iter()
@@ -684,11 +688,26 @@ impl App {
             page_name.as_deref(),
         );
         let status = status_enabled.then_some(&status);
-        let palette_view = self
-            .palette
-            .as_ref()
-            .map(|p| palette_view(p, self.config.palette_match_underline));
-        let which_key_view = which_key_view(&self.pending, self.pending_since);
+        let palette_view = self.palette.as_ref().map(|p| {
+            palette_view(
+                p,
+                self.config.palette_match_underline,
+                self.page_pick.as_ref().map(|pick| pick.label.as_str()),
+            )
+        });
+        // A page part-way through a multi-key command says so through the
+        // same card the terminal's own prefixes use, and says it at once: the
+        // menus are how the tools are learned, where the terminal's hints
+        // wait to see whether the typing stalls.
+        let which_key_view = self
+            .pages
+            .get(&focused)
+            .and_then(|slot| slot.page.hint())
+            .map(|hint| winter_render::WhichKeyView {
+                items: hint.items,
+                title: hint.title,
+            })
+            .or_else(|| which_key_view(&self.pending, self.pending_since));
         // Gathered before the renderer is held mutably: the bands read app
         // state the views below borrow alongside it.
         let focused_bands = self.block_bands(focused);
@@ -1737,9 +1756,7 @@ fn build_page_grid(
             let mut at = start;
             while at < end {
                 let style = styles[at];
-                let run_end = (at + 1..end)
-                    .find(|&i| styles[i] != style)
-                    .unwrap_or(end);
+                let run_end = (at + 1..end).find(|&i| styles[i] != style).unwrap_or(end);
                 let piece: String = chars[at..run_end].iter().collect();
                 put(&mut grid, screen, col, &piece, style);
                 col += run_end - at;
@@ -2372,9 +2389,21 @@ mod tests {
         let plain = page_span_style(PageStyle::Normal, &theme);
         let accent = page_span_style(PageStyle::Accent, &theme);
         assert_eq!(grid.cell(0, 0).map(|c| c.style), Some(plain));
-        assert_eq!(grid.cell(0, 3).map(|c| c.style), Some(plain), "the span's own space");
-        assert_eq!(grid.cell(1, 0).map(|c| c.style), Some(accent), "the piece after the fold");
-        assert_eq!(grid.cell(1, 6).map(|c| c.style), Some(accent), "the span's tail on the same line");
+        assert_eq!(
+            grid.cell(0, 3).map(|c| c.style),
+            Some(plain),
+            "the span's own space"
+        );
+        assert_eq!(
+            grid.cell(1, 0).map(|c| c.style),
+            Some(accent),
+            "the piece after the fold"
+        );
+        assert_eq!(
+            grid.cell(1, 6).map(|c| c.style),
+            Some(accent),
+            "the span's tail on the same line"
+        );
     }
 
     #[test]

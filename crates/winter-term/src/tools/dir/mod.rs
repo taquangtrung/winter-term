@@ -29,8 +29,8 @@ use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
     find_match, row_height, row_text, wrap_window, JobReply, JobRequest, OpenTarget, Page,
-    PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PageWindow, PromptMode, PromptReply,
-    PromptRequest,
+    PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PageWindow, PickQuestion, PromptMode,
+    PromptReply, PromptRequest,
 };
 use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
 
@@ -646,12 +646,32 @@ impl DirPage {
         let Some(first) = targets.first() else {
             return PageOutcome::Consumed;
         };
-        let label = if targets.len() == 1 {
-            format!("{verb} {} to: ", name_of(first))
-        } else {
-            format!("{verb} {} entries into: ", targets.len())
-        };
-        self.ask(tag, label, String::new())
+        // One entry is transferred under a new name, which is nothing to
+        // list; several go into a directory, which is.
+        if targets.len() == 1 {
+            return self.ask(
+                tag,
+                format!("{verb} {} to: ", name_of(first)),
+                String::new(),
+            );
+        }
+        let label = format!("{verb} {} entries into", targets.len());
+        match PickQuestion::new(tag, &label).over(self.directory_names()) {
+            Some(request) => PageOutcome::Pick(request),
+            None => self.ask(tag, format!("{label}: "), String::new()),
+        }
+    }
+
+    /// The directories listed here, by name. Names rather than paths because
+    /// that is all a destination may be: a transfer resolves its answer
+    /// against this directory and refuses anything that reaches outside it
+    /// (see [`ops::resolve_name`]).
+    fn directory_names(&self) -> Vec<String> {
+        self.rows
+            .iter()
+            .filter(|row| row.entry.is_dir())
+            .map(|row| name_of(&row.entry.path).to_string())
+            .collect()
     }
 
     /// Carry out the answer to a question, and report what happened.
@@ -856,7 +876,9 @@ impl Page for DirPage {
     fn on_job(&mut self, reply: JobReply) -> PageOutcome {
         match reply {
             // A listing runs no commands and asks for no searches of its own.
-            JobReply::Command(_) | JobReply::Search(_) => return PageOutcome::Consumed,
+            JobReply::Command(_) | JobReply::Files(_) | JobReply::Search(_) => {
+                return PageOutcome::Consumed
+            }
             JobReply::DirSize { bytes, path } => {
                 self.sizes.insert(path, bytes);
             }
@@ -1773,13 +1795,18 @@ mod tests {
         );
     }
 
+    /// Answer whichever way the question was asked: a destination is offered
+    /// as a list of the directories in reach, everything else as a prompt,
+    /// and both are answered under the same tag.
     fn answer(page: &mut DirPage, outcome: PageOutcome, text: &str) {
-        let PageOutcome::Prompt(request) = outcome else {
-            panic!("expected a prompt, got {outcome:?}");
+        let tag = match outcome {
+            PageOutcome::Prompt(request) => request.tag,
+            PageOutcome::Pick(request) => request.tag,
+            other => panic!("expected a question, got {other:?}"),
         };
         page.on_prompt(PromptReply {
             answer: Some(text.to_string()),
-            tag: request.tag,
+            tag,
         });
     }
 
@@ -1874,6 +1901,47 @@ mod tests {
         let outcome = page.on_key(&press(KeyCode::Char('+')));
         answer(&mut page, outcome, "sub");
         assert!(tree.path("sub").is_dir());
+    }
+
+    #[test]
+    fn test_marked_entries_are_transferred_into_a_directory_chosen_from_a_list() {
+        // The same picker the Git view chooses a branch with, over what a
+        // destination may be here: a directory of this listing, by name,
+        // since a transfer refuses anything reaching outside it.
+        let tree = TempTree::new("destinations");
+        tree.touch("a.txt");
+        tree.touch("b.txt");
+        let nested = tree.dir("nested");
+        let mut page = DirPage::new(tree.0.clone());
+        // The directory sorts first, so mark the two files after it.
+        page.on_key(&press(KeyCode::Char('j')));
+        page.on_key(&press(KeyCode::Char('m')));
+        page.on_key(&press(KeyCode::Char('m')));
+
+        let PageOutcome::Pick(request) = page.on_key(&press(KeyCode::Char('C'))) else {
+            panic!("expected a list of directories");
+        };
+        assert_eq!(request.label, "Copy 2 entries into");
+        assert_eq!(request.items, ["nested"], "by name, not by path");
+
+        // The choice lands as the answer to the same question.
+        page.on_prompt(PromptReply {
+            answer: Some("nested".to_string()),
+            tag: request.tag,
+        });
+        assert!(nested.join("a.txt").exists(), "the copy went there");
+    }
+
+    #[test]
+    fn test_one_entry_is_still_asked_for_by_name() {
+        // A single transfer takes the new name to give it, which is nothing
+        // a list could offer.
+        let tree = TempTree::new("single");
+        tree.touch("a.txt");
+        let mut page = DirPage::new(tree.0.clone());
+
+        let outcome = page.on_key(&press(KeyCode::Char('C')));
+        assert!(matches!(outcome, PageOutcome::Prompt(_)), "got {outcome:?}");
     }
 
     #[test]

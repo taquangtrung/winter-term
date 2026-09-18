@@ -7,6 +7,7 @@ use crate::model::input::{Key, KeyCode};
 use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
 use crate::model::page::{Page, PageOutcome, PromptMode, PromptReply, PromptRequest};
+use crate::model::palette::Palette;
 use crate::tools::dir::DirPage;
 use crate::tools::git::GitPage;
 use crate::tools::grep::GrepPage;
@@ -52,6 +53,17 @@ pub(crate) struct ActivePrompt {
     input: String,
     pane: PaneId,
     request: PromptRequest,
+}
+
+/// The page question the palette is standing in for while it shows a list of
+/// that page's own choices.
+pub(crate) struct ActivePick {
+    /// What the list is of, shown where the palette shows its prompt.
+    pub(crate) label: String,
+    /// The page that asked.
+    pub(crate) pane: PaneId,
+    /// The question being answered, carried back with the choice.
+    pub(crate) tag: &'static str,
 }
 
 /// A page covering one pane: the page itself, which tool opened it, and the
@@ -276,6 +288,23 @@ impl App {
         self.act_on_page_outcome(pane_id, outcome);
     }
 
+    /// Hand a page the choice made from the list it asked for, as the answer
+    /// to the question it asked. A palette closed without choosing answers
+    /// with nothing, the way an escaped prompt does.
+    pub(crate) fn answer_page_pick(&mut self, choice: Option<String>) {
+        let Some(pick) = self.page_pick.take() else {
+            return;
+        };
+        let Some(slot) = self.pages.get_mut(&pick.pane) else {
+            return;
+        };
+        let outcome = slot.page.on_prompt(PromptReply {
+            answer: choice,
+            tag: pick.tag,
+        });
+        self.act_on_page_outcome(pick.pane, outcome);
+    }
+
     /// What the open prompt shows: its question, then what has been typed.
     pub(crate) fn prompt_display(&self) -> Option<String> {
         let prompt = self.page_prompt.as_ref()?;
@@ -340,6 +369,18 @@ impl App {
                     pane: pane_id,
                     request,
                 });
+                self.dirty = true;
+                true
+            }
+            PageOutcome::Pick(request) => {
+                // The palette is the list picker Winter already has: what a
+                // page adds is where the choice goes when it is made.
+                self.page_pick = Some(ActivePick {
+                    label: request.label,
+                    pane: pane_id,
+                    tag: request.tag,
+                });
+                self.palette = Some(Palette::open_pick(request.items));
                 self.dirty = true;
                 true
             }
@@ -565,6 +606,48 @@ mod tests {
         assert!(app.page_prompt.is_none(), "the prompt closes on Enter");
         assert!(app.pages.contains_key(&pane), "and the page stays open");
         assert_eq!(heard.borrow().as_slice(), [Some("see!".to_string())]);
+    }
+
+    #[test]
+    fn test_a_list_answers_the_page_the_way_a_prompt_does() {
+        // The palette stands in for the prompt when the answer is one of a
+        // known set: what is chosen comes back under the same tag.
+        let (mut app, pane, heard) = app_asking();
+        app.page_prompt = None;
+        app.act_on_page_outcome(
+            pane,
+            PageOutcome::Pick(crate::model::page::PickRequest {
+                items: vec!["main".to_string(), "feature".to_string()],
+                label: "Checkout".to_string(),
+                tag: "ask",
+            }),
+        );
+        assert!(app.palette.is_some(), "the list is showing");
+        assert_eq!(
+            app.page_pick.as_ref().map(|pick| pick.label.as_str()),
+            Some("Checkout"),
+            "and it says what it is a list of"
+        );
+
+        app.answer_page_pick(Some("feature".to_string()));
+        assert!(app.page_pick.is_none(), "the question is answered");
+        assert_eq!(heard.borrow().as_slice(), [Some("feature".to_string())]);
+    }
+
+    #[test]
+    fn test_a_list_closed_without_choosing_says_so() {
+        let (mut app, pane, heard) = app_asking();
+        app.page_prompt = None;
+        app.act_on_page_outcome(
+            pane,
+            PageOutcome::Pick(crate::model::page::PickRequest {
+                items: vec!["main".to_string()],
+                label: "Checkout".to_string(),
+                tag: "ask",
+            }),
+        );
+        app.answer_page_pick(None);
+        assert_eq!(heard.borrow().as_slice(), [None]);
     }
 
     #[test]

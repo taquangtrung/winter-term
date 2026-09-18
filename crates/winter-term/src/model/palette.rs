@@ -32,6 +32,10 @@ pub enum PaletteMode {
     Panes,
     /// `cd` target picker: selecting an entry executes `cd <dir>` immediately.
     RecentDirs,
+    /// A tool page's own list: the branches to check out, the tags to delete.
+    /// Selecting an entry answers the page's question rather than running a
+    /// command of the host's.
+    PagePick,
     /// Buffer swoop: fuzzy line search over the active pane's scrollback and grid.
     Swoop,
     /// Mux session switcher: selecting an entry attaches or switches to that daemon session.
@@ -173,6 +177,33 @@ impl Palette {
             history_index: None,
             live_query: String::new(),
             mode: PaletteMode::Panes,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+        }
+    }
+
+    /// Open the palette over a tool page's own list, where each entry stands
+    /// for itself: what is chosen is the text of the row.
+    pub fn open_pick(items: Vec<String>) -> Self {
+        let entries = items
+            .into_iter()
+            .map(|item| PaletteEntry {
+                action: item.clone(),
+                label: item,
+                match_positions: Vec::new(),
+                shortcut: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::PagePick,
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,

@@ -84,7 +84,9 @@ impl App {
             None => return,
         };
         let cols = pane.grid().cols();
-        let offsets = pane.scrollback().block_row_offsets(cols, pane.grid().word_wrap());
+        let offsets = pane
+            .scrollback()
+            .block_row_offsets(cols, pane.grid().word_wrap());
         let scroll_offset = pane.grid().scroll_offset();
         let sb_len = pane.grid().scrollback_len();
 

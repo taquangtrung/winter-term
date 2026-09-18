@@ -3,8 +3,8 @@
 
 use crate::model::input::{CursorMove, Key, KeyCode, WindowKeymap};
 use crate::model::page::{
-    find_match, row_height, row_text, wrap_window, Page, PageContent, PageOutcome,
-    PageRow, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
+    find_match, row_height, row_text, wrap_window, Page, PageContent, PageOutcome, PageRow,
+    PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::palette::builtin_commands;
 use crate::model::vim::nav::buffer_end;

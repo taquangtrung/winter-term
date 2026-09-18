@@ -7,8 +7,8 @@ use super::paint::{
 use super::view::{DropdownImage, PaletteView, WhichKeyView};
 use super::{
     DROPDOWN_RADIUS, DROPDOWN_SHADOW, DROPDOWN_SHADOW_ALPHA, MENU_BORDER_MIX, MENU_HOVER_INSET,
-    PALETTE_ITEM_PAD_X, PALETTE_ITEM_PAD_Y, PALETTE_MAX_ITEMS, PALETTE_TOP_RATIO,
-    PALETTE_WIDTH_RATIO, SHADOW_COLOR,
+    PALETTE_HEIGHT_RATIO, PALETTE_ITEM_PAD_X, PALETTE_ITEM_PAD_Y, PALETTE_WIDTH_RATIO,
+    SHADOW_COLOR, WHICH_KEY_HEIGHT_RATIO, WHICH_KEY_WIDTH_RATIO,
 };
 use crate::renderer::colors::mix_rgb;
 use crate::renderer::glyphs::FontCtx;
@@ -505,15 +505,27 @@ pub(super) fn palette_rgba(
     let margin = DROPDOWN_SHADOW;
     let inner_pad = ctx.cell_h * 0.5;
     let input_h = ctx.cell_h * 2.2;
+    // A titled list is headed by what it is a list of, above the line the
+    // filter is typed on; a palette that names nothing keeps its own height.
+    let title_h = match view.title.is_empty() {
+        true => 0.0,
+        false => ctx.line_height + PALETTE_ITEM_PAD_Y * 2.0,
+    };
     let item_h = (ctx.line_height + PALETTE_ITEM_PAD_Y * 2.0).round();
-    let display_count = view.items.len().min(PALETTE_MAX_ITEMS);
-    let row_count = display_count.max(1);
+    // The panel is a fixed fraction of the window, and how many results fit
+    // follows from its height: it does not resize as the query narrows the
+    // list, which would walk its own rows out from under the eye.
     let panel_w = (surface_w * PALETTE_WIDTH_RATIO)
-        .clamp(300.0, 680.0)
-        .floor();
-    let panel_h = (inner_pad + input_h + 1.0 + item_h * row_count as f32 + inner_pad)
+        .min(surface_w - 40.0)
         .floor()
-        .max(1.0);
+        .max(300.0);
+    let panel_h = (surface_h * PALETTE_HEIGHT_RATIO)
+        .min(surface_h - 40.0)
+        .floor()
+        .max(inner_pad * 2.0 + title_h + input_h + 1.0 + item_h);
+    let row_count =
+        (((panel_h - inner_pad * 2.0 - title_h - input_h - 1.0) / item_h).floor() as usize).max(1);
+    let display_count = view.items.len().min(row_count);
 
     let width = (panel_w + 2.0 * margin) as u32;
     let height = (panel_h + 2.0 * margin) as u32;
@@ -558,7 +570,7 @@ pub(super) fn palette_rgba(
     );
 
     // Hover highlight on the selected result row.
-    let divider_y = margin + inner_pad + input_h;
+    let divider_y = margin + inner_pad + title_h + input_h;
     let results_top = divider_y + 1.0;
     if display_count > 0 {
         let sel = view.selected.min(display_count - 1);
@@ -601,9 +613,27 @@ pub(super) fn palette_rgba(
     let origin = margin as i32;
     let input_text_dy = ((input_h - ctx.line_height) / 2.0).max(0.0) as i32;
     let item_text_dy = ((item_h - ctx.line_height) / 2.0).max(0.0) as i32;
-    let input_top = (margin + inner_pad) as i32;
+    let input_top = (margin + inner_pad + title_h) as i32;
 
-    // "❯" prompt.
+    // The title, above the input line: what the list is of, which the key
+    // that opened it is too far back to say by the time it is read.
+    if !view.title.is_empty() {
+        let mut title_buf = shape_chrome_line(font_system, ctx, &view.title, muted, false, true);
+        composite_buffer(
+            font_system,
+            swash_cache,
+            &mut rgba,
+            canvas,
+            &mut title_buf,
+            (
+                origin + pad_x,
+                (margin + inner_pad) as i32 + PALETTE_ITEM_PAD_Y as i32,
+            ),
+            muted,
+        );
+    }
+
+    // The "❯" prompt opening the input line.
     let mut prompt_buf = shape_chrome_line(font_system, ctx, "\u{276f} ", accent, false, true);
     let prompt_w = buffer_width(&prompt_buf).ceil() as i32;
     composite_buffer(
@@ -715,9 +745,11 @@ pub(super) fn palette_rgba(
         }
     }
 
-    // Center horizontally; place in the upper third of the window.
+    // Centred both ways, where the key-hint card sits: both are asking for
+    // one keystroke's worth of attention, and a picker opened from the middle
+    // of a view should not send the eye to the top of the window for it.
     let palette_x = ((surface_w - panel_w) / 2.0).max(0.0);
-    let palette_y = surface_h * PALETTE_TOP_RATIO;
+    let palette_y = ((surface_h - panel_h) / 2.0).max(0.0);
 
     DropdownImage {
         height,
@@ -744,18 +776,23 @@ pub(super) fn which_key_rgba(
     let title_h = ctx.line_height + 4.0;
     let item_h = (ctx.line_height + 4.0).round();
 
-    let cols = if view.items.len() > 6 { 2 } else { 1 };
-    let rows = view.items.len().div_ceil(cols);
-
-    let col_w = (ctx.cell_w * 26.0).max(220.0);
-    let panel_w = (pad_x * 2.0 + col_w * cols as f32)
+    // The card is the same size whatever it holds, so a hint is always read
+    // in the same place: what varies with the number of keys is how many
+    // columns they flow into, not how big the panel is.
+    let panel_w = (surface_w * WHICH_KEY_WIDTH_RATIO)
         .min(surface_w - 40.0)
         .floor()
         .max(220.0);
-    let panel_h = (pad_y * 2.0 + title_h + rows as f32 * item_h + 8.0)
+    let panel_h = (surface_h * WHICH_KEY_HEIGHT_RATIO)
         .min(surface_h - 40.0)
         .floor()
         .max(60.0);
+    let items_h = (panel_h - pad_y * 2.0 - title_h - 8.0).max(item_h);
+    let rows = ((items_h / item_h).floor() as usize)
+        .max(1)
+        .min(view.items.len().max(1));
+    let cols = view.items.len().div_ceil(rows).max(1);
+    let col_w = (panel_w - pad_x * 2.0) / cols as f32;
 
     let width = (panel_w + 2.0 * margin) as u32;
     let height = (panel_h + 2.0 * margin) as u32;
@@ -814,8 +851,10 @@ pub(super) fn which_key_rgba(
     let accent = theme.cursor_bg.to_glyphon();
     let muted = theme.ansi[8].to_glyphon();
 
-    // Draw Title.
-    let mut title_buf = shape_chrome_line(font_system, ctx, &view.title, accent, true, true);
+    // The title, in the same thin muted hand the picker heads its own list
+    // with: it says what the keys below belong to, and the keys are what the
+    // card is read for.
+    let mut title_buf = shape_chrome_line(font_system, ctx, &view.title, muted, false, true);
     composite_buffer(
         font_system,
         swash_cache,
@@ -823,7 +862,7 @@ pub(super) fn which_key_rgba(
         canvas,
         &mut title_buf,
         ((margin + pad_x) as i32, (margin + pad_y) as i32),
-        accent,
+        muted,
     );
 
     // Draw Items.
@@ -845,18 +884,10 @@ pub(super) fn which_key_rgba(
             accent,
         );
 
-        let mut arrow_buf = shape_chrome_line(font_system, ctx, "→", muted, false, true);
+        // The key is accented and the label is not, which is what tells the
+        // two apart; a glyph between them only adds a column of noise to
+        // every row.
         let key_w = ctx.cell_w * 7.0;
-        composite_buffer(
-            font_system,
-            swash_cache,
-            &mut rgba,
-            canvas,
-            &mut arrow_buf,
-            ((item_x + key_w) as i32, item_y as i32),
-            muted,
-        );
-
         let mut label_buf = shape_chrome_line(font_system, ctx, label, foreground, false, true);
         composite_buffer(
             font_system,
@@ -864,7 +895,7 @@ pub(super) fn which_key_rgba(
             &mut rgba,
             canvas,
             &mut label_buf,
-            ((item_x + key_w + ctx.cell_w * 2.0) as i32, item_y as i32),
+            ((item_x + key_w) as i32, item_y as i32),
             foreground,
         );
     }
@@ -929,6 +960,93 @@ mod tests {
         let center_idx = ((image.height / 2 * image.width + image.width / 2) * 4) as usize;
         assert_eq!(image.rgba[center_idx + 3], 255, "card interior is opaque");
     }
+    #[test]
+    fn test_the_picker_is_one_size_however_much_the_query_matches() {
+        // Typing narrows the list, and a panel sized to what is left would
+        // shrink under every keystroke, moving the rows out from under the
+        // eye reading them.
+        let mut font_system = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let (surface_w, surface_h) = (1000.0, 800.0);
+        let mut card = |matches: usize| {
+            let view = PaletteView {
+                empty_message: "Nothing matches".to_string(),
+                items: (0..matches)
+                    .map(|i| crate::renderer::chrome::view::PaletteItem {
+                        action: i.to_string(),
+                        label: format!("entry {i}"),
+                        match_positions: Vec::new(),
+                        shortcut: String::new(),
+                    })
+                    .collect(),
+                match_underline: false,
+                query: String::new(),
+                selected: 0,
+                title: String::new(),
+            };
+            let image = palette_rgba(
+                &mut font_system,
+                &mut swash,
+                &ctx,
+                &theme,
+                &view,
+                surface_w,
+                surface_h,
+            );
+            (image.width, image.height, image.y)
+        };
+
+        let full = card(40);
+        assert_eq!(card(3), full, "three matches draw the box a full list does");
+        assert_eq!(card(0), full, "and so does none");
+        assert!(
+            (full.0 as f32 - (surface_w * PALETTE_WIDTH_RATIO + 2.0 * DROPDOWN_SHADOW)).abs() < 2.0,
+            "and it is sized against the window, got {full:?}"
+        );
+    }
+
+    #[test]
+    fn test_the_key_hint_card_is_one_size_whatever_it_holds() {
+        // A hint is read in the same place every time, so two of them of very
+        // different lengths draw the same panel: the keys flow into more
+        // columns rather than the card growing under them.
+        let mut font_system = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let (surface_w, surface_h) = (1000.0, 800.0);
+        let mut card = |count: usize| {
+            let view = WhichKeyView {
+                title: "Branch".to_string(),
+                items: (0..count)
+                    .map(|i| (i.to_string(), format!("choice {i}")))
+                    .collect(),
+            };
+            let image = which_key_rgba(
+                &mut font_system,
+                &mut swash,
+                &ctx,
+                &theme,
+                &view,
+                surface_w,
+                surface_h,
+            );
+            (image.width, image.height)
+        };
+
+        let small = card(2);
+        assert_eq!(card(15), small, "fifteen keys draw the card two do");
+        // The image carries the drop shadow on each side, so it is the panel
+        // plus two margins.
+        let expected = surface_w * WHICH_KEY_WIDTH_RATIO + 2.0 * DROPDOWN_SHADOW;
+        assert!(
+            (small.0 as f32 - expected).abs() < 2.0,
+            "and it is sized against the window, got {small:?}"
+        );
+    }
+
     #[test]
     fn test_dropdown_rgba_is_an_elevated_rounded_card() {
         let mut font_system = FontSystem::new();

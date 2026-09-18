@@ -212,6 +212,8 @@ A single-chord binding whose action is not one of the built-in window actions is
 
 A tool opens over the focused pane, covering it. The shell underneath keeps running and comes back the moment you close the tool with `q`, or by pressing the tool's own chord again. The window chords all still work while a tool is up: split, zoom, close, and `Alt-h/j/k/l` to move focus. For a tool beside your shell rather than over it, split first and open it in the new pane.
 
+Every tool asks the same way. A question with a known set of answers opens a picker: what the list is of on top, a filter line under it, and the matches below, narrowing as you type. `Up`/`Down` or `Ctrl-p`/`Ctrl-n` move through them, `Enter` takes the highlighted one, and `Esc` answers nothing. A question with no list to offer, or one whose answer is a name that does not exist yet, is still typed into the status bar.
+
 Every tool answers to `Alt-Shift-,` and `Alt-Shift-.` for the top and the bottom of what it is showing, which are emacs' `M-<` and `M->` under the fingers, so a page is read with either set of habits: the Vim `gg` and `G` reach the same two rows.
 
 Every tool searches the same way. `/` asks for text and moves the cursor to the next row holding it, `n` and `N` step through the rest of the matches and wrap at the ends, and a search that finds nothing says so instead of sitting still. Matching is literal and pays no attention to case: a directory listing matches on the entry's name, every other tool on the whole row as it is painted, so a chord is as findable as the command beside it. A search moves the cursor and nothing else: marks, folds, and everything staged stay as they were. Grep is the one exception to the first part, since its rows already are a search: `/` there asks for a new one.
@@ -244,7 +246,7 @@ Every tool searches the same way. `/` asks for text and moves the cursor to the 
 | `M` / `U` | Mark everything listed, unmark everything |
 | `_` / `+` | New file, new directory |
 | `R` | Rename the entry under the cursor |
-| `C` / `Alt-m` | Copy, move the targets |
+| `C` / `Alt-m` | Copy, move the targets: one takes a new name, several take a directory chosen from a list |
 | `x` | Delete the targets, after confirming |
 | `*` | Set permission bits, as octal |
 | `&` | Open the entry with the system handler |
@@ -258,18 +260,20 @@ Directories sort before files whatever the key, and moving the root, toggling a 
 
 Each entry carries an icon for what it is. The `icons` setting chooses where it comes from: `"svg"` (the default) draws bundled artwork keyed by extension, exact filename, or directory name, which needs nothing of the terminal font; `"font"` draws a Nerd Font glyph for the entry's broad category, which scales, themes, and copies like any other character but needs a patched font, as the status bar's own mode glyphs already do; `"none"` draws neither.
 
-**Git** (`Ctrl-Shift-g`, or `Git: Status`) shows the working tree of the repository the pane's directory sits in, as foldable sections. A file changed both in the index and in the working tree appears in both, which is what lets one half be staged without the other. Every command runs from the repository root, off the event-loop thread, and the view re-reads the tree after anything that changed it; a failure is reported in the header rather than swallowed.
+**Git** (`Ctrl-Shift-g`, or `Git: Status`) shows the working tree of the repository the pane's directory sits in, as foldable sections: the changes, then the stashes, then what the upstream has that you do not, then the recent commits. A file changed both in the index and in the working tree appears in both, which is what lets one half be staged without the other. Every command runs from the repository root, off the event-loop thread, and the view re-reads the tree after anything that changed it; a failure is reported in the header rather than swallowed.
 
 | Key | Action |
 |---|---|
 | `j` `k` or `Down` `Up` | Move down, up |
 | `Alt-n` / `Alt-p` | Next, previous entry, skipping blank lines |
-| `g t` / `g u` / `g s` / `g r` | Jump to untracked, unstaged, staged, recent |
+| `g` | Jump: `t` untracked, `u` unstaged, `s` staged, `r` recent, `g` top, `j`/`k` next, previous entry |
 | `/` | Search the view, or the log or listing filling it |
 | `n` / `N` | Next, previous match |
 | `Tab` / `Shift-Tab` | Fold the section, fold everything |
 | `Enter` | Open the file under the cursor in `$EDITOR` |
 | `Enter` on a commit | Read the commit: message, then the files it changed, each opening to its patch |
+| `Enter` on a stash | Read the stash as a diff |
+| `.` | File: what can be done with the file under the cursor |
 | `Tab` on a file | Show its diff, hunk by hunk |
 | `s` / `S` | Stage the target, stage everything |
 | `u` / `U` | Unstage the target, unstage everything |
@@ -288,9 +292,15 @@ Each entry carries an icon for what it is. The `icons` setting chooses where it 
 
 The view is read by color as much as by name, the way magic-vscode's own git view is: a section heading wears the hue of what sits under it (cyan staged, yellow unstaged, green untracked, red contested), every other heading and the header block's own labels are blue, a file says what changed to it in that change's own hue, a branch is magenta and one on a remote green, a tag cyan, and anything the upstream has not seen yet — the commits ahead of it and the count saying how many — is red.
 
+When git is part-way through something — a merge, a rebase, a cherry-pick, a revert, a bisect — a `State:` line in the header says so, what it is working on, how far along it is where git counts the steps, and the keys that finish it. Nothing in a porcelain status reports any of that, so without the line the only sign of an open rebase is a section of conflicts and no reason for them. It is read from the files git writes it in, under the repository's own directory.
+
 A triangle opens every row a fold key acts on, pointing down while what hangs off it shows and right while it is hidden: section headings, file rows, and a commit's hunk headers all carry one. A hunk in the status view does not, since `Tab` there folds the file it belongs to rather than the hunk itself. Opening a row brings what it opened into view: a block that would run past the pane's bottom pulls its own row to the top, where the most of it fits, while one that already shows in full leaves the page where it was.
 
 On a section heading, `s`, `u`, and `x` act on every file in that section. On a hunk, or on any line inside it, they act on that hunk alone: the patch is built from the hunk and fed to `git apply` on standard input, so the rest of the file is untouched. Discarding an untracked file deletes it, since `git restore` cannot reach a path that is not in the index.
+
+A command that takes a name asks for it as a list rather than a blank line: checking out, merging or rebasing onto a branch offers every branch, deleting one offers the local branches, deleting a tag offers the tags, and removing or pruning a remote offers the remotes. Where there is nothing to list, the question falls back to being typed.
+
+Every key that waits for a second one names what the second key may be, on the same card the terminal's own key hints use: centred over the window, above whatever is under it, so it cannot be pushed off the bottom by a long listing. It shows at once rather than after a pause, since the menus are how the tools are learned. Any key the menu does not offer closes it without doing anything, which is what makes a mistyped second key harmless.
 
 These keys open a menu, and the next key picks from it:
 

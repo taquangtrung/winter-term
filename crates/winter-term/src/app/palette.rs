@@ -89,6 +89,11 @@ impl App {
                         }
                     }
                 }
+                // A page waiting on a choice is told there was none, the way
+                // an escaped prompt answers with nothing.
+                if palette.mode == PaletteMode::PagePick {
+                    self.answer_page_pick(None);
+                }
                 palette.close();
                 self.palette = None;
                 self.dirty = true;
@@ -179,6 +184,9 @@ impl App {
                         self.switch_to_pane(PaneId(pane_id_val));
                     }
                 }
+            }
+            PaletteMode::PagePick => {
+                self.answer_page_pick(action);
             }
             PaletteMode::Swoop => {
                 if let Some(action) = action {

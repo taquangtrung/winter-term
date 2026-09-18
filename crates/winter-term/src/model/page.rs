@@ -106,6 +106,10 @@ pub enum JobRequest {
     Command(CommandRequest),
     /// Total the bytes under this directory.
     DirSize(PathBuf),
+    /// Read these files, skipping the ones that are not there. For the small
+    /// state files a program keeps beside its data, where "not there" is an
+    /// answer rather than a failure.
+    ReadFiles(Vec<PathBuf>),
     /// Find the lines under a directory that hold some text.
     Search(SearchRequest),
 }
@@ -124,6 +128,82 @@ pub struct CommandRequest {
     pub stdin: Option<String>,
     /// Which request this is, so the page knows what finished.
     pub tag: &'static str,
+}
+
+/// What a page waiting on the second key of a command offers: what the
+/// sequence is called, and the keys that complete it with what each does.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PageHint {
+    /// The continuations, as `(key, what it does)`.
+    pub items: Vec<(String, String)>,
+    /// What the sequence is called, shown as the hint's heading.
+    pub title: String,
+}
+
+/// A choice a page asks the host to collect from a list it already knows: the
+/// branches to check out, the tags to delete, the remotes to prune.
+///
+/// What the host shows is a filter over `items`, not a text field: a name that
+/// is not in the list is not an answer, which is the difference between this
+/// and a [`PromptRequest`].
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PickRequest {
+    /// The choices, in the order they should read.
+    pub items: Vec<String>,
+    /// What the list is of, shown where a prompt shows its question.
+    pub label: String,
+    /// Which question this answers, so the page knows what came back.
+    pub tag: &'static str,
+}
+
+/// A question a page answers from a list rather than from typing, held while
+/// the list itself is gathered.
+///
+/// The gathering differs per tool — a git branch list is a command away, a
+/// directory's own rows are already in hand — but what happens to the answer
+/// does not: it arrives under [`PickQuestion::tag`] as the reply to the same
+/// question a [`PromptRequest`] would have asked. A list that comes back
+/// empty is no list at all, and every constructor here says so with `None`,
+/// which is the caller's cue to fall back to asking for it typed.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PickQuestion {
+    /// What the list is of, shown as the picker's heading.
+    pub label: String,
+    /// The question the choice answers.
+    pub tag: &'static str,
+}
+
+impl PickQuestion {
+    /// A question to be answered from a list.
+    pub fn new(tag: &'static str, label: impl Into<String>) -> Self {
+        Self {
+            label: label.into(),
+            tag,
+        }
+    }
+
+    /// The list a page already holds, in the order it should read.
+    pub fn over(&self, items: Vec<String>) -> Option<PickRequest> {
+        (!items.is_empty()).then(|| PickRequest {
+            items,
+            label: self.label.clone(),
+            tag: self.tag,
+        })
+    }
+
+    /// The list a program wrote, one candidate per line: blank lines are
+    /// dropped, each line is trimmed, and `keep` has the last word on what
+    /// belongs (a remote's own `HEAD`, say, which stands for a name already
+    /// listed).
+    pub fn over_lines(&self, text: &str, keep: impl Fn(&str) -> bool) -> Option<PickRequest> {
+        self.over(
+            text.lines()
+                .map(str::trim)
+                .filter(|line| !line.is_empty() && keep(line))
+                .map(str::to_string)
+                .collect(),
+        )
+    }
 }
 
 /// A text search over a directory tree, run without a pattern engine: the
@@ -149,6 +229,9 @@ pub enum JobReply {
         /// The directory that was totalled.
         path: PathBuf,
     },
+    /// What the files that could be read hold, keyed by the path asked for.
+    /// A file that is missing or unreadable is simply absent.
+    Files(Vec<(PathBuf, String)>),
     /// The lines a search found.
     Search(SearchResult),
 }
@@ -335,6 +418,10 @@ pub enum PageOutcome {
     Job(JobRequest),
     /// The page asks the host to read an answer from the user.
     Prompt(PromptRequest),
+    /// The page asks the host to have the user choose from a list, rather
+    /// than type. The answer comes back as a [`PromptReply`] under the same
+    /// tag, so a question asked either way is answered in one place.
+    Pick(PickRequest),
     /// The page asks the host to run one of its own commands, named the way the
     /// command palette names it.
     RunAction(String),
@@ -424,7 +511,12 @@ pub fn wrap_start(indent: usize, cols: usize) -> usize {
 /// (clamped by [`wrap_start`], so every line holds at least one column and
 /// wrapping always terminates). With `wrap` off, the whole text is one line
 /// whatever the pane's width.
-pub fn wrapped_lines(chars: &[char], cols: usize, wrap: bool, indent: usize) -> Vec<(usize, usize)> {
+pub fn wrapped_lines(
+    chars: &[char],
+    cols: usize,
+    wrap: bool,
+    indent: usize,
+) -> Vec<(usize, usize)> {
     if !wrap || cols == 0 || chars.len() <= cols {
         return vec![(0, chars.len())];
     }
@@ -556,6 +648,15 @@ pub trait Page {
 
     /// Offer a key to the page.
     fn on_key(&mut self, key: &Key) -> PageOutcome;
+
+    /// What the page is waiting for, when it is part-way through a command
+    /// that takes more than one key: the sequence's name and what the next
+    /// key may be. The host draws it the way it draws its own key hints, so a
+    /// multi-key command looks the same wherever it is being typed. Pages
+    /// with no multi-key commands never implement it.
+    fn hint(&self) -> Option<PageHint> {
+        None
+    }
 
     /// Hand back the answer to a prompt the page asked for. Pages that never
     /// ask never implement it.

@@ -1,14 +1,9 @@
 //! Transient menus: a key opens one, a second key picks from it. The menu
 //! itself knows only what it offers; what each choice does belongs to the view.
 
-use crate::model::page::{PageRow, PageSpan, PageStyle};
-
 // ========================================================================
 // Constants
 // ========================================================================
-
-/// Separates a choice's key from its label.
-const KEY_GAP: &str = "  ";
 
 // ========================================================================
 // Data Structures
@@ -28,8 +23,12 @@ pub enum Popup {
     Commit,
     /// Reading diffs.
     Diff,
+    /// What can be done with the file under the cursor.
+    File,
     /// Adding paths to `.gitignore`.
     Ignore,
+    /// Jumping to a part of the view.
+    Jump,
     /// Reading the log.
     Log,
     /// Merging a branch in.
@@ -63,7 +62,9 @@ impl Popup {
             Popup::CherryPick => "Cherry-pick",
             Popup::Commit => "Commit",
             Popup::Diff => "Diff",
+            Popup::File => "File",
             Popup::Ignore => "Ignore",
+            Popup::Jump => "Jump",
             Popup::Log => "Log",
             Popup::Merge => "Merge",
             Popup::Rebase => "Rebase",
@@ -104,7 +105,29 @@ impl Popup {
                 ('s', "staged"),
                 ('r', "against a revision"),
             ],
+            // Everything that acts on one file, gathered where the cursor
+            // already is: the same commands their own keys run, asked for
+            // without having to recall which key each one was.
+            Popup::File => &[
+                ('s', "stage it"),
+                ('u', "unstage it"),
+                ('x', "discard it"),
+                ('d', "diff it"),
+                ('l', "log it"),
+                ('b', "blame it"),
+            ],
             Popup::Ignore => &[('i', "this path"), ('e', "this extension")],
+            // The `g` leader, which moves rather than runs: a menu all the
+            // same, so a sequence with a second key says what it offers.
+            Popup::Jump => &[
+                ('g', "the top"),
+                ('t', "untracked files"),
+                ('u', "unstaged changes"),
+                ('s', "staged changes"),
+                ('r', "recent commits"),
+                ('j', "next entry"),
+                ('k', "previous entry"),
+            ],
             Popup::Log => &[('l', "this branch"), ('a', "all refs"), ('f', "this file")],
             Popup::Merge => &[('m', "merge a branch"), ('c', "continue"), ('x', "abort")],
             Popup::Rebase => &[
@@ -132,24 +155,6 @@ impl Popup {
             Popup::Worktree => &[('l', "list"), ('a', "add"), ('d', "remove")],
         }
     }
-
-    /// The menu as rows, drawn under the view it belongs to.
-    pub fn rows(self) -> Vec<PageRow> {
-        let mut rows = vec![
-            Vec::new(),
-            vec![PageSpan::new(
-                PageStyle::Header,
-                format!("{}:", self.title()),
-            )],
-        ];
-        rows.extend(self.choices().iter().map(|(key, label)| {
-            vec![
-                PageSpan::new(PageStyle::Accent, key.to_string()),
-                PageSpan::new(PageStyle::Dim, format!("{KEY_GAP}{label}")),
-            ]
-        }));
-        rows
-    }
 }
 
 // ========================================================================
@@ -161,13 +166,15 @@ mod tests {
     use super::*;
 
     /// Every menu the view can open.
-    const EVERY: [Popup; 15] = [
+    const EVERY: [Popup; 17] = [
         Popup::Bisect,
         Popup::Branch,
         Popup::CherryPick,
         Popup::Commit,
         Popup::Diff,
+        Popup::File,
         Popup::Ignore,
+        Popup::Jump,
         Popup::Log,
         Popup::Merge,
         Popup::Rebase,
@@ -200,23 +207,11 @@ mod tests {
     }
 
     #[test]
-    fn test_a_menu_draws_its_title_and_every_choice() {
-        let rows = Popup::Stash.rows();
-        let text: Vec<String> = rows
-            .iter()
-            .map(|row| row.iter().map(|span| span.text.clone()).collect())
-            .collect();
-        assert!(text.iter().any(|line| line.contains("Stash:")));
-        let choices = Popup::Stash.choices();
-        for (key, label) in choices {
-            assert!(
-                text.iter().any(|line| line.contains(*label)),
-                "{label} is not drawn"
-            );
-            assert!(
-                text.iter().any(|line| line.contains(&key.to_string())),
-                "{key} is not drawn"
-            );
+    fn test_every_menu_is_named_by_what_it_is_a_menu_of() {
+        // The title heads the hint the host draws, so an empty one leaves a
+        // card of keys with nothing saying what they belong to.
+        for popup in EVERY {
+            assert!(!popup.title().is_empty(), "{popup:?} has no title");
         }
     }
 }

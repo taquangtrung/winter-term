@@ -12,6 +12,7 @@ pub mod diff;
 pub mod exec;
 pub mod parse;
 pub mod popup;
+pub mod progress;
 pub mod reltime;
 pub mod rows;
 pub mod words;
@@ -23,17 +24,18 @@ use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
     find_match, row_height, row_text, wrap_window, CommandOutput, JobReply, JobRequest, OpenTarget,
-    Page, PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PageWindow, PromptMode,
-    PromptReply, PromptRequest, SpawnRequest,
+    Page, PageContent, PageHint, PageIcon, PageOutcome, PageSpan, PageStyle, PageWindow,
+    PickQuestion, PromptMode, PromptReply, PromptRequest, SpawnRequest,
 };
 use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
 
 use commit::CommitContent;
 use diff::FileDiff;
 use exec::{LogScope, ResetMode, SequenceStep};
-use parse::{Commit, Section, Status};
+use parse::{Commit, Section, Stash, Status};
 use popup::Popup;
-use rows::{CommitFolds, FileRow, Item, ViewRow};
+use progress::Progress;
+use rows::{Block, CommitFolds, FileRow, Item, ViewRow};
 
 // ========================================================================
 // Constants
@@ -126,8 +128,17 @@ pub struct Output {
 pub struct GitPage {
     /// Sections the user has shut. `None` stands for the recent-commits
     /// section, which has no `Section` of its own.
-    collapsed: HashSet<Option<Section>>,
+    collapsed: HashSet<Block>,
     commits: Vec<Commit>,
+    /// Where the repository keeps its own files, which is where the state of
+    /// whatever git is part-way through is written.
+    git_dir: Option<PathBuf>,
+    /// What git is part-way through, when it is part-way through anything.
+    progress: Option<Progress>,
+    /// The stashes, newest first.
+    stashes: Vec<Stash>,
+    /// What the upstream has and this branch does not, newest first.
+    unpulled: Vec<Commit>,
     /// Diffs already read, keyed by the row that asked for one. A file's
     /// working-tree and index diffs are different things, so the section is
     /// part of the key.
@@ -143,8 +154,6 @@ pub struct GitPage {
     scroll: usize,
     /// The last text searched for, repeated by the next and previous keys.
     search: String,
-    /// Set by `g`, waiting for the key that says which section to jump to.
-    pending: bool,
     /// The file whose diff was asked for and has not come back yet.
     pending_diff: Option<FileRow>,
     /// The menu waiting for its second key.
@@ -170,6 +179,8 @@ pub struct GitPage {
     /// view, if they do not already fit under it. Held until the paint, since
     /// what fits is only known once the pane's width and height are.
     reveal: Option<usize>,
+    /// The question a list of names is being gathered for.
+    pending_pick: Option<PickQuestion>,
 }
 
 // ========================================================================
@@ -181,6 +192,10 @@ impl GitPage {
     pub fn new(start: PathBuf) -> Self {
         Self {
             collapsed: HashSet::new(),
+            git_dir: None,
+            progress: None,
+            stashes: Vec::new(),
+            unpulled: Vec::new(),
             commits: Vec::new(),
             diffs: HashMap::new(),
             expanded: HashSet::new(),
@@ -189,7 +204,6 @@ impl GitPage {
             message: None,
             log_count: LOG_PAGE,
             output: None,
-            pending: false,
             pending_diff: None,
             popup: None,
             root: None,
@@ -201,6 +215,7 @@ impl GitPage {
             viewport: 0,
             nav: VimNav::new(),
             reveal: None,
+            pending_pick: None,
         }
     }
 
@@ -222,12 +237,17 @@ impl GitPage {
         let expanded = self.expanded.clone();
         let diffs = self.diffs.clone();
         self.rows = rows::build(
-            &self.status,
-            &self.commits,
-            self.root.as_deref(),
-            now_unix(),
-            &|section| collapsed.contains(&section),
-            self.message.as_deref(),
+            rows::StatusContent {
+                status: &self.status,
+                commits: &self.commits,
+                unpulled: &self.unpulled,
+                stashes: &self.stashes,
+                progress: self.progress.as_ref(),
+                root: self.root.as_deref(),
+                message: self.message.as_deref(),
+                now: now_unix(),
+            },
+            &|block| collapsed.contains(&block),
             &|file| {
                 expanded
                     .contains(file)
@@ -256,6 +276,9 @@ impl GitPage {
             | Some(Item::CommitFile(_))
             | Some(Item::CommitHunk(_, _))
             | Some(Item::RecentHeading)
+            | Some(Item::Stash(_))
+            | Some(Item::StashHeading)
+            | Some(Item::UnpulledHeading)
             | Some(Item::None)
             | None => Vec::new(),
         }
@@ -409,18 +432,15 @@ impl GitPage {
         }
     }
 
-    /// Fold what the cursor is on: a heading shuts its section, a file shows or
-    /// hides its own diff, and a hunk folds the file it belongs to.
+    /// Fold what the cursor is on: a heading shuts the block it heads, a file
+    /// shows or hides its own diff, and a hunk folds the file it belongs to.
     fn toggle_fold(&mut self) -> PageOutcome {
-        match self.selected().map(|row| row.item.clone()) {
-            Some(Item::Heading(section)) => {
-                self.toggle_section(Some(section));
-                PageOutcome::Consumed
-            }
-            Some(Item::RecentHeading) | Some(Item::Commit(_)) => {
-                self.toggle_section(None);
-                PageOutcome::Consumed
-            }
+        let item = self.selected().map(|row| row.item.clone());
+        if let Some(block) = item.as_ref().and_then(rows::fold_block) {
+            self.toggle_block(block);
+            return PageOutcome::Consumed;
+        }
+        match item {
             Some(Item::File(file)) => self.toggle_file(file),
             Some(Item::Hunk(hunk)) => {
                 let file = FileRow {
@@ -431,13 +451,9 @@ impl GitPage {
                 self.rebuild();
                 PageOutcome::Consumed
             }
-            // A commit view folds through its own handler, over its own fold
-            // sets, so these cannot be reached from the status view's rows.
-            Some(Item::CommitChanges)
-            | Some(Item::CommitFile(_))
-            | Some(Item::CommitHunk(_, _))
-            | Some(Item::None)
-            | None => PageOutcome::Consumed,
+            // The headings resolved above, and a commit view folds through
+            // its own handler over its own fold sets.
+            _ => PageOutcome::Consumed,
         }
     }
 
@@ -448,11 +464,11 @@ impl GitPage {
             .position(|row| matches!(&row.item, Item::File(row_file) if row_file == file))
     }
 
-    fn toggle_section(&mut self, key: Option<Section>) {
-        if self.collapsed.remove(&key) {
+    fn toggle_block(&mut self, block: Block) {
+        if self.collapsed.remove(&block) {
             self.reveal = Some(self.cursor);
         } else {
-            self.collapsed.insert(key);
+            self.collapsed.insert(block);
         }
         self.rebuild();
     }
@@ -493,8 +509,10 @@ impl GitPage {
 
     fn toggle_fold_all(&mut self) {
         if self.collapsed.is_empty() {
-            self.collapsed = Section::all().into_iter().map(Some).collect();
-            self.collapsed.insert(None);
+            self.collapsed = Section::all().into_iter().map(Block::Files).collect();
+            self.collapsed.insert(Block::Recent);
+            self.collapsed.insert(Block::Stashes);
+            self.collapsed.insert(Block::Unpulled);
         } else {
             self.collapsed.clear();
         }
@@ -915,11 +933,23 @@ impl GitPage {
             return PageOutcome::Consumed;
         };
         match (popup, choice) {
-            (Popup::Branch, 'b') => self.ask(ASK_BRANCH_CHECKOUT, "Checkout: "),
+            // A jump needs no repository: it moves within what is drawn.
+            (Popup::Jump, _) => self.jump_to(code),
+            (Popup::Branch, 'b') => {
+                self.pick(ASK_BRANCH_CHECKOUT, "Checkout", exec::Candidates::Branches)
+            }
             (Popup::Branch, 'c') => self.ask(ASK_BRANCH_CREATE, "Create and checkout: "),
             (Popup::Branch, 'n') => self.ask(ASK_BRANCH_CREATE_HERE, "Create branch: "),
-            (Popup::Branch, 'd') => self.ask(ASK_BRANCH_DELETE, "Delete branch: "),
-            (Popup::Branch, 'D') => self.ask(ASK_BRANCH_DELETE_FORCE, "Delete unmerged branch: "),
+            (Popup::Branch, 'd') => self.pick(
+                ASK_BRANCH_DELETE,
+                "Delete branch",
+                exec::Candidates::LocalBranches,
+            ),
+            (Popup::Branch, 'D') => self.pick(
+                ASK_BRANCH_DELETE_FORCE,
+                "Delete unmerged branch",
+                exec::Candidates::LocalBranches,
+            ),
 
             (Popup::Commit, 'c') => self.spawn_git(&root, &["commit"]),
             (Popup::Commit, 'm') => self.ask_commit_message(),
@@ -928,7 +958,7 @@ impl GitPage {
                 PageOutcome::Job(exec::custom(&root, "commit --amend --no-edit"))
             }
 
-            (Popup::Merge, 'm') => self.ask(ASK_MERGE, "Merge: "),
+            (Popup::Merge, 'm') => self.pick(ASK_MERGE, "Merge", exec::Candidates::Branches),
             (Popup::Merge, 'c') => {
                 PageOutcome::Job(exec::sequence(&root, "merge", SequenceStep::Continue))
             }
@@ -938,7 +968,9 @@ impl GitPage {
 
             // Interactive rebase needs a terminal for its todo list, so it goes
             // to a pane rather than being captured.
-            (Popup::Rebase, 'i') => self.ask(ASK_REBASE, "Rebase interactively onto: "),
+            (Popup::Rebase, 'i') => {
+                self.pick(ASK_REBASE, "Rebase onto", exec::Candidates::Branches)
+            }
             (Popup::Rebase, 'u') => PageOutcome::Job(exec::rebase(&root, "@{upstream}")),
             (Popup::Rebase, 'c') => {
                 PageOutcome::Job(exec::sequence(&root, "rebase", SequenceStep::Continue))
@@ -957,13 +989,19 @@ impl GitPage {
             (Popup::Stash, 'l') => PageOutcome::Job(exec::stash_list(&root)),
 
             (Popup::Tag, 't') => self.ask(ASK_TAG_CREATE, "Tag name: "),
-            (Popup::Tag, 'd') => self.ask(ASK_TAG_DELETE, "Delete tag: "),
+            (Popup::Tag, 'd') => self.pick(ASK_TAG_DELETE, "Delete tag", exec::Candidates::Tags),
             (Popup::Tag, 'l') => PageOutcome::Job(exec::tag_list(&root)),
 
             (Popup::Remote, 'v') => PageOutcome::Job(exec::remote_list(&root)),
             (Popup::Remote, 'a') => self.ask(ASK_REMOTE_ADD, "Remote, as `name url`: "),
-            (Popup::Remote, 'd') => self.ask(ASK_REMOTE_REMOVE, "Remove remote: "),
-            (Popup::Remote, 'p') => self.ask(ASK_REMOTE_PRUNE, "Prune remote: "),
+            (Popup::Remote, 'd') => self.pick(
+                ASK_REMOTE_REMOVE,
+                "Remove remote",
+                exec::Candidates::Remotes,
+            ),
+            (Popup::Remote, 'p') => {
+                self.pick(ASK_REMOTE_PRUNE, "Prune remote", exec::Candidates::Remotes)
+            }
 
             (Popup::CherryPick, 'a') => self.ask(ASK_CHERRY_PICK, "Cherry-pick: "),
             (Popup::CherryPick, 'c') => {
@@ -991,6 +1029,23 @@ impl GitPage {
             (Popup::Diff, 's') => PageOutcome::Job(exec::diff_all(&root, true, None)),
             (Popup::Diff, 'r') => self.ask(ASK_DIFF_REV, "Diff against: "),
 
+            // Every file choice acts on the row the popup was opened over.
+            (Popup::File, choice @ ('s' | 'u' | 'x' | 'd' | 'l' | 'b')) => {
+                let Some(path) = self.path_at_cursor() else {
+                    return PageOutcome::Consumed;
+                };
+                match choice {
+                    's' => self.stage(false),
+                    'u' => self.unstage(false),
+                    'x' => self.discard(),
+                    'b' => PageOutcome::Job(exec::blame(&root, &path)),
+                    'd' => self.toggle_fold(),
+                    _ => {
+                        self.log_count = LOG_PAGE;
+                        PageOutcome::Job(exec::log(&root, LogScope::File(path), self.log_count))
+                    }
+                }
+            }
             (Popup::Log, 'l') => {
                 self.log_count = LOG_PAGE;
                 PageOutcome::Job(exec::log(&root, LogScope::Branch, self.log_count))
@@ -1024,6 +1079,18 @@ impl GitPage {
     }
 
     /// Ask a one-line question, tagged so the answer finds its way back.
+    /// Ask the same question [`ask`](Self::ask) does, but over the names it
+    /// can be answered with: the reader filters a list instead of spelling a
+    /// branch out. The names are read first, so this hands back the job that
+    /// reads them and the answer comes through the same tag either way.
+    fn pick(&mut self, tag: &'static str, label: &str, kind: exec::Candidates) -> PageOutcome {
+        let Some(root) = self.root.clone() else {
+            return PageOutcome::Consumed;
+        };
+        self.pending_pick = Some(PickQuestion::new(tag, label));
+        PageOutcome::Job(exec::candidates(&root, kind))
+    }
+
     fn ask(&self, tag: &'static str, label: &str) -> PageOutcome {
         PageOutcome::Prompt(PromptRequest {
             initial: String::new(),
@@ -1122,7 +1189,16 @@ impl GitPage {
         }
         match output.tag {
             exec::TAG_ROOT => {
-                let root = PathBuf::from(output.stdout.trim());
+                // Two lines: the working tree, then where the repository keeps
+                // its own files, which a worktree or a submodule puts outside
+                // the tree entirely.
+                let mut lines = output.stdout.lines();
+                let root = PathBuf::from(lines.next().unwrap_or_default().trim());
+                self.git_dir = lines
+                    .next()
+                    .map(str::trim)
+                    .filter(|line| !line.is_empty())
+                    .map(PathBuf::from);
                 self.root = Some(root.clone());
                 PageOutcome::Job(exec::status(&root))
             }
@@ -1150,10 +1226,52 @@ impl GitPage {
                 }
                 self.request_stale_diff()
             }
+            // The status refresh is a chain: each read asks for the next, so
+            // the view fills in from one pass rather than firing five jobs at
+            // once and racing them.
             exec::TAG_LOG => {
                 self.commits = parse::parse_decorated_log(&output.stdout);
                 self.rebuild();
-                PageOutcome::Consumed
+                match &self.root {
+                    Some(root) => PageOutcome::Job(exec::stash_entries(root)),
+                    None => PageOutcome::Consumed,
+                }
+            }
+            exec::TAG_CANDIDATES => {
+                let Some(question) = self.pending_pick.take() else {
+                    return PageOutcome::Consumed;
+                };
+                // A remote's own `HEAD` is a pointer at one of the names
+                // already listed, never an answer of its own.
+                match question.over_lines(&output.stdout, |name| !name.ends_with("/HEAD")) {
+                    Some(request) => PageOutcome::Pick(request),
+                    // With nothing to choose from there is still a question
+                    // to answer, so it falls back to being typed.
+                    None => self.ask(question.tag, &format!("{}: ", question.label)),
+                }
+            }
+            exec::TAG_STASHES => {
+                self.stashes = parse::parse_stash_list(&output.stdout);
+                self.rebuild();
+                match &self.root {
+                    Some(root) => PageOutcome::Job(exec::unpulled(root)),
+                    None => PageOutcome::Consumed,
+                }
+            }
+            exec::TAG_UNPULLED => {
+                // A branch tracking nothing makes this fail, which is not a
+                // failure worth reporting: it is behind nothing.
+                self.unpulled = match output.succeeded() {
+                    true => parse::parse_decorated_log(&output.stdout),
+                    false => Vec::new(),
+                };
+                self.rebuild();
+                match &self.git_dir {
+                    Some(dir) => {
+                        PageOutcome::Job(JobRequest::ReadFiles(progress::state_files(dir)))
+                    }
+                    None => PageOutcome::Consumed,
+                }
             }
             // A blame and a plain read differ only in what the view is called.
             exec::TAG_BLAME | exec::TAG_READ => {
@@ -1316,11 +1434,7 @@ impl Page for GitPage {
             return PageContent::new(vec![vec![PageSpan::new(PageStyle::Dim, note)]]);
         }
         let indents: Vec<usize> = self.rows.iter().map(|row| row.wrap_indent).collect();
-        let texts: Vec<String> = self
-            .rows
-            .iter()
-            .map(|row| row_text(&row.spans))
-            .collect();
+        let texts: Vec<String> = self.rows.iter().map(|row| row_text(&row.spans)).collect();
         let visible = rows.saturating_sub(HEADER_ROWS);
         let height = |index: usize| row_height(&texts[index], cols, wrap, indents[index]);
         let mut window = wrap_window(self.scroll, self.cursor, self.rows.len(), visible, height);
@@ -1346,25 +1460,28 @@ impl Page for GitPage {
             painted.push(row.spans.clone());
             wrap_indents.push(row.wrap_indent);
         }
-        if let Some(popup) = self.popup {
-            let popup_rows = popup.rows();
-            wrap_indents.extend(std::iter::repeat_n(0, popup_rows.len()));
-            painted.extend(popup_rows);
-        }
         PageContent::new(painted)
             .with_icons(icons)
             .with_cursor_line(window.cursor)
             .with_wrap_indents(wrap_indents)
     }
 
+    fn hint(&self) -> Option<PageHint> {
+        let popup = self.popup?;
+        Some(PageHint {
+            items: popup
+                .choices()
+                .iter()
+                .map(|(key, what)| (key.to_string(), what.to_string()))
+                .collect(),
+            title: popup.title().to_string(),
+        })
+    }
+
     fn on_key(&mut self, key: &Key) -> PageOutcome {
         self.message = None;
         if let Some(popup) = self.popup.take() {
             return self.on_popup_key(popup, key.code);
-        }
-        if self.pending {
-            self.pending = false;
-            return self.jump_to(key.code);
         }
         if self.output.is_some() {
             return self.on_output_key(key);
@@ -1427,12 +1544,17 @@ impl Page for GitPage {
                     Some(root) => PageOutcome::Job(exec::show_commit(&root, &hash)),
                     None => PageOutcome::Consumed,
                 },
+                // A stash reads as the diff it holds, the way a commit reads
+                // as the patch it is.
+                Some(Item::Stash(index)) => match (self.root.clone(), self.stashes.get(index)) {
+                    (Some(root), Some(stash)) => {
+                        PageOutcome::Job(exec::stash_show(&root, &stash.name))
+                    }
+                    _ => PageOutcome::Consumed,
+                },
                 _ => PageOutcome::Consumed,
             },
-            KeyCode::Char('g') => {
-                self.pending = true;
-                PageOutcome::Consumed
-            }
+            KeyCode::Char('g') => self.open_popup(Popup::Jump),
             KeyCode::Char('s') => self.stage(false),
             KeyCode::Char('S') => self.stage(true),
             KeyCode::Char('u') => self.unstage(false),
@@ -1460,6 +1582,16 @@ impl Page for GitPage {
             // Reset to a revision, straight from the cursor: the keymap's
             // direct mixed-reset key.
             KeyCode::Char('o') => self.reset_at_point(ResetMode::Mixed),
+            // `.` is "this one": what can be done with the file the cursor is
+            // already on, without recalling which key each of them was.
+            KeyCode::Char('.') => match self.path_at_cursor() {
+                Some(_) => self.open_popup(Popup::File),
+                None => {
+                    self.message = Some("no file here".to_string());
+                    self.rebuild();
+                    PageOutcome::Consumed
+                }
+            },
             KeyCode::Char('!') => self.ask(ASK_CUSTOM, "git "),
             KeyCode::Char('P') => match &self.root {
                 Some(root) => PageOutcome::Job(exec::push(root)),
@@ -1548,6 +1680,14 @@ impl Page for GitPage {
     fn on_job(&mut self, reply: JobReply) -> PageOutcome {
         match reply {
             JobReply::Command(output) => self.on_command(output),
+            JobReply::Files(files) => {
+                // What git is part-way through, read straight from the files
+                // it writes it in: nothing about it reaches a porcelain
+                // status, so there is nothing to run for it.
+                self.progress = progress::parse(&files);
+                self.rebuild();
+                PageOutcome::Consumed
+            }
             // The view asks for no directory walks and no searches.
             JobReply::DirSize { .. } | JobReply::Search(_) => PageOutcome::Consumed,
         }
@@ -1774,7 +1914,7 @@ mod tests {
 
     fn loaded_page() -> GitPage {
         let mut page = GitPage::new(PathBuf::from("/repo/sub"));
-        page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
+        page.on_job(reply(exec::TAG_ROOT, "/repo\n/repo/.git\n"));
         page.on_job(reply(exec::TAG_STATUS, STATUS_OUTPUT));
         page.on_job(reply(
             exec::TAG_LOG,
@@ -1797,7 +1937,7 @@ mod tests {
         // Every later command runs from the root, so the view cannot do
         // anything until that answer arrives.
         let mut page = GitPage::new(PathBuf::from("/repo/sub"));
-        let next = page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
+        let next = page.on_job(reply(exec::TAG_ROOT, "/repo\n/repo/.git\n"));
         let command = command_of(&next);
         assert_eq!(command.tag, exec::TAG_STATUS);
         assert_eq!(command.cwd, PathBuf::from("/repo"), "not the subdirectory");
@@ -1806,7 +1946,7 @@ mod tests {
     #[test]
     fn test_a_status_read_is_followed_by_the_recent_log() {
         let mut page = GitPage::new(PathBuf::from("/repo"));
-        page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
+        page.on_job(reply(exec::TAG_ROOT, "/repo\n/repo/.git\n"));
         let next = page.on_job(reply(exec::TAG_STATUS, STATUS_OUTPUT));
         assert_eq!(command_of(&next).tag, exec::TAG_LOG);
     }
@@ -1909,7 +2049,7 @@ mod tests {
         // `git commit` with an empty index fails with a wall of advice; not
         // asking for a message is the better answer.
         let mut page = GitPage::new(PathBuf::from("/repo"));
-        page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
+        page.on_job(reply(exec::TAG_ROOT, "/repo\n/repo/.git\n"));
         page.on_job(reply(exec::TAG_STATUS, "# branch.head main\n"));
         let outcome = page.on_key(&Key {
             alt: false,
@@ -2252,13 +2392,24 @@ index aaa..bbb 100644
     }
 
     #[test]
-    fn test_an_open_file_is_re_read_after_the_tree_changes() {
+    fn test_a_refresh_reads_everything_the_view_shows_in_one_chain() {
+        // Each read asks for the next, so one refresh fills the whole view
+        // rather than five jobs racing each other into it.
         let mut page = page_with_diff();
         page.on_job(reply(exec::TAG_STATUS, STATUS_OUTPUT));
-        let next = page.on_job(reply(exec::TAG_LOG, ""));
-        // The log is the last of the refresh chain, and the open diff is what
-        // still needs reading.
-        assert_eq!(next, PageOutcome::Consumed);
+        let after_log = page.on_job(reply(exec::TAG_LOG, ""));
+        assert_eq!(command_of(&after_log).tag, exec::TAG_STASHES);
+        let after_stashes = page.on_job(reply(exec::TAG_STASHES, ""));
+        assert_eq!(command_of(&after_stashes).tag, exec::TAG_UNPULLED);
+
+        // The chain ends on the state files, which no command reports.
+        let after_unpulled = page.on_job(reply(exec::TAG_UNPULLED, ""));
+        let PageOutcome::Job(JobRequest::ReadFiles(paths)) = after_unpulled else {
+            panic!("expected the state files, got {after_unpulled:?}");
+        };
+        assert!(paths.iter().any(|path| path.ends_with("MERGE_HEAD")));
+
+        // And the open diff is what still needs reading.
         let stale = page.request_stale_diff();
         assert_eq!(command_of(&stale).tag, exec::TAG_DIFF);
     }
@@ -2334,10 +2485,23 @@ index aaa..bbb 100644
     }
 
     #[test]
-    fn test_a_menu_key_opens_a_menu_and_draws_it_under_the_view() {
+    fn test_a_menu_key_opens_a_menu_and_hands_it_to_the_host_to_draw() {
+        // The menu is the host's own key-hint card, centred over the window,
+        // so the view keeps every row of the pane to itself.
         let mut page = loaded_page();
         page.on_key(&press_char('z'));
         assert_eq!(page.popup, Some(Popup::Stash));
+
+        let hint = page.hint().expect("a hint while the menu is open");
+        assert_eq!(hint.title, "Stash");
+        assert!(
+            hint.items
+                .iter()
+                .any(|(key, what)| key == "p" && what == "pop the newest"),
+            "got {:?}",
+            hint.items
+        );
+
         let painted = page.content(80, 80, false);
         let text: Vec<String> = painted
             .rows
@@ -2345,8 +2509,8 @@ index aaa..bbb 100644
             .map(|row| row.iter().map(|span| span.text.clone()).collect())
             .collect();
         assert!(
-            text.iter().any(|line| line.contains("Stash:")),
-            "got {text:?}"
+            !text.iter().any(|line| line.contains("pop the newest")),
+            "and nothing of it is drawn into the view, got {text:?}"
         );
     }
 
@@ -2434,8 +2598,14 @@ index aaa..bbb 100644
     #[test]
     fn test_an_interactive_rebase_also_goes_to_a_pane() {
         let mut page = loaded_page();
-        let PageOutcome::Prompt(request) = choose(&mut page, 'r', 'i') else {
-            panic!("expected a prompt");
+        // The branch to rebase onto is chosen from a list, so the key asks
+        // for the names first and the answer arrives under the same tag.
+        let listing = choose(&mut page, 'r', 'i');
+        assert_eq!(command_of(&listing).tag, exec::TAG_CANDIDATES);
+        let PageOutcome::Pick(request) =
+            page.on_job(reply(exec::TAG_CANDIDATES, "main\nfeature\n"))
+        else {
+            panic!("expected a list to pick from");
         };
         let outcome = page.on_prompt(PromptReply {
             answer: Some("HEAD~3".to_string()),
@@ -2995,6 +3165,157 @@ index aaa..bbb 100644
             .rows
             .iter()
             .any(|row| matches!(row.item, Item::File(_))));
+    }
+
+    #[test]
+    fn test_a_menu_shows_however_long_the_view_is() {
+        // The card is drawn over the window rather than under the rows, so a
+        // status longer than the pane cannot push it off the bottom, which is
+        // where a menu drawn into the view ended up.
+        let mut page = loaded_page();
+        page.on_key(&press_char('b'));
+        let rows = 4;
+        let painted = page.content(rows, 80, false);
+
+        assert!(page.hint().is_some(), "the menu is there to draw");
+        assert!(
+            painted.rows.len() <= rows,
+            "and the view still fits its pane, got {}",
+            painted.rows.len()
+        );
+    }
+
+    #[test]
+    fn test_the_jump_leader_says_where_it_can_go() {
+        // `g` waits for a second key like every other prefix, so it says what
+        // the second key may be the same way they do.
+        let mut page = loaded_page();
+        assert_eq!(page.on_key(&press_char('g')), PageOutcome::Consumed);
+        let hint = page.hint().expect("a hint while the leader is open");
+        assert_eq!(hint.title, "Jump");
+        assert!(
+            hint.items
+                .iter()
+                .any(|(key, what)| key == "s" && what == "staged changes"),
+            "got {:?}",
+            hint.items
+        );
+
+        // And the second key still jumps.
+        page.on_key(&press_char('s'));
+        assert_eq!(
+            page.selected().map(|row| row.item.clone()),
+            Some(Item::Heading(Section::Staged))
+        );
+    }
+
+    #[test]
+    fn test_switching_branch_offers_the_branches_rather_than_a_blank_line() {
+        let mut page = loaded_page();
+        let listing = choose(&mut page, 'b', 'b');
+        let command = command_of(&listing);
+        assert_eq!(command.tag, exec::TAG_CANDIDATES);
+        assert_eq!(command.args[0], "for-each-ref");
+        assert!(
+            command.args.iter().any(|arg| arg == "refs/remotes"),
+            "a checkout takes a remote branch too, got {:?}",
+            command.args
+        );
+
+        let outcome = page.on_job(reply(
+            exec::TAG_CANDIDATES,
+            "main\nfeature\norigin/main\norigin/HEAD\n",
+        ));
+        let PageOutcome::Pick(request) = outcome else {
+            panic!("expected a list to pick from, got {outcome:?}");
+        };
+        assert_eq!(request.label, "Checkout");
+        assert_eq!(request.items, ["main", "feature", "origin/main"]);
+
+        // Choosing one answers the question the key asked.
+        let ran = page.on_prompt(PromptReply {
+            answer: Some("feature".to_string()),
+            tag: request.tag,
+        });
+        let command = command_of(&ran);
+        assert_eq!(command.args, ["checkout", "feature"]);
+    }
+
+    #[test]
+    fn test_deleting_a_branch_offers_only_the_ones_that_can_be_deleted() {
+        // A branch on a remote is not this repository's to delete, so the
+        // list stops at the local ones.
+        let mut page = loaded_page();
+        let command = command_of(&choose(&mut page, 'b', 'd'));
+        assert!(
+            command.args.iter().any(|arg| arg == "refs/heads")
+                && !command.args.iter().any(|arg| arg == "refs/remotes"),
+            "got {:?}",
+            command.args
+        );
+    }
+
+    #[test]
+    fn test_a_question_with_nothing_to_choose_from_falls_back_to_typing() {
+        // A repository with no tags still has a delete-tag key; it asks for
+        // one to be spelled out rather than opening an empty list.
+        let mut page = loaded_page();
+        choose(&mut page, 't', 'd');
+        let outcome = page.on_job(reply(exec::TAG_CANDIDATES, "\n"));
+        let PageOutcome::Prompt(request) = outcome else {
+            panic!("expected a prompt, got {outcome:?}");
+        };
+        assert_eq!(request.label, "Delete tag: ");
+    }
+
+    #[test]
+    fn test_the_file_popup_acts_on_the_row_it_was_opened_over() {
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        assert_eq!(page.on_key(&press_char('.')), PageOutcome::Consumed);
+        assert_eq!(page.popup, Some(Popup::File), "the menu is open");
+
+        let command = command_of(&page.on_key(&press_char('b')));
+        assert_eq!(command.args[0], "blame");
+        assert!(
+            command.args.iter().any(|arg| arg == "working.rs"),
+            "on the file the cursor was on, got {:?}",
+            command.args
+        );
+    }
+
+    #[test]
+    fn test_the_file_popup_stays_shut_where_there_is_no_file() {
+        // On a heading or a commit there is nothing for it to act on, and a
+        // menu whose every choice does nothing is worse than none.
+        let mut page = loaded_page();
+        page.cursor = 0;
+        assert_eq!(page.on_key(&press_char('.')), PageOutcome::Consumed);
+        assert_eq!(page.popup, None);
+        assert_eq!(page.message.as_deref(), Some("no file here"));
+    }
+
+    #[test]
+    fn test_enter_on_a_stash_reads_it_as_a_diff() {
+        let mut page = loaded_page();
+        page.on_job(reply(
+            exec::TAG_STASHES,
+            "stash@{0}\u{1f}WIP on main: a thing\n",
+        ));
+        let at = page
+            .rows
+            .iter()
+            .position(|row| row.item == Item::Stash(0))
+            .expect("the stash row");
+        page.cursor = at;
+
+        let command = command_of(&page.on_key(&press(KeyCode::Enter)));
+        assert_eq!(command.args[0], "stash");
+        assert!(
+            command.args.iter().any(|arg| arg == "stash@{0}"),
+            "the stash under the cursor, got {:?}",
+            command.args
+        );
     }
 
     #[test]

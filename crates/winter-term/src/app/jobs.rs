@@ -180,8 +180,24 @@ fn run(request: JobRequest, cancel: &AtomicBool) -> JobReply {
             let bytes = walk_size(&path, cancel, 0);
             JobReply::DirSize { bytes, path }
         }
+        JobRequest::ReadFiles(paths) => JobReply::Files(read_files(&paths)),
         JobRequest::Search(request) => JobReply::Search(search_tree(&request, cancel)),
     }
+}
+
+/// Read what each of `paths` holds, dropping the ones that are not there or
+/// do not read as text. A caller asking for a program's state files expects
+/// most of them to be missing most of the time, so a missing file is left out
+/// rather than reported.
+fn read_files(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
+    paths
+        .iter()
+        .filter_map(|path| {
+            std::fs::read_to_string(path)
+                .ok()
+                .map(|text| (path.clone(), text))
+        })
+        .collect()
 }
 
 /// Run a program to completion and collect what it wrote. Not interruptible:

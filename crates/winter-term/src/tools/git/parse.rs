@@ -63,6 +63,16 @@ pub enum Section {
     Staged,
 }
 
+/// One entry of the stash list.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Stash {
+    /// What git calls it, e.g. `stash@{0}`, which is also what a command
+    /// acting on it takes.
+    pub name: String,
+    /// The message it was pushed with.
+    pub subject: String,
+}
+
 /// One commit of decorated log output.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Commit {
@@ -172,6 +182,21 @@ pub fn parse_decorated_log(text: &str) -> Vec<Commit> {
     text.lines()
         .filter(|line| !line.trim().is_empty())
         .map(parse_decorated_commit)
+        .collect()
+}
+
+/// The stash list, newest first, as git wrote it: name and message per line,
+/// separated by the same unit separator the log format uses.
+pub fn parse_stash_list(text: &str) -> Vec<Stash> {
+    text.lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| {
+            let (name, subject) = line.split_once(FIELD_SEP).unwrap_or((line, ""));
+            Stash {
+                name: name.trim().to_string(),
+                subject: subject.trim().to_string(),
+            }
+        })
         .collect()
 }
 

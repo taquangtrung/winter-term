@@ -55,6 +55,9 @@ pub struct PaletteView {
     pub match_underline: bool,
     /// The filter text as typed.
     pub query: String,
+    /// What the list is of, drawn as a heading above the input line. Empty
+    /// for a palette that needs no naming, which draws no heading at all.
+    pub title: String,
     /// Index into `items` of the highlighted entry.
     pub selected: usize,
 }

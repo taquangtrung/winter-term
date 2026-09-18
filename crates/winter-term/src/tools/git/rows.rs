@@ -9,7 +9,10 @@ use crate::model::page::{PageIcon, PageIconKind, PageRow, PageSpan, PageStyle};
 
 use super::commit::{CommitContent, CommitFile};
 use super::diff::{FileDiff, Hunk};
-use super::parse::{Commit, FileStatus, RefKind, Section, Status};
+use super::parse::{Commit, FileStatus, RefKind, Section, Stash, Status};
+#[cfg(test)]
+use super::progress::Operation;
+use super::progress::Progress;
 use super::reltime;
 use super::words::{decorate, Segment};
 
@@ -62,6 +65,16 @@ const LOG_TITLE: &str = "Commit logs";
 /// Heading over the files a commit touched, which folds them all away at once.
 const CHANGES_TITLE: &str = "Changes";
 
+/// Heading of the stash section.
+const STASH_TITLE: &str = "Stashes";
+
+/// Heading of the section listing what the upstream has and this branch does
+/// not. The upstream's name follows it.
+const UNPULLED_TITLE: &str = "Unpulled from";
+
+/// Label of the line naming whatever git is part-way through.
+const LABEL_STATE: &str = "State:";
+
 /// What the log view says when more commits can be loaded.
 const LOG_MORE: &str = "Press '+' to display more commits";
 
@@ -106,6 +119,12 @@ const DETAIL_MARKS: [&str; 3] = ["index ", "old mode ", "new mode "];
 pub enum Item {
     /// The heading over every file a commit touched.
     CommitChanges,
+    /// A stash, by its index in the list.
+    Stash(usize),
+    /// The heading of the stash section.
+    StashHeading,
+    /// The heading of the unpulled-commits section.
+    UnpulledHeading,
     /// A file of the commit view, by its index in the commit's file list.
     CommitFile(usize),
     /// A hunk of the commit view, by its file's index and its own index within
@@ -169,22 +188,26 @@ pub struct ViewRow {
 // ========================================================================
 
 /// Build every row of the view: a header block, then each non-empty section,
-/// then the recent commits.
+/// then the stashes, what the upstream is holding, and the recent commits.
 ///
-/// `root` is the repository's path, drawn on the `Repo:` line; `now` is the
-/// current Unix time, which the commit rows measure their age against. Both are
-/// passed in rather than read here so this stays a pure function of what it is
-/// given.
+/// Everything drawn is passed in, so this stays a pure function of what the
+/// page has read.
 pub fn build(
-    status: &Status,
-    commits: &[Commit],
-    root: Option<&Path>,
-    now: i64,
-    collapsed: &dyn Fn(Option<Section>) -> bool,
-    message: Option<&str>,
+    content: StatusContent,
+    collapsed: &dyn Fn(Block) -> bool,
     diffs: &dyn Fn(&FileRow) -> Option<FileDiff>,
 ) -> Vec<ViewRow> {
-    let mut rows = header_block(status, commits, root, message);
+    let StatusContent {
+        status,
+        commits,
+        unpulled,
+        stashes,
+        progress,
+        root,
+        message,
+        now,
+    } = content;
+    let mut rows = header_block(status, commits, root, progress, message);
     rows.push(blank_row());
     for section in Section::all() {
         let files: Vec<&FileStatus> = status
@@ -195,7 +218,7 @@ pub fn build(
         if files.is_empty() {
             continue;
         }
-        let shut = collapsed(Some(section));
+        let shut = collapsed(Block::Files(section));
         rows.push(heading_row(
             section.title(),
             files.len(),
@@ -219,8 +242,47 @@ pub fn build(
         }
         rows.push(blank_row());
     }
+    if !stashes.is_empty() {
+        let shut = collapsed(Block::Stashes);
+        rows.push(heading_row(
+            STASH_TITLE,
+            stashes.len(),
+            shut,
+            Item::StashHeading,
+        ));
+        if !shut {
+            rows.extend(
+                stashes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, stash)| stash_row(stash, index)),
+            );
+        }
+        rows.push(blank_row());
+    }
+    if !unpulled.is_empty() {
+        let shut = collapsed(Block::Unpulled);
+        let title = match &status.upstream {
+            Some(upstream) => format!("{UNPULLED_TITLE} {upstream}"),
+            None => UNPULLED_TITLE.to_string(),
+        };
+        rows.push(heading_row(
+            &title,
+            unpulled.len(),
+            shut,
+            Item::UnpulledHeading,
+        ));
+        if !shut {
+            for commit in unpulled {
+                // Nothing here is unpushed: these are the commits the other
+                // side has, which is the opposite direction.
+                rows.extend(commit_rows_decorated(commit, now, false));
+            }
+        }
+        rows.push(blank_row());
+    }
     if !commits.is_empty() {
-        let shut = collapsed(None);
+        let shut = collapsed(Block::Recent);
         rows.push(heading_row(
             RECENT_TITLE,
             commits.len(),
@@ -249,6 +311,7 @@ fn header_block(
     status: &Status,
     commits: &[Commit],
     root: Option<&Path>,
+    progress: Option<&Progress>,
     message: Option<&str>,
 ) -> Vec<ViewRow> {
     let mut rows = Vec::new();
@@ -293,6 +356,16 @@ fn header_block(
         ));
     }
     rows.push(label_row(LABEL_MERGE, merge));
+    // What git is part-way through, and the keys that finish it. Nothing in a
+    // porcelain status says a rebase is open, so without this line the only
+    // sign of one is a section of conflicts and no reason for them.
+    if let Some(progress) = progress {
+        rows.push(label_row(LABEL_STATE, progress_spans(progress)));
+        rows.push(label_row(
+            "",
+            vec![PageSpan::new(PageStyle::Dim, progress.operation.keys())],
+        ));
+    }
     // A tag on HEAD reads off the same decoration the commit rows use.
     let head_tag = commits
         .first()
@@ -326,6 +399,35 @@ fn label_row(label: &str, value: Vec<PageSpan>) -> ViewRow {
         item: Item::None,
         spans,
         wrap_indent: LABEL_WIDTH,
+    }
+}
+
+/// What git is doing, said in the order a reader asks it: which operation,
+/// what it is working on, and how far along it is.
+fn progress_spans(progress: &Progress) -> PageRow {
+    let mut spans = vec![PageSpan::new(
+        PageStyle::ChangeConflict,
+        progress.operation.title(),
+    )];
+    if !progress.detail.is_empty() {
+        spans.push(PageSpan::plain(format!(" {}", progress.detail)));
+    }
+    if let Some((at, of)) = progress.step {
+        spans.push(PageSpan::new(PageStyle::Dim, format!("  ({at}/{of})")));
+    }
+    spans
+}
+
+/// One stash's row: what git calls it, then the message it was pushed with.
+fn stash_row(stash: &Stash, index: usize) -> ViewRow {
+    ViewRow {
+        icon: None,
+        item: Item::Stash(index),
+        spans: vec![
+            PageSpan::new(PageStyle::Accent, format!("{} ", stash.name)),
+            PageSpan::plain(stash.subject.clone()),
+        ],
+        wrap_indent: stash.name.chars().count() + 1,
     }
 }
 
@@ -605,6 +707,59 @@ pub fn diff_view_rows(lines: &[String]) -> Vec<ViewRow> {
             wrap_indent,
         })
         .collect()
+}
+
+/// A block of the status view that folds as a unit.
+///
+/// The file sections fold by which section they are; the rest are one of a
+/// kind. What folds is what a heading heads, so every variant here answers to
+/// one [`Item`] the cursor can sit on.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Block {
+    /// One of the change sections, by which one.
+    Files(Section),
+    /// The recent commits.
+    Recent,
+    /// The stashes.
+    Stashes,
+    /// The commits the upstream has and this branch does not.
+    Unpulled,
+}
+
+/// The block a row's heading folds, or `None` where the row heads no block.
+pub fn fold_block(item: &Item) -> Option<Block> {
+    match item {
+        Item::Heading(section) => Some(Block::Files(*section)),
+        Item::RecentHeading | Item::Commit(_) => Some(Block::Recent),
+        Item::StashHeading | Item::Stash(_) => Some(Block::Stashes),
+        Item::UnpulledHeading => Some(Block::Unpulled),
+        _ => None,
+    }
+}
+
+/// Everything the status view draws, gathered from git by the page.
+///
+/// A struct rather than a parameter list: the view is the sum of half a dozen
+/// separate reads, and each one that arrives should not shuffle the order of
+/// the others at every call site.
+#[derive(Clone, Copy)]
+pub struct StatusContent<'a> {
+    /// The working tree, as `git status` reports it.
+    pub status: &'a Status,
+    /// The tail of the log, for the recent-commits section.
+    pub commits: &'a [Commit],
+    /// What the upstream has and this branch does not, newest first.
+    pub unpulled: &'a [Commit],
+    /// The stashes, newest first.
+    pub stashes: &'a [Stash],
+    /// What git is part-way through, when it is part-way through anything.
+    pub progress: Option<&'a Progress>,
+    /// The repository's path, drawn on the `Repo:` line.
+    pub root: Option<&'a Path>,
+    /// What the last command reported, drawn under the header.
+    pub message: Option<&'a str>,
+    /// The current Unix time, which the commit rows measure ages against.
+    pub now: i64,
 }
 
 /// How far a commit is opened, one level at a time: the heading over its
@@ -1015,11 +1170,11 @@ mod tests {
         row.spans.iter().map(|span| span.text.clone()).collect()
     }
 
-    fn open(_section: Option<Section>) -> bool {
+    fn open(_block: Block) -> bool {
         false
     }
 
-    fn shut(_section: Option<Section>) -> bool {
+    fn shut(_block: Block) -> bool {
         true
     }
 
@@ -1036,10 +1191,26 @@ mod tests {
     fn built(
         status: &Status,
         commits: &[Commit],
-        collapsed: &dyn Fn(Option<Section>) -> bool,
+        collapsed: &dyn Fn(Block) -> bool,
         diffs: &dyn Fn(&FileRow) -> Option<FileDiff>,
     ) -> Vec<ViewRow> {
-        build(status, commits, None, NOW, collapsed, None, diffs)
+        build(content(status, commits), collapsed, diffs)
+    }
+
+    /// The view's content with everything the page reads separately left
+    /// empty, and a fixed clock: what a test that is not about the stashes or
+    /// the upstream draws.
+    fn content<'a>(status: &'a Status, commits: &'a [Commit]) -> StatusContent<'a> {
+        StatusContent {
+            status,
+            commits,
+            unpulled: &[],
+            stashes: &[],
+            progress: None,
+            root: None,
+            message: None,
+            now: NOW,
+        }
     }
 
     /// A commit with only the fields a test cares about set.
@@ -1446,6 +1617,136 @@ mod tests {
         // A commit with no file at all heads nothing.
         let bare = commit_view(&shown(&["commit abc", "", "    message"]));
         assert!(bare.iter().all(|row| !text(row).contains(CHANGES_TITLE)));
+    }
+
+    #[test]
+    fn test_the_stashes_and_the_upstreams_commits_get_sections_of_their_own() {
+        let status = Status {
+            ahead: 0,
+            behind: 2,
+            branch: Some("main".to_string()),
+            files: Vec::new(),
+            upstream: Some("origin/main".to_string()),
+        };
+        let stashes = vec![
+            Stash {
+                name: "stash@{0}".to_string(),
+                subject: "WIP on main: half a thing".to_string(),
+            },
+            Stash {
+                name: "stash@{1}".to_string(),
+                subject: "spike".to_string(),
+            },
+        ];
+        let unpulled = vec![commit("aaa1111", "theirs")];
+        let rows = build(
+            StatusContent {
+                stashes: &stashes,
+                unpulled: &unpulled,
+                ..content(&status, &[])
+            },
+            &open,
+            &no_diffs,
+        );
+        let lines: Vec<String> = rows.iter().map(text).collect();
+
+        assert!(
+            lines.iter().any(|line| line == "▼ Stashes (2)"),
+            "got {lines:?}"
+        );
+        assert!(lines
+            .iter()
+            .any(|line| line.contains("stash@{0} WIP on main")));
+        assert!(
+            lines
+                .iter()
+                .any(|line| line == "▼ Unpulled from origin/main (1)"),
+            "the section names where the commits came from, got {lines:?}"
+        );
+        assert!(lines.iter().any(|line| line.contains("theirs")));
+    }
+
+    #[test]
+    fn test_every_heading_folds_the_block_it_heads() {
+        let status = Status {
+            ahead: 0,
+            behind: 1,
+            branch: Some("main".to_string()),
+            files: vec![file(Section::Staged, "s.rs", 'M')],
+            upstream: Some("origin/main".to_string()),
+        };
+        let stashes = vec![Stash {
+            name: "stash@{0}".to_string(),
+            subject: "spike".to_string(),
+        }];
+        let unpulled = vec![commit("aaa1111", "theirs")];
+        let rows = build(
+            StatusContent {
+                stashes: &stashes,
+                unpulled: &unpulled,
+                ..content(&status, &[commit("bbb2222", "mine")])
+            },
+            &shut,
+            &no_diffs,
+        );
+        let lines: Vec<String> = rows.iter().map(text).collect();
+
+        // Every block's own heading survives its fold, and nothing under any
+        // of them does.
+        for heading in ["Staged changes", "Stashes", "Unpulled from", RECENT_TITLE] {
+            assert!(
+                lines.iter().any(|line| line.contains(heading)),
+                "{heading} keeps its heading, got {lines:?}"
+            );
+        }
+        // By hash for the commits: their subjects also read on the `Head:`
+        // line, which is not part of any block.
+        for hidden in ["s.rs", "stash@{0}", "aaa1111", "bbb2222"] {
+            assert!(
+                !lines.iter().any(|line| line.contains(hidden)),
+                "{hidden} is folded away, got {lines:?}"
+            );
+        }
+        for item in [
+            Item::Heading(Section::Staged),
+            Item::StashHeading,
+            Item::UnpulledHeading,
+            Item::RecentHeading,
+        ] {
+            assert!(fold_block(&item).is_some(), "{item:?} folds a block");
+        }
+    }
+
+    #[test]
+    fn test_an_unfinished_operation_says_what_it_is_and_how_to_finish_it() {
+        // Nothing in a porcelain status says a rebase is open: without this
+        // line the only sign of one is a section of conflicts and no reason.
+        let progress = Progress {
+            operation: Operation::Rebase,
+            detail: "feature onto abc1234".to_string(),
+            step: Some((3, 7)),
+        };
+        let status = status_with(Vec::new());
+        let rows = build(
+            StatusContent {
+                progress: Some(&progress),
+                ..content(&status, &[])
+            },
+            &open,
+            &no_diffs,
+        );
+        let lines: Vec<String> = rows.iter().map(text).collect();
+
+        assert!(
+            lines.iter().any(|line| line.starts_with("State:")
+                && line.contains("Rebasing feature onto abc1234")
+                && line.contains("(3/7)")),
+            "got {lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("r c continue")),
+            "and the keys that finish it, got {lines:?}"
+        );
     }
 
     #[test]

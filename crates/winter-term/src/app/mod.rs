@@ -617,6 +617,9 @@ pub struct App {
     pub(crate) jobs: jobs::Jobs,
     /// The question a page is waiting on an answer to, if any.
     pub(crate) page_prompt: Option<page::ActivePrompt>,
+    /// The page question the open palette is collecting an answer to, while
+    /// it is showing a page's own list.
+    pub(crate) page_pick: Option<page::ActivePick>,
     /// The Vim-style text cursor over a page, while one is up. At most one
     /// exists: it belongs to whichever page pane `v` was pressed in.
     pub(crate) page_cursor: Option<page_cursor::PageCursor>,

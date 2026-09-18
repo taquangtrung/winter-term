@@ -56,8 +56,18 @@ pub const TAG_PULL: &str = "pull";
 /// Tag naming a push request.
 pub const TAG_PUSH: &str = "push";
 
-/// Tag naming the repository-root lookup.
+/// Tag naming the repository-root lookup, which also reports where the
+/// repository keeps its own files.
 pub const TAG_ROOT: &str = "root";
+
+/// Tag naming a list of names gathered for the reader to choose from.
+pub const TAG_CANDIDATES: &str = "candidates";
+
+/// Tag naming the stash list the status view holds a section for.
+pub const TAG_STASHES: &str = "stashes";
+
+/// Tag naming the read of what the upstream has and this branch does not.
+pub const TAG_UNPULLED: &str = "unpulled";
 
 /// Tag naming a stage request.
 pub const TAG_STAGE: &str = "stage";
@@ -153,8 +163,71 @@ const RECENT_COMMITS: usize = 10;
 /// Ask where the repository containing `cwd` is rooted. Every other command
 /// runs from there, so a listing opened deep in a tree still stages by
 /// repository-relative path.
+/// Which names a question can be answered with.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Candidates {
+    /// Every branch, local and on a remote: what a checkout or a merge takes.
+    Branches,
+    /// The branches in this repository, which are the ones that can be
+    /// deleted.
+    LocalBranches,
+    /// The remotes.
+    Remotes,
+    /// The tags.
+    Tags,
+}
+
+/// Where the repository is, and where it keeps its own files: two lines, the
+/// working tree's root and the directory holding `HEAD` and the state files
+/// naming whatever git is part-way through. A worktree and a submodule put
+/// the second somewhere the first does not imply, so it is asked for rather
+/// than assumed.
 pub fn repo_root(cwd: &Path) -> JobRequest {
-    request(cwd, TAG_ROOT, ["rev-parse", "--show-toplevel"])
+    request(
+        cwd,
+        TAG_ROOT,
+        ["rev-parse", "--show-toplevel", "--absolute-git-dir"],
+    )
+}
+
+/// The names a question can be answered with, for the reader to pick from
+/// rather than type: [`Candidates`] says which kind.
+pub fn candidates(root: &Path, kind: Candidates) -> JobRequest {
+    match kind {
+        Candidates::Branches => refs(root, &["refs/heads", "refs/remotes"]),
+        Candidates::LocalBranches => refs(root, &["refs/heads"]),
+        Candidates::Remotes => request(root, TAG_CANDIDATES, ["remote"]),
+        Candidates::Tags => refs(root, &["refs/tags"]),
+    }
+}
+
+/// Every ref under `namespaces`, by its short name.
+fn refs(root: &Path, namespaces: &[&str]) -> JobRequest {
+    let mut args = vec![
+        "for-each-ref".to_string(),
+        "--format=%(refname:short)".to_string(),
+        "--sort=-committerdate".to_string(),
+    ];
+    args.extend(namespaces.iter().map(|space| space.to_string()));
+    owned_request(root, TAG_CANDIDATES, args)
+}
+
+/// The stashes, as the status view's own section lists them: each one's name
+/// and the message it was pushed with.
+pub fn stash_entries(root: &Path) -> JobRequest {
+    request(root, TAG_STASHES, ["stash", "list", "--format=%gd%x1f%s"])
+}
+
+/// The commits the upstream has that this branch does not, newest first.
+///
+/// Fails when there is no upstream at all, which is not an error worth
+/// reporting: a branch that tracks nothing is behind nothing.
+pub fn unpulled(root: &Path) -> JobRequest {
+    request(
+        root,
+        TAG_UNPULLED,
+        ["log", LOG_FORMAT, "--decorate=short", "HEAD..@{upstream}"],
+    )
 }
 
 /// The working tree's state, with branch and tracking information.
@@ -511,6 +584,16 @@ pub fn show_commit(root: &Path, rev: &str) -> JobRequest {
     )
 }
 
+/// What one stash holds, as a diff the view paints the way it paints any
+/// other: a stash is a commit under a different name.
+pub fn stash_show(root: &Path, name: &str) -> JobRequest {
+    owned(
+        root,
+        TAG_DIFF_VIEW,
+        vec!["stash", "show", "--no-color", "--patch", name],
+    )
+}
+
 /// A whole diff, for reading rather than staging.
 pub fn diff_all(root: &Path, staged: bool, rev: Option<&str>) -> JobRequest {
     let mut args = vec!["diff".to_string(), "--no-color".to_string()];
@@ -568,7 +651,9 @@ mod tests {
     fn args_of(request: &JobRequest) -> Vec<String> {
         match request {
             JobRequest::Command(command) => command.args.clone(),
-            JobRequest::DirSize(_) | JobRequest::Search(_) => panic!("expected a command"),
+            JobRequest::DirSize(_) | JobRequest::ReadFiles(_) | JobRequest::Search(_) => {
+                panic!("expected a command")
+            }
         }
     }
 

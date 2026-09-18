@@ -16,7 +16,9 @@ impl App {
         };
         let blocks = pane.scrollback().blocks();
         let cols = pane.grid().cols();
-        let offsets = pane.scrollback().block_row_offsets(cols, pane.grid().word_wrap());
+        let offsets = pane
+            .scrollback()
+            .block_row_offsets(cols, pane.grid().word_wrap());
         let current = pane.grid().scroll_offset();
         let text = offsets
             .iter()
@@ -45,7 +47,9 @@ impl App {
         };
         let blocks = pane.scrollback().blocks();
         let cols = pane.grid().cols();
-        let offsets = pane.scrollback().block_row_offsets(cols, pane.grid().word_wrap());
+        let offsets = pane
+            .scrollback()
+            .block_row_offsets(cols, pane.grid().word_wrap());
         let current = pane.grid().scroll_offset();
         let text = offsets
             .iter()
@@ -78,7 +82,9 @@ impl App {
         };
         let blocks = pane.scrollback().blocks();
         let cols = pane.grid().cols();
-        let offsets = pane.scrollback().block_row_offsets(cols, pane.grid().word_wrap());
+        let offsets = pane
+            .scrollback()
+            .block_row_offsets(cols, pane.grid().word_wrap());
         let current = pane.grid().scroll_offset();
         let svg = offsets
             .iter()
@@ -112,7 +118,9 @@ impl App {
             None => return,
         };
         let cols = pane.grid().cols();
-        let offsets = pane.scrollback().block_row_offsets(cols, pane.grid().word_wrap());
+        let offsets = pane
+            .scrollback()
+            .block_row_offsets(cols, pane.grid().word_wrap());
         let current = pane.grid().scroll_offset();
         let block_idx = offsets
             .iter()
@@ -148,7 +156,9 @@ impl App {
             None => return,
         };
         let cols = pane.grid().cols();
-        let offsets = pane.scrollback().block_row_offsets(cols, pane.grid().word_wrap());
+        let offsets = pane
+            .scrollback()
+            .block_row_offsets(cols, pane.grid().word_wrap());
         if offsets.is_empty() {
             return;
         }

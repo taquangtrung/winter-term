@@ -242,11 +242,7 @@ impl Page for GrepPage {
         if self.rows.is_empty() {
             return PageContent::new(page_rows);
         }
-        let texts: Vec<String> = self
-            .rows
-            .iter()
-            .map(|row| row_text(&row.spans))
-            .collect();
+        let texts: Vec<String> = self.rows.iter().map(|row| row_text(&row.spans)).collect();
         let window = wrap_window(
             self.scroll,
             self.cursor,
@@ -348,7 +344,7 @@ impl Page for GrepPage {
         match reply {
             JobReply::Search(found) => self.on_found(found),
             // The page runs no commands and asks for no directory totals.
-            JobReply::Command(_) | JobReply::DirSize { .. } => {}
+            JobReply::Command(_) | JobReply::DirSize { .. } | JobReply::Files(_) => {}
         }
         PageOutcome::Consumed
     }

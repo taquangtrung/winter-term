@@ -54,14 +54,29 @@ const TOAST_TEXTURE_ID: u64 = u64::MAX - 7;
 /// Reserved id for the rasterized which-key hint popup.
 const WHICH_KEY_TEXTURE_ID: u64 = u64::MAX - 8;
 
-/// Maximum number of command results visible in the palette at once.
-pub(super) const PALETTE_MAX_ITEMS: usize = 8;
+/// The key-hint card's width and height as fractions of the surface.
+///
+/// A fixed size whatever the card holds: a hint is read at a glance, in the
+/// same place every time, and a panel that grew and shrank with the number of
+/// keys would move the first row somewhere new on every prefix. The keys flow
+/// into as many columns as the fixed height needs.
+///
+/// Sized for the longest menu rather than the common one: a prefix offering a
+/// dozen keys should still read down a single column, which is what the
+/// height buys, and the width is what keeps a second column legible when one
+/// offers more than that.
+pub(super) const WHICH_KEY_WIDTH_RATIO: f32 = 0.66;
+pub(super) const WHICH_KEY_HEIGHT_RATIO: f32 = 0.55;
 
-/// Palette panel width as a fraction of the surface width.
-pub(super) const PALETTE_WIDTH_RATIO: f32 = 0.62;
-
-/// Palette panel top edge as a fraction of the surface height (VS Code style).
-pub(super) const PALETTE_TOP_RATIO: f32 = 0.15;
+/// The palette's width and height as fractions of the surface.
+///
+/// A fixed size, as the key-hint card is: the list narrows as the query is
+/// typed, and a panel that shrank with it would walk its own rows out from
+/// under the eye reading them. How many results are visible follows from the
+/// height rather than from a count of its own, so a taller window shows more
+/// of them.
+pub(super) const PALETTE_WIDTH_RATIO: f32 = 0.7;
+pub(super) const PALETTE_HEIGHT_RATIO: f32 = 0.6;
 
 /// Extra horizontal padding inside each palette result row, in pixels, applied
 /// to both the left label and the right shortcut hint.
