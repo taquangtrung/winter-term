@@ -3,8 +3,8 @@
 
 use crate::model::input::{Key, KeyCode, WindowKeymap};
 use crate::model::page::{
-    find_match, row_text, scroll_to_cursor, Page, PageContent, PageOutcome, PageRow, PageSpan,
-    PageStyle, PromptMode, PromptReply, PromptRequest,
+    find_match, row_height, row_text, row_width, wrap_window, Page, PageContent, PageOutcome,
+    PageRow, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::palette::builtin_commands;
 
@@ -147,24 +147,30 @@ impl Page for KeysPage {
         TITLE.to_string()
     }
 
-    fn content(&mut self, rows: usize) -> PageContent {
-        let visible = rows.saturating_sub(HEADER_ROWS);
-        self.scroll = scroll_to_cursor(self.scroll, self.selected, self.commands.len(), visible);
-        let mut page_rows = vec![self.title_row(), PageRow::new()];
-        page_rows.extend(
-            self.commands
-                .iter()
-                .skip(self.scroll)
-                .take(visible)
-                .map(|cmd| self.command_row(cmd)),
+    fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> PageContent {
+        let all: Vec<PageRow> = self
+            .commands
+            .iter()
+            .map(|cmd| self.command_row(cmd))
+            .collect();
+        let widths: Vec<usize> = all.iter().map(row_width).collect();
+        let window = wrap_window(
+            self.scroll,
+            self.selected,
+            widths.len(),
+            rows.saturating_sub(HEADER_ROWS),
+            |index| row_height(widths[index], cols, wrap, 0),
         );
+        self.scroll = window.start;
+        let mut page_rows = vec![self.title_row(), PageRow::new()];
+        page_rows.extend(all.into_iter().skip(window.start).take(window.count));
         let content = PageContent::new(page_rows);
         if self.commands.is_empty() {
             // Nothing to band, and a cursor line under the header would light up
             // a blank row that stands for no command.
             return content;
         }
-        content.with_cursor_line(HEADER_ROWS + self.selected - self.scroll)
+        content.with_cursor_line(HEADER_ROWS + window.cursor)
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
@@ -371,13 +377,16 @@ mod tests {
     #[test]
     fn test_an_empty_list_has_no_cursor_line() {
         let mut page = page_with_rows(0);
-        assert_eq!(page.content(20).cursor_line, None);
+        assert_eq!(page.content(20, 80, false).cursor_line, None);
     }
 
     #[test]
     fn test_cursor_line_sits_on_the_selected_command() {
         let mut page = page_with_rows(3);
         page.on_key(&press(KeyCode::Char('j')));
-        assert_eq!(page.content(40).cursor_line, Some(HEADER_ROWS + 1));
+        assert_eq!(
+            page.content(40, 80, false).cursor_line,
+            Some(HEADER_ROWS + 1)
+        );
     }
 }

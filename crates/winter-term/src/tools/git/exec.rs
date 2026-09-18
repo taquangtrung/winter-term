@@ -34,6 +34,10 @@ pub const TAG_BLAME: &str = "blame";
 /// Tag naming a diff read.
 pub const TAG_DIFF: &str = "diff";
 
+/// Tag naming a whole-diff read, which fills the view as a decorated diff
+/// rather than output shown as it came back.
+pub const TAG_DIFF_VIEW: &str = "diff-view";
+
 /// Tag naming a discard request.
 pub const TAG_DISCARD: &str = "discard";
 
@@ -167,6 +171,14 @@ pub fn status(root: &Path) -> JobRequest {
     )
 }
 
+/// The log format both log requests ask for: abbreviated hash, ref decoration,
+/// author, author time, and subject, separated by US (`%x1f`).
+///
+/// A separator rather than git's own spacing because every field after the hash
+/// is arbitrary text. `--date-order` is not set: the default reverse-chronology
+/// is what a "recent commits" tail means.
+const LOG_FORMAT: &str = "--format=%h%x1f%d%x1f%an%x1f%at%x1f%s";
+
 /// The most recent commits, for the view's own tail.
 pub fn recent_log(root: &Path) -> JobRequest {
     request(
@@ -174,8 +186,8 @@ pub fn recent_log(root: &Path) -> JobRequest {
         TAG_LOG,
         [
             "log",
-            "--oneline",
-            "--no-decorate",
+            LOG_FORMAT,
+            "--decorate=short",
             &format!("--max-count={RECENT_COMMITS}"),
         ],
     )
@@ -449,8 +461,8 @@ pub fn log(root: &Path, scope: LogScope, count: usize) -> JobRequest {
     let count = format!("--max-count={count}");
     let mut args = vec![
         "log".to_string(),
-        "--oneline".to_string(),
-        "--no-decorate".to_string(),
+        LOG_FORMAT.to_string(),
+        "--decorate=short".to_string(),
         count,
     ];
     match scope {
@@ -492,7 +504,7 @@ pub fn show_commit(root: &Path, rev: &str) -> JobRequest {
             "show",
             "--no-color",
             "--no-ext-diff",
-            "--stat",
+            "--shortstat",
             "--patch",
             "--date=iso",
             rev,
@@ -509,7 +521,7 @@ pub fn diff_all(root: &Path, staged: bool, rev: Option<&str>) -> JobRequest {
     if let Some(rev) = rev {
         args.push(rev.to_string());
     }
-    owned_request(root, TAG_READ, args)
+    owned_request(root, TAG_DIFF_VIEW, args)
 }
 
 /// Whatever the user typed, split on spaces: the escape hatch for the commands

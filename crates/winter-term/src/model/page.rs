@@ -18,6 +18,12 @@ pub struct PageContent {
     pub icons: Vec<PageIcon>,
     /// Every line of the page.
     pub rows: Vec<PageRow>,
+    /// For each row, the column its wrapped continuation starts at: a diff
+    /// line reserves its marker's room, so the text it spills onto the next
+    /// screen row lines up under the text it started with, not under the
+    /// marker. Rows past the list, and pages that set nothing, wrap from
+    /// column zero.
+    pub wrap_indents: Vec<usize>,
 }
 
 /// An icon a page wants drawn beside one of its rows.
@@ -69,6 +75,20 @@ pub enum PageIconKind {
 
 /// One rendered line: styled runs laid out left to right from column zero.
 pub type PageRow = Vec<PageSpan>;
+
+/// The rows of a page to paint in a pane, once wrapping is accounted for:
+/// where the window starts, how many rows fill the pane, and which screen
+/// row the cursor paints on.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PageWindow {
+    /// How many rows to paint; the pane clips whatever wraps past its bottom.
+    pub count: usize,
+    /// The screen row the cursor's row paints on, counted from the first
+    /// painted row, in screen rows once wrapping is on.
+    pub cursor: usize,
+    /// The first of the page's own rows to paint.
+    pub start: usize,
+}
 
 /// A run of text sharing one style.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -237,17 +257,40 @@ pub enum PromptMode {
 /// color of its own.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PageStyle {
+    /// An added diff line: arriving, faintly.
+    Added,
+    /// The words an edit added: arriving, emphatically.
+    AddedEdit,
     /// Emphasized, in the theme's accent color.
     Accent,
     /// De-emphasized: metadata, hints, and inactive detail.
     Dim,
     /// A title or a column header.
     Header,
+    /// A hunk's header line: the band a hunk sits under.
+    Hunk,
     /// Selected by the user for an operation to act on.
     Marked,
     /// Ordinary text.
     #[default]
     Normal,
+    /// A removed diff line: leaving, faintly.
+    Removed,
+    /// The words an edit removed: leaving, emphatically.
+    RemovedEdit,
+    /// The checked-out branch, where a ref is drawn beside a commit.
+    RefHead,
+    /// A local branch other than the checked-out one, beside a commit.
+    RefLocal,
+    /// A branch on a remote, beside a commit.
+    RefRemote,
+    /// A tag, beside a commit.
+    RefTag,
+    /// A file's row in a diff: the band its changes sit under, bright while
+    /// they show beneath it.
+    Section,
+    /// A file's row in a diff whose changes are folded away: the band, receded.
+    SectionFolded,
 }
 
 /// What the host should do with a key the page was offered.
@@ -340,6 +383,83 @@ pub fn row_text(row: &PageRow) -> String {
     row.iter().map(|span| span.text.as_str()).collect()
 }
 
+/// How many cells a painted row occupies across the pane: the sum of its
+/// spans' text.
+pub fn row_width(row: &PageRow) -> usize {
+    row.iter().map(|span| span.text.chars().count()).sum()
+}
+
+/// The column a wrapped row's continuation starts at, clamped so at least one
+/// column of text remains however narrow the pane or wide the indent.
+pub fn wrap_start(indent: usize, cols: usize) -> usize {
+    indent.min(cols.saturating_sub(1))
+}
+
+/// How many screen rows a painted row takes in a pane `cols` wide: one,
+/// unless it wraps, in which case one per line it spills onto — the first
+/// filling the pane, the rest starting at the row's wrap indent and so
+/// holding less.
+pub fn row_height(width: usize, cols: usize, wrap: bool, indent: usize) -> usize {
+    if !wrap || cols == 0 || width <= cols {
+        return 1;
+    }
+    let room = cols - wrap_start(indent, cols);
+    1 + (width - cols).div_ceil(room)
+}
+
+/// The window of a page's rows to paint in a pane, so the cursor stays
+/// visible: the same cursor-following window [`scroll_to_cursor`] gives, but
+/// measured in screen rows, since a row wider than the pane wraps onto
+/// several of them and leaves room for fewer of the page's own rows. Each
+/// row's height is read from `height`, which decides how a row wider than the
+/// pane is counted, and only for the rows the walk visits — so a page whose
+/// rows are built as they are painted is not asked to build them all. With
+/// every row one screen row this is the plain window.
+pub fn wrap_window(
+    scroll: usize,
+    cursor: usize,
+    total: usize,
+    screen_rows: usize,
+    height: impl Fn(usize) -> usize,
+) -> PageWindow {
+    // The logical clamp first: it lands jumps (a long way to the bottom, back
+    // to the top) with the cursor inside a window of plain rows, without
+    // measuring every row to get there.
+    let mut start = scroll_to_cursor(scroll, cursor, total, screen_rows);
+    // Enough rows from `start` to fill the pane, counting wrapped heights.
+    let fill_from = |start: usize| {
+        let mut filled = 0;
+        let mut count = 0;
+        for index in start..total {
+            filled += height(index);
+            count += 1;
+            if filled >= screen_rows {
+                break;
+            }
+        }
+        count
+    };
+    let mut count = fill_from(start);
+    // Wrapping shrinks the window below the cursor the logical clamp put
+    // inside it, so when it did, the cursor's own row goes to the top — the
+    // one place it is certainly on screen, even if its own tail wraps past
+    // the pane's bottom.
+    if !(start..start + count).contains(&cursor) {
+        start = cursor.min(total.saturating_sub(1));
+        count = fill_from(start);
+    }
+    // The cursor's screen row, counted from the first painted row.
+    let mut cursor_row = 0;
+    for index in start..cursor.min(start + count) {
+        cursor_row += height(index);
+    }
+    PageWindow {
+        count,
+        cursor: cursor_row,
+        start,
+    }
+}
+
 // ========================================================================
 // Traits
 // ========================================================================
@@ -350,10 +470,12 @@ pub trait Page {
     /// A short label for the pane title.
     fn title(&self) -> String;
 
-    /// The rows to draw this frame, given how many the pane can show. A page
-    /// longer than its pane returns the window it wants visible, so scrolling
-    /// stays where the cursor is.
-    fn content(&mut self, rows: usize) -> PageContent;
+    /// The rows to draw this frame, given how many the pane can show below any
+    /// rows it pins, and how wide the pane is: a page longer than its pane
+    /// returns the window it wants visible, so scrolling stays where the
+    /// cursor is, and when `wrap` is set a row wider than `cols` wraps onto
+    /// the next screen row rather than clipping at the pane's edge.
+    fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> PageContent;
 
     /// Offer a key to the page.
     fn on_key(&mut self, key: &Key) -> PageOutcome;
@@ -381,12 +503,20 @@ impl PageContent {
             cursor_line: None,
             icons: Vec::new(),
             rows,
+            wrap_indents: Vec::new(),
         }
     }
 
     /// Attach the icons the host should draw over these rows.
     pub fn with_icons(mut self, icons: Vec<PageIcon>) -> Self {
         self.icons = icons;
+        self
+    }
+
+    /// Attach the column each row's wrapped continuation starts at, one per
+    /// row.
+    pub fn with_wrap_indents(mut self, wrap_indents: Vec<usize>) -> Self {
+        self.wrap_indents = wrap_indents;
         self
     }
 
@@ -499,5 +629,81 @@ mod tests {
         assert_eq!(find_match(&empty, "mod", 0, true), None);
         assert_eq!(find_match(&["mod.rs"], "", 0, true), None);
         assert_eq!(find_match(&["mod.rs"], "absent", 0, true), None);
+    }
+
+    #[test]
+    fn test_without_wrapping_the_window_is_one_row_per_row() {
+        // Every row one screen row: the window is the plain cursor-following
+        // one, and the count is the pane's rows.
+        let window = wrap_window(10, 15, 100, 20, |_| 1);
+        assert_eq!(
+            window,
+            PageWindow {
+                count: 20,
+                cursor: 5,
+                start: 10
+            }
+        );
+    }
+
+    #[test]
+    fn test_an_indented_wrap_holds_less_per_continuation_line() {
+        // A 17-cell row in a 10-cell pane: unindented it spills one cell onto
+        // a second line; with the continuation starting five cells in, that
+        // line holds only five, so the row takes three.
+        assert_eq!(row_height(17, 10, true, 0), 2);
+        assert_eq!(row_height(17, 10, true, 5), 3);
+    }
+
+    #[test]
+    fn test_a_wrap_indent_never_leaves_no_room_for_text() {
+        // An indent as wide as the pane is clamped to leave one column of
+        // text, so wrapping still terminates.
+        assert_eq!(wrap_start(10, 10), 9);
+        assert_eq!(wrap_start(4, 10), 4);
+        assert_eq!(row_height(12, 10, true, 10), 3);
+    }
+
+    #[test]
+    fn test_a_wrapped_row_pushes_the_cursor_down_a_screen_row() {
+        // A row five panes wide takes five screen rows, so the row under it
+        // paints on screen row five, not one.
+        let heights = [5, 1, 1, 1];
+        let window = wrap_window(0, 1, heights.len(), 10, |index| heights[index]);
+        assert_eq!(window.cursor, 5);
+        // Four rows heights 5+1+1+1 fill eight of ten screen rows.
+        assert_eq!(window.count, 4);
+    }
+
+    #[test]
+    fn test_a_cursor_squeezed_out_by_wrapping_goes_to_the_top() {
+        // Rows tall enough that the filled window ends before the cursor:
+        // the cursor's own row becomes the first painted one, where it is
+        // certainly on screen.
+        let heights = [4, 4, 4, 4, 4];
+        let window = wrap_window(0, 4, heights.len(), 10, |index| heights[index]);
+        assert_eq!(window.start, 4);
+        assert_eq!(window.cursor, 0);
+    }
+
+    #[test]
+    fn test_wrapping_fits_fewer_rows_than_the_pane_is_tall() {
+        // Ten screen rows of two-row-tall rows hold five of the page's rows.
+        let heights = [2; 30];
+        let window = wrap_window(0, 0, heights.len(), 10, |index| heights[index]);
+        assert_eq!(window.count, 5);
+    }
+
+    #[test]
+    fn test_an_empty_page_windows_to_nothing() {
+        let window = wrap_window(3, 0, 0, 10, |_| 1);
+        assert_eq!(
+            window,
+            PageWindow {
+                count: 0,
+                cursor: 0,
+                start: 0
+            }
+        );
     }
 }

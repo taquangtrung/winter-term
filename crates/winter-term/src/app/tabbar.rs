@@ -759,7 +759,7 @@ mod tests {
             fn title(&self) -> String {
                 self.0.to_string()
             }
-            fn content(&mut self, _rows: usize) -> PageContent {
+            fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> PageContent {
                 PageContent::default()
             }
             fn on_key(&mut self, _key: &Key) -> PageOutcome {

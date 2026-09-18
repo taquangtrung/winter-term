@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::config::IconStyle;
 use crate::model::layout::{PaneId, Rect};
 use crate::model::mode::Mode;
-use crate::model::page::{PageContent, PageIcon, PageStyle};
+use crate::model::page::{wrap_start, PageContent, PageIcon, PageStyle};
 use crate::model::palette::{Palette, PaletteMode};
 use crate::model::settings_page::{Control, SettingsField, SettingsPage};
 use crate::terminal::block_queue::{BlockEntry, BlockKind};
@@ -60,6 +60,35 @@ const SETTINGS_RIGHT_PAD: usize = 4;
 const SETTINGS_FIRST_ROW: usize = 3;
 /// How far a page's dim style is blended toward the background.
 const PAGE_DIM_MIX: f32 = 0.45;
+
+/// How far an added or removed diff line's background is blended toward the
+/// theme's green or red: a tint that reads at a glance without fighting the
+/// text, the way a diff editor tints a whole inserted or deleted line.
+const PAGE_DIFF_LINE_MIX: f32 = 0.15;
+
+/// How far the edited words within a diff line blend harder than their line,
+/// the way a diff editor's word highlight sits on top of its line one.
+const PAGE_DIFF_EDIT_MIX: f32 = 0.38;
+
+/// How far a hunk header's band is blended toward the theme's blue: darker
+/// than a file's band, so the hunk reads as sitting under its file.
+const PAGE_HUNK_MIX: f32 = 0.22;
+
+/// How far a file's band is blended toward the theme's cyan, bright while the
+/// file's diff shows beneath it.
+const PAGE_SECTION_MIX: f32 = 0.55;
+
+/// How far a folded file's band blends less, so a shut row reads as receded
+/// beside the ones whose changes are showing.
+const PAGE_SECTION_FOLDED_MIX: f32 = 0.35;
+
+/// The ANSI palette slots a diff's colors are drawn from: red and green for
+/// the sides, blue and cyan for the header bands, yellow for a tag's ref.
+const ANSI_RED: usize = 1;
+const ANSI_GREEN: usize = 2;
+const ANSI_YELLOW: usize = 3;
+const ANSI_BLUE: usize = 4;
+const ANSI_CYAN: usize = 6;
 
 /// Footer hint shown along the bottom of the settings page.
 const SETTINGS_HINT: &str = "↑/↓ Move     ←/→ Change     Space Toggle     Enter/Esc Close";
@@ -614,7 +643,7 @@ impl App {
             let Some(slot) = self.pages.get_mut(id) else {
                 continue;
             };
-            let content = slot.page.content(rows);
+            let content = slot.page.content(rows, cols, self.page_wrap);
             // Kept on the slot rather than in the paint, so that selecting over
             // the pane after this frame reads the rows the user can see.
             slot.cursor_line = content.cursor_line;
@@ -624,6 +653,7 @@ impl App {
                 cols,
                 rows,
                 icon_style,
+                self.page_wrap,
             ));
             page_paints.push(PagePaint {
                 cursor_line: content.cursor_line,
@@ -1648,22 +1678,66 @@ fn build_page_grid(
     cols: usize,
     rows: usize,
     icons: IconStyle,
+    wrap: bool,
 ) -> Grid {
     let mut grid = Grid::new(cols, rows);
-    for (row, spans) in content.rows.iter().take(rows).enumerate() {
+    if cols == 0 {
+        return grid;
+    }
+    // The screen row each of the page's own rows starts on, so icons — which
+    // name their row among the page's — land on the right screen row once
+    // earlier rows wrap.
+    let mut row_starts: Vec<usize> = Vec::with_capacity(content.rows.len());
+    let mut screen = 0;
+    'page: for (index, spans) in content.rows.iter().enumerate() {
+        row_starts.push(screen);
+        // The column this row's wrapped continuations start at, reserving the
+        // room its leading span gives the diff marker.
+        let indent = wrap_start(content.wrap_indents.get(index).copied().unwrap_or(0), cols);
+        let lead = spans.first().map(|span| page_span_style(span.style, theme));
         let mut col = 0;
         for span in spans {
-            if col >= cols {
-                break;
+            let style = page_span_style(span.style, theme);
+            let text: Vec<char> = span.text.chars().collect();
+            let mut written = 0;
+            while written < text.len() {
+                if col >= cols {
+                    if !wrap {
+                        // The rest of this row is clipped at the pane's edge.
+                        // The row still took its one screen row, though, so
+                        // the rows under it must not paint over what survived
+                        // the clipping.
+                        screen += 1;
+                        if screen >= rows {
+                            break 'page;
+                        }
+                        continue 'page;
+                    }
+                    screen += 1;
+                    if screen >= rows {
+                        break 'page;
+                    }
+                    col = indent;
+                    if indent > 0 {
+                        // The indent keeps the row's own tint, from its leading
+                        // span, so a wrapped line reads as one tinted line
+                        // rather than one that loses its color at the fold.
+                        if let Some(style) = lead {
+                            let gutter = " ".repeat(indent);
+                            put(&mut grid, screen, 0, &gutter, style);
+                        }
+                    }
+                }
+                let take = (cols - col).min(text.len() - written);
+                let piece: String = text[written..written + take].iter().collect();
+                put(&mut grid, screen, col, &piece, style);
+                written += take;
+                col += take;
             }
-            put(
-                &mut grid,
-                row,
-                col,
-                &span.text,
-                page_span_style(span.style, theme),
-            );
-            col += span.text.chars().count();
+        }
+        screen += 1;
+        if screen >= rows {
+            break;
         }
     }
     // A glyph is a real cell, so it goes into the grid the page just painted
@@ -1672,30 +1746,41 @@ fn build_page_grid(
     // marked row runs through it unbroken.
     if icons == IconStyle::Font {
         for icon in &content.icons {
-            if icon.row >= rows || icon.col >= cols {
+            let Some(row) = row_starts.get(icon.row).copied() else {
+                continue;
+            };
+            if row >= rows || icon.col >= cols {
                 continue;
             }
             let style = grid
-                .cell(icon.row, icon.col)
+                .cell(row, icon.col)
                 .map(|cell| cell.style)
                 .unwrap_or_else(|| page_span_style(PageStyle::Normal, theme));
-            put(
-                &mut grid,
-                icon.row,
-                icon.col,
-                &icon.glyph.to_string(),
-                style,
-            );
+            put(&mut grid, row, icon.col, &icon.glyph.to_string(), style);
         }
     }
     grid
 }
 
-/// Resolve a page's semantic style against the active theme.
+/// Resolve a page's semantic style against the active theme. The diff styles
+/// tint the background with the theme's palette the way a diff editor does,
+/// rather than carrying colors of their own, so every theme gets bands that
+/// belong to it.
 fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
     match style {
         PageStyle::Accent => Style {
             foreground: theme_rgb(theme.cursor_bg),
+            ..Style::default()
+        },
+        PageStyle::Added => Style {
+            background: mix_rgb(theme.background, theme.ansi[ANSI_GREEN], PAGE_DIFF_LINE_MIX),
+            foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        PageStyle::AddedEdit => Style {
+            background: mix_rgb(theme.background, theme.ansi[ANSI_GREEN], PAGE_DIFF_EDIT_MIX),
+            bold: true,
+            foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
         PageStyle::Dim => Style {
@@ -1707,6 +1792,11 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
+        PageStyle::Hunk => Style {
+            background: mix_rgb(theme.background, theme.ansi[ANSI_BLUE], PAGE_HUNK_MIX),
+            foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
+            ..Style::default()
+        },
         PageStyle::Marked => Style {
             background: theme_rgb(theme.selection_bg),
             bold: true,
@@ -1714,6 +1804,51 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
             ..Style::default()
         },
         PageStyle::Normal => Style {
+            foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        PageStyle::Removed => Style {
+            background: mix_rgb(theme.background, theme.ansi[ANSI_RED], PAGE_DIFF_LINE_MIX),
+            foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        PageStyle::RemovedEdit => Style {
+            background: mix_rgb(theme.background, theme.ansi[ANSI_RED], PAGE_DIFF_EDIT_MIX),
+            bold: true,
+            foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        // The four ref styles are told apart by hue rather than by weight, the
+        // way a git log's own decoration colors are, with only the checked-out
+        // branch also carrying bold so the eye lands on it first.
+        PageStyle::RefHead => Style {
+            bold: true,
+            foreground: theme_rgb(theme.ansi[ANSI_CYAN]),
+            ..Style::default()
+        },
+        PageStyle::RefLocal => Style {
+            foreground: theme_rgb(theme.ansi[ANSI_GREEN]),
+            ..Style::default()
+        },
+        PageStyle::RefRemote => Style {
+            foreground: theme_rgb(theme.ansi[ANSI_RED]),
+            ..Style::default()
+        },
+        PageStyle::RefTag => Style {
+            foreground: theme_rgb(theme.ansi[ANSI_YELLOW]),
+            ..Style::default()
+        },
+        PageStyle::Section => Style {
+            background: mix_rgb(theme.background, theme.ansi[ANSI_CYAN], PAGE_SECTION_MIX),
+            foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        PageStyle::SectionFolded => Style {
+            background: mix_rgb(
+                theme.background,
+                theme.ansi[ANSI_CYAN],
+                PAGE_SECTION_FOLDED_MIX,
+            ),
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
@@ -2063,7 +2198,7 @@ mod tests {
             PageSpan::plain("Zoom Pane"),
             PageSpan::new(PageStyle::Accent, "Shift-Alt-="),
         ]]);
-        let grid = build_page_grid(&content, &Theme::dark(), 40, 4, IconStyle::None);
+        let grid = build_page_grid(&content, &Theme::dark(), 40, 4, IconStyle::None, false);
         let first = grid
             .to_text()
             .lines()
@@ -2089,7 +2224,7 @@ mod tests {
                 row: 0,
             }]);
         let painted = |style| {
-            build_page_grid(&content, &Theme::dark(), 20, 2, style)
+            build_page_grid(&content, &Theme::dark(), 20, 2, style, false)
                 .to_text()
                 .lines()
                 .next()
@@ -2114,12 +2249,140 @@ mod tests {
             20,
             3,
             IconStyle::None,
+            false,
         );
         let text = grid.to_text();
         assert!(text.contains("row2"), "the last visible row is painted");
         assert!(
             !text.contains("row3"),
             "rows past the pane height are dropped"
+        );
+    }
+
+    #[test]
+    fn test_a_row_wider_than_the_pane_wraps_onto_the_next_screen_row() {
+        let content = PageContent::new(vec![vec![PageSpan::plain("abcdefghij")]]);
+        let wrapped = build_page_grid(&content, &Theme::dark(), 5, 2, IconStyle::None, true);
+        let text = wrapped.to_text();
+        // Five cells a line: the row's text spills onto the screen row under
+        // it rather than being lost at the pane's edge.
+        assert!(text.contains("abcde"), "the first line, got {text:?}");
+        assert!(text.contains("fghij"), "the wrapped rest, got {text:?}");
+        let clipped = build_page_grid(&content, &Theme::dark(), 5, 2, IconStyle::None, false);
+        let text = clipped.to_text();
+        assert!(text.contains("abcde"), "the first line, got {text:?}");
+        assert!(!text.contains("fghij"), "the edge clips the rest");
+    }
+
+    #[test]
+    fn test_wrapping_pushes_the_rows_under_a_wrapped_one_down() {
+        // Two spans in one row: the second must follow the first onto its
+        // wrapped line, and a whole second row must land below the lines the
+        // first took, not on top of them.
+        let content = PageContent::new(vec![
+            vec![PageSpan::plain("aaa"), PageSpan::plain("bbb")],
+            vec![PageSpan::plain("zz")],
+        ]);
+        let grid = build_page_grid(&content, &Theme::dark(), 4, 3, IconStyle::None, true);
+        let text = grid.to_text();
+        assert!(text.contains("aaab"), "the spans share the wrapped line");
+        assert!(text.contains("bb"), "the row's wrapped tail");
+        let zz_line = text
+            .lines()
+            .position(|line| line.contains("zz"))
+            .expect("the second row");
+        let tail_line = text
+            .lines()
+            .position(|line| line.trim() == "bb")
+            .expect("the wrapped tail");
+        assert!(zz_line > tail_line, "the second row paints under the wrap");
+    }
+
+    #[test]
+    fn test_a_clipped_row_still_takes_its_own_screen_row() {
+        // With wrapping off, a row wider than the pane loses its tail — but it
+        // still occupies one screen row, and the row under it must paint on
+        // the next screen row rather than over the clipped one.
+        let content = PageContent::new(vec![
+            vec![PageSpan::plain("0123456789")],
+            vec![PageSpan::plain("next")],
+        ]);
+        let grid = build_page_grid(&content, &Theme::dark(), 5, 2, IconStyle::None, false);
+        let text = grid.to_text();
+        assert!(text.contains("01234"), "the clipped row keeps its start");
+        assert!(text.contains("next"), "the next row paints under it");
+    }
+
+    #[test]
+    fn test_a_wrapped_diff_line_continues_past_its_marker() {
+        // The continuation of a wrapped diff line starts past the marker's
+        // column, so the spilled text lines up under the text it follows, not
+        // under the marker — and the room it leaves keeps the line's own
+        // tint, so a wrapped line reads as one tinted line rather than one
+        // that loses its color at the fold.
+        let content = PageContent::new(vec![vec![
+            PageSpan::new(PageStyle::Removed, "    -"),
+            PageSpan::new(PageStyle::RemovedEdit, "old".repeat(4)),
+        ]])
+        .with_wrap_indents(vec![5]);
+        let theme = Theme::dark();
+        let grid = build_page_grid(&content, &theme, 10, 3, IconStyle::None, true);
+        let text = grid.to_text();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], "    -oldol", "the marker and the first cells");
+        assert_eq!(
+            lines[1], "     doldo",
+            "the continuation starts past the marker"
+        );
+        assert_eq!(lines[2], "     ld", "the last of the spilled text");
+        assert_eq!(
+            grid.cell(1, 0).map(|cell| cell.style),
+            Some(page_span_style(PageStyle::Removed, &theme)),
+            "the gutter keeps the line's tint"
+        );
+        assert_eq!(
+            grid.cell(1, 5).map(|cell| cell.style),
+            Some(page_span_style(PageStyle::RemovedEdit, &theme)),
+            "the spilled text keeps its own style"
+        );
+    }
+
+    #[test]
+    fn test_a_truncated_diff_line_keeps_its_row_under_the_next_line() {
+        // The shape the bug came from: a removed line long enough to be
+        // clipped, with the added line under it. Before the fix the added
+        // line painted over the removed one's screen row, so the decorator
+        // showed one line wearing the wrong side's tint.
+        let content = PageContent::new(vec![
+            vec![
+                PageSpan::new(PageStyle::Removed, "-"),
+                PageSpan::new(PageStyle::RemovedEdit, "old".repeat(10)),
+            ],
+            vec![
+                PageSpan::new(PageStyle::Added, "+"),
+                PageSpan::new(PageStyle::AddedEdit, "new"),
+            ],
+        ]);
+        let theme = Theme::dark();
+        let grid = build_page_grid(&content, &theme, 6, 2, IconStyle::None, false);
+        let text = grid.to_text();
+        assert!(
+            text.contains("-oldol"),
+            "the truncated removed line keeps its row, got {text:?}"
+        );
+        assert!(
+            text.contains("+new"),
+            "the added line paints on its own row, got {text:?}"
+        );
+        assert_eq!(
+            grid.cell(0, 0).map(|cell| cell.style),
+            Some(page_span_style(PageStyle::Removed, &theme)),
+            "the removed row's cells keep the removed tint"
+        );
+        assert_eq!(
+            grid.cell(1, 0).map(|cell| cell.style),
+            Some(page_span_style(PageStyle::Added, &theme)),
+            "the added row's cells carry the added tint"
         );
     }
 

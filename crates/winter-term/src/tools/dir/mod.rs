@@ -28,8 +28,9 @@ use std::time::SystemTime;
 use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    find_match, scroll_to_cursor, JobReply, JobRequest, OpenTarget, Page, PageContent, PageIcon,
-    PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
+    find_match, row_height, row_width, wrap_window, JobReply, JobRequest, OpenTarget, Page,
+    PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply,
+    PromptRequest,
 };
 use crate::model::vim::nav::{VimKey, VimNav};
 
@@ -853,7 +854,7 @@ impl Page for DirPage {
             .unwrap_or_else(|| self.root.to_string_lossy().to_string())
     }
 
-    fn content(&mut self, rows: usize) -> PageContent {
+    fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> PageContent {
         let now = SystemTime::now();
         // Remember the viewport for the half-page motions, which key handling
         // needs between paints.
@@ -877,10 +878,41 @@ impl Page for DirPage {
             page_rows.push(vec![PageSpan::new(PageStyle::Dim, EMPTY_NOTE)]);
             return PageContent::new(page_rows);
         }
-        let visible = rows.saturating_sub(HEADER_ROWS);
-        self.scroll = scroll_to_cursor(self.scroll, self.cursor, self.rows.len(), visible);
+        // An entry's spans, built on demand: the wrapping window walks only
+        // the rows it may paint, so a listing longer than the pane is not
+        // built in full to measure it.
+        let entry_spans = |index: usize| {
+            let row = &self.rows[index];
+            let edited = self.edited_name(index, row);
+            rows::entry_row(
+                row,
+                edited.as_ref(),
+                rows::RowStyle {
+                    marked: self.marks.contains(&row.entry.path),
+                    show_details: self.show_details,
+                    show_sizes: self.show_sizes,
+                    size: self.dir_size(row),
+                },
+                now,
+            )
+            .0
+        };
+        let window = wrap_window(
+            self.scroll,
+            self.cursor,
+            self.rows.len(),
+            rows.saturating_sub(HEADER_ROWS),
+            |index| row_height(row_width(&entry_spans(index)), cols, wrap, 0),
+        );
+        self.scroll = window.start;
         let mut icons: Vec<PageIcon> = Vec::new();
-        for (index, row) in self.rows.iter().enumerate().skip(self.scroll).take(visible) {
+        for (index, row) in self
+            .rows
+            .iter()
+            .enumerate()
+            .skip(window.start)
+            .take(window.count)
+        {
             let edited = self.edited_name(index, row);
             let (spans, mut icon) = rows::entry_row(
                 row,
@@ -899,7 +931,7 @@ impl Page for DirPage {
         }
         PageContent::new(page_rows)
             .with_icons(icons)
-            .with_cursor_line(HEADER_ROWS + self.cursor - self.scroll)
+            .with_cursor_line(HEADER_ROWS + window.cursor)
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
@@ -1934,13 +1966,13 @@ mod tests {
         let mut page = DirPage::new(tree.0.clone());
         let pane_rows = 6;
 
-        let visible = page.content(pane_rows).rows.len();
+        let visible = page.content(pane_rows, 80, false).rows.len();
         assert_eq!(visible, pane_rows, "the pane is filled, not overrun");
 
         for _ in 0..19 {
             page.on_key(&press(KeyCode::Char('j')));
         }
-        let content = page.content(pane_rows);
+        let content = page.content(pane_rows, 80, false);
         assert_eq!(
             content.cursor_line,
             Some(pane_rows - 1),
@@ -1950,7 +1982,7 @@ mod tests {
 
         page.on_key(&press(KeyCode::Home));
         assert_eq!(
-            page.content(pane_rows).cursor_line,
+            page.content(pane_rows, 80, false).cursor_line,
             Some(HEADER_ROWS),
             "and returns to the top when the cursor does"
         );
@@ -1962,7 +1994,7 @@ mod tests {
         // would highlight the header.
         let tree = TempTree::new("empty");
         let mut page = DirPage::new(tree.0.clone());
-        assert_eq!(page.content(20).cursor_line, None);
+        assert_eq!(page.content(20, 80, false).cursor_line, None);
     }
 
     #[test]
@@ -2197,7 +2229,7 @@ mod tests {
         toggle_edit(&mut page);
         page.on_key(&press(KeyCode::Char('0')));
 
-        let content = page.content(10);
+        let content = page.content(10, 80, false);
         let cursor = content.cursor_line.expect("a cursor row");
         let line = crate::model::page::row_text(&content.rows[cursor]);
         assert!(line.contains('│'), "got {line:?}");
@@ -2293,11 +2325,11 @@ mod tests {
         tree.touch("name.txt");
         let mut page = DirPage::new(tree.0.clone());
         toggle_edit(&mut page);
-        let header = crate::model::page::row_text(&page.content(10).rows[0]);
+        let header = crate::model::page::row_text(&page.content(10, 80, false).rows[0]);
         assert!(header.contains("editing:normal"), "got {header:?}");
 
         page.on_key(&press(KeyCode::Char('A')));
-        let header = crate::model::page::row_text(&page.content(10).rows[0]);
+        let header = crate::model::page::row_text(&page.content(10, 80, false).rows[0]);
         assert!(header.contains("editing:insert"), "got {header:?}");
     }
 
@@ -2425,7 +2457,7 @@ mod tests {
         page.on_key(&press(KeyCode::Home));
 
         // The pane holds 10 rows, one of them the header: half of nine is four.
-        page.content(10);
+        page.content(10, 80, false);
         page.on_key(&ctrl(KeyCode::Char('d')));
         assert_eq!(page.cursor, 4, "half a viewport down");
         page.on_key(&ctrl(KeyCode::Char('u')));

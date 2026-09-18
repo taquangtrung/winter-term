@@ -602,6 +602,9 @@ pub struct App {
     /// Panes a tool page is currently covering. The pane keeps its terminal,
     /// which goes on running underneath and comes back when the page closes.
     pub(crate) pages: HashMap<PaneId, page::PageSlot>,
+    /// Whether tool pages wrap rows wider than their pane onto the next
+    /// screen row, toggled by `Alt+Z` in every tool at once.
+    pub(crate) page_wrap: bool,
     /// Slow work pages have asked for, and the answers coming back.
     pub(crate) jobs: jobs::Jobs,
     /// The question a page is waiting on an answer to, if any.

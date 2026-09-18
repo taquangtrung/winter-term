@@ -222,6 +222,13 @@ impl App {
     /// Offer `key` to the page covering `pane_id`. Returns whether the key was
     /// spent, so a key the page declines still reaches the ordinary keymap.
     pub(crate) fn offer_key_to_page(&mut self, pane_id: PaneId, key: &Key) -> bool {
+        // Wrap belongs to the pane, not the tool: every page gets the toggle,
+        // ahead of its own keys, so no tool has to claim it itself.
+        if key.alt && !key.ctrl && matches!(key.code, KeyCode::Char('z') | KeyCode::Char('Z')) {
+            self.page_wrap = !self.page_wrap;
+            self.dirty = true;
+            return true;
+        }
         let Some(slot) = self.pages.get_mut(&pane_id) else {
             return false;
         };
@@ -371,7 +378,7 @@ mod tests {
             "Counting".to_string()
         }
 
-        fn content(&mut self, _rows: usize) -> PageContent {
+        fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> PageContent {
             PageContent::new(vec![vec![PageSpan::plain("counting")]])
         }
 
@@ -483,6 +490,20 @@ mod tests {
         assert!(!app.offer_key_to_page(other, &press(KeyCode::Char('x'))));
     }
 
+    #[test]
+    fn test_alt_z_toggles_wrapping_without_reaching_the_page() {
+        // Wrapping belongs to the pane rather than any one tool, so the host
+        // spends the toggle itself: the key is claimed rather than declined,
+        // which would otherwise hand it to the ordinary keymap.
+        let (mut app, pane) = app_with_open_page();
+        let mut key = press(KeyCode::Char('z'));
+        key.alt = true;
+        assert!(app.offer_key_to_page(pane, &key), "the toggle is spent");
+        assert!(app.page_wrap);
+        assert!(app.offer_key_to_page(pane, &key));
+        assert!(!app.page_wrap);
+    }
+
     /// A page that asks one question, sharing the answer it hears with the
     /// test that opened it.
     struct AskingPage {
@@ -494,7 +515,7 @@ mod tests {
             "Asking".to_string()
         }
 
-        fn content(&mut self, _rows: usize) -> PageContent {
+        fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> PageContent {
             PageContent::new(vec![vec![PageSpan::plain("asking")]])
         }
 

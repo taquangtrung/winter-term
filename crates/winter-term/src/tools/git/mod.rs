@@ -5,12 +5,16 @@
 //! - [`parse`]: reading git's own output.
 //! - [`popup`]: the transient menus a key opens.
 //! - [`rows`]: painting the view, and what each row stands for.
+//! - [`words`]: the word-level diff that decorates a hunk's changed lines.
 
+pub mod commit;
 pub mod diff;
 pub mod exec;
 pub mod parse;
 pub mod popup;
+pub mod reltime;
 pub mod rows;
+pub mod words;
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -18,12 +22,13 @@ use std::path::PathBuf;
 use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    find_match, row_text, scroll_to_cursor, CommandOutput, JobReply, JobRequest, OpenTarget, Page,
-    PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PromptMode, PromptReply,
-    PromptRequest, SpawnRequest,
+    find_match, row_height, row_text, row_width, wrap_window, CommandOutput, JobReply, JobRequest,
+    OpenTarget, Page, PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PromptMode,
+    PromptReply, PromptRequest, SpawnRequest,
 };
 use crate::model::vim::nav::{VimKey, VimNav};
 
+use commit::CommitContent;
 use diff::FileDiff;
 use exec::{LogScope, ResetMode, SequenceStep};
 use parse::{Commit, Section, Status};
@@ -84,17 +89,34 @@ const HEADER_ROWS: usize = 1;
 // Data Structures
 // ========================================================================
 
-/// Output filling the view in place of the status: what it is, and its lines.
+/// Output filling the view in place of the status: what it is, its lines,
+/// and, for a view that paints its own, the rows it paints.
 #[derive(Clone, Debug)]
 pub struct Output {
     /// What produced it, for the title.
     title: String,
-    /// The lines, as they came back.
+    /// The text a search reads over the view: the lines as they came back,
+    /// or one entry per painted row for the views that paint their own.
     lines: Vec<String>,
+    /// The painted rows, one per line, for output that paints itself; empty for
+    /// everything else, which paints straight from its lines.
+    ///
+    /// A [`ViewRow`] rather than bare spans because a painted view may also
+    /// carry an icon per row and an [`Item`] saying what the row stands for,
+    /// which is what lets the commit view fold at the cursor.
+    rows: Vec<ViewRow>,
     /// Cursor over the lines.
     cursor: usize,
     /// Whether more can be asked for, which only the log offers.
     more: bool,
+    /// The commit being shown, kept so folding a file or a hunk can redraw at a
+    /// different depth without re-running `git show`. `None` for every other
+    /// kind of output.
+    commit: Option<CommitContent>,
+    /// Files of `commit` showing no diff.
+    folded_files: HashSet<usize>,
+    /// `(file, hunk)` pairs of `commit` showing only their header.
+    folded_hunks: HashSet<(usize, usize)>,
 }
 
 /// The working tree's state, and the cursor over it.
@@ -194,6 +216,8 @@ impl GitPage {
         self.rows = rows::build(
             &self.status,
             &self.commits,
+            self.root.as_deref(),
+            now_unix(),
             &|section| collapsed.contains(&section),
             self.message.as_deref(),
             &|file| {
@@ -217,9 +241,14 @@ impl GitPage {
             Some(Item::File(file)) => vec![file.path.clone()],
             Some(Item::Hunk(hunk)) => vec![hunk.path.clone()],
             Some(Item::Heading(section)) => self.paths_in(*section),
-            Some(Item::Commit(_)) | Some(Item::RecentHeading) | Some(Item::None) | None => {
-                Vec::new()
-            }
+            // The commit-view items only ever appear in an output view, which
+            // has its own key handling and never asks for working-tree targets.
+            Some(Item::Commit(_))
+            | Some(Item::CommitFile(_))
+            | Some(Item::CommitHunk(_, _))
+            | Some(Item::RecentHeading)
+            | Some(Item::None)
+            | None => Vec::new(),
         }
     }
 
@@ -393,7 +422,11 @@ impl GitPage {
                 self.rebuild();
                 PageOutcome::Consumed
             }
-            Some(Item::None) | None => PageOutcome::Consumed,
+            // A commit view folds through its own handler, over its own fold
+            // sets, so these cannot be reached from the status view's rows.
+            Some(Item::CommitFile(_)) | Some(Item::CommitHunk(_, _)) | Some(Item::None) | None => {
+                PageOutcome::Consumed
+            }
         }
     }
 
@@ -710,6 +743,31 @@ impl GitPage {
                     PageOutcome::Yank(value)
                 }
             }
+            // Fold or unfold what the cursor is on. A file row shuts its whole
+            // diff away; a hunk row shuts the hunk's body but keeps the header,
+            // so the file still says what it contains.
+            KeyCode::Tab => {
+                match output.rows.get(output.cursor).map(|row| row.item.clone()) {
+                    Some(Item::CommitFile(file)) => {
+                        if !output.folded_files.remove(&file) {
+                            output.folded_files.insert(file);
+                        }
+                    }
+                    Some(Item::CommitHunk(file, hunk)) => {
+                        if !output.folded_hunks.remove(&(file, hunk)) {
+                            output.folded_hunks.insert((file, hunk));
+                        }
+                    }
+                    // Nothing foldable under the cursor.
+                    _ => return PageOutcome::Consumed,
+                }
+                // Keep the cursor on the row it was on: folding a file leaves
+                // its band in place, so the reader does not lose their spot.
+                let at = output.cursor;
+                repaint_commit(output);
+                output.cursor = at.min(output.rows.len().saturating_sub(1));
+                PageOutcome::Consumed
+            }
             KeyCode::Char('q') | KeyCode::Escape => {
                 self.output = None;
                 PageOutcome::Consumed
@@ -718,14 +776,52 @@ impl GitPage {
         }
     }
 
-    /// Show `text` in place of the status view.
+    /// Show `text` in place of the status view, as it came back.
     fn show_output(&mut self, title: &str, text: &str, more: bool) {
         self.output = Some(Output {
             cursor: 0,
             lines: text.lines().map(str::to_string).collect(),
             more,
+            rows: Vec::new(),
             title: title.to_string(),
+            commit: None,
+            folded_files: HashSet::new(),
+            folded_hunks: HashSet::new(),
         });
+    }
+
+    /// Show painted rows in place of the status view, with the text a search
+    /// reads over them — one entry per row, since a painted view may show
+    /// more rows than the text it came from had, or fewer.
+    fn show_painted(&mut self, title: &str, rows: Vec<ViewRow>) {
+        let lines: Vec<String> = rows.iter().map(|row| row_text(&row.spans)).collect();
+        self.output = Some(Output {
+            cursor: 0,
+            lines,
+            more: false,
+            rows,
+            title: title.to_string(),
+            commit: None,
+            folded_files: HashSet::new(),
+            folded_hunks: HashSet::new(),
+        });
+    }
+
+    /// Show one commit, kept as content rather than as lines so its files and
+    /// hunks can be folded and unfolded in place.
+    fn show_commit(&mut self, title: &str, content: CommitContent) {
+        let mut output = Output {
+            cursor: 0,
+            lines: Vec::new(),
+            more: false,
+            rows: Vec::new(),
+            title: title.to_string(),
+            commit: Some(content),
+            folded_files: HashSet::new(),
+            folded_hunks: HashSet::new(),
+        };
+        repaint_commit(&mut output);
+        self.output = Some(output);
     }
 
     /// Act on a choice from the open menu. An unknown key closes the menu
@@ -970,7 +1066,7 @@ impl GitPage {
                 self.request_stale_diff()
             }
             exec::TAG_LOG => {
-                self.commits = parse::parse_log(&output.stdout);
+                self.commits = parse::parse_decorated_log(&output.stdout);
                 self.rebuild();
                 PageOutcome::Consumed
             }
@@ -989,16 +1085,45 @@ impl GitPage {
                 }
                 PageOutcome::Consumed
             }
-            exec::TAG_LOG_VIEW => {
-                self.show_output("Log", &output.stdout, true);
+            // A whole diff fills the view decorated, line for line.
+            exec::TAG_DIFF_VIEW => {
+                if output.stdout.trim().is_empty() {
+                    self.message = Some("nothing to show".to_string());
+                    self.rebuild();
+                } else {
+                    let lines: Vec<String> = output.stdout.lines().map(str::to_string).collect();
+                    self.show_painted("Diff", rows::diff_view_rows(&lines));
+                }
                 PageOutcome::Consumed
             }
+            // The log view lists commits the way the status tail does, rather
+            // than as the raw lines git wrote, so both read the same.
+            exec::TAG_LOG_VIEW => {
+                let commits = parse::parse_decorated_log(&output.stdout);
+                if commits.is_empty() {
+                    self.message = Some("nothing to show".to_string());
+                    self.rebuild();
+                } else {
+                    let painted = rows::log_rows(&commits, self.root.as_deref(), now_unix(), true);
+                    self.show_painted("Log", painted);
+                    // The load-more key only means anything while a log shows.
+                    if let Some(output) = &mut self.output {
+                        output.more = true;
+                    }
+                }
+                PageOutcome::Consumed
+            }
+            // A commit fills the view as its content: the summary it was shown
+            // with, then its files banded and their hunks decorated, the way
+            // the working tree reads.
             exec::TAG_SHOW => {
                 if output.stdout.trim().is_empty() {
                     self.message = Some("nothing to show".to_string());
                     self.rebuild();
                 } else {
-                    self.show_output(&commit_title(&output.stdout), &output.stdout, false);
+                    let lines: Vec<String> = output.stdout.lines().map(str::to_string).collect();
+                    let title = commit_title(&output.stdout);
+                    self.show_commit(&title, CommitContent::parse(&lines));
                 }
                 PageOutcome::Consumed
             }
@@ -1027,14 +1152,30 @@ impl Page for GitPage {
         "Git".to_string()
     }
 
-    fn content(&mut self, rows: usize) -> PageContent {
+    fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> PageContent {
         // Remember the viewport for the paging motions, which key handling
         // needs between paints.
         self.viewport = rows.saturating_sub(HEADER_ROWS).max(1);
         if let Some(output) = &self.output {
             let visible = rows.saturating_sub(HEADER_ROWS).max(1);
-            let scroll = scroll_to_cursor(self.scroll, output.cursor, output.lines.len(), visible);
-            self.scroll = scroll;
+            let widths: Vec<usize> = output
+                .lines
+                .iter()
+                .map(|line| line.chars().count())
+                .collect();
+            let window = wrap_window(self.scroll, output.cursor, widths.len(), visible, |index| {
+                row_height(
+                    widths[index],
+                    cols,
+                    wrap,
+                    output
+                        .rows
+                        .get(index)
+                        .map(|row| row.wrap_indent)
+                        .unwrap_or(0),
+                )
+            });
+            self.scroll = window.start;
             let mut header = vec![
                 PageSpan::new(PageStyle::Header, output.title.clone()),
                 PageSpan::new(PageStyle::Dim, "  q to go back".to_string()),
@@ -1045,16 +1186,37 @@ impl Page for GitPage {
                 header.push(PageSpan::new(PageStyle::Dim, format!("  {message}")));
             }
             let mut painted = vec![header];
-            painted.extend(
-                output
-                    .lines
-                    .iter()
-                    .skip(scroll)
-                    .take(visible)
-                    .map(|line| vec![PageSpan::plain(line.clone())]),
-            );
+            let mut wrap_indents = vec![0];
+            let mut icons: Vec<PageIcon> = Vec::new();
+            for (index, line) in output
+                .lines
+                .iter()
+                .enumerate()
+                .skip(window.start)
+                .take(window.count)
+            {
+                match output.rows.get(index) {
+                    Some(row) => {
+                        if let Some(icon) = &row.icon {
+                            icons.push(PageIcon {
+                                row: painted.len(),
+                                ..icon.clone()
+                            });
+                        }
+                        painted.push(row.spans.clone());
+                        wrap_indents.push(row.wrap_indent);
+                    }
+                    // Output that never painted itself shows as plain text.
+                    None => {
+                        painted.push(vec![PageSpan::plain(line.clone())]);
+                        wrap_indents.push(0);
+                    }
+                }
+            }
             return PageContent::new(painted)
-                .with_cursor_line(HEADER_ROWS + output.cursor - scroll);
+                .with_icons(icons)
+                .with_cursor_line(HEADER_ROWS + window.cursor)
+                .with_wrap_indents(wrap_indents);
         }
         if self.rows.is_empty() {
             // A loaded view with no rows means git answered and had nothing
@@ -1063,11 +1225,25 @@ impl Page for GitPage {
             let note = if self.loaded { NOT_A_REPO } else { LOADING };
             return PageContent::new(vec![vec![PageSpan::new(PageStyle::Dim, note)]]);
         }
-        let visible = rows.saturating_sub(HEADER_ROWS);
-        self.scroll = scroll_to_cursor(self.scroll, self.cursor, self.rows.len(), visible);
+        let widths: Vec<usize> = self.rows.iter().map(|row| row_width(&row.spans)).collect();
+        let indents: Vec<usize> = self.rows.iter().map(|row| row.wrap_indent).collect();
+        let window = wrap_window(
+            self.scroll,
+            self.cursor,
+            widths.len(),
+            rows.saturating_sub(HEADER_ROWS),
+            |index| row_height(widths[index], cols, wrap, indents[index]),
+        );
+        self.scroll = window.start;
         let mut painted: Vec<Vec<PageSpan>> = Vec::new();
+        let mut wrap_indents: Vec<usize> = Vec::new();
         let mut icons: Vec<PageIcon> = Vec::new();
-        for row in self.rows.iter().skip(self.scroll).take(visible.max(1)) {
+        for row in self
+            .rows
+            .iter()
+            .skip(window.start)
+            .take(window.count.max(1))
+        {
             if let Some(icon) = &row.icon {
                 icons.push(PageIcon {
                     row: painted.len(),
@@ -1075,13 +1251,17 @@ impl Page for GitPage {
                 });
             }
             painted.push(row.spans.clone());
+            wrap_indents.push(row.wrap_indent);
         }
         if let Some(popup) = self.popup {
-            painted.extend(popup.rows());
+            let popup_rows = popup.rows();
+            wrap_indents.extend(std::iter::repeat_n(0, popup_rows.len()));
+            painted.extend(popup_rows);
         }
         PageContent::new(painted)
             .with_icons(icons)
-            .with_cursor_line(self.cursor - self.scroll)
+            .with_cursor_line(window.cursor)
+            .with_wrap_indents(wrap_indents)
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
@@ -1281,6 +1461,35 @@ impl Page for GitPage {
 // Helpers
 // ========================================================================
 
+/// Redraw a commit output's rows at its current fold depth, keeping the search
+/// text in step with them.
+///
+/// Called after every fold change rather than the rows being edited in place:
+/// folding a file removes a variable number of rows, and rebuilding from the
+/// content is the only way the row list, the search text, and the fold sets
+/// cannot drift apart.
+fn repaint_commit(output: &mut Output) {
+    let Some(content) = &output.commit else {
+        return;
+    };
+    output.rows = rows::commit_view_rows(content, &output.folded_files, &output.folded_hunks);
+    output.lines = output.rows.iter().map(|row| row_text(&row.spans)).collect();
+    output.cursor = output.cursor.min(output.rows.len().saturating_sub(1));
+}
+
+/// The current time, in seconds since the Unix epoch, for the commit rows to
+/// measure a commit's age against.
+///
+/// A clock read before the system clock was set — which cannot be represented as
+/// "seconds since the epoch" — reads as `0`, and every commit then shows no
+/// meaningful age rather than the view failing to draw.
+fn now_unix() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// Name the view showing one commit, from the `git show` output itself.
 ///
 /// The abbreviated hash and the subject, which is what identifies a commit to a
@@ -1435,11 +1644,26 @@ mod tests {
         }
     }
 
+    /// One line of the decorated log format the view asks git for, so a test
+    /// feeds the shape [`parse::parse_decorated_log`] actually reads.
+    fn log_output(commits: &[(&str, &str)]) -> String {
+        let sep = parse::FIELD_SEP;
+        commits
+            .iter()
+            .map(|(hash, subject)| {
+                format!("{hash}{sep}{sep}Someone{sep}1700000000{sep}{subject}\n")
+            })
+            .collect()
+    }
+
     fn loaded_page() -> GitPage {
         let mut page = GitPage::new(PathBuf::from("/repo/sub"));
         page.on_job(reply(exec::TAG_ROOT, "/repo\n"));
         page.on_job(reply(exec::TAG_STATUS, STATUS_OUTPUT));
-        page.on_job(reply(exec::TAG_LOG, "abc1234 do the thing\n"));
+        page.on_job(reply(
+            exec::TAG_LOG,
+            &log_output(&[("abc1234", "do the thing")]),
+        ));
         page
     }
 
@@ -1689,6 +1913,106 @@ index aaa..bbb 100644
     }
 
     #[test]
+    fn test_an_expanded_files_diff_decorates_the_edited_words() {
+        // The whole point of the word diff: a replaced line paints its edit in
+        // the line's style and the words the edit left alone recede.
+        let page = page_with_diff();
+        let added = page
+            .rows
+            .iter()
+            .find(|row| row_text(&row.spans).contains("new();"))
+            .expect("the added line");
+        assert!(
+            added
+                .spans
+                .iter()
+                .any(|span| span.style == PageStyle::AddedEdit),
+            "got {:?}",
+            added.spans
+        );
+        assert!(
+            added
+                .spans
+                .iter()
+                .any(|span| span.style == PageStyle::Added),
+            "got {:?}",
+            added.spans
+        );
+    }
+
+    #[test]
+    fn test_wrapping_puts_the_cursor_on_its_wrapped_screen_row() {
+        // A changed line wider than the pane takes several screen rows, so the
+        // band must follow the wrapped offset of the cursor's row, not its
+        // row number, or it lights up the wrong line.
+        let long = "x".repeat(45);
+        let text = format!(
+            "diff --git a/working.rs b/working.rs\n--- a/working.rs\n+++ b/working.rs\n@@ -1 +1 @@\n-{long}\n+{long}y\n"
+        );
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        page.on_key(&press(KeyCode::Tab));
+        page.on_job(reply(exec::TAG_DIFF, &text));
+        let added = page
+            .rows
+            .iter()
+            .position(|row| row_text(&row.spans).contains(&format!("{long}y")))
+            .expect("the added line");
+        page.cursor = added;
+        // Stated relative to the cursor's row index: the status header is a
+        // labelled block whose height can change, and an absolute screen row
+        // here would be measuring the header rather than the wrapping.
+        let flat = page.content(20, 80, false);
+        assert_eq!(
+            flat.cursor_line,
+            Some(added),
+            "unwrapped, every row is one screen row, so the band sits on its own index"
+        );
+        let wrapped = page.content(20, 32, true);
+        assert_eq!(
+            wrapped.cursor_line,
+            Some(added + 1),
+            "the removed line's wrapped rows push the band down"
+        );
+        assert!(
+            wrapped.wrap_indents.contains(&5),
+            "the hunk's lines carry their marker column, got {:?}",
+            wrapped.wrap_indents
+        );
+    }
+
+    #[test]
+    fn test_the_diff_popup_fills_the_view_with_a_decorated_diff() {
+        let mut page = loaded_page();
+        page.on_key(&press(KeyCode::Char('d')));
+        let outcome = page.on_key(&press(KeyCode::Char('d')));
+        assert_eq!(command_of(&outcome).args[0], "diff");
+        page.on_job(reply(exec::TAG_DIFF_VIEW, DIFF_OUTPUT));
+        let output = page.output.as_ref().expect("the diff view");
+        assert_eq!(output.title, "Diff");
+        assert_eq!(output.rows.len(), output.lines.len());
+        let added = output
+            .rows
+            .iter()
+            .find(|row| row_text(&row.spans).contains("new();"))
+            .expect("the added line");
+        assert!(
+            added
+                .spans
+                .iter()
+                .any(|span| span.style == PageStyle::AddedEdit),
+            "got {added:?}"
+        );
+        assert!(
+            added
+                .spans
+                .iter()
+                .any(|span| span.style == PageStyle::Added),
+            "got {added:?}"
+        );
+    }
+
+    #[test]
     fn test_staging_on_a_hunk_applies_that_hunk_alone() {
         // The whole point of hunk staging: the second hunk must not be in the
         // patch, and the patch goes in on standard input.
@@ -1840,7 +2164,7 @@ index aaa..bbb 100644
         let mut page = loaded_page();
         page.on_key(&press_char('z'));
         assert_eq!(page.popup, Some(Popup::Stash));
-        let painted = page.content(80);
+        let painted = page.content(80, 80, false);
         let text: Vec<String> = painted
             .rows
             .iter()
@@ -1999,8 +2323,8 @@ index aaa..bbb 100644
         assert_eq!(command.args.first().map(String::as_str), Some("show"));
         assert_eq!(command.args.last().map(String::as_str), Some("abc1234"));
         assert!(
-            command.args.iter().any(|arg| arg == "--stat"),
-            "the summary comes before the patch: {:?}",
+            command.args.iter().any(|arg| arg == "--shortstat"),
+            "the summary and its totals come before the patch: {:?}",
             command.args
         );
     }
@@ -2031,6 +2355,204 @@ index aaa..bbb 100644
             .expect("the commit replaced the status view");
         assert_eq!(output.title, "Commit abc12345  do the thing");
         assert!(output.lines.iter().any(|line| line.contains("src/a.rs")));
+    }
+
+    #[test]
+    fn test_a_commit_content_view_bands_its_files() {
+        // Enter on a commit shows its content the way the working tree reads:
+        // the summary receded, then a band per file and decorated hunks
+        // under it — no `diff --git` or `index` lines.
+        let shown = [
+            "commit abc1234567890",
+            "Author: Someone <a@b.c>",
+            "Date:   2026-09-15 12:00:00 +0000",
+            "",
+            "    do the thing",
+            "",
+            " 1 file changed, 2 insertions(+), 1 deletion(-)",
+            "diff --git a/src/a.rs b/src/a.rs",
+            "index 111..222 100644",
+            "--- a/src/a.rs",
+            "+++ b/src/a.rs",
+            "@@ -1,2 +1,2 @@",
+            " fn main() {",
+            "-    old();",
+            "+    new();",
+        ]
+        .join("\n");
+        let mut page = loaded_page();
+        assert_eq!(
+            page.on_job(reply(exec::TAG_SHOW, &shown)),
+            PageOutcome::Consumed
+        );
+        let output = page
+            .output
+            .as_ref()
+            .expect("the commit replaced the status view");
+        assert_eq!(
+            output.rows[0].spans,
+            vec![PageSpan::new(PageStyle::Header, "commit abc1234567890")]
+        );
+        let band = output
+            .rows
+            .iter()
+            .find(|row| row_text(&row.spans).contains("src/a.rs"))
+            .expect("the file band");
+        assert!(
+            band.spans
+                .iter()
+                .any(|span| span.style == PageStyle::Section),
+            "got {band:?}"
+        );
+        assert!(
+            output
+                .rows
+                .iter()
+                .all(|row| !row_text(&row.spans).contains("diff --git")),
+            "the patch's plumbing lines are gone"
+        );
+        let added = output
+            .rows
+            .iter()
+            .find(|row| row_text(&row.spans).contains("new();"))
+            .expect("the added line");
+        assert!(added
+            .spans
+            .iter()
+            .any(|span| span.style == PageStyle::AddedEdit));
+        assert_eq!(
+            output.lines.len(),
+            output.rows.len(),
+            "the search text matches the painted rows"
+        );
+    }
+
+    /// A `git show` of one file with two hunks, for the fold tests.
+    const SHOWN_TWO_HUNKS: &str = "commit abc1234567890\n\n    do the thing\ndiff --git a/src/a.rs b/src/a.rs\n--- a/src/a.rs\n+++ b/src/a.rs\n@@ -1,2 +1,2 @@\n-    old();\n+    new();\n@@ -9,2 +9,2 @@\n-    second();\n+    third();\n";
+
+    /// Put the cursor on the first row whose text contains `needle`.
+    fn output_cursor_on(page: &mut GitPage, needle: &str) {
+        let output = page.output.as_mut().expect("an output view");
+        output.cursor = output
+            .lines
+            .iter()
+            .position(|line| line.contains(needle))
+            .unwrap_or_else(|| panic!("no output row for {needle}"));
+    }
+
+    fn output_has(page: &GitPage, needle: &str) -> bool {
+        page.output
+            .as_ref()
+            .is_some_and(|output| output.lines.iter().any(|line| line.contains(needle)))
+    }
+
+    #[test]
+    fn test_tab_on_a_commits_file_folds_its_diff_away_and_back() {
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+        assert!(output_has(&page, "new();"), "the diff shows to begin with");
+
+        output_cursor_on(&mut page, "src/a.rs");
+        let at = page.output.as_ref().unwrap().cursor;
+        assert_eq!(page.on_key(&press(KeyCode::Tab)), PageOutcome::Consumed);
+
+        assert!(
+            !output_has(&page, "new();"),
+            "folding the file hides its diff"
+        );
+        assert!(
+            output_has(&page, "src/a.rs"),
+            "its band stays, so it can be opened again"
+        );
+        assert_eq!(
+            page.output.as_ref().unwrap().cursor,
+            at,
+            "the cursor stays on the band it acted on"
+        );
+
+        page.on_key(&press(KeyCode::Tab));
+        assert!(output_has(&page, "new();"), "a second Tab opens it again");
+    }
+
+    #[test]
+    fn test_tab_on_a_commits_hunk_folds_only_that_hunk() {
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+
+        output_cursor_on(&mut page, "@@ -1,2 +1,2 @@");
+        page.on_key(&press(KeyCode::Tab));
+
+        assert!(
+            output_has(&page, "@@ -1,2 +1,2 @@"),
+            "a folded hunk keeps its header"
+        );
+        assert!(!output_has(&page, "new();"), "but drops its body");
+        assert!(output_has(&page, "third();"), "the other hunk is untouched");
+    }
+
+    #[test]
+    fn test_tab_on_a_commits_summary_does_nothing() {
+        // The summary has nothing to fold, so Tab must not disturb the view.
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+        output_cursor_on(&mut page, "do the thing");
+        let before = page.output.as_ref().unwrap().lines.clone();
+
+        assert_eq!(page.on_key(&press(KeyCode::Tab)), PageOutcome::Consumed);
+        assert_eq!(
+            page.output.as_ref().unwrap().lines,
+            before,
+            "the view is unchanged"
+        );
+    }
+
+    #[test]
+    fn test_a_commits_file_band_carries_an_icon() {
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+        let output = page.output.as_ref().expect("the commit view");
+        let band = output
+            .rows
+            .iter()
+            .find(|row| row_text(&row.spans).contains("src/a.rs"))
+            .expect("the file band");
+        assert_eq!(
+            band.icon.as_ref().map(|icon| &icon.kind),
+            Some(&crate::model::page::PageIconKind::File {
+                name: "a.rs".to_string()
+            }),
+            "the band names its icon for the file's leaf"
+        );
+        assert!(
+            output.rows.iter().filter(|row| row.icon.is_some()).count() == 1,
+            "only the file band carries one; hunk lines do not"
+        );
+    }
+
+    #[test]
+    fn test_folding_reaches_the_painted_content_the_pane_draws() {
+        // The fold has to change what `content` returns, not just the row list,
+        // or the pane keeps drawing the unfolded view.
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+        let drawn = |page: &mut GitPage| -> String {
+            page.content(40, 100, false)
+                .rows
+                .iter()
+                .map(row_text)
+                .collect::<Vec<String>>()
+                .join("\n")
+        };
+        assert!(drawn(&mut page).contains("new();"));
+
+        output_cursor_on(&mut page, "src/a.rs");
+        page.on_key(&press(KeyCode::Tab));
+        let after = drawn(&mut page);
+        assert!(
+            !after.contains("new();"),
+            "the pane draws the folded view, got {after:?}"
+        );
+        assert!(after.contains("src/a.rs"), "the band is still drawn");
     }
 
     #[test]
@@ -2120,7 +2642,10 @@ index aaa..bbb 100644
     fn test_a_log_fills_the_view_and_can_ask_for_more() {
         let mut page = loaded_page();
         choose(&mut page, 'l', 'l');
-        let outcome = page.on_job(reply(exec::TAG_LOG_VIEW, "aaa one\nbbb two\n"));
+        let outcome = page.on_job(reply(
+            exec::TAG_LOG_VIEW,
+            &log_output(&[("aaa", "one"), ("bbb", "two")]),
+        ));
         assert_eq!(outcome, PageOutcome::Consumed);
         assert!(page.output.is_some(), "the log replaced the status view");
 
@@ -2136,7 +2661,7 @@ index aaa..bbb 100644
         // came from.
         let mut page = loaded_page();
         choose(&mut page, 'l', 'l');
-        page.on_job(reply(exec::TAG_LOG_VIEW, "aaa one\n"));
+        page.on_job(reply(exec::TAG_LOG_VIEW, &log_output(&[("aaa", "one")])));
         let outcome = page.on_key(&press_char('q'));
         assert_eq!(outcome, PageOutcome::Consumed);
         assert!(page.output.is_none());
@@ -2229,7 +2754,7 @@ index aaa..bbb 100644
 
         page.on_key(&press(KeyCode::Char('0')));
         assert_eq!(page.cursor, 0);
-        page.content(10);
+        page.content(10, 80, false);
         page.on_key(&ctrl(KeyCode::Char('d')));
         assert_eq!(page.cursor, 4, "half the viewport down");
         page.on_key(&ctrl(KeyCode::Char('u')));
@@ -2359,11 +2884,22 @@ index aaa..bbb 100644
         // cursor nobody can see and leave the visible one where it was.
         let mut page = loaded_page();
         choose(&mut page, 'l', 'l');
-        page.on_job(reply(exec::TAG_LOG_VIEW, "aaa one\nbbb two\nccc three\n"));
+        page.on_job(reply(
+            exec::TAG_LOG_VIEW,
+            &log_output(&[("aaa", "one"), ("bbb", "two"), ("ccc", "three")]),
+        ));
         let before = page.cursor;
 
         search(&mut page, "ccc");
-        assert_eq!(page.output.as_ref().map(|output| output.cursor), Some(2));
+        // Located rather than hardcoded: the log view heads its list, and each
+        // commit takes an identity row and an authorship row, so a literal index
+        // here would only re-encode the current layout.
+        let expected = page
+            .output
+            .as_ref()
+            .and_then(|output| output.lines.iter().position(|line| line.contains("ccc")));
+        assert!(expected.is_some(), "the log lists the commit searched for");
+        assert_eq!(page.output.as_ref().map(|output| output.cursor), expected);
         assert_eq!(page.cursor, before);
     }
 

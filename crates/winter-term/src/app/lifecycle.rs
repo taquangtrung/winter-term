@@ -68,6 +68,7 @@ impl App {
             jobs: crate::app::jobs::Jobs::new(),
             page_prompt: None,
             page_cursor: None,
+            page_wrap: false,
             pages: HashMap::new(),
             panes: HashMap::new(),
             pending_tab_completion: HashSet::new(),

@@ -7,6 +7,17 @@
 /// The code porcelain v2 uses where a file is unchanged on one side.
 const UNCHANGED: char = '.';
 
+/// Field separator in the decorated log format, matching the `%x1f` the log
+/// request asks git for. US is chosen because it cannot occur in a hash, a
+/// decoration, an author name, a timestamp, or a commit subject.
+pub(super) const FIELD_SEP: char = '\x1f';
+
+/// How git spells the checked-out branch in a `%d` decoration.
+const HEAD_ARROW: &str = "->";
+
+/// How git marks a tag in a `%d` decoration.
+const TAG_MARK: &str = "tag:";
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -52,13 +63,43 @@ pub enum Section {
     Staged,
 }
 
-/// One line of `git log --oneline`-shaped output.
+/// One commit of decorated log output.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Commit {
     /// The abbreviated hash.
     pub hash: String,
     /// The subject line.
     pub subject: String,
+    /// Who wrote it.
+    pub author: String,
+    /// When it was authored, in seconds since the Unix epoch. `0` when the log
+    /// carried no timestamp, which reads as "no age known" rather than 1970.
+    pub time: i64,
+    /// The refs pointing at it, HEAD first.
+    pub refs: Vec<Ref>,
+}
+
+/// What kind of thing a ref pointing at a commit is, which is what decides how
+/// loudly it is drawn.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RefKind {
+    /// The checked-out branch, or a bare detached `HEAD`.
+    Head,
+    /// A local branch that is not the checked-out one.
+    Local,
+    /// A branch on a remote.
+    Remote,
+    /// A tag.
+    Tag,
+}
+
+/// One ref pointing at a commit.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Ref {
+    /// Which kind of ref it is.
+    pub kind: RefKind,
+    /// Its name, without the `tag: ` marker git decorates tags with.
+    pub name: String,
 }
 
 // ========================================================================
@@ -120,21 +161,105 @@ pub fn parse_status(text: &str) -> Status {
     status
 }
 
-/// Parse lines of `<hash> <subject>`, as `git log --oneline` writes them.
-pub fn parse_log(text: &str) -> Vec<Commit> {
+/// Parse the decorated log [`crate::tools::git::exec`] asks for: one commit per
+/// line, fields separated by US (`\x1f`) as `hash·decoration·author·time·subject`.
+///
+/// A unit separator rather than git's own bracket decoration, because a subject
+/// is arbitrary text: it can hold `[`, `]`, `(` and `)`, and a bracket-matching
+/// parser mis-reads those as fields. US cannot appear in any of these fields, so
+/// splitting on it needs no escaping and cannot be fooled by the commit message.
+pub fn parse_decorated_log(text: &str) -> Vec<Commit> {
     text.lines()
         .filter(|line| !line.trim().is_empty())
-        .map(|line| match line.split_once(' ') {
-            Some((hash, subject)) => Commit {
-                hash: hash.to_string(),
-                subject: subject.to_string(),
-            },
-            None => Commit {
-                hash: line.to_string(),
-                subject: String::new(),
-            },
-        })
+        .map(parse_decorated_commit)
         .collect()
+}
+
+/// One decorated log line as a [`Commit`]. A line missing later fields still
+/// yields the fields it has, so a log format change degrades to less detail
+/// rather than to no commits at all.
+fn parse_decorated_commit(line: &str) -> Commit {
+    let mut fields = line.split(FIELD_SEP);
+    let hash = fields.next().unwrap_or_default().trim().to_string();
+    let decoration = fields.next().unwrap_or_default();
+    let author = fields.next().unwrap_or_default().trim().to_string();
+    let time = fields
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .parse::<i64>()
+        .unwrap_or(0);
+    // The subject is the remainder, not just the next field, so a subject that
+    // somehow holds the separator keeps all of itself.
+    let subject = fields.collect::<Vec<&str>>().join(&FIELD_SEP.to_string());
+    Commit {
+        hash,
+        subject: subject.trim_end().to_string(),
+        author,
+        time,
+        refs: classify_refs(decoration),
+    }
+}
+
+/// The refs in a `%d` decoration, HEAD first.
+///
+/// git writes it as ` (HEAD -> main, origin/main, tag: v1.0)`, empty when
+/// nothing points at the commit. HEAD is hoisted to the front because it is the
+/// one ref a reader scans for, and git only happens to place it first.
+pub fn classify_refs(decoration: &str) -> Vec<Ref> {
+    let trimmed = decoration.trim();
+    let inner = trimmed
+        .strip_prefix('(')
+        .and_then(|rest| rest.strip_suffix(')'))
+        .unwrap_or("");
+    let mut refs: Vec<Ref> = Vec::new();
+    for token in inner.split(',') {
+        let token = token.trim();
+        if token.is_empty() {
+            continue;
+        }
+        refs.push(classify_ref(token));
+    }
+    // HEAD first, order among the rest left as git reported it.
+    refs.sort_by_key(|entry| entry.kind != RefKind::Head);
+    refs
+}
+
+/// One decoration token as a [`Ref`].
+fn classify_ref(token: &str) -> Ref {
+    // `HEAD -> main`: the checked-out branch. Named for the branch, not for
+    // HEAD, since the branch is what the reader is looking for.
+    if let Some((_, branch)) = token.split_once(HEAD_ARROW) {
+        return Ref {
+            kind: RefKind::Head,
+            name: branch.trim().to_string(),
+        };
+    }
+    if let Some(tag) = token.strip_prefix(TAG_MARK) {
+        return Ref {
+            kind: RefKind::Tag,
+            name: tag.trim().to_string(),
+        };
+    }
+    // A detached HEAD points at a commit with no branch to name it.
+    if token == "HEAD" {
+        return Ref {
+            kind: RefKind::Head,
+            name: token.to_string(),
+        };
+    }
+    // A remote-tracking branch is the only ref shaped `remote/name`. A local
+    // branch may hold a slash too (`feature/x`), so this is a heuristic; git
+    // gives no way to tell them apart in a decoration.
+    let kind = if token.contains('/') {
+        RefKind::Remote
+    } else {
+        RefKind::Local
+    };
+    Ref {
+        kind,
+        name: token.to_string(),
+    }
 }
 
 fn read_header(status: &mut Status, rest: &str) {
@@ -330,17 +455,97 @@ u UU N... 100644 100644 100644 100644 aaa bbb ccc conflicted.rs
         assert_eq!(parse_status(""), Status::default());
     }
 
-    #[test]
-    fn test_log_lines_split_hash_from_subject() {
-        let commits = parse_log("8ea4e30 add tree motions\n2f6e30a draw icons\n");
-        assert_eq!(commits.len(), 2);
-        assert_eq!(commits[0].hash, "8ea4e30");
-        assert_eq!(commits[1].subject, "draw icons");
+    /// A decorated log line, assembled the way the log format writes it.
+    fn log_line(hash: &str, decoration: &str, author: &str, time: &str, subject: &str) -> String {
+        [hash, decoration, author, time, subject].join(&FIELD_SEP.to_string())
     }
 
     #[test]
-    fn test_a_subject_holding_spaces_is_kept_whole() {
-        let commits = parse_log("abc1234 fix: keep the whole subject line\n");
-        assert_eq!(commits[0].subject, "fix: keep the whole subject line");
+    fn test_a_decorated_log_line_yields_every_field() {
+        let text = log_line(
+            "8ea4e30",
+            " (HEAD -> main, origin/main)",
+            "Jane Doe",
+            "1700000000",
+            "add tree motions",
+        );
+        let commits = parse_decorated_log(&text);
+        assert_eq!(commits.len(), 1);
+        let commit = &commits[0];
+        assert_eq!(commit.hash, "8ea4e30");
+        assert_eq!(commit.author, "Jane Doe");
+        assert_eq!(commit.time, 1_700_000_000);
+        assert_eq!(commit.subject, "add tree motions");
+        assert_eq!(
+            commit.refs,
+            vec![
+                Ref {
+                    kind: RefKind::Head,
+                    name: "main".to_string()
+                },
+                Ref {
+                    kind: RefKind::Remote,
+                    name: "origin/main".to_string()
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn test_a_subject_holding_spaces_and_brackets_is_kept_whole() {
+        // The separator is why this works: a bracket-matching parser would read
+        // `[skip ci]` as the author field.
+        let subject = "fix: keep [skip ci] (and parens) whole";
+        let commits = parse_decorated_log(&log_line("abc1234", "", "A", "1", subject));
+        assert_eq!(commits[0].subject, subject);
+        assert_eq!(commits[0].author, "A");
+    }
+
+    #[test]
+    fn test_an_undecorated_commit_has_no_refs() {
+        let commits = parse_decorated_log(&log_line("abc1234", "", "A", "1", "plain"));
+        assert!(commits[0].refs.is_empty());
+    }
+
+    #[test]
+    fn test_head_is_hoisted_ahead_of_the_refs_git_listed_first() {
+        // git puts tags before HEAD here; the view wants HEAD first.
+        let refs = classify_refs(" (tag: v1.0, HEAD -> main)");
+        assert_eq!(refs[0].kind, RefKind::Head);
+        assert_eq!(refs[0].name, "main");
+        assert_eq!(refs[1].kind, RefKind::Tag);
+        assert_eq!(refs[1].name, "v1.0");
+    }
+
+    #[test]
+    fn test_each_kind_of_ref_is_told_apart() {
+        let refs = classify_refs(" (HEAD -> main, feature, origin/main, tag: v2)");
+        let kinds: Vec<RefKind> = refs.iter().map(|entry| entry.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![RefKind::Head, RefKind::Local, RefKind::Remote, RefKind::Tag]
+        );
+    }
+
+    #[test]
+    fn test_a_detached_head_is_named_head() {
+        let refs = classify_refs(" (HEAD)");
+        assert_eq!(refs[0].kind, RefKind::Head);
+        assert_eq!(refs[0].name, "HEAD");
+    }
+
+    #[test]
+    fn test_a_missing_timestamp_reads_as_no_age_rather_than_the_epoch() {
+        // A truncated line still yields the fields it has.
+        let commits = parse_decorated_log("abc1234");
+        assert_eq!(commits[0].hash, "abc1234");
+        assert_eq!(commits[0].time, 0);
+        assert_eq!(commits[0].subject, "");
+    }
+
+    #[test]
+    fn test_empty_log_output_is_no_commits() {
+        assert!(parse_decorated_log("").is_empty());
+        assert!(parse_decorated_log("\n\n").is_empty());
     }
 }

@@ -5,9 +5,9 @@ use std::path::{Path, PathBuf};
 
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    scroll_to_cursor, JobReply, JobRequest, OpenTarget, Page, PageContent, PageOutcome, PageRow,
-    PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest, SearchHit, SearchRequest,
-    SearchResult,
+    row_height, row_width, wrap_window, JobReply, JobRequest, OpenTarget, Page, PageContent,
+    PageOutcome, PageRow, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest, SearchHit,
+    SearchRequest, SearchResult,
 };
 
 // ========================================================================
@@ -242,21 +242,28 @@ impl Page for GrepPage {
         format!("{TITLE}: {}", self.query)
     }
 
-    fn content(&mut self, rows: usize) -> PageContent {
+    fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> PageContent {
         let mut page_rows = vec![self.header_row()];
         if self.rows.is_empty() {
             return PageContent::new(page_rows);
         }
-        let visible = rows.saturating_sub(HEADER_ROWS);
-        self.scroll = scroll_to_cursor(self.scroll, self.cursor, self.rows.len(), visible);
+        let widths: Vec<usize> = self.rows.iter().map(|row| row_width(&row.spans)).collect();
+        let window = wrap_window(
+            self.scroll,
+            self.cursor,
+            widths.len(),
+            rows.saturating_sub(HEADER_ROWS),
+            |index| row_height(widths[index], cols, wrap, 0),
+        );
+        self.scroll = window.start;
         page_rows.extend(
             self.rows
                 .iter()
-                .skip(self.scroll)
-                .take(visible)
+                .skip(window.start)
+                .take(window.count)
                 .map(|row| row.spans.clone()),
         );
-        PageContent::new(page_rows).with_cursor_line(HEADER_ROWS + self.cursor - self.scroll)
+        PageContent::new(page_rows).with_cursor_line(HEADER_ROWS + window.cursor)
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
