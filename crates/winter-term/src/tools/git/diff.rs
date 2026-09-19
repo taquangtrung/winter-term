@@ -81,6 +81,19 @@ impl Hunk {
         let removed = self.lines.iter().filter(|l| l.starts_with('-')).count();
         (added, removed)
     }
+
+    /// The line the hunk starts at on the new side, counting from one, which
+    /// is where it is in the file as it stands now. `None` for a header git
+    /// wrote in some shape this does not read, rather than a guess at line
+    /// one: landing somewhere arbitrary is worse than landing at the top.
+    pub fn new_start(&self) -> Option<usize> {
+        let counts = self.header.strip_prefix(HUNK_MARK)?;
+        let new_side = counts
+            .split_whitespace()
+            .find_map(|part| part.strip_prefix('+'))?;
+        let start = new_side.split(',').next()?;
+        start.parse().ok()
+    }
 }
 
 // ========================================================================
@@ -172,6 +185,26 @@ index 1234567..89abcde 100644
         // changes the line the patch reads as its anchor.
         let diff = parse_diff(DIFF);
         assert!(diff.hunks[1].header.ends_with("fn other() {"));
+    }
+
+    #[test]
+    fn test_a_hunk_says_which_line_it_starts_at_on_the_new_side() {
+        // Opening a file from a hunk lands on this line, so reading the old
+        // side's number, or the count after the comma, opens the wrong place.
+        let diff = parse_diff(DIFF);
+        assert_eq!(diff.hunks[0].new_start(), Some(1));
+        assert_eq!(diff.hunks[1].new_start(), Some(20));
+
+        // A single-line hunk writes no count at all.
+        let single = parse_diff("@@ -7 +9 @@\n-old\n+new\n");
+        assert_eq!(single.hunks[0].new_start(), Some(9));
+
+        // A header in no shape this reads offers no line rather than line one.
+        let odd = Hunk {
+            header: "@@ nonsense @@".to_string(),
+            lines: Vec::new(),
+        };
+        assert_eq!(odd.new_start(), None);
     }
 
     #[test]

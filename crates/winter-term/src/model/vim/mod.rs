@@ -3,8 +3,8 @@
 //! The architecture is layered bottom-up:
 //!
 //! 1. **This module** — the vocabulary ([`motion::CursorMove`]), the text
-//!    primitives ([`words`]), and the key mapping ([`nav`]). Nothing here
-//!    knows about grids, panes, or tools.
+//!    primitives ([`words`], [`objects`]), and the key mapping ([`nav`]).
+//!    Nothing here knows about grids, panes, or tools.
 //! 2. **The grid surface** — `model::input` resolves the full Vim grammar
 //!    (counts, operators, text objects) into these motions for the terminal,
 //!    and `app::navigation` executes them over the live grid.
@@ -19,4 +19,5 @@
 
 pub mod motion;
 pub mod nav;
+pub mod objects;
 pub mod words;

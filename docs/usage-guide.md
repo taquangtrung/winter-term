@@ -35,7 +35,7 @@ Available in both Normal and Visual mode. Most take a count prefix, so `5j` move
 | Keys | Motion |
 |---|---|
 | `h` `j` `k` `l` | Left, down, up, right (arrow keys also work) |
-| `w` `b` `e` | Word forward, word back, word end |
+| `w` `b` `e` | Word forward, word back, word end, over any punctuation between |
 | `W` `B` `E` | Same, treating every non-blank run as one word |
 | `ge` `gE` | Back to the end of the previous word |
 | `0` or `\|` | First column |
@@ -145,7 +145,7 @@ The marks named with punctuation are kept for you rather than set by hand, the w
 |---|---|
 | `gt` `gT` | Next tab, previous tab |
 | `g<` `g>` | Move the current tab left, right |
-| `gx` | Open the URL or path under the cursor |
+| `gx` | Open what is under the cursor: a URL goes to the browser, a path to the editor over this pane, at the line a `path:line` reference names |
 | `gy` | Yank the block under the cursor |
 | `gs` | Buffer swoop: fuzzy line search over the pane |
 | `gn` `gN` | Select the next, previous search match |
@@ -212,7 +212,7 @@ A single-chord binding whose action is not one of the built-in window actions is
 
 A tool opens over the focused pane, covering it. The shell underneath keeps running and comes back the moment you close the tool with `q`, or by pressing the tool's own chord again. The window chords all still work while a tool is up: split, zoom, close, and `Alt-h/j/k/l` to move focus. For a tool beside your shell rather than over it, split first and open it in the new pane.
 
-Every tool asks the same way. A question with a known set of answers opens a picker: what the list is of on top, a filter line under it, and the matches below, narrowing as you type. `Up`/`Down` or `Ctrl-p`/`Ctrl-n` move through them, `Enter` takes the highlighted one, and `Esc` answers nothing. A question with no list to offer, or one whose answer is a name that does not exist yet, is still typed into the status bar.
+Every tool asks the same way, in the middle of the window. A question with a known set of answers opens a picker: what the list is of on top, a filter line under it, and the matches below, narrowing as you type. `Up`/`Down` or `Ctrl-p`/`Ctrl-n` move through them, `Enter` takes the highlighted one, and `Esc` answers nothing. A question with no list to offer, or one whose answer is a name that does not exist yet, opens the same panel without the list: the question, the line it is answered on, and how to answer it. A question that cannot be undone is answered by a single key rather than a line, and says so instead of drawing a caret. Either way the question is where the eye already is, and the status bar is left to what it was saying.
 
 Every tool answers to `Alt-Shift-,` and `Alt-Shift-.` for the top and the bottom of what it is showing, which are emacs' `M-<` and `M->` under the fingers, so a page is read with either set of habits: the Vim `gg` and `G` reach the same two rows.
 
@@ -224,7 +224,8 @@ Every tool searches the same way. `/` asks for text and moves the cursor to the 
 |---|---|
 | `j` `k` or `Down` `Up` | Move down, up |
 | `Home` / `End` | First entry, last entry |
-| `Enter` | Enter a directory, or open a file in `$EDITOR` in a new tab |
+| `Enter` | Enter a directory, or open a file in the editor |
+| `Ctrl-o` | Open the file under the cursor in `$EDITOR`, in a new tab |
 | `l` / `Right` | Open the directory under the cursor, in place |
 | `h` / `Left` | Close it, else step out to the parent row, else leave the root |
 | `Backspace` | Leave the root for its parent |
@@ -244,7 +245,7 @@ Every tool searches the same way. `/` asks for text and moves the cursor to the 
 | `G` | Re-read the listing |
 | `m` / `u` | Mark, unmark the entry and step on |
 | `M` / `U` | Mark everything listed, unmark everything |
-| `_` / `+` | New file, new directory |
+| `_` / `+` | New file, which opens in the editor; new directory |
 | `R` | Rename the entry under the cursor |
 | `C` / `Alt-m` | Copy, move the targets: one takes a new name, several take a directory chosen from a list |
 | `x` | Delete the targets, after confirming |
@@ -270,8 +271,10 @@ Each entry carries an icon for what it is. The `icons` setting chooses where it 
 | `/` | Search the view, or the log or listing filling it |
 | `n` / `N` | Next, previous match |
 | `Tab` / `Shift-Tab` | Fold the section, fold everything |
-| `Enter` | Open the file under the cursor in `$EDITOR` |
+| `Enter` | Open the file under the cursor in the editor; from a hunk, at the line it changes |
+| `Ctrl-o` | Open it in `$EDITOR` instead, in a new tab |
 | `Enter` on a commit | Read the commit: message, then the files it changed, each opening to its patch |
+| `Enter` in that patch | Open the file the row belongs to, at the line its hunk changes |
 | `Enter` on a stash | Read the stash as a diff |
 | `.` | File: what can be done with the file under the cursor |
 | `Tab` on a file | Show its diff, hunk by hunk |
@@ -324,11 +327,11 @@ These keys open a menu, and the next key picks from it:
 
 Anything that wants a terminal of its own goes to a new tab: commit and amend in `$EDITOR`, and interactive rebase with its todo list. `o` resets to the commit under the cursor, or asks which one when the cursor is elsewhere.
 
-A log, a listing, a blame, or a diff fills the view; `j`/`k` move through it, `/` searches it, `+` asks for more of a log, `y` copies the first field of a line, which is the commit hash in a log or a blame, and `q` goes back to the status.
+A log, a listing, a blame, or a diff fills the view; `j`/`k` move through it, `/` searches it, `+` asks for more of a log, `y` copies the first field of a line, which is the commit hash in a log or a blame, and `q` goes back to the status. In a blame, where every row is a line of one file, `Enter` opens that file at the row under the cursor and `Ctrl-o` opens it in `$EDITOR` there.
 
 A commit read with `Enter` opens shut, the way the status view does: the summary, then a `Changes` heading counting the files it touched, then one band per file, each counting the hunks it holds, each saying in words what the commit did to it (`modified`, `new file`, `deleted`, `renamed`) after its fold triangle and before its icon and path, with the patch waiting behind them. It folds the same way too. `Tab` on the heading takes the whole file list away and brings it back, `Tab` on a file band opens it to its hunk headers and shuts it again, `Tab` on a hunk opens that hunk's body, and `Shift-Tab` acts on the whole commit at once, opening every file and hunk of it, or shutting all of them when none is folded.
 
-**Grep** (`Ctrl-Shift-f`, or `Grep: Search Files`) finds the lines under the pane's working directory that hold some text, grouped under one heading per file.
+**Grep** (`Ctrl-Shift-s`, or `Grep: Search Files`) finds the lines under the pane's working directory that hold some text, grouped under one heading per file.
 
 | Key | Action |
 |---|---|
@@ -337,7 +340,8 @@ A commit read with `Enter` opens shut, the way the status view does: the summary
 | `n` / `N` | Next, previous match, skipping the file names between them |
 | `Home` / `End` | First row, last row |
 | `Alt-n` / `Alt-p` | Next, previous file |
-| `Enter` | Open the file in `$EDITOR` at the line that matched |
+| `Enter` | Open the file in the editor, at the line that matched |
+| `Ctrl-o` | Open it in `$EDITOR` instead, at the same line |
 | `y` | Copy the match's `path:line` |
 | `G` | Run the same search again |
 | `Esc` | Stop a running search; close the tool when none is running |
@@ -346,6 +350,81 @@ A commit read with `Enter` opens shut, the way the status view does: the summary
 The walk runs off the event loop, so the pane stays live while a large tree is read, and `Esc` abandons it. `/` here asks for a new search rather than searching the rows, since the rows already are one, and `n` and `N` step through what it found. Matching is literal text, whatever the case, the same as every other tool's search.
 
 The walk skips what would swamp the results rather than reading everything: `.git`, `.hg`, `.svn`, `node_modules`, and `target`, files over a megabyte, anything that does not read as text, and symlinks, which are never followed. It stops at 500 matches and says so in the header, because a query loose enough to pass that is one to narrow.
+
+**Editor** opens the file a tool was pointing at, as editable text. It is not reached by a chord of its own: `Enter` on a file in Dir, Git, or Grep opens it, at the line that tool knew about. It opens *over* the tool rather than in place of it, so closing it puts the listing back where you left it, re-read in case what you just saved changed what it says.
+
+| Key | Action |
+|---|---|
+| `h` `j` `k` `l` or the arrows | Move by character and line |
+| `w` `W` / `b` `B` / `e` `E` | Word starts and ends, crossing lines |
+| `ge` / `gE` | Back to the end of the word before |
+| `0` / `^` / `$` / `g_` | Column one, first non-blank, end of line, last non-blank |
+| `{` / `}` | The paragraph before, after: the blank line past the text |
+| `%` | The bracket matching the first one at or right of the cursor |
+| `f` `F` `t` `T` / `;` `,` | To a character on this line; the same again, or back |
+| `gg` / `G` / `20G` | First line, last line, line twenty |
+| `Ctrl-d` / `Ctrl-u` / `Ctrl-f` / `Ctrl-b` | Half a screen, a screen, either way |
+| `H` / `M` / `L` | Top, middle, bottom of what is on screen |
+| `zz` / `zt` / `zb` | This line to the middle, the top, the bottom of the pane |
+| `m{a-z}` / `'{a-z}` / `` `{a-z} `` | Mark this place; back to it, by line or exactly |
+| `''` | Back to where the last jump started |
+| `/` `?` / `n` `N` / `*` `#` | Search on, back; the next match, the one before; the word here |
+| `i` `a` / `I` `A` | Type here, after here; at the first non-blank, at the end |
+| `o` / `O` | Open a line below, above, keeping the indent |
+| `v` / `V` | Select from here, by character or by whole lines |
+| `R` | Type over what is there rather than pushing it along |
+| `x` `X` / `r` / `~` | Delete a character here, before here; replace one; flip its case |
+| `s` `S` / `C` `D` | Change a character, a line; change, delete to the line's end |
+| `d` `c` `y` + motion | Delete, change, yank over it; doubled, over whole lines |
+| `d` `c` `y` + `i`/`a` + object | The same over a word, paragraph, sentence, quoted or bracketed run |
+| `>>` / `<<` / `>` `<` + motion | Indent, outdent whole lines |
+| `p` / `P` | Put back what was taken, after the cursor or before it |
+| `"{a-z}` / `"+` | Use that register for the next yank, delete, or put |
+| `J` | Join the next line onto this one |
+| `Ctrl-a` / `Ctrl-x` | Add one to the number at the cursor, take one off |
+| `.` | Do the last command that changed the text again |
+| `u` / `Ctrl-r` | Undo, redo |
+| `Ctrl-s` | Write the file |
+| `Z Z` / `Z Q` | Write and close; close, discarding edits |
+| `Ctrl-o` | Hand the file to `$EDITOR` in a new tab, at the cursor's line |
+| `]b` / `[b` | The next open buffer, the one before |
+| `gb` | List the open buffers and go to one |
+| `q` | Close this buffer, asking first if it has unsaved edits |
+
+One editor holds as many files as you open into it. Opening a file while the editor is up (from the file browser, or `gx` on a path) adds it as another buffer rather than covering the editor with a second one, and opening a file that is already open goes to it. `]b` and `[b` step through them, `gb` lists them, and the header says which of how many you are on. `q` and `ZZ` close the buffer you are reading and leave the rest; closing the last one closes the editor and gives the pane back. A buffer with unsaved edits asks before it goes, one buffer at a time, so nothing is dropped quietly.
+
+What the buffers share is what Vim shares: the registers, the last search, the last char search, and the last change `.` repeats. What belongs to each file stays with it: its marks, its undo history, where the cursor and the window are in it, and what it looked like on disk.
+
+A count typed before a command applies to it, as in Vim: `3x`, `2dd`, `5j`, `2d3w`. Insert mode also answers to the readline chords the shell's own line takes: `Ctrl-a`, `Ctrl-e`, `Ctrl-b`, `Ctrl-f`, `Ctrl-k`, `Ctrl-u`, and `Ctrl-w`.
+
+Selecting with `v` or `V` puts the operators on what is selected rather than on a motion: `d`, `c`, `y`, `>`, `<`, `J`, `~`, `r`, and `p` all act on the selection and end it, `i` and `a` grow it to a text object, and `o` moves to its other end so it can be grown from either side. `Esc` drops it.
+
+The mouse moves the cursor too: a click puts it on the character under the pointer, dragging selects from where the button went down, and the wheel scrolls, carrying the cursor with it so the two never part company.
+
+Yanks stay in the file's own registers, with `"a` through `"z` to name one. `"+` and `"*` are the system clipboard, so `"+yy` copies a line out of Winter and `"+p` puts back whatever was copied anywhere else.
+
+Searching is literal text rather than a pattern, and a search typed in lower case matches either case, while one typed with a capital in it matches exactly. `*` and `#` look for the word under the cursor without typing it out.
+
+It colors what it is reading: comments, strings, numbers, keywords, and the names of types, for Rust, Python, Go, TypeScript and JavaScript, C and C++, shell, JSON, and the config formats. The colors come from the theme's own palette rather than a scheme of their own, so a file reads as the terminal beside it does, and a file in a language it does not know is painted as the plain text it may well be rather than guessed at. It is a lexer and not a parser: it colors what the characters themselves say and never decides that something is wrong with the code.
+
+If the file changes on disk while it is open with nothing unsaved in it, it is read again the next time the editor comes back to the front, so what is on screen is what is on disk. With unsaved edits it leaves your work alone and asks before overwriting at save time.
+
+Past that it edits text and nothing more: no completion, no language server. That is what `Ctrl-o` is for, and it saves before handing over, so `$EDITOR` opens what you were looking at rather than what was last written. A file it cannot open as text says so and stays closed: anything holding a NUL byte, anything that is not UTF-8, and anything over four megabytes, all of which it would otherwise write back as something the original was not.
+
+Saving writes through a temporary file beside the original and renames it over the top, so an interrupted write leaves the previous contents whole rather than a truncated file. A file's permission bits, its line endings, and whether it ended with a newline all survive the trip, so saving one edited line does not show up as a whole-file diff. If something else has written to the file since it was opened, saving asks before overwriting rather than throwing that away.
+
+**File browser** (`Ctrl-Shift-f`, or `File: Browse Files`) walks the working directory in the command palette rather than in a pane, for the times you know roughly where a file is and want it open rather than listed.
+
+| Key | Action |
+|---|---|
+| Typing | Filter this directory's entries |
+| `Up` `Down` or `Ctrl-p` `Ctrl-n` | Move through what is showing |
+| `Enter` / `Right` on a directory | Go into it: the browser stays up, rooted there |
+| `Enter` on a file | Open it in the editor, over the focused pane |
+| `Backspace` with nothing typed, or `Left` | Back up to the parent directory |
+| `Ctrl-Shift-f` again, or `Esc` | Put it away |
+
+Directories come first, then files, with the hidden ones after each group and `../` at the top, so a listing opens on what is usually wanted and typing reaches the rest. The path being browsed is shown above the list, and a directory's row says `dir` where a file's says its size. It reads one directory at a time rather than walking the tree, so it opens instantly however large the tree below it is.
 
 **Keys** (`Keys: Show Every Command`) lists every command and the chord bound to it, read from the keymap in force, so it cannot disagree with what the keys actually do. `/`, `n`, and `N` search it, over both columns, so a chord you pressed by accident is as easy to look up as a command you are hunting for. `Enter` runs the command under the cursor: the page hands the pane back first, so a command that opens a tool of its own has somewhere to open.
 

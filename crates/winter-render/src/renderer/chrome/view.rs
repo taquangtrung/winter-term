@@ -61,6 +61,21 @@ pub struct PaletteView {
     /// Index into `items` of the highlighted entry.
     pub selected: usize,
 }
+/// A question being answered in a floating dialog: what is being asked, what
+/// has been typed so far, and how to answer it.
+#[derive(Clone, Debug)]
+pub struct InputView {
+    /// How to answer, drawn under the input in the muted color. Empty draws
+    /// nothing.
+    pub hint: String,
+    /// What has been typed, drawn on an input line with a caret after it.
+    /// `None` for a question answered by one key, which has no line to type
+    /// on.
+    pub input: Option<String>,
+    /// What is being asked, drawn as the dialog's heading.
+    pub label: String,
+}
+
 /// The which-key hint overlay state shown when the user pauses mid-prefix.
 #[derive(Clone, Debug)]
 pub struct WhichKeyView {

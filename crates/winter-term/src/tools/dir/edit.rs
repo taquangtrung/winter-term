@@ -1391,20 +1391,18 @@ mod tests {
     fn test_the_word_motions_cross_words_and_counts() {
         let mut edit = state(&["notes.txt"], 0);
         press(&mut edit, 0, "0w");
-        assert_eq!(edit.col(), 5, "onto the `.`: punctuation is its own word");
-        press(&mut edit, 0, "w");
-        assert_eq!(edit.col(), 6, "onto `txt`");
+        assert_eq!(edit.col(), 6, "over the `.`, onto `txt`");
         press(&mut edit, 0, "b");
-        assert_eq!(edit.col(), 5);
+        assert_eq!(edit.col(), 0, "and back over it, to the start of `notes`");
         press(&mut edit, 0, "e");
-        assert_eq!(edit.col(), 8, "the end of `txt`");
-        press(&mut edit, 0, "0e");
         assert_eq!(edit.col(), 4, "the end of `notes`");
+        press(&mut edit, 0, "e");
+        assert_eq!(edit.col(), 8, "then the end of `txt`");
         press(&mut edit, 0, "0W");
         assert_eq!(
             edit.col(),
-            6,
-            "the big jump crosses the `.` and lands on the word after it"
+            9,
+            "the big jump has the whole name as one WORD, with none after it"
         );
     }
 
@@ -1472,7 +1470,7 @@ mod tests {
     fn test_operators_over_motions() {
         let mut edit = state(&["notes.txt"], 0);
         press(&mut edit, 0, "0dw");
-        assert_eq!(edit.name(0), Some(".txt"), "`dw` is exclusive");
+        assert_eq!(edit.name(0), Some("txt"), "`dw` stops at the next start");
         press(&mut edit, 0, "u0db");
         // `db` from the very start has no word behind it to take.
         assert_eq!(edit.name(0), Some("notes.txt"));
@@ -1495,7 +1493,7 @@ mod tests {
         // Vim's `dw` on the line's last word has no next start to stop at, so
         // it deletes to the end of the line instead of leaving it stranded.
         let mut edit = state(&["notes.txt"], 0);
-        press(&mut edit, 0, "0wwdw");
+        press(&mut edit, 0, "0wdw");
         assert_eq!(edit.name(0), Some("notes."));
     }
 

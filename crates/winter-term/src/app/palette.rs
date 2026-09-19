@@ -1,10 +1,13 @@
 //! Command-palette input, and the pickers layered on top of it.
 
+use std::path::PathBuf;
+
 use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
 use crate::model::input::{self, EditBinding};
 use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
+use crate::model::page;
 use crate::model::palette::{Palette, PaletteMode};
 
 use super::navigation;
@@ -100,6 +103,13 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::Enter) => {
+                // In the browser a directory is somewhere to go rather than
+                // something to open: the palette stays up, rooted there.
+                if let Some(next) = self.step_into_selection(palette) {
+                    *palette = next;
+                    self.dirty = true;
+                    return;
+                }
                 self.confirm_palette_selection(palette, focused);
                 palette.close();
                 self.palette = None;
@@ -107,6 +117,15 @@ impl App {
                 return;
             }
             Key::Named(NamedKey::Backspace) => {
+                // With nothing typed there is no character to rub out, so the
+                // key does the other thing it means in a browser: go up.
+                if palette.query.is_empty() {
+                    if let Some(up) = self.step_out(palette) {
+                        *palette = up;
+                        self.dirty = true;
+                        return;
+                    }
+                }
                 palette.pop_char();
             }
             Key::Named(NamedKey::ArrowUp) => {
@@ -114,6 +133,20 @@ impl App {
             }
             Key::Named(NamedKey::ArrowDown) => {
                 palette.move_down();
+            }
+            Key::Named(NamedKey::ArrowLeft) => {
+                if let Some(up) = self.step_out(palette) {
+                    *palette = up;
+                    self.dirty = true;
+                    return;
+                }
+            }
+            Key::Named(NamedKey::ArrowRight) => {
+                if let Some(next) = self.step_into_selection(palette) {
+                    *palette = next;
+                    self.dirty = true;
+                    return;
+                }
             }
             Key::Character(c) => {
                 // In the pane switcher, the digit shown next to an entry
@@ -183,6 +216,13 @@ impl App {
                     if let Ok(pane_id_val) = pane_id_str.parse::<u64>() {
                         self.switch_to_pane(PaneId(pane_id_val));
                     }
+                }
+            }
+            PaletteMode::Files => {
+                if let Some(path) = action {
+                    // Over the focused pane, as every other way into the
+                    // editor does it, so closing the file puts the shell back.
+                    self.open_editor_page(page::OpenTarget::file(PathBuf::from(path)));
                 }
             }
             PaletteMode::PagePick => {
@@ -257,6 +297,30 @@ impl App {
             }
         }
     }
+    /// The browser rooted at the selected row, when the browser is up and
+    /// that row is a directory. `None` for every other row and every other
+    /// mode, which is the caller's signal to go on treating the key as a
+    /// choice rather than a step.
+    fn step_into_selection(&mut self, palette: &Palette) -> Option<Palette> {
+        if palette.mode != PaletteMode::Files {
+            return None;
+        }
+        let path = PathBuf::from(palette.selected_action()?);
+        if !path.is_dir() {
+            return None;
+        }
+        Some(Palette::open_files(path))
+    }
+
+    /// The browser rooted one directory up, where there is one to reach.
+    fn step_out(&mut self, palette: &Palette) -> Option<Palette> {
+        if palette.mode != PaletteMode::Files {
+            return None;
+        }
+        let dir = palette.dir.as_ref()?;
+        Some(Palette::open_files(dir.parent()?.to_path_buf()))
+    }
+
     pub(crate) fn record_palette_query(&mut self, query: &str) {
         let trimmed = query.trim();
         if trimmed.is_empty() {

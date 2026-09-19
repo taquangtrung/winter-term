@@ -6,7 +6,7 @@ use serde_json::Value;
 use crate::config::IconStyle;
 use crate::model::layout::{PaneId, Rect};
 use crate::model::mode::Mode;
-use crate::model::page::{wrap_start, wrapped_lines, PageContent, PageIcon, PageStyle};
+use crate::model::page::{wrap_start, wrapped_lines, PageContent, PageIcon, PageStyle, PromptMode};
 use crate::model::palette::{Palette, PaletteMode};
 use crate::model::settings_page::{Control, SettingsField, SettingsPage};
 use crate::terminal::block_queue::{BlockEntry, BlockKind};
@@ -15,11 +15,11 @@ use crate::terminal::webview;
 use winter_core::winter_proto::EmitBlock;
 use winter_render::renderer::{PaneRect, PaneView};
 use winter_render::{
-    Color, CursorShape, Grid, ImagePlacement, NoticeKind, PaletteItem, PaletteView, RgbColor,
-    StatusNotice, StatusSearch, Style, Theme, ThemeRgb,
+    Color, CursorShape, Grid, ImagePlacement, PaletteItem, PaletteView, RgbColor, StatusNotice,
+    StatusSearch, Style, Theme, ThemeRgb,
 };
 
-use super::{status_bar, App, ImageBlock, ReflowSource};
+use super::{page, status_bar, App, ImageBlock, ReflowSource};
 
 // ========================================================================
 // Constants
@@ -92,6 +92,10 @@ const ANSI_BLUE: usize = 4;
 const ANSI_MAGENTA: usize = 5;
 const ANSI_CYAN: usize = 6;
 
+/// The palette slot a comment is drawn from: the receded gray every shell and
+/// pager already writes one in.
+const ANSI_BRIGHT_BLACK: usize = 8;
+
 /// Footer hint shown along the bottom of the settings page.
 const SETTINGS_HINT: &str = "↑/↓ Move     ←/→ Change     Space Toggle     Enter/Esc Close";
 
@@ -132,11 +136,13 @@ struct PaneViewInput<'a> {
     nav_cursors: &'a std::collections::HashMap<PaneId, (usize, usize)>,
     overlays: &'a PaneOverlays,
     page_paints: &'a [PagePaint],
-    /// Where the Vim-style text cursor sits, for the one page that has one.
-    page_cursors: &'a std::collections::HashMap<PaneId, (usize, usize)>,
+    /// Where each page's caret sits, and whether it is typing there.
+    page_cursors: &'a std::collections::HashMap<PaneId, PaneCaret>,
     /// The open pages, for the grid each one last painted into.
     pages: &'a std::collections::HashMap<PaneId, super::page::PageSlot>,
-    palette_open: bool,
+    /// Whether an overlay has the keyboard: the palette, or a question being
+    /// answered in the input dialog.
+    overlay_open: bool,
     panes: &'a std::collections::HashMap<PaneId, crate::terminal::pane::Pane>,
     rects: &'a [(PaneId, Rect)],
     selection: Option<&'a super::Selection>,
@@ -169,7 +175,7 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
         page_cursors,
         page_paints,
         pages,
-        palette_open,
+        overlay_open,
         panes,
         rects,
         selection,
@@ -258,9 +264,9 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
             };
             let is_focused = *id == focused;
             let cursor_unfocused = is_focused && !window_focused;
-            let cursor_visible = if palette_open || !pane.grid().cursor_visible() {
-                // The palette steals focus, and DECTCEM (CSI ?25l) lets a
-                // full-screen app like btop hide the cursor outright.
+            let cursor_visible = if overlay_open || !pane.grid().cursor_visible() {
+                // An overlay with the keyboard has the cursor too, and DECTCEM
+                // (CSI ?25l) lets a full-screen app like btop hide it outright.
                 false
             } else if cursor_unfocused {
                 // An unfocused cursor marks "not receiving keystrokes"; blinking
@@ -318,6 +324,26 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
 /// selection sits. A text selection over the page is drawn here the same way a
 /// terminal pane draws one: the rows it names are the page's, so it has to be
 /// resolved against the grid the page painted rather than the pane's.
+/// Where a pane's caret is drawn and how it reads: the cell it is on, and
+/// whether what is happening there is typing.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) struct PaneCaret {
+    pub(crate) col: usize,
+    pub(crate) insert: bool,
+    pub(crate) row: usize,
+}
+
+impl PaneCaret {
+    /// A caret on `(row, col)` that is not typing.
+    fn at(row: usize, col: usize) -> Self {
+        Self {
+            col,
+            insert: false,
+            row,
+        }
+    }
+}
+
 fn page_pane_view<'a>(
     paint: &'a PagePaint,
     grid: &'a Grid,
@@ -325,7 +351,7 @@ fn page_pane_view<'a>(
     focused: bool,
     config: &crate::config::Config,
     selection: Option<&'a super::Selection>,
-    text_cursor: Option<(usize, usize)>,
+    text_cursor: Option<PaneCaret>,
 ) -> PaneView<'a> {
     let (sel_tuple, sel_block) = match selection {
         Some(s) => (
@@ -337,7 +363,14 @@ fn page_pane_view<'a>(
     PaneView {
         bracket_colors: &[],
         block_band: None,
-        cursor_shape: CursorShape::Block,
+        // A page's caret is a block over the cell it is on, as the traversal
+        // cursor is everywhere else; a page taking typed text takes the shape
+        // the terminal's own cursor has while typing, so the two read apart at
+        // a glance.
+        cursor_shape: match text_cursor.map(|caret| caret.insert) {
+            Some(true) => config.cursor.insert,
+            _ => CursorShape::Block,
+        },
         cursor_unfocused: false,
         cursor_visible: false,
         dim: !focused && config.dim_inactive,
@@ -349,7 +382,11 @@ fn page_pane_view<'a>(
         // Out of bounds when there is no text cursor, which suppresses it: a
         // page has no caret of its own, so the cursor line is the only mark of
         // where the page's own selection sits.
-        nav_cursor: Some(text_cursor.unwrap_or((grid.rows(), grid.cols()))),
+        nav_cursor: Some(
+            text_cursor
+                .map(|caret| (caret.row, caret.col))
+                .unwrap_or((grid.rows(), grid.cols())),
+        ),
         cursor_line_row: paint.cursor_line,
         nav_cursor_visible: text_cursor.is_some(),
         rect: App::layout_rect_to_pane(rect),
@@ -530,6 +567,7 @@ fn image_placements(
 /// behind them, and the empty-state message matching what it searches over.
 fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) -> PaletteView {
     let empty_message = match palette.mode {
+        PaletteMode::Files => "Nothing here by that name",
         PaletteMode::History => "No matching history",
         PaletteMode::PagePick => "Nothing matches",
         PaletteMode::Panes => "No matching panes",
@@ -543,9 +581,13 @@ fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) ->
     };
     PaletteView {
         empty_message: empty_message.to_string(),
-        // A page's list is headed by what it is a list of; the command
-        // palette needs no naming and is drawn without a heading.
-        title: pick.unwrap_or_default().to_string(),
+        // A page's list is headed by what it is a list of, and a browser by
+        // where it is; the command palette needs no naming and is drawn
+        // without a heading.
+        title: match &palette.dir {
+            Some(dir) => dir.display().to_string(),
+            None => pick.unwrap_or_default().to_string(),
+        },
         items: palette
             .filtered
             .iter()
@@ -586,6 +628,11 @@ fn which_key_view(
 
 impl App {
     pub(crate) fn render_frame(&mut self) {
+        // What is about to be drawn is the current state, so the pending-repaint
+        // flag is spent here. Clearing it at the top rather than the bottom keeps
+        // a change made while this frame is being built from being swallowed: it
+        // sets the flag again and earns its own frame.
+        self.dirty = false;
         // The settings page is a full-window modal; it replaces the panes, tabbar,
         // status bar, and block tiles entirely until it closes.
         if self.settings_page.is_some() {
@@ -593,24 +640,20 @@ impl App {
             return;
         }
 
-        // While a new-theme name is being entered, show the live input in place
-        // of any transient notice (reuses the same status-bar/toast display).
-        let notice = if let Some(text) = self.prompt_display() {
-            Some(StatusNotice {
-                kind: NoticeKind::Info,
-                text,
-            })
-        } else if let Some(input) = &self.theme_name_input {
-            Some(StatusNotice {
-                kind: NoticeKind::Info,
-                text: format!("New theme name: {input}\u{2502}"),
-            })
-        } else {
-            self.active_notice().map(|(text, kind)| StatusNotice {
-                kind,
-                text: text.to_string(),
-            })
-        };
+        // Questions are asked in the dialog over the middle of the window, so
+        // the status bar is left to say what it has to say.
+        let notice = self.active_notice().map(|(text, kind)| StatusNotice {
+            kind,
+            text: text.to_string(),
+        });
+        // A tool's question, or the one the app asks for a new theme's name:
+        // both are a line typed in answer to a label, and both are read in
+        // the same place.
+        let input_view = self.input_view().or_else(|| {
+            self.theme_name_input
+                .as_ref()
+                .map(|input| page::input_dialog("New theme name", input, PromptMode::Text))
+        });
         // A live `/` search forces the status bar on for its duration even if
         // it's configured hidden: it's the only place search feedback (query
         // text, match position) is shown, so there'd otherwise be nowhere to
@@ -718,16 +761,32 @@ impl App {
         // started a text cursor in. The row band says which entry is current;
         // the cursor says which cell a selection would start from, and without
         // it a page looks like it has no cursor at all.
-        let page_cursors: std::collections::HashMap<PaneId, (usize, usize)> = self
+        let page_cursors: std::collections::HashMap<PaneId, PaneCaret> = self
             .pages
             .iter()
             .filter_map(|(id, slot)| {
                 if let Some(cursor) = self.page_cursor.as_ref().filter(|c| c.pane == *id) {
-                    return Some((*id, (cursor.row, cursor.col)));
+                    return Some((*id, PaneCaret::at(cursor.row, cursor.col)));
                 }
                 let row = slot.cursor_line?;
+                // A page that edits text says which cell it is on; one whose
+                // cursor is a whole row leaves it to the row's first painted
+                // character, which is where the eye starts reading it.
+                if let Some(caret) = slot.page.caret() {
+                    return Some((
+                        *id,
+                        PaneCaret {
+                            col: caret.col,
+                            insert: caret.insert,
+                            row,
+                        },
+                    ));
+                }
                 let grid = slot.painted.as_ref()?;
-                Some((*id, (row, super::page_cursor::first_non_blank(grid, row))))
+                Some((
+                    *id,
+                    PaneCaret::at(row, super::page_cursor::first_non_blank(grid, row)),
+                ))
             })
             .collect();
 
@@ -751,7 +810,7 @@ impl App {
             page_cursors: &page_cursors,
             page_paints: &page_paints,
             pages: &self.pages,
-            palette_open: self.palette.is_some(),
+            overlay_open: self.palette.is_some() || input_view.is_some(),
             panes: &self.panes,
             rects: &rects,
             selection: self.selection.span.as_ref(),
@@ -763,6 +822,7 @@ impl App {
             Some(&tabbar),
             &placements,
             palette_view.as_ref(),
+            input_view.as_ref(),
             toast.as_ref(),
             which_key_view.as_ref(),
         );
@@ -1117,6 +1177,7 @@ impl App {
             None,
             None,
             &[],
+            None,
             None,
             None,
             None,
@@ -1895,6 +1956,30 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         PageStyle::Section => Style {
             background: section_band(theme),
             foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        // Source is colored out of the theme's own palette rather than out of
+        // a scheme of its own, so a file reads as the terminal beside it does:
+        // the comment hue the shells and the pagers already use, and one hue
+        // per kind of thing after that.
+        PageStyle::SyntaxComment => Style {
+            foreground: theme_rgb(theme.ansi[ANSI_BRIGHT_BLACK]),
+            ..Style::default()
+        },
+        PageStyle::SyntaxKeyword => Style {
+            foreground: theme_rgb(theme.ansi[ANSI_MAGENTA]),
+            ..Style::default()
+        },
+        PageStyle::SyntaxNumber => Style {
+            foreground: theme_rgb(theme.ansi[ANSI_YELLOW]),
+            ..Style::default()
+        },
+        PageStyle::SyntaxString => Style {
+            foreground: theme_rgb(theme.ansi[ANSI_GREEN]),
+            ..Style::default()
+        },
+        PageStyle::SyntaxType => Style {
+            foreground: theme_rgb(theme.ansi[ANSI_CYAN]),
             ..Style::default()
         },
         PageStyle::Unpushed => Style {

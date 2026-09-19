@@ -13,7 +13,7 @@ See the [usage guide](docs/usage-guide.md) for how to drive Winter, and the [pro
 - **Structured command blocks:** OSC 133 shell integration organizes your session into discrete, foldable units with exit codes and durations clearly marked. Jump between blocks with `]b`/`[b`, yank block output with `y`, or target blocks with quick-select (`q`).
 - **Rich inline MIME blocks (TBP):** Render tables, interactive Vega charts, LaTeX math, PDFs, and images inline via the Terminal Block Protocol, backed by a real web engine with secure CSP sandboxing and automatic plain-text fallbacks.
 - **Prompt-line integration:** Normal-mode operators (`dw`, `ci"`, `x`) act directly on your active shell prompt line, accompanied by which-key hints that display pending keybindings dynamically.
-- **Tool panes:** `Ctrl-Shift-d` opens a tree-style directory listing with marks, file operations, and background directory sizes; `Ctrl-Shift-g` opens the working tree, where hunks stage and discard one at a time and transient menus drive branch, commit, merge, rebase, stash, tag, log, and blame; `Ctrl-Shift-f` searches the tree for text and opens any match at its line. A tool covers the focused pane rather than replacing it, so the shell underneath keeps running and comes back the moment you close it, and `/`, `n`, and `N` search whichever tool is up.
+- **Tool panes:** `Ctrl-Shift-d` opens a tree-style directory listing with marks, file operations, and background directory sizes; `Ctrl-Shift-g` opens the working tree, where hunks stage and discard one at a time and transient menus drive branch, commit, merge, rebase, stash, tag, log, and blame; `Ctrl-Shift-s` searches the tree for text and opens any match at its line; `Ctrl-Shift-f` walks the working directory in the command palette, a directory at a time, and opens the file you land on. A tool covers the focused pane rather than replacing it, so the shell underneath keeps running and comes back the moment you close it, and `/`, `n`, and `N` search whichever tool is up.
 
 ## Core keybindings
 
@@ -47,7 +47,8 @@ A Winter pane is always in one of five modes: **Insert** (owns the PTY), **Norma
 | **Tabs** | `Ctrl-Shift-t` / `Ctrl-Shift-w` | New tab, close tab |
 | | `gt` / `gT` or `Ctrl-Tab` | Next tab, previous tab |
 | **Tools** | `Ctrl-Shift-d` / `Ctrl-Shift-g` | Directory listing, git status |
-| | `Ctrl-Shift-f` | Search the tree for text |
+| | `Ctrl-Shift-f` | Browse files in the palette, and open one |
+| | `Ctrl-Shift-s` | Search the tree for text |
 | | `/` then `n` / `N` | Search an open tool, next and previous match |
 | | `q` | Close the tool, giving the pane back |
 | **Palette** | `Ctrl-Shift-p` or `Alt-x` | Open command palette |

@@ -72,6 +72,7 @@ impl App {
             page_cursor: None,
             page_wrap: false,
             pages: HashMap::new(),
+            covered: HashMap::new(),
             panes: HashMap::new(),
             pending_tab_completion: HashSet::new(),
             last_alt_screen_escape: None,
@@ -169,6 +170,9 @@ impl App {
             }
             "dir_page" => {
                 self.open_dir_page();
+            }
+            "file_browser" => {
+                self.open_file_browser();
             }
             "git_page" => {
                 self.open_git_page();

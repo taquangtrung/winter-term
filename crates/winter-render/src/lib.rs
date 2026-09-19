@@ -22,8 +22,8 @@ pub use grid::{
 };
 pub use image::ImagePlacement;
 pub use renderer::{
-    start_font_load, FontConfig, FontLoad, NoticeKind, PaletteItem, PaletteView, PaneRect,
-    PaneView, StatusBar, StatusNotice, StatusSearch, WhichKeyView,
+    start_font_load, FontConfig, FontLoad, InputView, NoticeKind, PaletteItem, PaletteView,
+    PaneRect, PaneView, StatusBar, StatusNotice, StatusSearch, WhichKeyView,
 };
 pub use screen::Screen;
 pub use tabbar::{

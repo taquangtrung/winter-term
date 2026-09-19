@@ -161,6 +161,7 @@ impl App {
             return;
         }
         self.pages.remove(&pane_id);
+        self.covered.remove(&pane_id);
         self.panes.remove(&pane_id);
         self.modes.remove(&pane_id);
         self.nav_cursors.remove(&pane_id);

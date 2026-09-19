@@ -525,6 +525,15 @@ fn is_poll_idle(last_activity: Instant, now: Instant) -> bool {
     now.saturating_duration_since(last_activity) >= PTY_ACTIVE_WINDOW
 }
 
+/// Whether the blink timer should be running: it is configured on *and* the
+/// window has focus. An unfocused window draws its cursor in the steady "not
+/// receiving keystrokes" form, which does not consult the blink phase, so
+/// flipping it there cannot change a pixel and every redraw it asked for was
+/// waste a backgrounded window paid around the clock.
+fn is_blink_active(blink_configured: bool, window_focused: bool) -> bool {
+    blink_configured && window_focused
+}
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -610,6 +619,10 @@ pub struct App {
     /// Panes a tool page is currently covering. The pane keeps its terminal,
     /// which goes on running underneath and comes back when the page closes.
     pub(crate) pages: HashMap<PaneId, page::PageSlot>,
+    /// Pages a later page was opened on top of, innermost last. Opening a file
+    /// from a listing covers the listing rather than replacing it, so closing
+    /// the file puts the user back where they were looking.
+    pub(crate) covered: HashMap<PaneId, Vec<page::PageSlot>>,
     /// Whether tool pages wrap rows wider than their pane onto the next
     /// screen row, toggled by `Alt+Z` in every tool at once.
     pub(crate) page_wrap: bool,
@@ -916,7 +929,16 @@ impl ApplicationHandler for App {
         _window_id: WindowId,
         event: WindowEvent,
     ) {
-        self.last_activity = Instant::now();
+        // Every window event except a repaint counts as activity for the
+        // `about_to_wait` poll back-off. `RedrawRequested` is excluded because
+        // the app is what asks for those: the cursor blink alone requests one
+        // roughly twice a second, so counting them kept `last_activity`
+        // permanently fresher than `PTY_ACTIVE_WINDOW` and pinned the loop to
+        // `PTY_POLL_INTERVAL` forever, leaving `PTY_POLL_INTERVAL_IDLE`
+        // unreachable with the default config.
+        if !matches!(event, WindowEvent::RedrawRequested) {
+            self.last_activity = Instant::now();
+        }
         match event {
             WindowEvent::Resized(size) => {
                 if size.width > 0 && size.height > 0 {
@@ -1025,6 +1047,15 @@ impl ApplicationHandler for App {
                 }
                 if self.window_focused != focused {
                     self.window_focused = focused;
+                    // The blink timer is paused while unfocused, so
+                    // `blink_next_flip` is stale by the time focus returns.
+                    // Restart it from the visible phase, the same way a key
+                    // press does, rather than letting the elapsed deadline
+                    // blink the cursor off the instant the window is clicked.
+                    if self.config.cursor.blink && focused {
+                        self.blink_phase = true;
+                        self.blink_next_flip = Instant::now() + CURSOR_BLINK_PERIOD;
+                    }
                     self.dirty = true;
                     if let Some(window) = &self.window {
                         window.request_redraw();
@@ -1125,15 +1156,12 @@ impl ApplicationHandler for App {
 
         // Flip cursor blink phase when the timer fires, requesting a redraw to
         // show the updated state.
-        if self.config.cursor.blink {
+        if is_blink_active(self.config.cursor.blink, self.window_focused) {
             let now = Instant::now();
             if now >= self.blink_next_flip {
                 self.blink_phase = !self.blink_phase;
                 self.blink_next_flip = now + CURSOR_BLINK_PERIOD;
                 self.dirty = true;
-                if let Some(window) = &self.window {
-                    window.request_redraw();
-                }
             }
         }
 
@@ -1163,6 +1191,19 @@ impl ApplicationHandler for App {
             self.last_activity = Instant::now();
         }
 
+        // Turn the app-wide "what is drawn no longer matches the state" flag
+        // into the one redraw request it stands for. This is the only place
+        // `dirty` is read: most of the ~150 sites that set it never call
+        // `request_redraw` themselves, and until now those repaints only
+        // landed because the cursor blink happened to ask for a frame twice a
+        // second anyway. Taken rather than read, so one request is made per
+        // batch of changes; winit coalesces a redraw already pending.
+        if let Some(window) = &self.window {
+            if std::mem::take(&mut self.dirty) {
+                window.request_redraw();
+            }
+        }
+
         let now = Instant::now();
         let poll_interval = if is_poll_idle(self.last_activity, now) {
             PTY_POLL_INTERVAL_IDLE
@@ -1170,7 +1211,7 @@ impl ApplicationHandler for App {
             PTY_POLL_INTERVAL
         };
         let next_poll = now + poll_interval;
-        let mut wakeup = if self.config.cursor.blink {
+        let mut wakeup = if is_blink_active(self.config.cursor.blink, self.window_focused) {
             next_poll.min(self.blink_next_flip)
         } else {
             next_poll
@@ -2157,6 +2198,18 @@ mod tests {
         let last_activity = Instant::now();
         let now = last_activity + PTY_ACTIVE_WINDOW;
         assert!(is_poll_idle(last_activity, now));
+    }
+
+    #[test]
+    fn test_blink_needs_both_config_and_window_focus() {
+        // Dropping either term is the regression this guards. Losing the focus
+        // term puts a backgrounded window back on a 530ms redraw it cannot
+        // show, which is what kept `PTY_POLL_INTERVAL_IDLE` unreachable;
+        // losing the config term blinks for users who turned blinking off.
+        assert!(is_blink_active(true, true));
+        assert!(!is_blink_active(true, false));
+        assert!(!is_blink_active(false, true));
+        assert!(!is_blink_active(false, false));
     }
 
     #[test]

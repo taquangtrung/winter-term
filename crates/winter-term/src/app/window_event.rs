@@ -4,6 +4,8 @@ use std::time::{Duration, Instant};
 
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
+
+use crate::model::page::PagePoint;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::CursorIcon;
 
@@ -530,6 +532,21 @@ impl App {
                     if let Some((pane_id, pane_rect)) = self.pane_at_pixel(x, y) {
                         self.tab_mut().focus(pane_id);
                         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
+                        // A page covering the pane owns what is drawn there,
+                        // so the click is its to answer before the grid's.
+                        let at = PagePoint {
+                            col,
+                            drag: false,
+                            row,
+                        };
+                        if self.offer_mouse_to_page(pane_id, at) {
+                            self.pointer.press_cell = None;
+                            self.dirty = true;
+                            if let Some(window) = &self.window {
+                                window.request_redraw();
+                            }
+                            return;
+                        }
                         // A click parks the traversal cursor under the
                         // pointer, so selecting with the mouse moves the
                         // cursor instead of leaving it wherever the last
@@ -671,6 +688,18 @@ impl App {
             // Resolved against the pane the drag started in, not just the one
             // under the pointer, so running off an edge keeps selecting.
             if let Some((pane_id, row, col)) = self.drag_cell_at(x, y) {
+                let at = PagePoint {
+                    col,
+                    drag: true,
+                    row,
+                };
+                if self.offer_mouse_to_page(pane_id, at) {
+                    self.dirty = true;
+                    if let Some(window) = &self.window {
+                        window.request_redraw();
+                    }
+                    return;
+                }
                 // Selection rows are absolute (see `Grid::to_absolute_row`)
                 // so they keep naming the same line if auto-scroll (or a
                 // wheel scroll) moves the view mid-drag.
@@ -738,6 +767,13 @@ impl App {
         };
 
         let focused = self.tab().focused();
+        if scroll_lines != 0 && self.offer_scroll_to_page(focused, scroll_lines) {
+            self.dirty = true;
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+            return;
+        }
         if self.panes.get(&focused).is_some_and(|p| p.mouse_tracking()) {
             self.drop_selection_in_pane(focused);
             self.forward_mouse_scroll(scroll_lines, focused);

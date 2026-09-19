@@ -199,25 +199,6 @@ pub(super) fn motion_action(
     }
     Some(action)
 }
-/// The text object a key names after an `i`/`a` operator.
-///
-/// Shared by `c`, `d`, and `ys` so an object added here works for every
-/// operator that takes one, instead of having to be added to each separately.
-fn text_object(code: KeyCode) -> Option<TextObject> {
-    match code {
-        KeyCode::Char('w') => Some(TextObject::Word),
-        KeyCode::Char('W') => Some(TextObject::WordBig),
-        KeyCode::Char('p') => Some(TextObject::Paragraph),
-        KeyCode::Char('s') => Some(TextObject::Sentence),
-        KeyCode::Char(c @ ('"' | '\'' | '`')) => Some(TextObject::Quotes(c)),
-        KeyCode::Char('(' | ')' | 'b') => Some(TextObject::Brackets('(', ')')),
-        KeyCode::Char('[' | ']') => Some(TextObject::Brackets('[', ']')),
-        KeyCode::Char('{' | '}' | 'B') => Some(TextObject::Brackets('{', '}')),
-        KeyCode::Char('<' | '>') => Some(TextObject::Brackets('<', '>')),
-        _ => None,
-    }
-}
-
 /// Chords that resolve before any pending sequence gets a look: window
 /// commands, the configurable window leader, prompt undo/redo, and the bare
 /// `Ctrl`/`Alt` chords.
@@ -436,7 +417,7 @@ pub(super) fn resolve_normal(
             KeyCode::Char('N') => Action::ChangeSearchMatch { forward: false },
             _ => Action::Ignore,
         },
-        PendingPrefix::ChangeObject { around } => match text_object(key.code) {
+        PendingPrefix::ChangeObject { around } => match TextObject::of_key(key.code) {
             Some(object) => Action::ChangeTextObject(TextObjectSpec::new(around, object)),
             None => Action::Ignore,
         },
@@ -486,7 +467,7 @@ pub(super) fn resolve_normal(
             }
             _ => Action::Ignore,
         },
-        PendingPrefix::YankObject { around, register } => match text_object(key.code) {
+        PendingPrefix::YankObject { around, register } => match TextObject::of_key(key.code) {
             Some(object) => Action::YankTextObject {
                 spec: TextObjectSpec::new(around, object),
                 register,
@@ -522,7 +503,7 @@ pub(super) fn resolve_normal(
             KeyCode::Char('N') => Action::DeleteSearchMatch { forward: false },
             _ => Action::Ignore,
         },
-        PendingPrefix::DeleteObject { around } => match text_object(key.code) {
+        PendingPrefix::DeleteObject { around } => match TextObject::of_key(key.code) {
             Some(object) => Action::DeleteTextObject(TextObjectSpec::new(around, object)),
             None => Action::Ignore,
         },
@@ -624,7 +605,7 @@ pub(super) fn resolve_normal(
                 Action::Ignore
             }
             code => {
-                if let Some(object) = text_object(code) {
+                if let Some(object) = TextObject::of_key(code) {
                     *pending = PendingPrefix::YieldSurroundDelimiter {
                         spec: TextObjectSpec::new(around, object),
                     };

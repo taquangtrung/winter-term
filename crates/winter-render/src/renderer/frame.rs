@@ -8,7 +8,7 @@ use super::background::{
     build_bg_vertices_offset, compute_divider, cursor_outline_quads, cursor_quad, lerp_to_bg,
     quad_vertices, BgParams, BgVertex, DotVertex, CURSOR_HOLLOW_STROKE_WIDTH, DOT_BUFFER_SIZE,
 };
-use super::chrome::{PaletteView, TabbarText, WhichKeyView, DIM_FACTOR};
+use super::chrome::{InputView, PaletteView, TabbarText, WhichKeyView, DIM_FACTOR};
 use super::colors::{
     block_cursor_cell, cell_text_fg, cursor_contrast_fg, needs_dark_on_light_bold,
     srgb_to_linear_f64, theme_indexed_color,
@@ -154,6 +154,7 @@ impl GpuRenderer {
         tabbar: Option<&TopTabbar>,
         images: &[ImagePlacement],
         palette: Option<&PaletteView>,
+        input: Option<&InputView>,
         toast: Option<&StatusNotice>,
         which_key: Option<&WhichKeyView>,
     ) {
@@ -219,7 +220,7 @@ impl GpuRenderer {
 
         let ranges = self.upload_vertex_buffers(&mut layers, surface);
         self.prepare_tabbar_strip(tabbar, surface);
-        self.prepare_overlay_images(images, tabbar, palette, toast, which_key, surface);
+        self.prepare_overlay_images(images, tabbar, palette, input, toast, which_key, surface);
         self.glyph_quad_pass.prepare(
             &self.queue,
             &layers.glyph_quads,
@@ -1130,6 +1131,7 @@ impl GpuRenderer {
         images: &[ImagePlacement],
         tabbar: Option<&TopTabbar>,
         palette: Option<&PaletteView>,
+        input: Option<&InputView>,
         toast: Option<&StatusNotice>,
         which_key: Option<&WhichKeyView>,
         surface: SurfaceSize,
@@ -1145,6 +1147,9 @@ impl GpuRenderer {
         }
         if let Some(p) = palette {
             all_images.extend(self.rasterize_palette(p, surface.width, surface.height));
+        }
+        if let Some(i) = input {
+            all_images.extend(self.rasterize_input(i, surface.width, surface.height));
         }
         if let Some(t) = toast {
             if let Some(placement) = self.rasterize_toast(t, surface.width) {

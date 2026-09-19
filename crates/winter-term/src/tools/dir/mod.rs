@@ -196,6 +196,17 @@ impl DirPage {
         PageOutcome::Consumed
     }
 
+    /// Hand the file under the cursor to `$EDITOR`, in a pane of its own, for
+    /// the editing the app's own editor deliberately cannot do.
+    fn open_external(&self) -> PageOutcome {
+        match self.selected() {
+            Some(row) if !row.entry.is_dir() => {
+                PageOutcome::SpawnEditor(OpenTarget::file(row.entry.path.clone()))
+            }
+            _ => PageOutcome::Consumed,
+        }
+    }
+
     /// Move the listing to the parent directory, keeping the cursor on the
     /// directory just left so stepping up and down again lands where it started.
     fn ascend(&mut self) {
@@ -675,7 +686,7 @@ impl DirPage {
     }
 
     /// Carry out the answer to a question, and report what happened.
-    fn apply_answer(&mut self, tag: &'static str, answer: &str) {
+    fn apply_answer(&mut self, tag: &'static str, answer: &str) -> PageOutcome {
         let result = match tag {
             ASK_COPY => self.copy_targets(answer),
             ASK_DELETE => self.delete_targets(),
@@ -686,12 +697,26 @@ impl DirPage {
             ASK_RENAME => self.rename_selected(answer),
             _ => Ok(String::new()),
         };
+        let created = result.is_ok();
         self.message = Some(match result {
             Ok(report) => report,
             Err(report) => format!("failed: {report}"),
         });
         self.marks.clear();
         self.reload_keeping_selection();
+        if tag != ASK_NEW_FILE || !created {
+            return PageOutcome::Consumed;
+        }
+        // A file is made to be written in, so it opens with the cursor in it
+        // rather than as one more empty row to find again. The listing lands
+        // on it too, for when the editor closes over the top of it.
+        let Some(path) = ops::resolve_name(&self.root, answer) else {
+            return PageOutcome::Consumed;
+        };
+        if let Some(index) = self.rows.iter().position(|row| row.entry.path == path) {
+            self.cursor = index;
+        }
+        PageOutcome::OpenPath(OpenTarget::file(path))
     }
 
     fn create(&mut self, name: &str, directory: bool) -> Result<String, String> {
@@ -873,6 +898,13 @@ fn reveal_start(rows: &[Row], window: &PageWindow, at: Option<usize>) -> Option<
 }
 
 impl Page for DirPage {
+    fn on_resume(&mut self) -> PageOutcome {
+        // A file edited under the listing has a new size and a new mtime, and
+        // a file created or deleted is a row that is not there.
+        self.reload_keeping_selection();
+        PageOutcome::Consumed
+    }
+
     fn on_job(&mut self, reply: JobReply) -> PageOutcome {
         match reply {
             // A listing runs no commands and asks for no searches of its own.
@@ -891,7 +923,7 @@ impl Page for DirPage {
             // A search moves the cursor and nothing else, so it must not clear
             // the marks or re-read the listing the way an operation does.
             Some(answer) if reply.tag == ASK_SEARCH => self.search_for(&answer),
-            Some(answer) => self.apply_answer(reply.tag, &answer),
+            Some(answer) => return self.apply_answer(reply.tag, &answer),
             None => self.message = Some("cancelled".to_string()),
         }
         PageOutcome::Consumed
@@ -1166,6 +1198,7 @@ impl DirPage {
                 self.pending = Some(Leader::Edit);
                 PageOutcome::Consumed
             }
+            KeyCode::Char('o') => self.open_external(),
             // The paging chords the shared layer binds fall through to it;
             // the rest stay with the window.
             _ => match self.nav.key(key) {
@@ -1808,6 +1841,76 @@ mod tests {
             answer: Some(text.to_string()),
             tag,
         });
+    }
+
+    #[test]
+    fn test_a_new_file_opens_for_writing_and_the_listing_lands_on_it() {
+        // A file is created to be written in. Leaving it as one more row in
+        // the listing means finding it again before anything can go in it.
+        let tree = TempTree::new("new-file");
+        tree.touch("other.txt");
+        let mut page = DirPage::new(tree.0.clone());
+
+        let outcome = page.on_key(&press(KeyCode::Char('_')));
+        let PageOutcome::Prompt(request) = outcome else {
+            panic!("expected a question, got {outcome:?}");
+        };
+        let opened = page.on_prompt(PromptReply {
+            answer: Some("notes.md".to_string()),
+            tag: request.tag,
+        });
+
+        let path = tree.0.join("notes.md");
+        assert!(path.exists(), "the file was created");
+        assert_eq!(
+            opened,
+            PageOutcome::OpenPath(OpenTarget::file(path.clone()))
+        );
+        assert_eq!(
+            page.selected().map(|row| row.entry.path.clone()),
+            Some(path),
+            "and the listing is on it for when the editor closes"
+        );
+    }
+
+    #[test]
+    fn test_a_new_directory_is_not_opened_for_writing() {
+        // Handing a directory to the editor would report a read failure at a
+        // moment nothing went wrong.
+        let tree = TempTree::new("new-dir");
+        let mut page = DirPage::new(tree.0.clone());
+        let outcome = page.on_key(&press(KeyCode::Char('+')));
+        let PageOutcome::Prompt(request) = outcome else {
+            panic!("expected a question, got {outcome:?}");
+        };
+        assert_eq!(
+            page.on_prompt(PromptReply {
+                answer: Some("src".to_string()),
+                tag: request.tag,
+            }),
+            PageOutcome::Consumed
+        );
+        assert!(tree.0.join("src").is_dir());
+    }
+
+    #[test]
+    fn test_a_name_that_could_not_be_created_opens_nothing() {
+        // The failure is reported in the header; opening the file that was
+        // never made would report a second, more confusing one.
+        let tree = TempTree::new("new-file-clash");
+        tree.touch("taken.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        let outcome = page.on_key(&press(KeyCode::Char('_')));
+        let PageOutcome::Prompt(request) = outcome else {
+            panic!("expected a question, got {outcome:?}");
+        };
+        assert_eq!(
+            page.on_prompt(PromptReply {
+                answer: Some("taken.txt".to_string()),
+                tag: request.tag,
+            }),
+            PageOutcome::Consumed
+        );
     }
 
     #[test]

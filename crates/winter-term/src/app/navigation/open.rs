@@ -14,6 +14,7 @@ use std::path::PathBuf;
 use winter_render::Grid;
 
 use crate::model::layout::PaneId;
+use crate::model::page;
 use crate::terminal::pane::Pane;
 
 use super::vim::line_chars;
@@ -29,7 +30,7 @@ const URL_REGEX: &str = r#"\bhttps?://[^\s<>"'`|(){}\[\]]+"#;
 // ========================================================================
 
 /// What `gx` resolved to under the cursor, and how to open it: URLs go to the
-/// system opener, files to a new tab running the user's editor.
+/// system opener, files to the editor over the pane they were named in.
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) enum OpenTarget {
     File {
@@ -259,7 +260,7 @@ fn enclosed_quote_span(line: &[char], idx: usize) -> Option<(usize, usize)> {
 impl App {
     /// `gx`: open what the Normal-mode cursor sits on (see
     /// [`resolve_open_target`]). A URL goes to the system opener; a file
-    /// opens in a new tab running the user's editor at the referenced line.
+    /// opens in the editor, over this pane, at the referenced line.
     pub(crate) fn open_under_cursor(&mut self, focused: PaneId) {
         let Some((row, col)) = self.nav_cursor(focused) else {
             return;
@@ -274,7 +275,16 @@ impl App {
                 Ok(()) => self.set_notice(format!("opened {url}")),
                 Err(e) => self.set_error(format!("could not open {url}: {e}")),
             },
-            Some(OpenTarget::File { path, line }) => self.open_file_in_new_tab(path, line),
+            // Over the pane rather than in a tab of its own: the reference was
+            // printed by whatever is running here, and closing the file puts
+            // the user back in front of it with their place kept.
+            Some(OpenTarget::File { path, line }) => {
+                let target = match line {
+                    Some(line) => page::OpenTarget::at_line(path, line),
+                    None => page::OpenTarget::file(path),
+                };
+                self.open_editor_page(target);
+            }
             None => self.set_notice("nothing to open under the cursor"),
         }
     }

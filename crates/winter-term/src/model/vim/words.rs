@@ -2,16 +2,18 @@
 //! characters, shared by every Vim surface in Winter — the terminal grid's
 //! Normal mode, the dir name editor — as the foundation's text layer.
 
+use super::motion::FindChar;
+
 // ========================================================================
 // Word classification
 // ========================================================================
 
 /// A character's word class, à la Vim. Blanks (class 0) separate words. With
-/// `big` false (`w`/`b`/`e`): keyword runs (alphanumerics and `_`, class 1) are
-/// distinct from punctuation runs (class 2). With `big` true (`W`/`B`/`E`):
-/// any non-blank is class 1, so only whitespace breaks a WORD. Text objects
-/// (`iw`/`aw`/`iW`/`aW`) and the word search classify with this; the motions
-/// classify with [`motion_class`] instead.
+/// `big` false: keyword runs (alphanumerics and `_`, class 1) are distinct
+/// from punctuation runs (class 2). With `big` true: any non-blank is class 1,
+/// so only whitespace breaks a WORD. Text objects (`iw`/`aw`/`iW`/`aW`) and the
+/// word search classify with this; the motions classify with [`motion_class`]
+/// instead.
 pub(crate) fn char_class(c: char, big: bool) -> u8 {
     if c == '\0' || c.is_whitespace() {
         0
@@ -22,14 +24,14 @@ pub(crate) fn char_class(c: char, big: bool) -> u8 {
     }
 }
 
-/// The class a *motion* step sees. It matches [`char_class`] for the small
-/// motions (`w`/`b`/`e`); for the big ones (`W`/`B`/`E`/`gE`) the word-based
-/// characters — alphanumerics and `_` — are the only ones worth landing on,
-/// so punctuation is crossed the way whitespace is: `W` over `foo .bar`
-/// lands on the `b`, never on the `.`.
+/// The class a *motion* step sees. Punctuation is never worth landing on, so
+/// the two sizes differ in what they do with it, not in whether they stop on
+/// it: the small motions (`w`/`b`/`e`/`ge`) cross it the way they cross a
+/// blank, leaving `foo.bar` two words; the big ones (`W`/`B`/`E`/`gE`) take it
+/// into the word beside it, leaving `foo.bar` one WORD.
 fn motion_class(c: char, big: bool) -> u8 {
-    if !big {
-        char_class(c, false)
+    if big {
+        char_class(c, true)
     } else if c.is_alphanumeric() || c == '_' {
         1
     } else {
@@ -42,8 +44,8 @@ fn motion_class(c: char, big: bool) -> u8 {
 // ========================================================================
 
 /// The start column of the next word at or after `col` (Vim `w`/`W`), or `None`
-/// when the rest of the line holds no further word. The big motion crosses
-/// punctuation along with the whitespace (see [`motion_class`]).
+/// when the rest of the line holds no further word. Neither size lands on
+/// punctuation (see [`motion_class`]).
 pub(crate) fn next_word_start(line: &[char], col: usize, big: bool) -> Option<usize> {
     let mut i = col;
     let here = line.get(i).map(|c| motion_class(*c, big)).unwrap_or(0);
@@ -79,9 +81,9 @@ pub(crate) fn prev_word_start(line: &[char], col: usize, big: bool) -> Option<us
 }
 
 /// The end column of the next word after `col` (Vim `e`/`E`), or `None` when the
-/// rest of the line holds no further word. The big motion's word ends on its
-/// last word-based character, so `E` over `foo.` stops on the second `o`, not
-/// the period.
+/// rest of the line holds no further word. The small motion's word ends on its
+/// last word-based character, so `e` over `foo.` stops on the second `o`; the
+/// big one has the period inside the word, so `E` stops on it.
 pub(crate) fn word_end(line: &[char], col: usize, big: bool) -> Option<usize> {
     let mut i = col + 1;
     while i < line.len() && motion_class(line[i], big) == 0 {
@@ -95,6 +97,27 @@ pub(crate) fn word_end(line: &[char], col: usize, big: bool) -> Option<usize> {
         i += 1;
     }
     Some(i)
+}
+
+/// The landing column for a Vim char-search (`f`/`F`/`t`/`T`) on `line` from
+/// `col`. `forward` searches right of the cursor, else left; `till` stops one
+/// cell short of the match. Returns `None` when there is no match, or when a
+/// `till` search would not move (target already adjacent).
+pub(crate) fn find_char(line: &[char], col: usize, find: FindChar) -> Option<usize> {
+    let FindChar { ch, forward, till } = find;
+    let target = if forward {
+        (col + 1..line.len()).find(|&i| line[i] == ch)?
+    } else {
+        (0..col).rev().find(|&i| line[i] == ch)?
+    };
+    let landing = if !till {
+        target
+    } else if forward {
+        target.checked_sub(1)?
+    } else {
+        target + 1
+    };
+    (landing != col).then_some(landing)
 }
 
 /// The column of the first non-blank character (Vim `^`), or 0 for a blank line.
@@ -115,8 +138,8 @@ pub(crate) fn last_non_blank(line: &[char]) -> usize {
 /// nothing precedes it on the line.
 pub(crate) fn prev_word_end(line: &[char], col: usize, big: bool) -> Option<usize> {
     let mut i = col.checked_sub(1)?;
-    // Step back off the word the cursor is inside, then over the blanks —
-    // and, for the big motion, the punctuation (see [`motion_class`]).
+    // Step back off the word the cursor is inside, then over the blanks, and
+    // over the punctuation the small motion crosses (see [`motion_class`]).
     let here = motion_class(*line.get(col).unwrap_or(&' '), big);
     if here != 0 {
         while i > 0 && motion_class(line[i], big) == here {
@@ -141,57 +164,46 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_the_big_motions_land_on_word_based_characters_only() {
-        // Punctuation is crossed the way whitespace is: `W` over `foo .bar`
-        // lands on the `b`, never the `.`; `E` ends a word on its last
-        // word-based character; `B` steps back the same way.
-        let line: Vec<char> = "foo .bar_baz, qux".chars().collect();
+    fn test_the_small_motions_cross_punctuation_the_way_they_cross_a_blank() {
+        // f0 o1 o2 .3 b4 a5 r6 _7 b8 a9 z10 ,11 ' '12 q13 u14 x15
+        let line: Vec<char> = "foo.bar_baz, qux".chars().collect();
 
-        assert_eq!(
-            next_word_start(&line, 0, true),
-            Some(5),
-            "the period is skipped"
-        );
-        assert_eq!(
-            next_word_start(&line, 5, true),
-            Some(14),
-            "the comma with it"
-        );
+        // `w`: the period and the comma are stepped over, never landed on.
+        assert_eq!(next_word_start(&line, 0, false), Some(4), "not the period");
+        assert_eq!(next_word_start(&line, 4, false), Some(13), "nor the comma");
+        assert_eq!(next_word_start(&line, 13, false), None);
 
-        assert_eq!(
-            word_end(&line, 0, true),
-            Some(2),
-            "the second `o`, not the blank"
-        );
-        assert_eq!(word_end(&line, 5, true), Some(11), "the `z`, not the comma");
+        // `b`: the same boundaries, walked backwards.
+        assert_eq!(prev_word_start(&line, 13, false), Some(4));
+        assert_eq!(prev_word_start(&line, 4, false), Some(0));
+        assert_eq!(prev_word_start(&line, 0, false), None);
 
-        assert_eq!(prev_word_start(&line, 14, true), Some(5));
-        assert_eq!(prev_word_start(&line, 5, true), Some(0));
+        // `e`: a word ends on its last word-based character.
+        assert_eq!(word_end(&line, 0, false), Some(2), "the second `o`");
+        assert_eq!(word_end(&line, 2, false), Some(10), "the `z`, over the dot");
+
+        // `ge`: back to that end, over the comma.
+        assert_eq!(prev_word_end(&line, 13, false), Some(10));
     }
 
     #[test]
-    fn test_vim_word_motions_on_a_line() {
-        // f o o , _ b a r _ b a z _ q u x   (_ = space)
-        let line: Vec<char> = "foo, bar_baz qux".chars().collect();
+    fn test_the_big_motions_take_punctuation_into_the_word_beside_it() {
+        let line: Vec<char> = "foo.bar_baz, qux".chars().collect();
 
-        // `w`: word starts, treating punctuation as its own word.
-        assert_eq!(next_word_start(&line, 0, false), Some(3)); // foo -> ','
-        assert_eq!(next_word_start(&line, 3, false), Some(5)); // ',' -> 'bar_baz'
-        assert_eq!(next_word_start(&line, 5, false), Some(13)); // 'bar_baz' -> 'qux'
-        assert_eq!(next_word_start(&line, 13, false), None); // nothing after 'qux'
+        // `W`/`B`: only a blank breaks a WORD, so the run up to it is one.
+        assert_eq!(next_word_start(&line, 0, true), Some(13));
+        assert_eq!(next_word_start(&line, 13, true), None);
+        assert_eq!(prev_word_start(&line, 13, true), Some(0));
 
-        // `b`: previous word starts.
-        assert_eq!(prev_word_start(&line, 13, false), Some(5));
-        assert_eq!(prev_word_start(&line, 5, false), Some(3));
-        assert_eq!(prev_word_start(&line, 0, false), None);
+        // `E`/`gE`: the trailing comma is inside the WORD it follows.
+        assert_eq!(word_end(&line, 0, true), Some(11), "the comma");
+        assert_eq!(prev_word_end(&line, 13, true), Some(11));
+    }
 
-        // `e`: word ends.
-        assert_eq!(word_end(&line, 0, false), Some(2)); // end of 'foo'
-        assert_eq!(word_end(&line, 2, false), Some(3)); // the ',' is a 1-char word
-        assert_eq!(word_end(&line, 5, false), Some(11)); // end of 'bar_baz'
-
-        // `^`: first non-blank.
+    #[test]
+    fn test_the_line_ends_skip_the_indent_and_the_trailing_blanks() {
         assert_eq!(first_non_blank(&"   hi".chars().collect::<Vec<_>>()), 3);
         assert_eq!(first_non_blank(&"".chars().collect::<Vec<_>>()), 0);
+        assert_eq!(last_non_blank(&"hi   ".chars().collect::<Vec<_>>()), 1);
     }
 }

@@ -399,6 +399,16 @@ pub enum PageStyle {
     Section,
     /// A file's row in a diff whose changes are folded away: the band, receded.
     SectionFolded,
+    /// Source being read: a comment, standing back from the code it explains.
+    SyntaxComment,
+    /// Source being read: a word of the language rather than of the program.
+    SyntaxKeyword,
+    /// Source being read: a literal number.
+    SyntaxNumber,
+    /// Source being read: a literal string.
+    SyntaxString,
+    /// Source being read: the name of a type.
+    SyntaxType,
 }
 
 /// What the host should do with a key the page was offered.
@@ -430,8 +440,41 @@ pub enum PageOutcome {
     Spawn(SpawnRequest),
     /// The page asks the host to copy this to the clipboard.
     Yank(String),
-    /// The page asks the host to open this file for editing.
+    /// The page asks the host to open this file for editing, in the editor
+    /// the app carries.
     OpenPath(OpenTarget),
+    /// The page asks the host to open this file in `$EDITOR`, in a pane of
+    /// its own, for the editing the app's own editor deliberately cannot do.
+    SpawnEditor(OpenTarget),
+    /// The page asks the host for what is on the clipboard, which comes back
+    /// through [`Page::on_paste`].
+    Paste,
+}
+
+/// Where a pointer is over a page: the row and column of the pane's own
+/// content, counted from the first row the page painted.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PagePoint {
+    /// The column the pointer is over.
+    pub col: usize,
+    /// Whether the pointer is being dragged with its button held, rather than
+    /// pressed where it now is.
+    pub drag: bool,
+    /// The row the pointer is over.
+    pub row: usize,
+}
+
+/// Where a page's own caret sits within the row it bands as its cursor line,
+/// and whether what it is doing there is typing. A page that reports one is
+/// drawn with the caret on that cell, rather than on the row's first non-blank
+/// character, which for a page with a gutter is in the gutter.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct PageCaret {
+    /// The column, counted in painted cells from the row's start.
+    pub col: usize,
+    /// Whether the next key typed goes into the text, which the caret takes
+    /// its shape from the way the terminal's own does.
+    pub insert: bool,
 }
 
 /// A file a page wants opened, and where in it to land.
@@ -649,6 +692,29 @@ pub trait Page {
     /// Offer a key to the page.
     fn on_key(&mut self, key: &Key) -> PageOutcome;
 
+    /// Offer a press or a drag of the pointer to the page. Pages that take no
+    /// pointer never implement it, and the click falls through to the host.
+    fn on_mouse(&mut self, _at: PagePoint) -> PageOutcome {
+        PageOutcome::Ignored
+    }
+
+    /// Offer a turn of the wheel to the page, in rows, positive upwards.
+    /// Pages that do not scroll themselves never implement it.
+    fn on_scroll(&mut self, _lines: isize) -> PageOutcome {
+        PageOutcome::Ignored
+    }
+
+    /// Hand back what the clipboard holds, for a page that asked for it.
+    fn on_paste(&mut self, _text: String) -> PageOutcome {
+        PageOutcome::Consumed
+    }
+
+    /// Offer a file to the page, for a page that can show more than one.
+    /// `false`, the default, means the host opens it however it would have.
+    fn open_file(&mut self, _target: OpenTarget) -> bool {
+        false
+    }
+
     /// What the page is waiting for, when it is part-way through a command
     /// that takes more than one key: the sequence's name and what the next
     /// key may be. The host draws it the way it draws its own key hints, so a
@@ -666,6 +732,21 @@ pub trait Page {
 
     /// Hand back the result of work the page asked for.
     fn on_job(&mut self, _reply: JobReply) -> PageOutcome {
+        PageOutcome::Consumed
+    }
+
+    /// Where the page's own caret is on its cursor line, for a page that puts
+    /// one somewhere other than the first thing it painted. A page whose
+    /// cursor is a whole row reports none.
+    fn caret(&self) -> Option<PageCaret> {
+        None
+    }
+
+    /// The page is showing again after another one was closed over the top of
+    /// it. What it was showing may have changed while it was covered, so a
+    /// page that reads the world re-reads it here. Pages showing something
+    /// that cannot go stale never implement it.
+    fn on_resume(&mut self) -> PageOutcome {
         PageOutcome::Consumed
     }
 }

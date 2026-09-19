@@ -10,4 +10,5 @@ pub mod mode;
 pub mod page;
 pub mod palette;
 pub mod settings_page;
+pub mod units;
 pub mod vim;

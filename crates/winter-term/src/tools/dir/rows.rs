@@ -4,6 +4,7 @@
 use std::time::{Duration, SystemTime};
 
 use crate::model::page::{PageIcon, PageIconKind, PageRow, PageSpan, PageStyle};
+use crate::model::units::format_size;
 
 use super::entry::{Entry, EntryKind, Meta};
 use super::icons::icon_for;
@@ -47,12 +48,6 @@ const WALKING: &str = "...";
 
 /// Seconds in the units an age is reported in, largest first.
 const AGE_UNITS: [(&str, u64); 4] = [("d", 86400), ("h", 3600), ("m", 60), ("s", 1)];
-
-/// Size units, each 1024 times the one before it.
-const SIZE_UNITS: [&str; 5] = ["B", "K", "M", "G", "T"];
-
-/// The divisor between two size units.
-const SIZE_STEP: u64 = 1024;
 
 // ========================================================================
 // Data Structures
@@ -268,20 +263,6 @@ pub fn format_mode(mode: u32) -> String {
         .collect()
 }
 
-/// A byte count in the largest unit that leaves it under four digits.
-pub fn format_size(len: u64) -> String {
-    let mut size = len as f64;
-    let mut unit = 0;
-    while size >= SIZE_STEP as f64 && unit + 1 < SIZE_UNITS.len() {
-        size /= SIZE_STEP as f64;
-        unit += 1;
-    }
-    if unit == 0 {
-        return format!("{len}{}", SIZE_UNITS[0]);
-    }
-    format!("{size:.1}{}", SIZE_UNITS[unit])
-}
-
 /// How long ago `modified` was, in the largest unit that fits. A timestamp in
 /// the future reads as `0s` rather than wrapping into a huge age.
 pub fn format_age(modified: SystemTime, now: SystemTime) -> String {
@@ -363,14 +344,6 @@ mod tests {
         assert_eq!(format_mode(0o755), "rwxr-xr-x");
         assert_eq!(format_mode(0o640), "rw-r-----");
         assert_eq!(format_mode(0o000), "---------");
-    }
-
-    #[test]
-    fn test_size_steps_up_a_unit_at_a_time() {
-        assert_eq!(format_size(0), "0B");
-        assert_eq!(format_size(1023), "1023B");
-        assert_eq!(format_size(1024), "1.0K");
-        assert_eq!(format_size(1024 * 1024 * 3), "3.0M");
     }
 
     #[test]

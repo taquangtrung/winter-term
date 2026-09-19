@@ -6,13 +6,17 @@ use std::path::PathBuf;
 use crate::model::input::{Key, KeyCode};
 use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
-use crate::model::page::{Page, PageOutcome, PromptMode, PromptReply, PromptRequest};
-use crate::model::palette::Palette;
+use crate::model::page::{
+    OpenTarget, Page, PageOutcome, PagePoint, PromptMode, PromptReply, PromptRequest,
+};
+use crate::model::palette::{Palette, PaletteMode};
 use crate::tools::dir::DirPage;
+use crate::tools::editor::EditorPage;
 use crate::tools::git::GitPage;
 use crate::tools::grep::GrepPage;
 use crate::tools::keys::KeysPage;
 use winter_render::Grid;
+use winter_render::InputView;
 
 use super::App;
 
@@ -23,6 +27,9 @@ use super::App;
 /// Tool name recorded for the directory listing, so its own chord toggles it.
 const DIR_TOOL: &str = "dir";
 
+/// Tool name recorded for the editor.
+const EDITOR_TOOL: &str = "editor";
+
 /// Tool name recorded for the git view.
 const GIT_TOOL: &str = "git";
 
@@ -32,13 +39,16 @@ const GREP_TOOL: &str = "grep";
 /// Tool name recorded for the keys page.
 const KEYS_TOOL: &str = "keys";
 
-/// Drawn after a prompt's typed text, so the line reads as an input.
-const CARET: char = '\u{2502}';
+/// How each kind of question is answered, said under the input: a dialog
+/// taking one key has to name it, and a line has to say what ends it.
+const HINT_CONFIRM: &str = "y to confirm, any other key to cancel";
+const HINT_TEXT: &str = "Enter to accept, Esc to cancel";
 
 /// The glyph each tool shows in the status bar, in place of a mode icon. One
 /// line per tool, from the Font Awesome range every Nerd Font carries.
-const TOOL_ICONS: [(&str, char); 4] = [
+const TOOL_ICONS: [(&str, char); 5] = [
     (DIR_TOOL, '\u{f07b}'),
+    (EDITOR_TOOL, '\u{f044}'),
     (GIT_TOOL, '\u{f1d3}'),
     (GREP_TOOL, '\u{f002}'),
     (KEYS_TOOL, '\u{f11c}'),
@@ -117,6 +127,29 @@ impl PageSlot {
 }
 
 // ========================================================================
+// Functions
+// ========================================================================
+
+/// The dialog for one question: what is asked, the line it is answered on for
+/// a question that takes one, and how to answer it. A question answered by a
+/// single key has no line to type on, so it is given none.
+pub(crate) fn input_dialog(label: &str, input: &str, mode: PromptMode) -> InputView {
+    InputView {
+        hint: match mode {
+            PromptMode::Confirm => HINT_CONFIRM.to_string(),
+            PromptMode::Text => HINT_TEXT.to_string(),
+        },
+        input: match mode {
+            PromptMode::Confirm => None,
+            PromptMode::Text => Some(input.to_string()),
+        },
+        // Labels are written to sit before an answer on one line, so they end
+        // in a separator that reads as a dangling colon over one.
+        label: label.trim_end().trim_end_matches(':').to_string(),
+    }
+}
+
+// ========================================================================
 // App: tool pages
 // ========================================================================
 
@@ -164,6 +197,42 @@ impl App {
         self.show_page(GREP_TOOL, Box::new(GrepPage::new(self.page_start_dir())));
     }
 
+    /// Show `target`'s file as editable text over whatever the focused pane is
+    /// showing, so closing it returns to the tool the file was opened from.
+    ///
+    /// A file the editor will not open (binary, not UTF-8, too large to
+    /// repaint) says so and stays closed; `Ctrl-O` hands those to `$EDITOR`.
+    pub(crate) fn open_editor_page(&mut self, target: OpenTarget) {
+        // An editor already covering the pane takes the file as another
+        // buffer of its own, rather than being covered by a second editor.
+        let pane_id = self.tab().focused();
+        if let Some(slot) = self.pages.get_mut(&pane_id) {
+            if slot.tool == EDITOR_TOOL && slot.page.open_file(target.clone()) {
+                self.dirty = true;
+                return;
+            }
+        }
+        match EditorPage::new(target.path, target.line) {
+            Ok(page) => self.stack_page(EDITOR_TOOL, Box::new(page)),
+            Err(e) => self.set_error(format!("{e}")),
+        }
+    }
+
+    /// Open the file browser over the focused pane's working directory: the
+    /// palette, listing a directory a row at a time. The chord that opened it
+    /// closes it again, as a tool's own chord does.
+    pub(crate) fn open_file_browser(&mut self) {
+        let showing = self
+            .palette
+            .as_ref()
+            .is_some_and(|palette| palette.mode == PaletteMode::Files);
+        self.palette = match showing {
+            true => None,
+            false => Some(Palette::open_files(self.page_start_dir())),
+        };
+        self.dirty = true;
+    }
+
     /// Where a tool opens: the focused pane's working directory, falling back
     /// to this process's own.
     fn page_start_dir(&self) -> PathBuf {
@@ -171,6 +240,20 @@ impl App {
             .map(PathBuf::from)
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/"))
+    }
+
+    /// Cover the focused pane with `page`, keeping any page already there
+    /// underneath it: closing the new one puts the old one back, rather than
+    /// dropping the listing a file was opened from.
+    pub(crate) fn stack_page(&mut self, tool: &'static str, page: Box<dyn Page>) {
+        let pane_id = self.tab().focused();
+        if let Some(slot) = self.pages.remove(&pane_id) {
+            // Work the covered page asked for would come back to whichever
+            // page is on top, which is not the one that asked for it.
+            self.jobs.cancel_for(pane_id);
+            self.covered.entry(pane_id).or_default().push(slot);
+        }
+        self.show_page(tool, page);
     }
 
     /// Cover the focused pane with `page`. The pane keeps its process, which
@@ -211,9 +294,19 @@ impl App {
             self.stop_page_cursor();
         }
         self.jobs.cancel_for(pane_id);
-        self.modes.insert(pane_id, slot.prior_mode);
         self.last_tile_layout = None;
         self.dirty = true;
+        // A page opened over another one uncovers it rather than the terminal,
+        // and the page coming back re-reads whatever it was showing: the file
+        // just edited is the likeliest thing to have changed underneath it.
+        if let Some(mut covered) = self.covered.get_mut(&pane_id).and_then(Vec::pop) {
+            let outcome = covered.page.on_resume();
+            self.pages.insert(pane_id, covered);
+            self.modes.insert(pane_id, Mode::Page);
+            self.act_on_page_outcome(pane_id, outcome);
+            return;
+        }
+        self.modes.insert(pane_id, slot.prior_mode);
     }
 
     /// Close the focused pane's page when `tool` is what opened it, so a tool's
@@ -245,6 +338,26 @@ impl App {
             return false;
         };
         let outcome = slot.page.on_key(key);
+        self.act_on_page_outcome(pane_id, outcome)
+    }
+
+    /// Offer a pointer press or drag to the page covering `pane_id`, as the
+    /// row and column of the pane it landed on. Returns whether the page took
+    /// it, so a click it declines still reaches the pane underneath.
+    pub(crate) fn offer_mouse_to_page(&mut self, pane_id: PaneId, at: PagePoint) -> bool {
+        let Some(slot) = self.pages.get_mut(&pane_id) else {
+            return false;
+        };
+        let outcome = slot.page.on_mouse(at);
+        self.act_on_page_outcome(pane_id, outcome)
+    }
+
+    /// Offer a turn of the wheel to the page covering `pane_id`.
+    pub(crate) fn offer_scroll_to_page(&mut self, pane_id: PaneId, lines: isize) -> bool {
+        let Some(slot) = self.pages.get_mut(&pane_id) else {
+            return false;
+        };
+        let outcome = slot.page.on_scroll(lines);
         self.act_on_page_outcome(pane_id, outcome)
     }
 
@@ -306,12 +419,13 @@ impl App {
     }
 
     /// What the open prompt shows: its question, then what has been typed.
-    pub(crate) fn prompt_display(&self) -> Option<String> {
+    pub(crate) fn input_view(&self) -> Option<InputView> {
         let prompt = self.page_prompt.as_ref()?;
-        match prompt.request.mode {
-            PromptMode::Confirm => Some(prompt.request.label.clone()),
-            PromptMode::Text => Some(format!("{}{}{CARET}", prompt.request.label, prompt.input)),
-        }
+        Some(input_dialog(
+            &prompt.request.label,
+            &prompt.input,
+            prompt.request.mode,
+        ))
     }
 
     /// Carry out what a page asked for. Returns whether the input that produced
@@ -335,6 +449,10 @@ impl App {
                 true
             }
             PageOutcome::OpenPath(target) => {
+                self.open_editor_page(target);
+                true
+            }
+            PageOutcome::SpawnEditor(target) => {
                 self.open_file_in_new_tab(target.path, target.line);
                 true
             }
@@ -350,6 +468,14 @@ impl App {
             PageOutcome::Spawn(request) => {
                 self.spawn_in_tab(request);
                 true
+            }
+            PageOutcome::Paste => {
+                let text = self.clipboard_text().unwrap_or_default();
+                let Some(slot) = self.pages.get_mut(&pane_id) else {
+                    return true;
+                };
+                let outcome = slot.page.on_paste(text);
+                self.act_on_page_outcome(pane_id, outcome)
             }
             PageOutcome::Yank(value) => {
                 let copied = self
@@ -461,6 +587,61 @@ mod tests {
     }
 
     #[test]
+    fn test_opening_a_file_stacks_the_editor_and_a_refused_one_opens_nothing() {
+        // The host side of every `Enter` on a file: the editor has to end up
+        // covering the pane, and a file it will not open has to leave the pane
+        // showing whatever it was showing rather than an empty editor.
+        let dir = std::env::temp_dir().join(format!("winter-open-editor-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let text = dir.join("a.txt");
+        std::fs::write(&text, "one\ntwo\n").expect("temp file");
+        let binary = dir.join("a.bin");
+        std::fs::write(&binary, [0x00, 0x01]).expect("temp file");
+
+        let mut app = App::new();
+        let pane = app.tab().focused();
+        app.open_editor_page(OpenTarget::at_line(text, 2));
+        assert_eq!(app.pages.get(&pane).map(|slot| slot.tool), Some("editor"));
+
+        app.close_page(pane);
+        app.open_editor_page(OpenTarget::file(binary));
+        assert!(app.pages.is_empty(), "nothing was opened");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_page_opened_over_another_uncovers_it_rather_than_the_terminal() {
+        // Opening a file from a listing and closing it again has to land back
+        // on the listing: dropping it would throw away where the user was in
+        // a tree they may have spent a while walking into.
+        let mut app = App::new();
+        let pane = app.tab().focused();
+        app.modes.insert(pane, Mode::Normal);
+        app.show_page("counting", Box::new(CountingPage::default()));
+        app.stack_page("stacked", Box::new(CountingPage::default()));
+
+        assert_eq!(
+            app.pages.get(&pane).map(|slot| slot.tool),
+            Some("stacked"),
+            "the new page is the one showing"
+        );
+
+        app.close_page(pane);
+        assert_eq!(
+            app.pages.get(&pane).map(|slot| slot.tool),
+            Some("counting"),
+            "and closing it puts the covered one back"
+        );
+        assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Page));
+
+        app.close_page(pane);
+        assert!(app.pages.is_empty(), "the last one uncovers the terminal");
+        assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Normal));
+    }
+
+    #[test]
     fn test_closing_a_page_gives_the_pane_back_as_it_was() {
         // The terminal underneath kept running, so the pane has to return to
         // the mode it was in rather than being closed or left in Page mode.
@@ -473,6 +654,133 @@ mod tests {
         assert!(app.pages.is_empty());
         assert_eq!(app.tab().panes().len(), 1);
         assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Normal));
+    }
+
+    /// A directory holding `names`, removed again when the test ends.
+    struct TempTree(std::path::PathBuf);
+
+    impl TempTree {
+        fn new(tag: &str, names: &[&str]) -> Self {
+            let dir = std::env::temp_dir()
+                .join(format!("winter-browse-page-{tag}-{}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).expect("temp dir");
+            for name in names {
+                match name.ends_with('/') {
+                    true => std::fs::create_dir_all(dir.join(name.trim_end_matches('/'))),
+                    false => std::fs::write(dir.join(name), "hello\n"),
+                }
+                .expect("temp entry");
+            }
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    /// One key into the palette, the way the window loop delivers it.
+    fn browse_key(app: &mut App, named: winit::keyboard::NamedKey) {
+        use winit::keyboard::{Key, PhysicalKey};
+
+        let pane = app.tab().focused();
+        let phys = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let mut palette = app.palette.take().expect("the browser is up");
+        app.handle_palette_input(&mut palette, &Key::Named(named), &phys, pane);
+        if palette.active {
+            app.palette = Some(palette);
+        }
+    }
+
+    /// Put the selection on the row labelled `label`.
+    fn browse_to(app: &mut App, label: &str) {
+        let palette = app.palette.as_mut().expect("the browser is up");
+        let at = palette
+            .filtered
+            .iter()
+            .position(|&i| palette.entries[i].label == label)
+            .unwrap_or_else(|| panic!("no row labelled {label}"));
+        palette.selected = at;
+    }
+
+    #[test]
+    fn test_browsing_into_a_directory_keeps_the_palette_up_rooted_there() {
+        use winit::keyboard::NamedKey;
+
+        // The whole point of the browser is that a directory is a step rather
+        // than a choice: closing on one would make it a one-shot picker.
+        let tree = TempTree::new("step", &["src/", "README.md"]);
+        std::fs::write(tree.0.join("src").join("lib.rs"), "fn main() {}\n").expect("nested file");
+        let mut app = App::new();
+        app.palette = Some(crate::model::palette::Palette::open_files(tree.0.clone()));
+
+        browse_to(&mut app, "src/");
+        browse_key(&mut app, NamedKey::Enter);
+
+        let palette = app.palette.as_ref().expect("still browsing");
+        assert_eq!(palette.dir.as_ref(), Some(&tree.0.join("src")));
+        assert!(
+            palette.entries.iter().any(|entry| entry.label == "lib.rs"),
+            "showing what is in there"
+        );
+
+        // And back out again, on the key that has nothing else to do.
+        browse_key(&mut app, NamedKey::Backspace);
+        let palette = app.palette.as_ref().expect("still browsing");
+        assert_eq!(palette.dir.as_ref(), Some(&tree.0));
+    }
+
+    #[test]
+    fn test_a_second_file_joins_the_editor_rather_than_covering_it() {
+        // Two files opened from a listing used to be two editors stacked on
+        // one another, with no way back to the first but closing the second.
+        let tree = TempTree::new("two-files", &["one.txt", "two.txt"]);
+        let mut app = App::new();
+        let pane = app.tab().focused();
+
+        app.open_editor_page(OpenTarget::file(tree.0.join("one.txt")));
+        app.open_editor_page(OpenTarget::file(tree.0.join("two.txt")));
+
+        assert_eq!(
+            app.pages.get(&pane).map(|slot| slot.tool),
+            Some(EDITOR_TOOL)
+        );
+        assert!(
+            app.covered.get(&pane).is_none_or(Vec::is_empty),
+            "one editor, not two"
+        );
+    }
+
+    #[test]
+    fn test_the_browser_chord_pressed_twice_puts_it_away() {
+        let mut app = App::new();
+        app.open_file_browser();
+        assert!(app.palette.is_some());
+        app.open_file_browser();
+        assert!(app.palette.is_none(), "the same chord toggles it off");
+    }
+
+    #[test]
+    fn test_browsing_onto_a_file_opens_it_in_the_editor_over_the_pane() {
+        use winit::keyboard::NamedKey;
+
+        let tree = TempTree::new("open", &["README.md"]);
+        let mut app = App::new();
+        let pane = app.tab().focused();
+        app.palette = Some(crate::model::palette::Palette::open_files(tree.0.clone()));
+
+        browse_to(&mut app, "README.md");
+        browse_key(&mut app, NamedKey::Enter);
+
+        assert!(app.palette.is_none(), "the browser is done");
+        assert_eq!(
+            app.pages.get(&pane).map(|slot| slot.tool),
+            Some(EDITOR_TOOL),
+            "and the file is open over the pane"
+        );
     }
 
     #[test]
@@ -592,7 +900,25 @@ mod tests {
     #[test]
     fn test_a_prompt_starts_holding_its_initial_text() {
         let (app, _, _) = app_asking();
-        assert_eq!(app.prompt_display().as_deref(), Some("Name: seed\u{2502}"));
+        let view = app.input_view().expect("a dialog");
+        assert_eq!(view.input.as_deref(), Some("seed"));
+        assert_eq!(view.label, "Name", "the label's separator is the layout's");
+    }
+
+    #[test]
+    fn test_a_question_answered_by_one_key_offers_no_line_to_type_on() {
+        // A caret on a line that cannot be typed into invites typing into it.
+        let text = input_dialog("Name: ", "seed", PromptMode::Text);
+        assert_eq!(text.input.as_deref(), Some("seed"));
+
+        let confirm = input_dialog("Delete 3 entries?", "", PromptMode::Confirm);
+        assert_eq!(confirm.input, None);
+        assert_eq!(confirm.label, "Delete 3 entries?");
+        assert!(
+            confirm.hint.contains('y'),
+            "a dialog taking one key says which: {}",
+            confirm.hint
+        );
     }
 
     #[test]
@@ -600,7 +926,10 @@ mod tests {
         let (mut app, pane, heard) = app_asking();
         app.handle_prompt_key(&press(KeyCode::Backspace));
         app.handle_prompt_key(&press(KeyCode::Char('!')));
-        assert_eq!(app.prompt_display().as_deref(), Some("Name: see!\u{2502}"));
+        assert_eq!(
+            app.input_view().and_then(|view| view.input).as_deref(),
+            Some("see!")
+        );
 
         app.handle_prompt_key(&press(KeyCode::Enter));
         assert!(app.page_prompt.is_none(), "the prompt closes on Enter");

@@ -27,7 +27,7 @@ mod colors;
 mod glyphs;
 mod images;
 
-pub use chrome::{PaletteItem, PaletteView, WhichKeyView};
+pub use chrome::{InputView, PaletteItem, PaletteView, WhichKeyView};
 use glyphs::FallbackGlyphFit;
 pub use glyphs::{start_font_load, FontConfig, FontLoad};
 

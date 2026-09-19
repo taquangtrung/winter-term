@@ -8,12 +8,16 @@
 //! and the text-object spans.
 
 pub(crate) use crate::model::vim::words::{
-    char_class, first_non_blank, last_non_blank, next_word_start, prev_word_end, prev_word_start,
-    word_end,
+    char_class, find_char, first_non_blank, last_non_blank, next_word_start, prev_word_end,
+    prev_word_start, word_end,
 };
 use winter_render::Grid;
 
 use crate::model::input::TextObject;
+use crate::model::vim::objects;
+use crate::model::vim::objects::{
+    bracket_object, paragraph_object, quote_object, sentence_object, word_object, Span, TextRows,
+};
 
 // ========================================================================
 // Word classification
@@ -23,66 +27,49 @@ use crate::model::input::TextObject;
 /// searched over `rows_of` (a row's characters, indexed by visible row) starting
 /// at `row` (Vim `%`). `None` when the cursor's line holds no bracket from `col`
 /// on, or the match is not within the searched rows.
-///
-/// Nesting is counted, so `%` on the outer paren of `f(g(x))` lands on the outer
-/// closer, not the inner one.
 pub(super) fn matching_bracket(
     rows_of: &dyn Fn(usize) -> Vec<char>,
     rows: usize,
     row: usize,
     col: usize,
 ) -> Option<(usize, usize)> {
-    const PAIRS: [(char, char); 3] = [('(', ')'), ('[', ']'), ('{', '}')];
+    objects::matching_bracket(
+        &RowsOf {
+            count: rows,
+            of: rows_of,
+        },
+        (row, col),
+    )
+}
 
-    let line = rows_of(row);
-    // Vim starts from the first bracket at or after the cursor on its line.
-    let (start_col, open, close, forward) = (col..line.len()).find_map(|c| {
-        let ch = line[c];
-        PAIRS.iter().find_map(|&(o, cl)| {
-            if ch == o {
-                Some((c, o, cl, true))
-            } else if ch == cl {
-                Some((c, o, cl, false))
-            } else {
-                None
-            }
-        })
-    })?;
+/// Rows read through a closure, for a caller whose rows are numbered its own
+/// way rather than the grid's.
+struct RowsOf<'a> {
+    count: usize,
+    of: &'a dyn Fn(usize) -> Vec<char>,
+}
 
-    let mut depth: i32 = 0;
-    let mut r = row;
-    let mut c = start_col;
-    loop {
-        let chars = rows_of(r);
-        if let Some(&ch) = chars.get(c) {
-            if ch == open {
-                depth += if forward { 1 } else { -1 };
-            } else if ch == close {
-                depth += if forward { -1 } else { 1 };
-            }
-            // Back to zero means this is the partner of the starting bracket.
-            if depth == 0 {
-                return Some((r, c));
-            }
-        }
-        // Step one cell in the search direction, wrapping across rows.
-        if forward {
-            if c + 1 < chars.len() {
-                c += 1;
-            } else if r + 1 < rows {
-                r += 1;
-                c = 0;
-            } else {
-                return None;
-            }
-        } else if c > 0 {
-            c -= 1;
-        } else if r > 0 {
-            r -= 1;
-            c = rows_of(r).len().saturating_sub(1);
-        } else {
-            return None;
-        }
+impl TextRows for RowsOf<'_> {
+    fn row_count(&self) -> usize {
+        self.count
+    }
+
+    fn row_chars(&self, row: usize) -> Vec<char> {
+        (self.of)(row)
+    }
+}
+
+/// The grid's absolute rows, scrollback and screen together, as the rows a
+/// text object is looked for in.
+struct GridRows<'a>(&'a Grid);
+
+impl TextRows for GridRows<'_> {
+    fn row_count(&self) -> usize {
+        self.0.scrollback_len() + self.0.rows()
+    }
+
+    fn row_chars(&self, row: usize) -> Vec<char> {
+        absolute_row_chars(self.0, row)
     }
 }
 
@@ -149,27 +136,6 @@ pub(super) fn motion_paragraph(grid: &mut Grid, rows: usize, row: usize, forward
     };
 
     reveal_absolute_row(grid, rows, target)
-}
-
-/// The landing column for a Vim char-search (`f`/`F`/`t`/`T`) on `line` from
-/// `col`. `forward` searches right of the cursor, else left; `till` stops one
-/// cell short of the match. Returns `None` when there is no match, or when a
-/// `till` search would not move (target already adjacent).
-pub(super) fn find_char(line: &[char], col: usize, find: super::input::FindChar) -> Option<usize> {
-    let super::input::FindChar { ch, forward, till } = find;
-    let target = if forward {
-        (col + 1..line.len()).find(|&i| line[i] == ch)?
-    } else {
-        (0..col).rev().find(|&i| line[i] == ch)?
-    };
-    let landing = if !till {
-        target
-    } else if forward {
-        target.checked_sub(1)?
-    } else {
-        target + 1
-    };
-    (landing != col).then_some(landing)
 }
 
 // ========================================================================
@@ -394,64 +360,8 @@ pub(super) fn text_object_word(
     big: bool,
     around: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
-    let line = absolute_row_chars(grid, row);
-    if line.is_empty() {
-        return None;
-    }
-    let col = col.min(line.len().saturating_sub(1));
-    let cls = char_class(line[col], big);
-
-    if cls == 0 {
-        // Cursor is on whitespace.
-        let mut start = col;
-        while start > 0 && char_class(line[start - 1], big) == 0 {
-            start -= 1;
-        }
-        let mut end = col;
-        while end + 1 < line.len() && char_class(line[end + 1], big) == 0 {
-            end += 1;
-        }
-        if around {
-            if end + 1 < line.len() && char_class(line[end + 1], big) != 0 {
-                let mut word_end = end + 1;
-                let word_cls = char_class(line[word_end], big);
-                while word_end + 1 < line.len() && char_class(line[word_end + 1], big) == word_cls {
-                    word_end += 1;
-                }
-                end = word_end;
-            } else if start > 0 && char_class(line[start - 1], big) != 0 {
-                let mut word_start = start - 1;
-                let word_cls = char_class(line[word_start], big);
-                while word_start > 0 && char_class(line[word_start - 1], big) == word_cls {
-                    word_start -= 1;
-                }
-                start = word_start;
-            }
-        }
-        Some(((row, start), (row, end)))
-    } else {
-        // Cursor is on a word (keyword or punctuation run).
-        let mut start = col;
-        while start > 0 && char_class(line[start - 1], big) == cls {
-            start -= 1;
-        }
-        let mut end = col;
-        while end + 1 < line.len() && char_class(line[end + 1], big) == cls {
-            end += 1;
-        }
-        if around {
-            if end + 1 < line.len() && char_class(line[end + 1], big) == 0 {
-                while end + 1 < line.len() && char_class(line[end + 1], big) == 0 {
-                    end += 1;
-                }
-            } else if start > 0 && char_class(line[start - 1], big) == 0 {
-                while start > 0 && char_class(line[start - 1], big) == 0 {
-                    start -= 1;
-                }
-            }
-        }
-        Some(((row, start), (row, end)))
-    }
+    let (start, end) = word_object(&absolute_row_chars(grid, row), col, big, around)?;
+    Some(((row, start), (row, end)))
 }
 
 /// Compute the `(start, end)` inclusive coordinates for a delimited quote text object.
@@ -462,41 +372,8 @@ pub(super) fn text_object_quotes(
     quote: char,
     around: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
-    let line = absolute_row_chars(grid, row);
-    let mut quote_indices = Vec::new();
-    let mut escaped = false;
-    for (i, &c) in line.iter().enumerate() {
-        if c == '\\' && !escaped {
-            escaped = true;
-            continue;
-        }
-        if c == quote && !escaped {
-            quote_indices.push(i);
-        }
-        escaped = false;
-    }
-
-    if quote_indices.len() < 2 {
-        return None;
-    }
-
-    let mut pair = None;
-    for chunk in quote_indices.chunks_exact(2) {
-        let (q1, q2) = (chunk[0], chunk[1]);
-        if col <= q2 {
-            pair = Some((q1, q2));
-            break;
-        }
-    }
-
-    let (q1, q2) = pair?;
-    if around {
-        Some(((row, q1), (row, q2)))
-    } else if q2 > q1 + 1 {
-        Some(((row, q1 + 1), (row, q2 - 1)))
-    } else {
-        Some(((row, q1 + 1), (row, q1)))
-    }
+    let (start, end) = quote_object(&absolute_row_chars(grid, row), col, quote, around)?;
+    Some(((row, start), (row, end)))
 }
 
 /// Compute the `(start, end)` inclusive coordinates for a bracket text object.
@@ -508,96 +385,8 @@ pub(super) fn text_object_brackets(
     close: char,
     around: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
-    let total_rows = grid.scrollback_len() + grid.rows();
-    let rows_of = |r: usize| absolute_row_chars(grid, r);
-
-    let mut depth: i32 = 0;
-    let mut r = row;
-    let chars = rows_of(r);
-    let mut c = col.min(chars.len().saturating_sub(1));
-
-    let mut open_pos = None;
-    loop {
-        let line = rows_of(r);
-        if let Some(&ch) = line.get(c) {
-            if ch == close {
-                depth += 1;
-            } else if ch == open {
-                if depth == 0 {
-                    open_pos = Some((r, c));
-                    break;
-                } else {
-                    depth -= 1;
-                }
-            }
-        }
-        if c > 0 {
-            c -= 1;
-        } else if r > 0 {
-            r -= 1;
-            c = rows_of(r).len().saturating_sub(1);
-        } else {
-            break;
-        }
-    }
-
-    let (r_open, c_open) = open_pos?;
-
-    let mut close_depth: i32 = 0;
-    let mut rf = r_open;
-    let mut cf = c_open;
-    let mut close_pos = None;
-
-    loop {
-        let line = rows_of(rf);
-        if let Some(&ch) = line.get(cf) {
-            if ch == open {
-                close_depth += 1;
-            } else if ch == close {
-                close_depth -= 1;
-                if close_depth == 0 {
-                    close_pos = Some((rf, cf));
-                    break;
-                }
-            }
-        }
-        if cf + 1 < line.len() {
-            cf += 1;
-        } else if rf + 1 < total_rows {
-            rf += 1;
-            cf = 0;
-        } else {
-            break;
-        }
-    }
-
-    let (r_close, c_close) = close_pos?;
-
-    if around {
-        Some(((r_open, c_open), (r_close, c_close)))
-    } else {
-        let (r1, c1) = {
-            let line = rows_of(r_open);
-            if c_open + 1 < line.len() {
-                (r_open, c_open + 1)
-            } else if r_open + 1 < total_rows {
-                (r_open + 1, 0)
-            } else {
-                (r_open, c_open)
-            }
-        };
-        let (r2, c2) = {
-            if c_close > 0 {
-                (r_close, c_close - 1)
-            } else if r_close > 0 {
-                let prev_len = rows_of(r_close - 1).len();
-                (r_close - 1, prev_len.saturating_sub(1))
-            } else {
-                (r_close, c_close)
-            }
-        };
-        Some(((r1, c1), (r2, c2)))
-    }
+    let Span { end, start } = bracket_object(&GridRows(grid), (row, col), open, close, around)?;
+    Some((start, end))
 }
 
 /// Compute the text object span `((start_row, start_col), (end_row, end_col))` in absolute coordinates.
@@ -619,12 +408,6 @@ pub(super) fn text_object_span(
 }
 
 /// The sentence `col` sits in, within its own row.
-///
-/// Vim's rule for where one ends: a `.`, `!` or `?`, any closing quotes and
-/// brackets after it, then a blank or the row's end. `is` stops at the
-/// sentence; `as` takes the blanks that follow it, or the ones before it when
-/// none follow. On the blanks between two sentences, `is` takes the run of
-/// them alone, the way `iw` takes a run of blanks between words.
 fn text_object_sentence(
     grid: &Grid,
     row: usize,
@@ -638,114 +421,21 @@ fn text_object_sentence(
     while line.last().is_some_and(|c| c.is_whitespace()) {
         line.pop();
     }
-    if line.is_empty() {
-        return None;
-    }
-    let col = col.min(line.len() - 1);
-    let (mut start, end, after) = sentence_spans(&line)
-        .into_iter()
-        .find(|&(start, _, after)| col >= start && col < after)?;
-    if col >= end && !around {
-        return Some(((row, end), (row, after.saturating_sub(1))));
-    }
-    if around && after == end {
-        while start > 0 && line[start - 1].is_whitespace() {
-            start -= 1;
-        }
-    }
-    let last = if around { after } else { end };
-    Some(((row, start), (row, last.max(start + 1) - 1)))
+    let (start, end) = sentence_object(&line, col, around)?;
+    Some(((row, start), (row, end)))
 }
 
-/// Every sentence of `line`, as `(start, end, after)`: where it begins, where
-/// its text stops, and where the blanks following it stop. The tail of a row
-/// that ends no sentence is one of its own, so a cursor anywhere on the row
-/// lands in exactly one span.
-fn sentence_spans(line: &[char]) -> Vec<(usize, usize, usize)> {
-    let mut spans = Vec::new();
-    let mut start = 0;
-    let mut at = 0;
-    while at < line.len() {
-        let Some(end) = sentence_end_at(line, at) else {
-            at += 1;
-            continue;
-        };
-        let mut after = end;
-        while after < line.len() && line[after].is_whitespace() {
-            after += 1;
-        }
-        spans.push((start, end, after));
-        start = after;
-        at = after.max(at + 1);
-    }
-    if start < line.len() {
-        spans.push((start, line.len(), line.len()));
-    }
-    spans
-}
-
-/// Where the sentence ending at `at` stops: one past its `.`, `!` or `?` and
-/// the closing quotes and brackets that follow, when a blank or the row's end
-/// comes next. `None` where `at` ends no sentence, which is what keeps a
-/// decimal point or a file extension from splitting one.
-fn sentence_end_at(line: &[char], at: usize) -> Option<usize> {
-    if !matches!(line[at], '.' | '!' | '?') {
-        return None;
-    }
-    let mut end = at + 1;
-    while end < line.len() && matches!(line[end], ')' | ']' | '"' | '\'') {
-        end += 1;
-    }
-    match line.get(end) {
-        None => Some(end),
-        Some(c) if c.is_whitespace() => Some(end),
-        Some(_) => None,
-    }
-}
-
-/// The whole lines of the paragraph `row` sits in: the run of rows around it
-/// that are all blank or all not, which over a terminal's output is one block
-/// of output, one command's worth of it, or the gap between two.
-///
-/// `around` takes the blank rows that follow the run as well, and the ones
-/// before it when none follow — vim's own `ap`, where `ip` stops at the
-/// paragraph itself.
+/// The rows a paragraph object covers, as a span over whole rows: the text a
+/// yank reads back drops the blank padding past each row's own end.
 fn text_object_paragraph(
     grid: &Grid,
     row: usize,
     around: bool,
 ) -> Option<((usize, usize), (usize, usize))> {
-    let total = grid.scrollback_len() + grid.rows();
-    if row >= total {
-        return None;
-    }
-    let blank = absolute_row_is_blank(grid, row);
-    let same = |r: usize| absolute_row_is_blank(grid, r) == blank;
-    let mut start = row;
-    while start > 0 && same(start - 1) {
-        start -= 1;
-    }
-    let mut end = row;
-    while end + 1 < total && same(end + 1) {
-        end += 1;
-    }
-    if around {
-        let mut after = end;
-        while after + 1 < total && !same(after + 1) {
-            after += 1;
-        }
-        if after > end {
-            end = after;
-        } else {
-            while start > 0 && !same(start - 1) {
-                start -= 1;
-            }
-        }
-    }
-    // Whole rows: the span runs to the pane's last column, and the text the
-    // yank reads back drops the blank padding past each row's own end.
+    let (start, end) = paragraph_object(&GridRows(grid), row, around)?;
     Some(((start, 0), (end, grid.cols().saturating_sub(1))))
 }
+
 /// Normalize delimiter character to its opening and closing pair, and whether it is a quote.
 pub(super) fn surround_pair_chars(d: char) -> Option<(char, char, bool)> {
     match d {

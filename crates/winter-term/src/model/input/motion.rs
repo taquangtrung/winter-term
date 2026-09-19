@@ -9,6 +9,8 @@
 /// terminal's resolver and its callers keep their paths.
 pub use crate::model::vim::motion::{CursorMove, FindChar};
 
+use super::KeyCode;
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -45,6 +47,25 @@ pub enum TextObject {
     Word,
     /// A WORD, where only whitespace breaks the run.
     WordBig,
+}
+impl TextObject {
+    /// The object a key names after an `i` or an `a`, so an object added here
+    /// works for every operator that takes one, on every surface that has
+    /// them, rather than having to be added to each separately.
+    pub fn of_key(code: KeyCode) -> Option<Self> {
+        Some(match code {
+            KeyCode::Char('w') => Self::Word,
+            KeyCode::Char('W') => Self::WordBig,
+            KeyCode::Char('p') => Self::Paragraph,
+            KeyCode::Char('s') => Self::Sentence,
+            KeyCode::Char(c @ ('"' | '\'' | '`')) => Self::Quotes(c),
+            KeyCode::Char('(' | ')' | 'b') => Self::Brackets('(', ')'),
+            KeyCode::Char('[' | ']') => Self::Brackets('[', ']'),
+            KeyCode::Char('{' | '}' | 'B') => Self::Brackets('{', '}'),
+            KeyCode::Char('<' | '>') => Self::Brackets('<', '>'),
+            _ => return None,
+        })
+    }
 }
 /// Specification for a text object selection or operation (`around` vs `inner`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

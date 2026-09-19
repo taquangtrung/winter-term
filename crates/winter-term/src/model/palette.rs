@@ -5,10 +5,11 @@
 use std::collections::HashSet;
 use std::env;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::history::EditHistory;
 use super::input::WindowKeymap;
+use super::units::format_size;
 
 // ========================================================================
 // Constants
@@ -26,6 +27,10 @@ pub enum PaletteMode {
     /// Choosing a command to run.
     #[default]
     Commands,
+    /// Browsing a directory: a row is somewhere to go or something to open,
+    /// and the query filters the one directory being shown rather than the
+    /// tree under it.
+    Files,
     /// Recalling an earlier query.
     History,
     /// Pane switcher: selecting an entry focuses that pane.
@@ -68,6 +73,9 @@ pub struct PaletteEntry {
 pub struct Palette {
     /// Whether the palette is currently open.
     pub active: bool,
+    /// The directory a file browser is showing, and nothing for every other
+    /// mode, which lists something other than a place.
+    pub dir: Option<PathBuf>,
     /// Every candidate row, before filtering.
     pub entries: Vec<PaletteEntry>,
     /// Indices into the entries that match the query, in match order.
@@ -100,6 +108,7 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
@@ -118,6 +127,7 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
@@ -145,6 +155,7 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
@@ -171,6 +182,7 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
@@ -198,6 +210,7 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
@@ -227,6 +240,7 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
@@ -253,6 +267,7 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
@@ -279,6 +294,7 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
@@ -304,6 +320,7 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
@@ -329,12 +346,33 @@ impl Palette {
         let filtered = (0..entries.len()).collect();
         Palette {
             active: true,
+            dir: None,
             entries,
             filtered,
             history: EditHistory::new(String::new()),
             history_index: None,
             live_query: String::new(),
             mode: PaletteMode::MuxAttachRemote,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+        }
+    }
+
+    /// Open the palette over `dir`'s own entries: a directory is somewhere
+    /// to go, a file is something to open, and `..` is the way back up.
+    pub fn open_files(dir: PathBuf) -> Self {
+        let entries = file_entries(&dir);
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: Some(dir),
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::Files,
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
@@ -514,6 +552,58 @@ impl Palette {
 }
 
 // ========================================================================
+// Listings
+// ========================================================================
+
+/// One row per entry of `dir`, directories first and each group by name, with
+/// the hidden ones after the rest: a listing opens on what is usually wanted,
+/// and typing reaches the rest. `..` leads, where there is a parent to reach.
+fn file_entries(dir: &Path) -> Vec<PaletteEntry> {
+    let mut rows: Vec<(bool, bool, String, PaletteEntry)> = Vec::new();
+    let Ok(read) = fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let meta = entry.metadata().ok();
+        let is_dir = meta.as_ref().is_some_and(|meta| meta.is_dir());
+        let hidden = name.starts_with('.');
+        let label = match is_dir {
+            true => format!("{name}/"),
+            false => name.clone(),
+        };
+        let shortcut = match (is_dir, meta) {
+            (true, _) => "dir".to_string(),
+            (false, Some(meta)) => format_size(meta.len()),
+            (false, None) => String::new(),
+        };
+        rows.push((
+            !is_dir,
+            hidden,
+            name.to_lowercase(),
+            PaletteEntry {
+                action: entry.path().to_string_lossy().to_string(),
+                label,
+                match_positions: Vec::new(),
+                shortcut,
+            },
+        ));
+    }
+    rows.sort_by(|one, other| (one.0, one.1, &one.2).cmp(&(other.0, other.1, &other.2)));
+    let mut entries: Vec<PaletteEntry> = Vec::new();
+    if let Some(parent) = dir.parent() {
+        entries.push(PaletteEntry {
+            action: parent.to_string_lossy().to_string(),
+            label: "../".to_string(),
+            match_positions: Vec::new(),
+            shortcut: "up".to_string(),
+        });
+    }
+    entries.extend(rows.into_iter().map(|row| row.3));
+    entries
+}
+
+// ========================================================================
 // Scoring
 // ========================================================================
 
@@ -659,6 +749,7 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ),
         ("export_scrollback_html", "Export: Scrollback to HTML", ""),
         ("dir_page", "Dir: Open Working Directory", ""),
+        ("file_browser", "File: Browse Files", ""),
         ("focus_down", "Focus Pane Down", ""),
         ("git_page", "Git: Status", ""),
         ("grep_page", "Grep: Search Files", ""),
@@ -744,6 +835,86 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A directory holding `names`, removed again when the test ends.
+    struct TempTree(PathBuf);
+
+    impl TempTree {
+        fn new(tag: &str, names: &[&str]) -> Self {
+            let dir = env::temp_dir().join(format!("winter-browser-{tag}-{}", std::process::id()));
+            let _ = fs::remove_dir_all(&dir);
+            fs::create_dir_all(&dir).expect("temp dir");
+            for name in names {
+                match name.ends_with('/') {
+                    true => fs::create_dir_all(dir.join(name.trim_end_matches('/'))),
+                    false => fs::write(dir.join(name), "xy"),
+                }
+                .expect("temp entry");
+            }
+            Self(dir)
+        }
+    }
+
+    impl Drop for TempTree {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn test_a_browsed_directory_leads_with_the_way_up_then_its_directories() {
+        // A listing that opened on whatever order the filesystem handed back
+        // would put `.git` above `src` as often as not.
+        let tree = TempTree::new("order", &[".hidden", "beta.rs", "alpha/", ".git/"]);
+        let palette = Palette::open_files(tree.0.clone());
+
+        let labels: Vec<&str> = palette
+            .entries
+            .iter()
+            .map(|entry| entry.label.as_str())
+            .collect();
+        assert_eq!(labels, ["../", "alpha/", ".git/", "beta.rs", ".hidden"]);
+        assert_eq!(palette.mode, PaletteMode::Files);
+        assert_eq!(
+            palette.dir.as_ref(),
+            Some(&tree.0),
+            "and it says where it is"
+        );
+    }
+
+    #[test]
+    fn test_a_browsed_row_carries_its_path_and_what_it_is() {
+        let tree = TempTree::new("rows", &["src/", "notes.txt"]);
+        let palette = Palette::open_files(tree.0.clone());
+
+        let file = palette
+            .entries
+            .iter()
+            .find(|entry| entry.label == "notes.txt")
+            .expect("the file is listed");
+        assert_eq!(file.action, tree.0.join("notes.txt").to_string_lossy());
+        assert_eq!(file.shortcut, "2B", "its size, where a chord would go");
+
+        let dir = palette
+            .entries
+            .iter()
+            .find(|entry| entry.label == "src/")
+            .expect("the directory is listed");
+        assert_eq!(dir.shortcut, "dir");
+    }
+
+    #[test]
+    fn test_typing_filters_the_directory_being_browsed() {
+        let tree = TempTree::new("filter", &["alpha.rs", "beta.rs"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        palette.push_char('b');
+        let shown: Vec<&str> = palette
+            .filtered
+            .iter()
+            .map(|&i| palette.entries[i].label.as_str())
+            .collect();
+        assert_eq!(shown, ["beta.rs"]);
+    }
 
     #[test]
     fn test_palette_open_has_entries() {

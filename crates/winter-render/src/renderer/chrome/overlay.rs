@@ -4,11 +4,11 @@ use super::paint::{
     blend_px, buffer_width, composite_buffer, draw_highlighted_label, fill_rounded_rect,
     rounded_rect_sdf, shape_chrome_line,
 };
-use super::view::{DropdownImage, PaletteView, WhichKeyView};
+use super::view::{DropdownImage, InputView, PaletteView, WhichKeyView};
 use super::{
-    DROPDOWN_RADIUS, DROPDOWN_SHADOW, DROPDOWN_SHADOW_ALPHA, MENU_BORDER_MIX, MENU_HOVER_INSET,
-    PALETTE_HEIGHT_RATIO, PALETTE_ITEM_PAD_X, PALETTE_ITEM_PAD_Y, PALETTE_WIDTH_RATIO,
-    SHADOW_COLOR, WHICH_KEY_HEIGHT_RATIO, WHICH_KEY_WIDTH_RATIO,
+    DROPDOWN_RADIUS, DROPDOWN_SHADOW, DROPDOWN_SHADOW_ALPHA, INPUT_WIDTH_RATIO, MENU_BORDER_MIX,
+    MENU_HOVER_INSET, PALETTE_HEIGHT_RATIO, PALETTE_ITEM_PAD_X, PALETTE_ITEM_PAD_Y,
+    PALETTE_WIDTH_RATIO, SHADOW_COLOR, WHICH_KEY_HEIGHT_RATIO, WHICH_KEY_WIDTH_RATIO,
 };
 use crate::renderer::colors::mix_rgb;
 use crate::renderer::glyphs::FontCtx;
@@ -912,6 +912,174 @@ pub(super) fn which_key_rgba(
     }
 }
 
+/// Rasterize the input dialog: a centered floating panel holding one question,
+/// the line it is answered on, and how to answer it. The shape the command
+/// palette has, minus the list, since there is nothing to choose from.
+pub(super) fn input_rgba(
+    font_system: &mut FontSystem,
+    swash_cache: &mut SwashCache,
+    ctx: &FontCtx,
+    theme: &Theme,
+    view: &InputView,
+    surface_w: f32,
+    surface_h: f32,
+) -> DropdownImage {
+    let margin = DROPDOWN_SHADOW;
+    let inner_pad = ctx.cell_h * 0.6;
+    let label_h = ctx.line_height + PALETTE_ITEM_PAD_Y * 2.0;
+    let input_h = match view.input {
+        Some(_) => ctx.cell_h * 2.0,
+        None => 0.0,
+    };
+    let hint_h = match view.hint.is_empty() {
+        true => 0.0,
+        false => ctx.line_height + PALETTE_ITEM_PAD_Y,
+    };
+
+    let panel_w = (surface_w * INPUT_WIDTH_RATIO)
+        .min(surface_w - 40.0)
+        .floor()
+        .max(280.0);
+    let panel_h = (inner_pad * 2.0 + label_h + input_h + hint_h).ceil();
+
+    let width = (panel_w + 2.0 * margin) as u32;
+    let height = (panel_h + 2.0 * margin) as u32;
+    let canvas = (width, height);
+    let panel_rect = (margin, margin, panel_w, panel_h);
+
+    let mut rgba = vec![0u8; (width * height * 4) as usize];
+
+    // Soft drop shadow.
+    for py in 0..height {
+        for px in 0..width {
+            let sdf = rounded_rect_sdf(
+                px as f32 + 0.5,
+                py as f32 + 0.5,
+                panel_rect,
+                DROPDOWN_RADIUS,
+            );
+            let falloff = (1.0 - sdf / margin).clamp(0.0, 1.0);
+            if sdf <= 0.0 || falloff <= 0.0 {
+                continue;
+            }
+            let idx = ((py * width + px) * 4) as usize;
+            blend_px(
+                &mut rgba,
+                idx,
+                SHADOW_COLOR,
+                falloff * falloff * DROPDOWN_SHADOW_ALPHA,
+            );
+        }
+    }
+
+    // Elevated rounded panel with hairline border.
+    let border = mix_rgb(theme.menu_bg, Rgb::new(255, 255, 255), MENU_BORDER_MIX);
+    fill_rounded_rect(&mut rgba, canvas, panel_rect, DROPDOWN_RADIUS, border, 1.0);
+    fill_rounded_rect(
+        &mut rgba,
+        canvas,
+        (margin + 1.0, margin + 1.0, panel_w - 2.0, panel_h - 2.0),
+        DROPDOWN_RADIUS - 1.0,
+        theme.menu_bg,
+        1.0,
+    );
+
+    let foreground = theme.foreground.to_glyphon();
+    let muted = theme.ansi[8].to_glyphon();
+    let accent = theme.cursor_bg.to_glyphon();
+    let pad_x = (ctx.cell_w * 1.0) as i32;
+    let origin = margin as i32;
+
+    // The question itself, at the top, in the ordinary text color: it is what
+    // is being read, where the palette's own heading only names a list.
+    let mut label_buf = shape_chrome_line(font_system, ctx, &view.label, foreground, false, true);
+    composite_buffer(
+        font_system,
+        swash_cache,
+        &mut rgba,
+        canvas,
+        &mut label_buf,
+        (
+            origin + pad_x,
+            (margin + inner_pad) as i32 + PALETTE_ITEM_PAD_Y as i32,
+        ),
+        foreground,
+    );
+
+    // The line being typed on, under it, opened by the palette's own mark so
+    // the two read as the same kind of thing.
+    if let Some(input) = &view.input {
+        let input_top = (margin + inner_pad + label_h) as i32;
+        let input_text_dy = ((input_h - ctx.line_height) / 2.0).max(0.0) as i32;
+
+        let mut prompt_buf = shape_chrome_line(font_system, ctx, "\u{276f} ", accent, false, true);
+        let prompt_w = buffer_width(&prompt_buf).ceil() as i32;
+        composite_buffer(
+            font_system,
+            swash_cache,
+            &mut rgba,
+            canvas,
+            &mut prompt_buf,
+            (origin + pad_x, input_top + input_text_dy),
+            accent,
+        );
+
+        let mut input_buf = shape_chrome_line(font_system, ctx, input, foreground, true, true);
+        let input_w = buffer_width(&input_buf).ceil() as i32;
+        composite_buffer(
+            font_system,
+            swash_cache,
+            &mut rgba,
+            canvas,
+            &mut input_buf,
+            (origin + pad_x + prompt_w, input_top + input_text_dy),
+            foreground,
+        );
+
+        // A bar drawn directly rather than a glyph, which would sit centered
+        // in a cell box and leave a gap after the last character typed.
+        let caret_x = (origin + pad_x + prompt_w + input_w) as f32 + 1.0;
+        let caret_y = (input_top + input_text_dy) as f32 + 1.0;
+        fill_rounded_rect(
+            &mut rgba,
+            canvas,
+            (caret_x, caret_y, 2.0, (ctx.line_height - 2.0).max(1.0)),
+            1.0,
+            theme.cursor_bg,
+            1.0,
+        );
+    }
+
+    // How to answer, at the foot: a dialog that takes one key has to say which.
+    if !view.hint.is_empty() {
+        let hint_top = (margin + inner_pad + label_h + input_h) as i32;
+        let mut hint_buf = shape_chrome_line(font_system, ctx, &view.hint, muted, false, true);
+        composite_buffer(
+            font_system,
+            swash_cache,
+            &mut rgba,
+            canvas,
+            &mut hint_buf,
+            (origin + pad_x, hint_top),
+            muted,
+        );
+    }
+
+    // Centred both ways, where the palette and the key-hint card sit: a
+    // question interrupts whatever was being read, so it belongs where the
+    // eye already is rather than at an edge.
+    let x = ((surface_w - panel_w) / 2.0).max(0.0);
+    let y = ((surface_h - panel_h) / 2.0).max(0.0);
+
+    DropdownImage {
+        height,
+        rgba,
+        width,
+        x: (x - margin).round(),
+        y: (y - margin).round(),
+    }
+}
+
 // ========================================================================
 // Tests
 // ========================================================================
@@ -960,6 +1128,67 @@ mod tests {
         let center_idx = ((image.height / 2 * image.width + image.width / 2) * 4) as usize;
         assert_eq!(image.rgba[center_idx + 3], 255, "card interior is opaque");
     }
+    #[test]
+    fn test_the_input_dialog_is_centered_and_only_as_tall_as_it_needs() {
+        // It holds one question, so it is sized to the question: the palette's
+        // fixed height would put a filename prompt in a panel most of which is
+        // the empty list it does not have.
+        let mut font_system = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let (surface_w, surface_h) = (1000.0, 800.0);
+
+        let typed = InputView {
+            hint: "Enter to accept, Esc to cancel".to_string(),
+            input: Some("notes.md".to_string()),
+            label: "New file".to_string(),
+        };
+        let image = input_rgba(
+            &mut font_system,
+            &mut swash,
+            &ctx,
+            &theme,
+            &typed,
+            surface_w,
+            surface_h,
+        );
+        let center_x = image.x + image.width as f32 / 2.0;
+        let center_y = image.y + image.height as f32 / 2.0;
+        assert!((center_x - surface_w / 2.0).abs() < 2.0, "centered across");
+        assert!((center_y - surface_h / 2.0).abs() < 2.0, "and down");
+        assert!(
+            (image.height as f32) < surface_h * 0.3,
+            "a question is not a panel: {} of {surface_h}",
+            image.height
+        );
+        let middle = ((image.height / 2 * image.width + image.width / 2) * 4) as usize;
+        assert_eq!(image.rgba[middle + 3], 255, "the panel interior is opaque");
+
+        // A question answered by one key has no line to type on, so it is
+        // shorter than one that does.
+        let confirmed = InputView {
+            hint: "y to confirm, any other key to cancel".to_string(),
+            input: None,
+            label: "Delete 3 entries?".to_string(),
+        };
+        let shorter = input_rgba(
+            &mut font_system,
+            &mut swash,
+            &ctx,
+            &theme,
+            &confirmed,
+            surface_w,
+            surface_h,
+        );
+        assert!(
+            shorter.height < image.height,
+            "{} is not shorter than {}",
+            shorter.height,
+            image.height
+        );
+    }
+
     #[test]
     fn test_the_picker_is_one_size_however_much_the_query_matches() {
         // Typing narrows the list, and a panel sized to what is left would

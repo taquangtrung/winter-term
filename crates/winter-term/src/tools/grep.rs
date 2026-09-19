@@ -188,6 +188,15 @@ impl GrepPage {
         }
     }
 
+    /// Hand the file the cursor is on to `$EDITOR`, in a pane of its own, at
+    /// the line that matched.
+    fn open_external(&self) -> PageOutcome {
+        match self.selected() {
+            Some(hit) => PageOutcome::SpawnEditor(OpenTarget::at_line(hit.path.clone(), hit.line)),
+            None => PageOutcome::Consumed,
+        }
+    }
+
     /// Copy where the match is, in the `path:line` form every tool understands.
     fn yank_selected(&self) -> PageOutcome {
         match self.selected() {
@@ -263,6 +272,9 @@ impl Page for GrepPage {
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
         self.message = None;
+        if key.ctrl && key.code == KeyCode::Char('o') {
+            return self.open_external();
+        }
         if key.alt {
             if let Some(motion) = buffer_end(key) {
                 self.cursor = match motion {

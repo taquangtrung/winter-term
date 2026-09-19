@@ -29,8 +29,8 @@ use crate::model::page::{
 };
 use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
 
-use commit::CommitContent;
-use diff::FileDiff;
+use commit::{CommitContent, CommitFile};
+use diff::{FileDiff, Hunk};
 use exec::{LogScope, ResetMode, SequenceStep};
 use parse::{Commit, Section, Stash, Status};
 use popup::Popup;
@@ -115,6 +115,10 @@ pub struct Output {
     /// different depth without re-running `git show`. `None` for every other
     /// kind of output.
     commit: Option<CommitContent>,
+    /// The repository-relative path a blame is of, since a blame is one row
+    /// per line of one file and so every row names a place in it. `None` for
+    /// every other kind of output.
+    blamed: Option<String>,
     /// Whether the heading over `commit`'s files is shut, which hides every
     /// one of them.
     changes_shut: bool,
@@ -163,6 +167,9 @@ pub struct GitPage {
     output: Option<Output>,
     /// How many commits the log view last asked for.
     log_count: usize,
+    /// The path a blame was asked for, held until the answer comes back,
+    /// since the reply says only that it is a blame and not what of.
+    pending_blame: Option<String>,
     /// Where the page was opened, which is where the root is looked up from.
     start: PathBuf,
     status: Status,
@@ -193,6 +200,7 @@ impl GitPage {
         Self {
             collapsed: HashSet::new(),
             git_dir: None,
+            pending_blame: None,
             progress: None,
             stashes: Vec::new(),
             unpulled: Vec::new(),
@@ -699,8 +707,14 @@ impl GitPage {
             return PageOutcome::Consumed;
         };
         match self.selected().map(|row| row.item.clone()) {
-            Some(Item::File(file)) => PageOutcome::Job(exec::blame(&root, &file.path)),
-            Some(Item::Hunk(hunk)) => PageOutcome::Job(exec::blame(&root, &hunk.path)),
+            Some(Item::File(file)) => {
+                self.pending_blame = Some(file.path.clone());
+                PageOutcome::Job(exec::blame(&root, &file.path))
+            }
+            Some(Item::Hunk(hunk)) => {
+                self.pending_blame = Some(hunk.path.clone());
+                PageOutcome::Job(exec::blame(&root, &hunk.path))
+            }
             _ => {
                 self.message = Some("no file to blame here".to_string());
                 self.rebuild();
@@ -741,6 +755,19 @@ impl GitPage {
     fn on_output_key(&mut self, key: &Key) -> PageOutcome {
         if let Some(outcome) = self.on_search_key(key) {
             return outcome;
+        }
+        // A row of a commit's patch belongs to a file the same way a row of
+        // the status view does, so it opens the same way. A view whose rows
+        // stand for nothing (a log, a blame) keeps the key.
+        if key.code == KeyCode::Enter && !key.ctrl {
+            if let Some(target) = self.file_at_point() {
+                return PageOutcome::OpenPath(target);
+            }
+        }
+        if key.ctrl && key.code == KeyCode::Char('o') {
+            if let Some(target) = self.file_at_point() {
+                return PageOutcome::SpawnEditor(target);
+            }
         }
         let Some(output) = self.output.as_mut() else {
             return PageOutcome::Consumed;
@@ -868,6 +895,7 @@ impl GitPage {
             rows: Vec::new(),
             title: title.to_string(),
             commit: None,
+            blamed: None,
             changes_shut: false,
             folded_files: HashSet::new(),
             folded_hunks: HashSet::new(),
@@ -886,6 +914,7 @@ impl GitPage {
             rows,
             title: title.to_string(),
             commit: None,
+            blamed: None,
             changes_shut: false,
             folded_files: HashSet::new(),
             folded_hunks: HashSet::new(),
@@ -915,6 +944,7 @@ impl GitPage {
             rows: Vec::new(),
             title: title.to_string(),
             commit: Some(content),
+            blamed: None,
             changes_shut: false,
             folded_files,
             folded_hunks,
@@ -1174,10 +1204,90 @@ impl GitPage {
         PageOutcome::Consumed
     }
 
-    /// Open a repository-relative path for editing.
-    fn open(&self, path: &str) -> PageOutcome {
+    /// Open the file at point, at whatever line the row knows about.
+    fn open_at_point(&self) -> PageOutcome {
+        match self.file_at_point() {
+            Some(target) => PageOutcome::OpenPath(target),
+            None => PageOutcome::Consumed,
+        }
+    }
+
+    /// Hand the file at point to `$EDITOR`, in a pane of its own, for the
+    /// editing the app's own editor deliberately cannot do.
+    fn open_external(&self) -> PageOutcome {
+        match self.file_at_point() {
+            Some(target) => PageOutcome::SpawnEditor(target),
+            None => PageOutcome::Consumed,
+        }
+    }
+
+    /// What the row under the cursor stands for, in whichever view is
+    /// showing: a commit's patch has rows and a cursor of its own.
+    fn item_at_point(&self) -> Option<Item> {
+        match self.output.as_ref() {
+            Some(output) => output.rows.get(output.cursor).map(|row| row.item.clone()),
+            None => self.selected().map(|row| row.item.clone()),
+        }
+    }
+
+    /// One file of the commit being read, by its index among the files it
+    /// touched.
+    fn commit_file(&self, index: usize) -> Option<&CommitFile> {
+        self.output.as_ref()?.commit.as_ref()?.files.get(index)
+    }
+
+    /// The working-tree file the row at point belongs to, and where in it to
+    /// land: a hunk opens at the line it changes rather than at the top, in a
+    /// commit's patch as much as in the working tree's own.
+    ///
+    /// A row standing for a commit, a stash, or a section heading belongs to
+    /// no one file, and a commit's file may no longer be in the working tree
+    /// at all, which the editor reports when it cannot read it.
+    fn file_at_point(&self) -> Option<OpenTarget> {
         let root = self.root.clone().unwrap_or_default();
-        PageOutcome::OpenPath(OpenTarget::file(root.join(path)))
+        // A blame is one row per line of one file, so the row under the
+        // cursor names a place in it as surely as a hunk header does, even
+        // though the rows themselves stand for nothing foldable.
+        if let Some(output) = self.output.as_ref() {
+            if let Some(path) = &output.blamed {
+                return Some(OpenTarget::at_line(root.join(path), output.cursor + 1));
+            }
+        }
+        match self.item_at_point()? {
+            Item::File(file) => Some(OpenTarget::file(root.join(&file.path))),
+            Item::Hunk(hunk) => {
+                let path = root.join(&hunk.path);
+                let key = FileRow {
+                    path: hunk.path.clone(),
+                    section: hunk.section,
+                };
+                let line = self
+                    .diffs
+                    .get(&key)
+                    .and_then(|diff| diff.hunks.get(hunk.index))
+                    .and_then(Hunk::new_start);
+                Some(at_line_or_top(path, line))
+            }
+            Item::CommitFile(index) => {
+                let file = self.commit_file(index)?;
+                Some(OpenTarget::file(root.join(&file.path)))
+            }
+            Item::CommitHunk(file_index, hunk_index) => {
+                let file = self.commit_file(file_index)?;
+                let line = file.hunks.get(hunk_index).and_then(Hunk::new_start);
+                Some(at_line_or_top(root.join(&file.path), line))
+            }
+            // Everything else names a commit, a stash, or a heading: things
+            // with no one file behind them.
+            Item::Commit(_)
+            | Item::CommitChanges
+            | Item::Heading(_)
+            | Item::None
+            | Item::RecentHeading
+            | Item::Stash(_)
+            | Item::StashHeading
+            | Item::UnpulledHeading => None,
+        }
     }
 
     /// What a finished command means for the view.
@@ -1284,7 +1394,13 @@ impl GitPage {
                     } else {
                         "Output"
                     };
+                    let blamed = (output.tag == exec::TAG_BLAME)
+                        .then(|| self.pending_blame.take())
+                        .flatten();
                     self.show_output(title, &output.stdout, false);
+                    if let Some(output) = self.output.as_mut() {
+                        output.blamed = blamed;
+                    }
                 }
                 PageOutcome::Consumed
             }
@@ -1514,6 +1630,7 @@ impl Page for GitPage {
                 KeyCode::Char('C') | KeyCode::Char('c') if key.shift => self.ask_commit_message(),
                 KeyCode::Char('S') | KeyCode::Char('s') if key.shift => self.stage_all(),
                 KeyCode::Char('l') => self.open_popup(Popup::Log),
+                KeyCode::Char('o') => self.open_external(),
                 // The paging chords the shared layer binds fall through to it;
                 // the rest stay with the window.
                 _ => match self.nav.key(key) {
@@ -1536,8 +1653,13 @@ impl Page for GitPage {
             }
             KeyCode::Tab => self.toggle_fold(),
             KeyCode::Enter => match self.selected().map(|row| row.item.clone()) {
-                Some(Item::File(file)) => self.open(&file.path),
-                Some(Item::Hunk(hunk)) => self.open(&hunk.path),
+                // Anything that belongs to a file opens that file: a path in a
+                // section, a hunk of its diff, and the same two inside the
+                // patch a commit is being read as.
+                Some(Item::File(_))
+                | Some(Item::Hunk(_))
+                | Some(Item::CommitFile(_))
+                | Some(Item::CommitHunk(_, _)) => self.open_at_point(),
                 // A commit has no file to open, so Enter reads it instead:
                 // what it changed, and the patch that changed it.
                 Some(Item::Commit(hash)) => match self.root.clone() {
@@ -1677,6 +1799,12 @@ impl Page for GitPage {
         }
     }
 
+    fn on_resume(&mut self) -> PageOutcome {
+        // The file that was just being edited is very likely one of the ones
+        // this view reports on.
+        self.refresh()
+    }
+
     fn on_job(&mut self, reply: JobReply) -> PageOutcome {
         match reply {
             JobReply::Command(output) => self.on_command(output),
@@ -1697,6 +1825,15 @@ impl Page for GitPage {
 // ========================================================================
 // Helpers
 // ========================================================================
+
+/// `path` at `line` where one is known, and at the top where none is: a hunk
+/// whose header git wrote in some unreadable shape still opens its file.
+fn at_line_or_top(path: PathBuf, line: Option<usize>) -> OpenTarget {
+    match line {
+        Some(line) => OpenTarget::at_line(path, line),
+        None => OpenTarget::file(path),
+    }
+}
 
 /// Redraw a commit output's rows at its current fold depth, keeping the search
 /// text in step with them.
@@ -1859,6 +1996,15 @@ mod tests {
     fn press(code: KeyCode) -> Key {
         Key {
             alt: false,
+            code,
+            ctrl: false,
+            shift: false,
+        }
+    }
+
+    fn alt(code: KeyCode) -> Key {
+        Key {
+            alt: true,
             code,
             ctrl: false,
             shift: false,
@@ -2115,6 +2261,102 @@ index aaa..bbb 100644
         page.on_key(&press(KeyCode::Tab));
         page.on_job(reply(exec::TAG_DIFF, DIFF_OUTPUT));
         page
+    }
+
+    #[test]
+    fn test_enter_on_a_hunk_opens_its_file_at_the_line_the_hunk_changes() {
+        // Opening the file at line one from a hunk throws away the one thing
+        // the cursor's position said: which part of it is being read.
+        let mut page = page_with_diff();
+        cursor_on_hunk(&mut page, 1);
+        assert_eq!(
+            page.on_key(&press(KeyCode::Enter)),
+            PageOutcome::OpenPath(OpenTarget::at_line(PathBuf::from("/repo/working.rs"), 10))
+        );
+
+        // And the file's own band still opens it at the top, since it names
+        // no line in particular.
+        cursor_on(&mut page, "working.rs");
+        assert_eq!(
+            page.on_key(&press(KeyCode::Enter)),
+            PageOutcome::OpenPath(OpenTarget::file(PathBuf::from("/repo/working.rs")))
+        );
+    }
+
+    #[test]
+    fn test_enter_in_a_commits_patch_opens_the_file_that_row_belongs_to() {
+        // A commit is read as its patch, and every file band and hunk in it
+        // stands for a file in the working tree: Enter did nothing there.
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_HUNKS));
+
+        output_cursor_on(&mut page, "src/a.rs");
+        assert_eq!(
+            page.on_key(&press(KeyCode::Enter)),
+            PageOutcome::OpenPath(OpenTarget::file(PathBuf::from("/repo/src/a.rs"))),
+            "the file band opens the file"
+        );
+
+        // Open the file's diff, then land on its second hunk.
+        page.on_key(&press(KeyCode::Tab));
+        let output = page.output.as_mut().expect("an output view");
+        output.cursor = output
+            .rows
+            .iter()
+            .position(|row| row.item == Item::CommitHunk(0, 1))
+            .expect("a row for the second hunk");
+        assert_eq!(
+            page.on_key(&press(KeyCode::Enter)),
+            PageOutcome::OpenPath(OpenTarget::at_line(PathBuf::from("/repo/src/a.rs"), 9)),
+            "and a hunk opens it at the line it changes"
+        );
+    }
+
+    #[test]
+    fn test_enter_in_a_blame_opens_the_file_at_the_line_under_the_cursor() {
+        // A blame is one row per line of the file, so the row the cursor is
+        // on is the line to land on: opening at the top would throw away the
+        // only thing the reader was pointing at.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        page.on_key(&alt(KeyCode::Char('b')));
+        page.on_job(reply(
+            exec::TAG_BLAME,
+            "abc1234 (Someone 2026-09-18 1) fn main() {\n             abc1234 (Someone 2026-09-18 2)     old();\n             def5678 (Another 2026-09-18 3) }\n",
+        ));
+
+        let output = page.output.as_mut().expect("the blame");
+        output.cursor = 2;
+        assert_eq!(
+            page.on_key(&press(KeyCode::Enter)),
+            PageOutcome::OpenPath(OpenTarget::at_line(PathBuf::from("/repo/working.rs"), 3))
+        );
+    }
+
+    #[test]
+    fn test_enter_on_a_row_belonging_to_no_file_is_left_alone() {
+        // A log's rows stand for nothing to open, and swallowing the key
+        // there would take it from the window for no gain.
+        let mut page = loaded_page();
+        page.on_job(reply(
+            exec::TAG_LOG,
+            &log_output(&[("abc1234", "a commit")]),
+        ));
+        page.on_key(&ctrl_shift('l'));
+        if page.output.is_some() {
+            assert_eq!(page.on_key(&press(KeyCode::Enter)), PageOutcome::Ignored);
+        }
+
+        // In the status view, a section heading names a set of files rather
+        // than one, so Enter has nothing to open there either.
+        let mut status = loaded_page();
+        let heading = status
+            .rows
+            .iter()
+            .position(|row| matches!(row.item, Item::Heading(_)))
+            .expect("a heading row");
+        status.cursor = heading;
+        assert_eq!(status.on_key(&press(KeyCode::Enter)), PageOutcome::Consumed);
     }
 
     #[test]

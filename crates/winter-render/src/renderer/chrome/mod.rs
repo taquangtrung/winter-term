@@ -8,7 +8,7 @@ mod view;
 
 use view::StripImage;
 pub(crate) use view::TabbarText;
-pub use view::{PaletteItem, PaletteView, WhichKeyView};
+pub use view::{InputView, PaletteItem, PaletteView, WhichKeyView};
 
 use super::colors::mix_rgb;
 use super::glyphs::FontCtx;
@@ -22,8 +22,8 @@ use crate::tabbar::{
 use crate::theme::{Rgb, Theme};
 use glyphon::Color;
 use overlay::{
-    context_menu_rgba, dropdown_rgba, palette_rgba, submenu_rgba, toast_rgba, url_tooltip_rgba,
-    which_key_rgba,
+    context_menu_rgba, dropdown_rgba, input_rgba, palette_rgba, submenu_rgba, toast_rgba,
+    url_tooltip_rgba, which_key_rgba,
 };
 use paint::{fill_line_segment, fill_rounded_rect, shape_chrome_line, text_bounds, truncate_label};
 
@@ -53,6 +53,16 @@ const TOAST_TEXTURE_ID: u64 = u64::MAX - 7;
 
 /// Reserved id for the rasterized which-key hint popup.
 const WHICH_KEY_TEXTURE_ID: u64 = u64::MAX - 8;
+
+/// Reserved id for the rasterized input dialog.
+const INPUT_TEXTURE_ID: u64 = u64::MAX - 9;
+
+/// The input dialog's width as a fraction of the surface.
+///
+/// Narrower than the palette: it holds one line of an answer rather than a
+/// list of choices, and a box the width of the window for a filename reads as
+/// a panel rather than as a question.
+pub(super) const INPUT_WIDTH_RATIO: f32 = 0.5;
 
 /// The key-hint card's width and height as fractions of the surface.
 ///
@@ -401,6 +411,52 @@ impl GpuRenderer {
             alpha: 1.0,
             height: image.height as f32,
             id: PALETTE_TEXTURE_ID,
+            v_max: 1.0,
+            v_min: 0.0,
+            width: image.width as f32,
+            x: image.x,
+            y: image.y,
+        }]
+    }
+
+    /// Rasterize the input dialog and upload it to the GPU.
+    pub(super) fn rasterize_input(
+        &mut self,
+        input: &InputView,
+        surface_w: f32,
+        surface_h: f32,
+    ) -> Vec<ImagePlacement> {
+        let ctx = FontCtx {
+            cell_h: self.cell_height,
+            cell_w: self.cell_width,
+            family: self.font_family.as_deref(),
+            font_has_bold: self.font_has_bold,
+            font_size: self.font_size,
+            line_height: self.line_height,
+            normal_weight: self.normal_weight.as_deref(),
+            bold_weight: self.bold_weight.as_deref(),
+        };
+        let image = input_rgba(
+            &mut self.font_system,
+            &mut self.swash_cache,
+            &ctx,
+            &self.theme,
+            input,
+            surface_w,
+            surface_h,
+        );
+        self.image_pass.upload(
+            &self.device,
+            &self.queue,
+            INPUT_TEXTURE_ID,
+            &image.rgba,
+            image.width,
+            image.height,
+        );
+        vec![ImagePlacement {
+            alpha: 1.0,
+            height: image.height as f32,
+            id: INPUT_TEXTURE_ID,
             v_max: 1.0,
             v_min: 0.0,
             width: image.width as f32,

@@ -249,6 +249,7 @@ impl App {
         }
         for id in self.tabs.all[index].panes() {
             self.pages.remove(&id);
+            self.covered.remove(&id);
             self.panes.remove(&id);
             self.modes.remove(&id);
             self.nav_cursors.remove(&id);
