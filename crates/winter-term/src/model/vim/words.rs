@@ -201,6 +201,38 @@ mod tests {
     }
 
     #[test]
+    fn test_a_char_search_never_matches_the_cell_it_starts_on() {
+        // f0 o1 o2 ' '3 b4 a5 r6 ' '7 f8 o9 o10
+        let line: Vec<char> = "foo bar foo".chars().collect();
+        let f = |ch, forward, till| FindChar { ch, forward, till };
+
+        // `f` from the first `f` reaches the second, not the one under it.
+        assert_eq!(find_char(&line, 0, f('f', true, false)), Some(8));
+        // `F` likewise looks strictly left, never at the cursor.
+        assert_eq!(find_char(&line, 8, f('f', false, false)), Some(0));
+        assert_eq!(find_char(&line, 0, f('z', true, false)), None, "no match");
+        assert_eq!(
+            find_char(&line, 0, f('o', false, false)),
+            None,
+            "nothing left"
+        );
+    }
+
+    #[test]
+    fn test_a_till_search_stops_one_short_and_declines_to_stay_put() {
+        let line: Vec<char> = "foo bar foo".chars().collect();
+        let f = |ch, forward, till| FindChar { ch, forward, till };
+
+        // `t` lands before the target, `T` after it.
+        assert_eq!(find_char(&line, 0, f('b', true, true)), Some(3));
+        assert_eq!(find_char(&line, 8, f('f', false, true)), Some(1));
+        // A `t` onto the cell already occupied is no move, so it is declined
+        // rather than reported as a jump that goes nowhere.
+        assert_eq!(find_char(&line, 3, f('b', true, true)), None);
+        assert_eq!(find_char(&line, 1, f('f', false, true)), None);
+    }
+
+    #[test]
     fn test_the_line_ends_skip_the_indent_and_the_trailing_blanks() {
         assert_eq!(first_non_blank(&"   hi".chars().collect::<Vec<_>>()), 3);
         assert_eq!(first_non_blank(&"".chars().collect::<Vec<_>>()), 0);

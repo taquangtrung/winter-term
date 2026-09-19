@@ -176,6 +176,19 @@ pub(super) const SHADOW_COLOR: Rgb = Rgb::new(0, 0, 0);
 // ========================================================================
 // Data Structures
 // ========================================================================
+/// The last rasterized tabbar strip, beside everything it was drawn from. The
+/// strip is a full-width RGBA image repainted pixel by pixel and uploaded as a
+/// texture, which is worth doing only when one of those inputs has moved.
+pub(super) struct TabbarStripCache {
+    cell_height: f32,
+    cell_width: f32,
+    /// Where the cached texture is drawn, handed back untouched on a hit.
+    placement: ImagePlacement,
+    surface_width: f32,
+    tabbar: TopTabbar,
+    theme: Theme,
+}
+
 /// The derived metrics and colors every tabbar-strip painting pass shares.
 struct StripStyle<'a> {
     /// Fill of the active tab's pill.
@@ -232,6 +245,29 @@ impl HoverPill {
 // ========================================================================
 // Implementation
 // ========================================================================
+
+impl TabbarStripCache {
+    /// Whether the cached strip was painted from exactly these inputs. The
+    /// arguments mirror what the painting itself takes, so a new input has to
+    /// be threaded through both and cannot be left out of the comparison.
+    fn matches(
+        &self,
+        tabbar: &TopTabbar,
+        surface_width: f32,
+        cell_width: f32,
+        cell_height: f32,
+        theme: &Theme,
+    ) -> bool {
+        // Exact equality is what is wanted: these are the same values the last
+        // paint was handed, not a measurement to be compared within a
+        // tolerance, and any difference at all repaints.
+        self.cell_height == cell_height
+            && self.cell_width == cell_width
+            && self.surface_width == surface_width
+            && self.theme == *theme
+            && self.tabbar == *tabbar
+    }
+}
 
 impl GpuRenderer {
     /// Append the top tabbar's background quads to `verts` and return its text
@@ -641,6 +677,37 @@ impl GpuRenderer {
             x: image.x,
             y: image.y,
         })
+    }
+
+    /// Where to draw the tabbar strip, repainting it only when what it is drawn
+    /// from has moved since the last frame. Everything the painting reads is
+    /// compared, so a hit cannot serve a strip that should look different.
+    pub(super) fn tabbar_strip_placement(
+        &mut self,
+        tabbar: &TopTabbar,
+        surface_w: f32,
+    ) -> Option<ImagePlacement> {
+        if let Some(cached) = &self.tabbar_strip_cache {
+            if cached.matches(
+                tabbar,
+                surface_w,
+                self.cell_width,
+                self.cell_height,
+                &self.theme,
+            ) {
+                return Some(cached.placement);
+            }
+        }
+        let placement = self.rasterize_tabbar_strip(tabbar, surface_w)?;
+        self.tabbar_strip_cache = Some(TabbarStripCache {
+            cell_height: self.cell_height,
+            cell_width: self.cell_width,
+            placement,
+            surface_width: surface_w,
+            tabbar: tabbar.clone(),
+            theme: self.theme.clone(),
+        });
+        Some(placement)
     }
 
     /// Rasterize the top-tabbar strip, the recessed band, the rounded tab
@@ -1352,10 +1419,77 @@ mod tests {
 
     const CELL_W: f32 = 9.0;
     const CELL_H: f32 = 18.0;
+
     const SURFACE_W: f32 = 1000.0;
 
     fn strip(tabbar: &TopTabbar) -> StripImage {
         tabbar_strip_rgba(tabbar, SURFACE_W, CELL_W, CELL_H, &Theme::dark())
+    }
+
+    /// A cache standing for a strip painted from `tabbar` at `CELL_W`/`CELL_H`.
+    fn cache_of(tabbar: &TopTabbar, surface_width: f32, theme: &Theme) -> TabbarStripCache {
+        TabbarStripCache {
+            cell_height: CELL_H,
+            cell_width: CELL_W,
+            placement: ImagePlacement {
+                alpha: 1.0,
+                height: CELL_H,
+                id: TABBAR_STRIP_TEXTURE_ID,
+                v_max: 1.0,
+                v_min: 0.0,
+                width: surface_width,
+                x: 0.0,
+                y: 0.0,
+            },
+            surface_width,
+            tabbar: tabbar.clone(),
+            theme: theme.clone(),
+        }
+    }
+
+    #[test]
+    fn test_an_unchanged_tabbar_reuses_the_strip_it_already_painted() {
+        let tabbar = sample_menu_chrome(None);
+        let theme = Theme::dark();
+        let cache = cache_of(&tabbar, 800.0, &theme);
+        assert!(cache.matches(&tabbar, 800.0, CELL_W, CELL_H, &theme));
+    }
+
+    #[test]
+    fn test_the_strip_is_repainted_when_anything_it_is_drawn_from_moves() {
+        let tabbar = sample_menu_chrome(None);
+        let theme = Theme::dark();
+        let cache = cache_of(&tabbar, 800.0, &theme);
+
+        // A renamed tab is the case that would show a stale title forever.
+        let mut renamed = tabbar.clone();
+        renamed.tabs[0].title = "renamed".into();
+        assert!(
+            !cache.matches(&renamed, 800.0, CELL_W, CELL_H, &theme),
+            "title"
+        );
+
+        // The active tab moving repaints, or the highlight would not follow.
+        let mut switched = tabbar.clone();
+        switched.active_tab += 1;
+        assert!(
+            !cache.matches(&switched, 800.0, CELL_W, CELL_H, &theme),
+            "active"
+        );
+
+        assert!(
+            !cache.matches(&tabbar, 900.0, CELL_W, CELL_H, &theme),
+            "resize"
+        );
+        assert!(
+            !cache.matches(&tabbar, 800.0, CELL_W + 1.0, CELL_H, &theme),
+            "font"
+        );
+        let light = Theme::light();
+        assert!(
+            !cache.matches(&tabbar, 800.0, CELL_W, CELL_H, &light),
+            "theme"
+        );
     }
 
     /// The RGBA pixel at `(x, y)`.

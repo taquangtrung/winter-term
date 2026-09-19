@@ -241,15 +241,13 @@ impl App {
         if let Some(message) = self.pending_config_error.take() {
             self.set_error(message);
         }
-        // Hints the WM to snap interactive drags to whole cell rows/columns,
-        // so `snap_window_to_cell_grid` rarely has to correct anything after
-        // the fact. Best-effort: unsupported platforms just ignore the hint.
-        if let Some(window) = &self.window {
-            window.set_resize_increments(Some(winit::dpi::PhysicalSize::new(
-                cell_w.round() as u32,
-                cell_h.round() as u32,
-            )));
-        }
+        // No resize increments are set, deliberately: a height holding whole
+        // rows is the chrome plus a multiple of the cell, which X11 spells as
+        // a base size the increment alone cannot carry. A window manager that
+        // honours a bare cell increment floors off the chrome's pixels, and
+        // the snap below then banked that loss into the saved size, costing a
+        // row per launch. Aligning to the grid is the snap's job regardless.
+
         // Restore previous session layout if configured and a session file exists.
         // This replaces the single bootstrap pane with the saved split tree.
         let restored = cwd_override.is_none()

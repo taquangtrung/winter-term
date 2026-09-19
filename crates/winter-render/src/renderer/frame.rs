@@ -1116,7 +1116,7 @@ impl GpuRenderer {
         // The top-tabbar strip (band + rounded tab pills) is composited before the
         // text pass so the tab cards sit under the tab titles.
         let tabbar_strip: Vec<ImagePlacement> = tabbar
-            .and_then(|c| self.rasterize_tabbar_strip(c, surface.width))
+            .and_then(|c| self.tabbar_strip_placement(c, surface.width))
             .into_iter()
             .collect();
         self.tabbar_strip_pass

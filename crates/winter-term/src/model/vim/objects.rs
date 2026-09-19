@@ -377,12 +377,6 @@ fn sentence_end_at(line: &[char], at: usize) -> Option<usize> {
     }
 }
 
-/// The whole lines of the paragraph `row` sits in: the run of rows around it
-/// that are all blank or all not, which over a terminal's output is one block
-/// of output, one command's worth of it, or the gap between two.
-///
-/// `around` takes the blank rows that follow the run as well, and the ones
-/// before it when none follow — vim's own `ap`, where `ip` stops at the
 /// The pair a bracket character belongs to, and whether its match lies ahead
 /// of it rather than behind.
 fn pair_of(c: char) -> Option<(char, char, bool)> {
@@ -469,6 +463,43 @@ mod tests {
         // An escaped quote is not one of the pair.
         let escaped: Vec<char> = "\"a\\\"b\"".chars().collect();
         assert_eq!(quote_object(&escaped, 1, '"', true), Some((0, 5)));
+    }
+
+    #[test]
+    fn test_a_stop_only_ends_a_sentence_when_a_blank_or_the_row_end_follows() {
+        // The guard that keeps a version number and a file extension whole:
+        // without it every `.` inside `v1.2.3` would start a new sentence.
+        // R0..n2 ' '3 v4 1:5 .6 2:7 .8 3:9 ' '10 n11 o12 w13 .14 ' '15 T16..p24 .25
+        let line: Vec<char> = "Run v1.2.3 now. Then stop.".chars().collect();
+        assert_eq!(sentence_object(&line, 0, false), Some((0, 14)), "`is`");
+        assert_eq!(sentence_object(&line, 5, false), Some((0, 14)), "inside it");
+        // `as` reaches over the blank that follows the stop.
+        assert_eq!(sentence_object(&line, 0, true), Some((0, 15)), "`as`");
+    }
+
+    #[test]
+    fn test_a_sentence_keeps_the_quotes_and_brackets_that_close_after_its_stop() {
+        // H0..d6 ' '7 "8 G9 o10 .11 "12 ' '13 N14 o15 w16 .17
+        let line: Vec<char> = "He said \"Go.\" Now.".chars().collect();
+        assert_eq!(sentence_object(&line, 0, false), Some((0, 12)), "the quote");
+    }
+
+    #[test]
+    fn test_around_a_last_sentence_reaches_back_since_no_blanks_follow_it() {
+        let line: Vec<char> = "Run v1.2.3 now. Then stop.".chars().collect();
+        // Nothing trails the final stop, so `as` takes the blank before it
+        // instead, which is what keeps two sentences from closing up.
+        assert_eq!(sentence_object(&line, 16, true), Some((15, 25)));
+        assert_eq!(sentence_object(&line, 16, false), Some((16, 25)), "`is`");
+    }
+
+    #[test]
+    fn test_on_the_blanks_between_sentences_the_run_of_them_is_the_object() {
+        let line: Vec<char> = "Run v1.2.3 now. Then stop.".chars().collect();
+        // Column 15 is the space after the first stop: `is` there is that run,
+        // the way a run of blanks between two words is what `iw` takes.
+        assert_eq!(sentence_object(&line, 15, false), Some((15, 15)));
+        assert_eq!(sentence_object(&[], 0, false), None, "an empty line");
     }
 
     #[test]

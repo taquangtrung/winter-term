@@ -586,6 +586,11 @@ pub struct App {
     /// The last char-search (`f`/`F`/`t`/`T`), repeated by `;` and `,`.
     pub(crate) last_find: Option<input::FindChar>,
     pub(crate) last_tile_layout: Option<(usize, usize, u32, u32, Vec<PaneId>)>,
+    /// The inner size Winter itself settled on, and the one persisted. A
+    /// window manager that hands back something smaller must not have its
+    /// answer saved as the preference, or restoring it becomes the starting
+    /// point for the next correction and the size walks down on every launch.
+    pub(crate) preferred_size: Option<winit::dpi::PhysicalSize<u32>>,
     pub(crate) modifiers: winit::event::Modifiers,
     /// Set when the custom window-close control is clicked, drained by the mouse
     /// handler into the same quit path as a native close request.
@@ -1577,6 +1582,27 @@ mod tests {
             pad, 0.0,
             "a correctly snapped height leaves no padding to center"
         );
+    }
+
+    #[test]
+    fn test_snapping_a_snapped_size_never_moves_it_again() {
+        // The window used to lose a cell row on every launch, and ruling the
+        // snap out as the cause is what pointed at the resize-increment hint
+        // instead. Re-snapping a snapped size has to be a no-op on both axes
+        // and at a fractional chrome height, or the size walks down by itself
+        // however the window manager behaves.
+        let (top_h, status_h, ch) = (36.2_f32, 0.0, 19.0);
+        let (h_pad, cw) = (4.0_f32, 9.42);
+        for h in 100..900 {
+            let once = snap_height_to_rows(h as f32, top_h, status_h, ch);
+            let twice = snap_height_to_rows(once, top_h, status_h, ch);
+            assert_eq!(once, twice, "height {h} kept moving after it was snapped");
+        }
+        for w in 100..900 {
+            let once = snap_width_to_cols(w as f32, h_pad, cw);
+            let twice = snap_width_to_cols(once, h_pad, cw);
+            assert_eq!(once, twice, "width {w} kept moving after it was snapped");
+        }
     }
 
     #[test]

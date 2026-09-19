@@ -118,7 +118,7 @@ pub enum ControlsSide {
 }
 
 /// One tab's label in the tabbar.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TabLabel {
     /// The tab's resolved title, as drawn.
     pub title: String,
@@ -128,7 +128,7 @@ pub struct TabLabel {
 
 /// One dropdown menu: a `title` (shown only in the classic menubar) and its
 /// items. Item order matches the app's parallel command list.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Menu {
     /// The dropdown's lines, top to bottom.
     pub items: Vec<MenuItem>,
@@ -139,7 +139,7 @@ pub struct Menu {
 /// One selectable line in a dropdown. Purely presentational; the app maps the
 /// same index to a command name. An item with `children` is a submenu parent:
 /// hovering it opens a child panel to the right instead of running a command.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct MenuItem {
     /// Submenu entries. Empty for a plain command item.
     pub children: Vec<MenuItem>,
@@ -157,7 +157,7 @@ impl MenuItem {
 }
 
 /// A right-click context menu anchored at a pixel position.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ContextMenu {
     /// The menu's lines, top to bottom.
     pub items: Vec<MenuItem>,
@@ -170,7 +170,7 @@ pub struct ContextMenu {
 }
 
 /// The full top-tabbar model the app hands the renderer each frame.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct TopTabbar {
     /// Index into `tabs` of the focused tab.
     pub active_tab: usize,

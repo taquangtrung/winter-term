@@ -245,6 +245,9 @@ impl App {
         let ideal_h = snap_height_to_rows(size.height as f32, top_h_on_screen, status_h, ch) as u32;
         let ideal_w =
             snap_width_to_cols(size.width as f32, 2.0 * winter_render::PANE_H_PAD, cw) as u32;
+        // Recorded before the early return, since a window already on the grid
+        // has still settled on this size and it is the one worth remembering.
+        self.preferred_size = Some(winit::dpi::PhysicalSize::new(ideal_w, ideal_h));
         if ideal_h == size.height && ideal_w == size.width {
             return;
         }

@@ -196,6 +196,7 @@ impl GpuRenderer {
             status_buffer: None,
             image_pass,
             tabbar_strip_pass,
+            tabbar_strip_cache: None,
             svg_fontdb: None,
             divider_width: DIVIDER_THICKNESS,
             modern: true,

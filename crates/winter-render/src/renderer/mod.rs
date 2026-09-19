@@ -113,6 +113,10 @@ pub struct GpuRenderer {
     /// Image pass for the rasterized top-tabbar strip. Rendered between the bg
     /// quads and the text so the rounded tab cards sit under the tab titles.
     tabbar_strip_pass: ImagePass,
+    /// The strip's last paint, so a frame that changes nothing about the
+    /// tabbar reuses the texture already uploaded for it. Repainting it was
+    /// the most expensive thing an otherwise idle frame did.
+    tabbar_strip_cache: Option<chrome::TabbarStripCache>,
     /// System fonts for SVG text, loaded lazily on first SVG with text and then
     /// reused (the scan costs ~150ms, so it is deferred off the startup path).
     svg_fontdb: Option<std::sync::Arc<resvg::usvg::fontdb::Database>>,
