@@ -33,6 +33,10 @@ pub enum PaletteMode {
     Files,
     /// Recalling an earlier query.
     History,
+    /// Every tool: the ones open somewhere, then the ones closed recently.
+    /// Selecting an open one goes to it, and a closed one comes back as the
+    /// page it was rather than as a fresh tool of its kind.
+    Tools,
     /// Pane switcher: selecting an entry focuses that pane.
     Panes,
     /// `cd` target picker: selecting an entry executes `cd <dir>` immediately.
@@ -162,6 +166,39 @@ impl Palette {
             history_index: None,
             live_query: String::new(),
             mode: PaletteMode::RecentDirs,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+        }
+    }
+
+    /// Open the palette over every tool: the ones open somewhere first, then
+    /// the ones closed recently, newest first.
+    ///
+    /// Each entry is `(action, label, hint)`. The action says which pane a
+    /// row goes to or which closed thing it puts back, named rather than
+    /// numbered by position, so a row means the same thing however the list
+    /// has changed since it was drawn.
+    pub fn open_tools(tools: Vec<(String, String, String)>) -> Self {
+        let entries = tools
+            .into_iter()
+            .map(|(action, label, hint)| PaletteEntry {
+                action,
+                label,
+                match_positions: Vec::new(),
+                shortcut: hint,
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::Tools,
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
@@ -780,6 +817,8 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ("recent_tab_back", "Recent Tab (Backward)", ""),
         ("recent_tab_forward", "Recent Tab (Forward)", ""),
         ("reload", "Reload Winter", ""),
+        ("reopen_page", "Tool: Reopen Last Closed", ""),
+        ("tool_list", "Tool: Go To or Reopen...", ""),
         ("search", "Search Blocks", ""),
         ("select_pane", "Go to Pane", ""),
         ("scroll_page_up", "Scroll Page Up", ""),

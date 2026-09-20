@@ -13,8 +13,8 @@ use super::parse::{Commit, FileStatus, RefKind, Section, Stash, Status};
 #[cfg(test)]
 use super::progress::Operation;
 use super::progress::Progress;
-use super::reltime;
 use super::words::{decorate, Segment};
+use crate::tools::reltime;
 
 // ========================================================================
 // Constants

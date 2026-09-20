@@ -44,7 +44,7 @@ const ASK_SEARCH_BACK: &str = "search-back";
 
 /// What marks a buffer holding edits that are not on disk, in the header
 /// and in the list of open buffers.
-const DIRTY_MARK: &str = " [+]";
+pub(crate) const DIRTY_MARK: &str = " [+]";
 
 /// Rows of header above the first line of text.
 const HEADER_ROWS: usize = 1;
@@ -748,6 +748,12 @@ impl EditorPage {
 impl Page for EditorPage {
     fn title(&self) -> String {
         name_of(&self.doc().path)
+    }
+
+    /// Any buffer with unwritten edits, not just the one being read: closing
+    /// the editor takes every buffer it holds with it.
+    fn is_dirty(&self) -> bool {
+        self.docs.iter().any(|doc| doc.buffer.is_dirty())
     }
 
     fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> PageContent {

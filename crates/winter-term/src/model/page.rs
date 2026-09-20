@@ -795,6 +795,16 @@ pub trait Page {
         None
     }
 
+    /// Whether the page is holding work that would be lost with it.
+    ///
+    /// The host asks before closing a pane or a tab over one, keeps it out of
+    /// the reopen stash's way when that fills up, and marks it in the list of
+    /// what was closed. Pages holding nothing a reader could lose never
+    /// implement it.
+    fn is_dirty(&self) -> bool {
+        false
+    }
+
     /// The page is showing again after another one was closed over the top of
     /// it. What it was showing may have changed while it was covered, so a
     /// page that reads the world re-reads it here. Pages showing something

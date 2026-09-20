@@ -74,6 +74,10 @@ impl App {
             page_wrap: false,
             pages: HashMap::new(),
             covered: HashMap::new(),
+            closed: Vec::new(),
+            next_closed_id: 0,
+            reopen_hint_shown: false,
+            pending_close: None,
             panes: HashMap::new(),
             pending_tab_completion: HashSet::new(),
             last_alt_screen_escape: None,
@@ -186,6 +190,12 @@ impl App {
             }
             "keys_page" => {
                 self.open_keys_page();
+            }
+            "reopen_page" => {
+                self.reopen_last_closed();
+            }
+            "tool_list" => {
+                self.open_tool_palette();
             }
             "copy_cwd" => {
                 self.copy_pane_cwd(focused);

@@ -200,6 +200,8 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Ctrl-=` / `Ctrl--` / `Ctrl-0` | Font bigger, smaller, reset |
 | `Ctrl-Shift-d` | Show Dir over the focused pane (toggle) |
 | `Ctrl-Shift-g` | Show Git over the focused pane (toggle) |
+| `Ctrl-Shift-u` | Put back the last thing closed: a tool, or a whole pane |
+| `Ctrl-Shift-e` | Pick from every tool: the open ones, then the closed ones |
 | `Ctrl-Shift-p` or `Alt-x` | Command palette |
 | `Ctrl-Shift-r` | History palette |
 | `Ctrl-Shift-z` | Pane switcher (then press the digit shown on a pane) |
@@ -211,6 +213,14 @@ A single-chord binding whose action is not one of the built-in window actions is
 ## Tools
 
 A tool opens over the focused pane, covering it. The shell underneath keeps running and comes back the moment you close the tool with `q`, or by pressing the tool's own chord again. The window chords all still work while a tool is up: split, zoom, close, and `Alt-h/j/k/l` to move focus. For a tool beside your shell rather than over it, split first and open it in the new pane.
+
+`Ctrl-Shift-u` (`Tool: Reopen Last Closed`) puts back the last thing that was closed. For a tool closed with `q`, that is the page itself coming back and not a fresh one of its kind: the editor's buffers and the edits never written to them, where a listing's cursor was and what it had folded, the page a document was turned to. It re-reads what it was showing on the way back, the same way a covered page does when the page over it closes.
+
+For a pane, it is the pane: the split comes back where it was, with a shell in the directory the old one was in and every tool it was holding stacked back over it in the order they were. The shell itself cannot come back, since closing a pane ends the process; everything around it can. Pressing the key again reaches whatever was closed before that, up to the last eight. A tool toggled off by its own chord is not one of them, because the same chord toggles it back on and keeping those would only bury the closes you cannot undo any other way.
+
+`Ctrl-Shift-e` (`Tool: Go To or Reopen...`) shows every tool as a list to pick from, in the fuzzy panel every other list in Winter is picked from: the ones open somewhere first, labelled with the tab they are in, then the ones closed recently, newest first, each saying how long ago it was closed. Every row names the tool, what the page is showing, a `[+]` where it is holding edits that are on no disk, and the directory it is looking at, so typing `main` finds the editor that was on `main.rs` and `win` finds the listing of a tree with that in its path. `Enter` on an open tool goes to it rather than opening a second one; `Enter` on a closed one puts it back and leaves the rest closed. `Esc` changes nothing.
+
+Closing a pane or a tab over a tool holding unwritten edits asks first, naming what would go with it. Answering `y` closes it and keeps the page anyway, so the edits are still a `Ctrl-Shift-u` away; anything else leaves everything as it was. A tool holding unsaved edits is never the entry the stash drops when it fills up, and the first close of a session says in the status bar which key brings it back.
 
 Every tool asks the same way, in the middle of the window. A question with a known set of answers opens a picker: what the list is of on top, a filter line under it, and the matches below, narrowing as you type. `Up`/`Down` or `Ctrl-p`/`Ctrl-n` move through them, `Enter` takes the highlighted one, and `Esc` answers nothing. A question with no list to offer, or one whose answer is a name that does not exist yet, opens the same panel without the list: the question, the line it is answered on, and how to answer it. A question that cannot be undone is answered by a single key rather than a line, and says so instead of drawing a caret. Either way the question is where the eye already is, and the status bar is left to what it was saying.
 

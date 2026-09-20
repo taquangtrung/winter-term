@@ -633,6 +633,21 @@ pub struct App {
     /// from a listing covers the listing rather than replacing it, so closing
     /// the file puts the user back where they were looking.
     pub(crate) covered: HashMap<PaneId, Vec<page::PageSlot>>,
+    /// Panes and pages that were closed, oldest first, for reopening. A pane
+    /// or a tab closed with a tool on it used to drop the tool with no way
+    /// back, which for an editor meant dropping edits nothing had asked
+    /// about.
+    pub(crate) closed: Vec<page::Closed>,
+    /// The id the next closed thing is given, so a row of the list of them
+    /// stands for one page or pane rather than for a position in a list that
+    /// moves.
+    pub(crate) next_closed_id: u64,
+    /// Whether this session has said yet that a closed tool can be brought
+    /// back. Said once, on the first close, and never again.
+    pub(crate) reopen_hint_shown: bool,
+    /// What the host is waiting to close, while it asks whether the unwritten
+    /// edits over there are meant to go with it.
+    pub(crate) pending_close: Option<page::PendingClose>,
     /// Whether tool pages wrap rows wider than their pane onto the next
     /// screen row, toggled by `Alt+Z` in every tool at once.
     pub(crate) page_wrap: bool,

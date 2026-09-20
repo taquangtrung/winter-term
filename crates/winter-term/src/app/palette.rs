@@ -211,6 +211,11 @@ impl App {
                     }
                 }
             }
+            PaletteMode::Tools => {
+                if let Some(action) = action {
+                    self.choose_tool_row(&action);
+                }
+            }
             PaletteMode::Panes => {
                 if let Some(pane_id_str) = action {
                     if let Ok(pane_id_val) = pane_id_str.parse::<u64>() {

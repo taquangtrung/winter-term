@@ -13,7 +13,6 @@ pub mod exec;
 pub mod parse;
 pub mod popup;
 pub mod progress;
-pub mod reltime;
 pub mod rows;
 pub mod words;
 

@@ -10,6 +10,9 @@
 //! - [`grep`]: the lines under a directory holding some text.
 //! - [`keys`]: the command list and the chord bound to each command.
 //! - [`pdf`]: one PDF document, drawn by a WebView the page owns.
+//!
+//! [`reltime`] is shared rather than a tool of its own: a git log and a list
+//! of what was closed recently both have an age to word.
 
 pub mod dir;
 pub mod editor;
@@ -17,3 +20,4 @@ pub mod git;
 pub mod grep;
 pub mod keys;
 pub mod pdf;
+pub mod reltime;

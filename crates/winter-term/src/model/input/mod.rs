@@ -594,6 +594,25 @@ mod tests {
     }
 
     #[test]
+    fn test_the_reopen_chords_answer_from_any_mode() {
+        // The keys that put back a tool closed by accident have to answer from
+        // inside whatever is showing instead of it, which after a pane was
+        // merged away is a terminal in Insert mode.
+        for (key, command) in [('u', "reopen_page"), ('e', "tool_list")] {
+            let chord = Key {
+                alt: false,
+                code: KeyCode::Char(key),
+                ctrl: true,
+                shift: true,
+            };
+            let expected = Action::RunCommand(command.to_string());
+            for mode in [Mode::Insert, Mode::Normal, Mode::Page, Mode::Visual] {
+                assert_eq!(resolve_simple(mode, &chord), expected, "{key} in {mode:?}");
+            }
+        }
+    }
+
+    #[test]
     fn test_page_mode_swallows_keys_the_page_declined() {
         // `i` in Page mode must not reach the Normal-mode resolver: switching a
         // page pane to Insert would leave its keystrokes with nowhere to go.

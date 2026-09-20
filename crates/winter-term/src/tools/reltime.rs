@@ -1,8 +1,8 @@
 //! How long ago a commit was authored, worded the way a log view wants it.
 //!
-//! Std-only on purpose: the git views are the only thing that needs a duration
-//! in words, and a date library would be a workspace dependency carried for one
-//! format string. The thresholds match the strict distance formatting a reader
+//! Std-only on purpose: a duration in words is wanted in two places, a git log
+//! and the list of tools closed recently, and a date library would be a
+//! workspace dependency carried for one format string. The thresholds match the strict distance formatting a reader
 //! expects — the largest unit that fits, truncated rather than rounded, with no
 //! "ago" suffix, because the column it sits in already means "ago".
 

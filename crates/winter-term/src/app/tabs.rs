@@ -6,6 +6,7 @@ use crate::model::layout::{PaneId, Tab};
 use crate::model::mode::Mode;
 use crate::terminal::pane::Pane;
 
+use super::page::Closing;
 use super::App;
 use super::{DEFAULT_COLS, DEFAULT_ROWS};
 use winter_render::TabbarHit;
@@ -239,8 +240,20 @@ impl App {
         self.tabs.mru_walk = Some(next);
         self.activate_tab(self.tabs.mru[next]);
     }
-    /// Close tab `index`, dropping all its panes. The last tab is never closed.
+    /// Close tab `index`, dropping all its panes. The last tab is never
+    /// closed; it asks for the app to exit instead.
+    ///
+    /// Unwritten edits in a tool anywhere in the tab are asked about first,
+    /// and the tab closes on the answer rather than here.
     pub(crate) fn close_tab(&mut self, index: usize) {
+        if self.ask_before_closing_tab(index) {
+            return;
+        }
+        self.close_tab_now(index);
+    }
+
+    /// Close tab `index` without asking.
+    pub(crate) fn close_tab_now(&mut self, index: usize) {
         if index >= self.tabs.all.len() {
             return;
         }
@@ -249,8 +262,9 @@ impl App {
             return;
         }
         for id in self.tabs.all[index].panes() {
-            self.pages.remove(&id);
-            self.covered.remove(&id);
+            // Every tool the tab was holding stays reopenable, the same way a
+            // closed pane's do.
+            self.stash_pane_pages(id, Closing::Keep);
             self.panes.remove(&id);
             self.modes.remove(&id);
             self.nav_cursors.remove(&id);

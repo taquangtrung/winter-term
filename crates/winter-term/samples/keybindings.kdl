@@ -132,6 +132,12 @@ window {
     "C+S+f" "file_browser"
     "C+S+g" "git_page"
     "C+S+s" "grep_page"
+    // Put back the last tool page closed, whether it was closed on its own or
+    // went with the pane or tab it was on. Press again for the one before it.
+    "C+S+u" "reopen_page"
+    // Every tool as a list to pick from in the fuzzy panel: the ones open
+    // somewhere, then the ones closed recently.
+    "C+S+e" "tool_list"
 
     // Jump between prompt blocks.
     "C+S+Up" "prev_block"
