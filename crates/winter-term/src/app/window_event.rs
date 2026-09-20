@@ -16,8 +16,8 @@ use super::App;
 use super::Selection;
 use super::{
     escape_clears_selection, escape_forwarded_to_pty, forwarded_to_pty,
-    is_alt_screen_escape_double_tap, winit_key_to_code, ContextAction, APPROX_CELL_HEIGHT,
-    CURSOR_BLINK_PERIOD, SCROLLBAR_CLICK_WIDTH, SCROLL_LINES_PER_WHEEL_NOTCH,
+    is_alt_screen_escape_double_tap, winit_key_to_code, APPROX_CELL_HEIGHT, CURSOR_BLINK_PERIOD,
+    SCROLLBAR_CLICK_WIDTH, SCROLL_LINES_PER_WHEEL_NOTCH,
 };
 
 // ========================================================================
@@ -466,17 +466,7 @@ impl App {
                 if let winter_render::TabbarHit::ContextMenuItem(i) = hit {
                     if let Some(action) = self.menus.context_actions.get(i).cloned() {
                         self.close_context_menu();
-                        match action {
-                            ContextAction::Copy => self.copy_selection(),
-                            ContextAction::Paste => self.paste_from_clipboard(),
-                            ContextAction::OpenLink(url) => {
-                                let scheme =
-                                    url.split(':').next().unwrap_or("").to_ascii_lowercase();
-                                if matches!(scheme.as_str(), "http" | "https" | "mailto") {
-                                    let _ = open::that(&url);
-                                }
-                            }
-                        }
+                        self.run_context_action(action);
                         if let Some(window) = &self.window {
                             window.request_redraw();
                         }

@@ -70,7 +70,7 @@ use crate::model::mode::Mode;
 use crate::model::palette::Palette;
 use crate::model::settings_page::{ChoiceOption, SettingsPage};
 use crate::terminal::pane::Pane;
-use crate::terminal::webview::WebViewManager;
+use crate::terminal::webview::{PaneViewport, WebViewManager};
 use winter_render::renderer::GpuRenderer;
 use winter_render::{NoticeKind, StatusBar, StatusNotice, StatusSearch, Theme};
 
@@ -585,7 +585,12 @@ pub struct App {
     pub(crate) window_focused: bool,
     /// The last char-search (`f`/`F`/`t`/`T`), repeated by `;` and `,`.
     pub(crate) last_find: Option<input::FindChar>,
-    pub(crate) last_tile_layout: Option<(usize, usize, u32, u32, Vec<PaneId>)>,
+    /// Where every pane's grid sat the last time block tiles were placed.
+    /// Placing them again is a round-trip to the platform WebView per tile, so
+    /// a frame that moved nothing (plain typing) skips it. Cleared to `None`
+    /// by anything that changes a tile without moving a pane: a new tile, a
+    /// fold, a band that grew, a page covering the grid.
+    pub(crate) last_tile_layout: Option<HashMap<PaneId, PaneViewport>>,
     /// The inner size Winter itself settled on, and the one persisted. A
     /// window manager that hands back something smaller must not have its
     /// answer saved as the preference, or restoring it becomes the starting
@@ -724,7 +729,21 @@ pub struct App {
 pub(crate) enum ContextAction {
     Copy,
     OpenLink(String),
+    /// An entry a tool page offered, standing for a key that page binds.
+    PageKey(PageKeyAction),
     Paste,
+}
+
+/// A menu entry a tool page offered: what it is called, and the key of its
+/// own the page runs when it is chosen.
+#[derive(Clone)]
+pub(crate) struct PageKeyAction {
+    /// Qualified: `winit::keyboard::Key` is also in scope in this module.
+    pub(crate) key: input::Key,
+    pub(crate) label: String,
+    /// The pane whose page offered it, since the menu outlives the click and
+    /// the focus could move under it.
+    pub(crate) pane: PaneId,
 }
 
 /// A block drawn natively via the GPU. `id` keys the renderer's texture cache;
@@ -1117,6 +1136,7 @@ impl ApplicationHandler for App {
             }
         }
         self.process_webview_height_reports();
+        self.pump_page_surfaces();
         self.webview_mgr.flush_due_tile_updates();
         if self.pending_reload {
             self.pending_reload = false;

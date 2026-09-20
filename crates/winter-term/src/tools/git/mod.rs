@@ -24,8 +24,8 @@ use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
     find_match, row_height, row_text, wrap_window, CommandOutput, JobReply, JobRequest, OpenTarget,
-    Page, PageContent, PageHint, PageIcon, PageOutcome, PageSpan, PageStyle, PageWindow,
-    PickQuestion, PromptMode, PromptReply, PromptRequest, SpawnRequest,
+    Page, PageContent, PageHint, PageIcon, PageMenuItem, PageOutcome, PageSpan, PageStyle,
+    PageWindow, PickQuestion, PromptMode, PromptReply, PromptRequest, SpawnRequest,
 };
 use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
 
@@ -86,6 +86,36 @@ const NOT_A_REPO: &str = "not a git repository";
 
 /// Rows of header above the first section.
 const HEADER_ROWS: usize = 1;
+
+/// What the menu opened over a row calls each of the entries it offers. A key
+/// acts on the marked targets when there are any, so these name the command
+/// rather than the row it was opened on.
+const LABEL_APPLY_HUNK: &str = "Apply This Hunk";
+const LABEL_BLAME: &str = "Blame";
+const LABEL_COMMIT: &str = "Commit Staged...";
+const LABEL_COPY_HASH: &str = "Copy Hash";
+const LABEL_COPY_PATH: &str = "Copy Path";
+const LABEL_DIFF: &str = "Show Diff";
+const LABEL_DISCARD: &str = "Discard...";
+const LABEL_DISCARD_HUNK: &str = "Discard This Hunk...";
+const LABEL_FETCH: &str = "Fetch All";
+const LABEL_FOLD: &str = "Fold or Unfold";
+const LABEL_OPEN: &str = "Open";
+const LABEL_OPEN_AT_LINE: &str = "Open at This Line";
+const LABEL_OPEN_IN_EDITOR: &str = "Open in $EDITOR";
+const LABEL_PULL: &str = "Pull, Rebasing";
+const LABEL_PUSH: &str = "Push";
+const LABEL_READ_COMMIT: &str = "Read This Commit";
+const LABEL_READ_STASH: &str = "Read This Stash";
+const LABEL_RELOAD: &str = "Reload";
+const LABEL_REVERSE_HUNK: &str = "Reverse This Hunk";
+const LABEL_STAGE: &str = "Stage";
+const LABEL_STAGE_ALL: &str = "Stage Everything";
+const LABEL_STAGE_HUNK: &str = "Stage This Hunk";
+const LABEL_STASH_MENU: &str = "Stash...";
+const LABEL_UNSTAGE: &str = "Unstage";
+const LABEL_UNSTAGE_ALL: &str = "Unstage Everything";
+const LABEL_UNSTAGE_HUNK: &str = "Unstage This Hunk";
 
 // ========================================================================
 // Data Structures
@@ -1820,6 +1850,68 @@ impl Page for GitPage {
             JobReply::DirSize { .. } | JobReply::Search(_) => PageOutcome::Consumed,
         }
     }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        // The file under the cursor decides it, so a tool opened from a diff
+        // starts beside that file rather than at the top of the repository.
+        // Rows standing for a commit or a section name no file and leave the
+        // repository root as the answer.
+        self.file_at_point()
+            .and_then(|target| target.path.parent().map(PathBuf::from))
+            .or_else(|| self.root.clone())
+    }
+
+    fn context_items(&self) -> Vec<PageMenuItem> {
+        // What a row offers is what that kind of row can do, which is why the
+        // menu is built per item rather than as one list with things greyed
+        // out: a commit cannot be staged and a heading has no path to copy.
+        match self.item_at_point() {
+            Some(Item::File(_)) | Some(Item::CommitFile(_)) => vec![
+                PageMenuItem::new(Key::plain(KeyCode::Enter), LABEL_OPEN),
+                PageMenuItem::new(Key::with_ctrl(KeyCode::Char('o')), LABEL_OPEN_IN_EDITOR),
+                PageMenuItem::new(Key::plain(KeyCode::Tab), LABEL_DIFF),
+                PageMenuItem::new(Key::plain(KeyCode::Char('s')), LABEL_STAGE),
+                PageMenuItem::new(Key::plain(KeyCode::Char('u')), LABEL_UNSTAGE),
+                PageMenuItem::new(Key::plain(KeyCode::Char('x')), LABEL_DISCARD),
+                PageMenuItem::new(Key::with_alt(KeyCode::Char('b')), LABEL_BLAME),
+                PageMenuItem::new(Key::plain(KeyCode::Char('y')), LABEL_COPY_PATH),
+            ],
+            Some(Item::Hunk(_)) | Some(Item::CommitHunk(_, _)) => vec![
+                PageMenuItem::new(Key::plain(KeyCode::Enter), LABEL_OPEN_AT_LINE),
+                PageMenuItem::new(Key::plain(KeyCode::Char('s')), LABEL_STAGE_HUNK),
+                PageMenuItem::new(Key::plain(KeyCode::Char('u')), LABEL_UNSTAGE_HUNK),
+                PageMenuItem::new(Key::plain(KeyCode::Char('x')), LABEL_DISCARD_HUNK),
+                PageMenuItem::new(Key::plain(KeyCode::Char('a')), LABEL_APPLY_HUNK),
+                PageMenuItem::new(Key::plain(KeyCode::Char('-')), LABEL_REVERSE_HUNK),
+                PageMenuItem::new(Key::plain(KeyCode::Char('y')), LABEL_COPY_PATH),
+            ],
+            Some(Item::Commit(_)) => vec![
+                PageMenuItem::new(Key::plain(KeyCode::Enter), LABEL_READ_COMMIT),
+                PageMenuItem::new(Key::plain(KeyCode::Char('y')), LABEL_COPY_HASH),
+            ],
+            Some(Item::Stash(_)) => vec![
+                PageMenuItem::new(Key::plain(KeyCode::Enter), LABEL_READ_STASH),
+                PageMenuItem::new(Key::plain(KeyCode::Char('z')), LABEL_STASH_MENU),
+            ],
+            Some(Item::Heading(_))
+            | Some(Item::CommitChanges)
+            | Some(Item::StashHeading)
+            | Some(Item::UnpulledHeading)
+            | Some(Item::RecentHeading) => vec![
+                PageMenuItem::new(Key::plain(KeyCode::Tab), LABEL_FOLD),
+                PageMenuItem::new(Key::plain(KeyCode::Char('S')), LABEL_STAGE_ALL),
+                PageMenuItem::new(Key::plain(KeyCode::Char('U')), LABEL_UNSTAGE_ALL),
+                PageMenuItem::new(Key::plain(KeyCode::Char('G')), LABEL_RELOAD),
+            ],
+            Some(Item::None) | None => vec![
+                PageMenuItem::new(Key::with_ctrl_shift(KeyCode::Char('C')), LABEL_COMMIT),
+                PageMenuItem::new(Key::plain(KeyCode::Char('P')), LABEL_PUSH),
+                PageMenuItem::new(Key::plain(KeyCode::Char('F')), LABEL_PULL),
+                PageMenuItem::new(Key::plain(KeyCode::Char('f')), LABEL_FETCH),
+                PageMenuItem::new(Key::plain(KeyCode::Char('G')), LABEL_RELOAD),
+            ],
+        }
+    }
 }
 
 // ========================================================================
@@ -2076,6 +2168,67 @@ mod tests {
             .position(|row| matches!(&row.item, Item::File(file) if file.path == path))
             .unwrap_or_else(|| panic!("no row for {path}"));
         page.cursor = index;
+    }
+
+    #[test]
+    fn test_every_menu_entry_runs_a_key_the_view_binds() {
+        // The menu offers keys rather than commands of its own, so an entry
+        // naming a chord the page does not match does nothing when chosen.
+        // The commit entry is `Ctrl-Shift-C`, which is exactly the shape that
+        // gets written with a modifier missing.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        let over_file = page.context_items();
+
+        let mut header = loaded_page();
+        header.cursor = 0;
+        let over_header = header.context_items();
+
+        for (items, on_file) in [(over_file, true), (over_header, false)] {
+            assert!(!items.is_empty());
+            for item in items {
+                let mut probe = loaded_page();
+                match on_file {
+                    true => cursor_on(&mut probe, "working.rs"),
+                    false => probe.cursor = 0,
+                }
+                assert_ne!(
+                    probe.on_key(&item.key),
+                    PageOutcome::Ignored,
+                    "the menu offers {:?}, which the view does not bind",
+                    item.label
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_the_menu_offers_each_row_what_that_row_can_do() {
+        // A commit cannot be staged and a file has no hash to copy, so a menu
+        // built without looking at the row under it offers both everywhere.
+        let mut page = loaded_page();
+        cursor_on(&mut page, "working.rs");
+        let labels: Vec<String> = page
+            .context_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert!(labels.contains(&LABEL_STAGE.to_string()));
+        assert!(!labels.contains(&LABEL_COPY_HASH.to_string()));
+
+        let commit = page
+            .rows
+            .iter()
+            .position(|row| matches!(row.item, Item::Commit(_)))
+            .expect("the log put a commit in the view");
+        page.cursor = commit;
+        let labels: Vec<String> = page
+            .context_items()
+            .into_iter()
+            .map(|item| item.label)
+            .collect();
+        assert!(labels.contains(&LABEL_COPY_HASH.to_string()));
+        assert!(!labels.contains(&LABEL_STAGE.to_string()));
     }
 
     #[test]

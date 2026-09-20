@@ -9,9 +9,11 @@
 //! - [`git`]: the working tree's state.
 //! - [`grep`]: the lines under a directory holding some text.
 //! - [`keys`]: the command list and the chord bound to each command.
+//! - [`pdf`]: one PDF document, drawn by a WebView the page owns.
 
 pub mod dir;
 pub mod editor;
 pub mod git;
 pub mod grep;
 pub mod keys;
+pub mod pdf;

@@ -1,5 +1,7 @@
 //! Pane creation, splitting, closing, and per-frame pane upkeep.
 
+use std::path::PathBuf;
+
 use crate::model::layout::{Direction, PaneId};
 use crate::model::mode::Mode;
 use crate::terminal::pane::Pane;
@@ -54,11 +56,29 @@ impl App {
         let focused = self.tab().focused();
         self.panes.get(&focused).and_then(|pane| pane.cwd())
     }
+    /// Where an action launched from the focused pane starts: the page
+    /// covering it knows what is being looked at and answers first, and only
+    /// with no page there does the shell's own directory decide.
+    pub(crate) fn focused_start_dir(&self) -> PathBuf {
+        let focused = self.tab().focused();
+        self.pages
+            .get(&focused)
+            .and_then(|slot| slot.page.cwd())
+            .or_else(|| self.focused_cwd().map(PathBuf::from))
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("/"))
+    }
+    /// The same directory as a shell's working directory, dropped when the
+    /// path cannot be spelled as one.
+    pub(crate) fn focused_start_cwd(&self) -> Option<String> {
+        self.focused_start_dir().to_str().map(str::to_string)
+    }
     pub(crate) fn split_pane(&mut self, direction: Direction) {
         let new_id = self.alloc_pane_id();
-        // Capture the focused pane's cwd before the layout split so the new pane
-        // opens in the same working directory instead of the process default.
-        let cwd = self.focused_cwd();
+        // Captured before the layout split so the new pane opens where the
+        // focused one was being used, which for a pane under a tool is the
+        // directory that tool is looking at rather than the shell's own.
+        let cwd = self.focused_start_cwd();
         self.tab_mut().split(direction, SPLIT_RATIO, new_id);
         // Rebalance every split's ratio so all panes share the viewport equally,
         // without altering the tree shape the user built (mixed split

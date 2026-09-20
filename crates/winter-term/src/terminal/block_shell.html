@@ -54,6 +54,12 @@ img {
   border-radius: 4px;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
 }
+/* The host slides this wrapper up by however much the pane's top edge hides,
+   so a block straddling the edge is cut rather than dropped. A transform is
+   used because the body does not scroll, and because it leaves the height
+   this element reports back to the host untouched. See CONTENT_ID in
+   terminal/webview.rs. */
+#winter-content { transform: translateY(0); }
 body.winter-closed {
   filter: grayscale(60%);
   opacity: 0.6;
@@ -70,10 +76,12 @@ body.winter-closed::after {
 </style>
 </head>
 <body>
+<div id="winter-content">
 {{CONTENT}}
+</div>
 <script>
 try {
-  window.ipc.postMessage(String(document.documentElement.scrollHeight));
+  window.ipc.postMessage(String(document.getElementById('winter-content').scrollHeight));
 } catch (e) {}
 </script>
 </body>

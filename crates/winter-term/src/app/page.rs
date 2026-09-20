@@ -1,9 +1,7 @@
 //! Tool pages over panes: opening one in place, closing it, and offering it
 //! keys before the modal keymap sees them.
 
-use std::path::PathBuf;
-
-use crate::model::input::{Key, KeyCode};
+use crate::model::input::{self, Key, KeyCode};
 use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
 use crate::model::page::{
@@ -15,6 +13,7 @@ use crate::tools::editor::EditorPage;
 use crate::tools::git::GitPage;
 use crate::tools::grep::GrepPage;
 use crate::tools::keys::KeysPage;
+use crate::tools::pdf::PdfPage;
 use winter_render::Grid;
 use winter_render::InputView;
 
@@ -39,6 +38,9 @@ const GREP_TOOL: &str = "grep";
 /// Tool name recorded for the keys page.
 const KEYS_TOOL: &str = "keys";
 
+/// Tool name recorded for the PDF viewer.
+const PDF_TOOL: &str = "pdf";
+
 /// How each kind of question is answered, said under the input: a dialog
 /// taking one key has to name it, and a line has to say what ends it.
 const HINT_CONFIRM: &str = "y to confirm, any other key to cancel";
@@ -46,12 +48,13 @@ const HINT_TEXT: &str = "Enter to accept, Esc to cancel";
 
 /// The glyph each tool shows in the status bar, in place of a mode icon. One
 /// line per tool, from the Font Awesome range every Nerd Font carries.
-const TOOL_ICONS: [(&str, char); 5] = [
+const TOOL_ICONS: [(&str, char); 6] = [
     (DIR_TOOL, '\u{f07b}'),
     (EDITOR_TOOL, '\u{f044}'),
     (GIT_TOOL, '\u{f1d3}'),
     (GREP_TOOL, '\u{f002}'),
     (KEYS_TOOL, '\u{f11c}'),
+    (PDF_TOOL, '\u{f1c1}'),
 ];
 
 // ========================================================================
@@ -170,7 +173,7 @@ impl App {
         if self.close_page_if_showing(DIR_TOOL) {
             return;
         }
-        self.show_page(DIR_TOOL, Box::new(DirPage::new(self.page_start_dir())));
+        self.show_page(DIR_TOOL, Box::new(DirPage::new(self.focused_start_dir())));
     }
 
     /// Show the working tree's state over the focused pane, for the repository
@@ -179,7 +182,7 @@ impl App {
         if self.close_page_if_showing(GIT_TOOL) {
             return;
         }
-        let page = GitPage::new(self.page_start_dir());
+        let page = GitPage::new(self.focused_start_dir());
         // The view knows nothing until git answers, so its first request goes
         // out with it rather than waiting for a keystroke.
         let first = page.initial_request();
@@ -194,7 +197,20 @@ impl App {
         if self.close_page_if_showing(GREP_TOOL) {
             return;
         }
-        self.show_page(GREP_TOOL, Box::new(GrepPage::new(self.page_start_dir())));
+        self.show_page(GREP_TOOL, Box::new(GrepPage::new(self.focused_start_dir())));
+    }
+
+    /// Show `target`'s file over whatever the focused pane is showing, in
+    /// whichever tool can show it.
+    ///
+    /// A PDF is not text and the editor refuses it as binary, so it goes to
+    /// the viewer instead. Everything else is the editor's.
+    pub(crate) fn open_path_page(&mut self, target: OpenTarget) {
+        if PdfPage::handles(&target.path) {
+            self.stack_page(PDF_TOOL, Box::new(PdfPage::new(target.path)));
+            return;
+        }
+        self.open_editor_page(target);
     }
 
     /// Show `target`'s file as editable text over whatever the focused pane is
@@ -228,18 +244,9 @@ impl App {
             .is_some_and(|palette| palette.mode == PaletteMode::Files);
         self.palette = match showing {
             true => None,
-            false => Some(Palette::open_files(self.page_start_dir())),
+            false => Some(Palette::open_files(self.focused_start_dir())),
         };
         self.dirty = true;
-    }
-
-    /// Where a tool opens: the focused pane's working directory, falling back
-    /// to this process's own.
-    fn page_start_dir(&self) -> PathBuf {
-        self.focused_cwd()
-            .map(PathBuf::from)
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("/"))
     }
 
     /// Cover the focused pane with `page`, keeping any page already there
@@ -251,6 +258,9 @@ impl App {
             // Work the covered page asked for would come back to whichever
             // page is on top, which is not the one that asked for it.
             self.jobs.cancel_for(pane_id);
+            // A pane holds one surface, and it belongs to the page on top.
+            // The covered page builds itself a fresh one when it comes back.
+            self.webview_mgr.remove_surface(pane_id);
             self.covered.entry(pane_id).or_default().push(slot);
         }
         self.show_page(tool, page);
@@ -294,6 +304,7 @@ impl App {
             self.stop_page_cursor();
         }
         self.jobs.cancel_for(pane_id);
+        self.webview_mgr.remove_surface(pane_id);
         self.last_tile_layout = None;
         self.dirty = true;
         // A page opened over another one uncovers it rather than the terminal,
@@ -339,6 +350,36 @@ impl App {
         };
         let outcome = slot.page.on_key(key);
         self.act_on_page_outcome(pane_id, outcome)
+    }
+
+    /// Route a key a page surface handed back, because the WebView holding
+    /// the keyboard is the only thing that saw it.
+    ///
+    /// The page is offered it first, exactly as a key typed into any other
+    /// tool is, and what the page declines is resolved against the window
+    /// keymap, so the chords that split, zoom, and switch panes and tabs keep
+    /// working from inside a document.
+    ///
+    /// The terminal's own encoding settings are left at their defaults: a
+    /// pane showing a page never forwards a key to its PTY, so nothing here
+    /// can reach the encoder they belong to.
+    pub(crate) fn route_surface_key(&mut self, pane_id: PaneId, key: Key) {
+        if self.offer_key_to_page(pane_id, &key) {
+            self.dirty = true;
+            return;
+        }
+        let mode = self.modes.get(&pane_id).copied().unwrap_or_default();
+        let action = input::resolve_with(
+            mode,
+            &key,
+            &mut self.pending,
+            &self.window_keymap,
+            0,
+            None,
+            false,
+        );
+        self.handle_action(action, pane_id);
+        self.dirty = true;
     }
 
     /// Offer a pointer press or drag to the page covering `pane_id`, as the
@@ -449,7 +490,7 @@ impl App {
                 true
             }
             PageOutcome::OpenPath(target) => {
-                self.open_editor_page(target);
+                self.open_path_page(target);
                 true
             }
             PageOutcome::SpawnEditor(target) => {
@@ -531,6 +572,7 @@ mod tests {
     use crate::model::input::KeyCode;
     use crate::model::page::{PageContent, PageSpan};
     use std::cell::RefCell;
+    use std::path::PathBuf;
     use std::rc::Rc;
 
     /// A page that counts the keys it claims, so a test can tell a key the
@@ -560,6 +602,51 @@ mod tests {
                 _ => PageOutcome::Ignored,
             }
         }
+    }
+
+    /// A page that reports `dir` as the place it is looking at.
+    struct LocatedPage(PathBuf);
+
+    impl Page for LocatedPage {
+        fn title(&self) -> String {
+            "Located".to_string()
+        }
+
+        fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> PageContent {
+            PageContent::new(vec![vec![PageSpan::plain("located")]])
+        }
+
+        fn on_key(&mut self, _key: &Key) -> PageOutcome {
+            PageOutcome::Ignored
+        }
+
+        fn cwd(&self) -> Option<PathBuf> {
+            Some(self.0.clone())
+        }
+    }
+
+    #[test]
+    fn test_a_tool_opens_where_the_page_is_looking_not_where_the_shell_is() {
+        // Opening the file browser while reading a file used to start at the
+        // shell's directory, which for a file opened from elsewhere is not
+        // even the same tree. The page covering the pane answers first.
+        let mut app = App::new();
+        let looking_at = PathBuf::from("/tmp/winter-test-somewhere-else");
+        app.show_page("located", Box::new(LocatedPage(looking_at.clone())));
+        assert_eq!(app.focused_start_dir(), looking_at);
+    }
+
+    #[test]
+    fn test_a_pane_with_no_page_still_starts_where_its_shell_is() {
+        // The fallback has to stay intact: a bare terminal pane has no page
+        // to ask, and the shell's own directory is the right answer there.
+        let mut app = App::new();
+        app.show_page("counting", Box::new(CountingPage::default()));
+        let with_page = app.focused_start_dir();
+        app.close_page_if_showing("counting");
+        assert!(app.pages.is_empty(), "the page is gone");
+        // A page reporting nowhere leaves the resolution exactly as it was.
+        assert_eq!(app.focused_start_dir(), with_page);
     }
 
     fn press(code: KeyCode) -> Key {
@@ -657,7 +744,7 @@ mod tests {
     }
 
     /// A directory holding `names`, removed again when the test ends.
-    struct TempTree(std::path::PathBuf);
+    struct TempTree(PathBuf);
 
     impl TempTree {
         fn new(tag: &str, names: &[&str]) -> Self {

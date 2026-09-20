@@ -133,6 +133,22 @@ impl EditorPage {
     /// One key, in whichever mode the editor is in, with what it changes kept
     /// for `.` to do again.
     pub(super) fn dispatch(&mut self, key: &Key) -> PageOutcome {
+        // Stepping between buffers is no part of a text command, so it is
+        // taken ahead of the recorder and of the mode dispatch: the chord
+        // means the same whether a file is being read or typed into.
+        if key.ctrl && key.alt {
+            match key.code {
+                KeyCode::Char(']') => {
+                    self.recent_buffer(true);
+                    return PageOutcome::Consumed;
+                }
+                KeyCode::Char('[') => {
+                    self.recent_buffer(false);
+                    return PageOutcome::Consumed;
+                }
+                _ => {}
+            }
+        }
         if !self.replaying {
             self.record.push(key.clone());
         }
@@ -1348,7 +1364,7 @@ impl EditorPage {
             true => (at + 1) % count,
             false => (at + count - 1) % count,
         };
-        self.show_buffer(next);
+        self.select_buffer(next);
         PageOutcome::Consumed
     }
 

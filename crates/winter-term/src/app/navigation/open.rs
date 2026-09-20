@@ -283,7 +283,7 @@ impl App {
                     Some(line) => page::OpenTarget::at_line(path, line),
                     None => page::OpenTarget::file(path),
                 };
-                self.open_editor_page(target);
+                self.open_path_page(target);
             }
             None => self.set_notice("nothing to open under the cursor"),
         }

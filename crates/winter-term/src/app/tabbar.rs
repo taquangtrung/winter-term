@@ -7,7 +7,9 @@
 
 use winter_render::{ContextMenu, Menu, MenuItem, MenuStyle, TabLabel, TabbarHit, TopTabbar};
 
-use super::{App, ContextAction};
+use crate::model::page::PagePoint;
+
+use super::{App, ContextAction, PageKeyAction};
 use crate::config::TitleBarStyle;
 
 // ========================================================================
@@ -302,6 +304,7 @@ impl App {
                         super::ContextAction::Copy => "Copy".into(),
                         super::ContextAction::Paste => "Paste".into(),
                         super::ContextAction::OpenLink(_) => "Open Link".into(),
+                        super::ContextAction::PageKey(action) => action.label.clone(),
                     },
                     shortcut: String::new(),
                 })
@@ -349,15 +352,32 @@ impl App {
     }
 
     /// Open a right-click context menu at `(x, y)`.
+    ///
+    /// Over a tool page the menu is the page's own, because the terminal's
+    /// entries mean nothing there: a paste would go to the shell running
+    /// underneath the listing, which is not what was clicked on.
     pub(crate) fn open_context_menu(&mut self, x: f32, y: f32) {
         use super::ContextAction;
-        let mut actions: Vec<ContextAction> = Vec::new();
+        let over_page = self
+            .pane_at_pixel(x, y)
+            .is_some_and(|(pane_id, _)| self.pages.contains_key(&pane_id));
+        let mut actions: Vec<ContextAction> = match over_page {
+            true => self.page_context_actions(x, y),
+            false => Vec::new(),
+        };
         if self.selection.span.is_some() {
             actions.push(ContextAction::Copy);
         }
-        actions.push(ContextAction::Paste);
-        if let Some(url) = &self.pointer.hovered_url {
-            actions.push(ContextAction::OpenLink(url.clone()));
+        if !over_page {
+            actions.push(ContextAction::Paste);
+            if let Some(url) = &self.pointer.hovered_url {
+                actions.push(ContextAction::OpenLink(url.clone()));
+            }
+        }
+        // A page with nothing to offer over this row gets no empty card.
+        if actions.is_empty() {
+            self.close_context_menu();
+            return;
         }
         self.menus.context_pos = Some((x, y));
         self.menus.context_url = self.pointer.hovered_url.clone();
@@ -365,6 +385,61 @@ impl App {
         self.menus.context_selected = None;
         self.close_menu();
         self.dirty = true;
+    }
+
+    /// What the tool page under `(x, y)` offers over the row that was
+    /// clicked.
+    ///
+    /// The pointer moves the page's cursor first, so the menu acts on the row
+    /// it was opened over rather than wherever the keyboard last left the
+    /// cursor: right-clicking a file in Git and choosing "stage it" stages
+    /// that file, not the one that happened to be under the cursor.
+    fn page_context_actions(&mut self, x: f32, y: f32) -> Vec<super::ContextAction> {
+        let Some((pane_id, pane_rect)) = self.pane_at_pixel(x, y) else {
+            return Vec::new();
+        };
+        let (row, col) = self.pixel_to_cell(x, y, pane_rect);
+        self.offer_mouse_to_page(
+            pane_id,
+            PagePoint {
+                col,
+                drag: false,
+                row,
+            },
+        );
+        let Some(slot) = self.pages.get(&pane_id) else {
+            return Vec::new();
+        };
+        slot.page
+            .context_items()
+            .into_iter()
+            .map(|item| {
+                super::ContextAction::PageKey(PageKeyAction {
+                    key: item.key,
+                    label: item.label,
+                    pane: pane_id,
+                })
+            })
+            .collect()
+    }
+
+    /// Carry out a context-menu entry. Both the tabbar's click handling and
+    /// the window's own reach this, so an entry means one thing wherever the
+    /// click that chose it was resolved.
+    pub(crate) fn run_context_action(&mut self, action: super::ContextAction) {
+        match action {
+            super::ContextAction::Copy => self.copy_selection(),
+            super::ContextAction::Paste => self.paste_from_clipboard(),
+            super::ContextAction::OpenLink(url) => {
+                let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
+                if matches!(scheme.as_str(), "http" | "https" | "mailto") {
+                    let _ = open::that(&url);
+                }
+            }
+            super::ContextAction::PageKey(action) => {
+                self.offer_key_to_page(action.pane, &action.key);
+            }
+        }
     }
 
     /// Update the hovered context menu item from the pointer position while the
@@ -491,16 +566,7 @@ impl App {
             TabbarHit::ContextMenuItem(i) => {
                 if let Some(action) = self.menus.context_actions.get(i).cloned() {
                     self.close_context_menu();
-                    match action {
-                        super::ContextAction::Copy => self.copy_selection(),
-                        super::ContextAction::Paste => self.paste_from_clipboard(),
-                        super::ContextAction::OpenLink(url) => {
-                            let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
-                            if matches!(scheme.as_str(), "http" | "https" | "mailto") {
-                                let _ = open::that(&url);
-                            }
-                        }
-                    }
+                    self.run_context_action(action);
                 }
             }
             TabbarHit::None => {

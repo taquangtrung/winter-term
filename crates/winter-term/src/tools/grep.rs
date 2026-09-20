@@ -6,8 +6,8 @@ use std::path::{Path, PathBuf};
 use crate::model::input::{CursorMove, Key, KeyCode};
 use crate::model::page::{
     row_height, row_text, wrap_window, JobReply, JobRequest, OpenTarget, Page, PageContent,
-    PageOutcome, PageRow, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest, SearchHit,
-    SearchRequest, SearchResult,
+    PageMenuItem, PageOutcome, PageRow, PageSpan, PageStyle, PromptMode, PromptReply,
+    PromptRequest, SearchHit, SearchRequest, SearchResult,
 };
 use crate::model::vim::nav::buffer_end;
 
@@ -29,6 +29,13 @@ const EMPTY_HINT: &str = "/ to search, q to close";
 
 /// The page's title, before a query narrows it.
 const TITLE: &str = "Grep";
+
+/// What the menu opened over a row calls each of the entries it offers.
+const LABEL_COPY_MATCH: &str = "Copy path:line";
+const LABEL_OPEN: &str = "Open at This Line";
+const LABEL_OPEN_IN_EDITOR: &str = "Open in $EDITOR";
+const LABEL_SEARCH: &str = "New Search...";
+const LABEL_SEARCH_AGAIN: &str = "Run This Search Again";
 
 // ========================================================================
 // Data Structures
@@ -360,6 +367,41 @@ impl Page for GrepPage {
         }
         PageOutcome::Consumed
     }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        // The file the cursor is in, falling back to what was searched when
+        // the cursor is on a heading or there is nothing to point at.
+        self.selected()
+            .and_then(|hit| hit.path.parent())
+            .map(PathBuf::from)
+            .or_else(|| Some(self.root.clone()))
+    }
+
+    fn context_items(&self) -> Vec<PageMenuItem> {
+        // Everything here acts on the match under the cursor, so a row that
+        // is not one (a file heading, the header) offers only a new search.
+        let mut items = Vec::new();
+        if self.selected().is_some() {
+            items.push(PageMenuItem::new(Key::plain(KeyCode::Enter), LABEL_OPEN));
+            items.push(PageMenuItem::new(
+                Key::with_ctrl(KeyCode::Char('o')),
+                LABEL_OPEN_IN_EDITOR,
+            ));
+            items.push(PageMenuItem::new(
+                Key::plain(KeyCode::Char('y')),
+                LABEL_COPY_MATCH,
+            ));
+        }
+        items.push(PageMenuItem::new(
+            Key::plain(KeyCode::Char('/')),
+            LABEL_SEARCH,
+        ));
+        items.push(PageMenuItem::new(
+            Key::plain(KeyCode::Char('G')),
+            LABEL_SEARCH_AGAIN,
+        ));
+        items
+    }
 }
 
 // ========================================================================
@@ -453,6 +495,29 @@ mod tests {
             truncated: false,
         }));
         page
+    }
+
+    #[test]
+    fn test_the_start_directory_follows_the_hit_under_the_cursor() {
+        // A tool opened from a result should land beside the file being read,
+        // not at the top of whatever tree was searched, so stepping onto a
+        // hit in another directory has to move the answer with it.
+        let mut page = page_with(vec![
+            hit("src/a.rs", 1, "thing"),
+            hit("crates/deep/b.rs", 9, "thing"),
+        ]);
+        page.move_by(1);
+        assert_eq!(page.cwd(), Some(PathBuf::from("/repo/src")));
+        while page.selected().map(|h| h.line) != Some(9) {
+            page.move_by(1);
+        }
+        assert_eq!(page.cwd(), Some(PathBuf::from("/repo/crates/deep")));
+    }
+
+    #[test]
+    fn test_a_search_with_nothing_to_point_at_starts_where_it_searched() {
+        let page = GrepPage::new(PathBuf::from("/repo"));
+        assert_eq!(page.cwd(), Some(PathBuf::from("/repo")));
     }
 
     /// Ask for `text` through the query prompt, the way a key does.

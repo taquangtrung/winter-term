@@ -220,9 +220,9 @@ impl App {
             }
             PaletteMode::Files => {
                 if let Some(path) = action {
-                    // Over the focused pane, as every other way into the
-                    // editor does it, so closing the file puts the shell back.
-                    self.open_editor_page(page::OpenTarget::file(PathBuf::from(path)));
+                    // Over the focused pane, as every other way into a file
+                    // does it, so closing it puts the shell back.
+                    self.open_path_page(page::OpenTarget::file(PathBuf::from(path)));
                 }
             }
             PaletteMode::PagePick => {

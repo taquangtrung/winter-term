@@ -355,6 +355,96 @@ pub enum Action {
 }
 
 // ========================================================================
+// Key
+// ========================================================================
+
+impl Key {
+    /// `code` with no modifier held, which for a letter is the letter as
+    /// typed: `Key::plain(KeyCode::Char('S'))` is what Shift-s arrives as.
+    pub fn plain(code: KeyCode) -> Self {
+        Self {
+            alt: false,
+            code,
+            ctrl: false,
+            shift: false,
+        }
+    }
+
+    /// `code` with Alt held.
+    pub fn with_alt(code: KeyCode) -> Self {
+        Self {
+            alt: true,
+            code,
+            ctrl: false,
+            shift: false,
+        }
+    }
+
+    /// `code` with Ctrl held.
+    pub fn with_ctrl(code: KeyCode) -> Self {
+        Self {
+            alt: false,
+            code,
+            ctrl: true,
+            shift: false,
+        }
+    }
+
+    /// `code` with both Ctrl and Shift held.
+    pub fn with_ctrl_shift(code: KeyCode) -> Self {
+        Self {
+            alt: false,
+            code,
+            ctrl: true,
+            shift: true,
+        }
+    }
+}
+
+impl KeyCode {
+    /// The key a web engine's `KeyboardEvent.key` names, or `None` for one
+    /// Winter has no code for: a bare modifier, or anything exotic enough
+    /// that guessing would be worse than dropping it.
+    ///
+    /// Needed because a child WebView holds the keyboard whenever one is on
+    /// screen, so a key typed over it reaches Winter as a DOM name rather
+    /// than through the windowing layer.
+    pub fn from_web_name(name: &str) -> Option<Self> {
+        // The space bar names itself with the character it types, and Winter
+        // has a code of its own for it.
+        if name == " " {
+            return Some(KeyCode::Space);
+        }
+        let mut chars = name.chars();
+        if let (Some(only), None) = (chars.next(), chars.next()) {
+            return Some(KeyCode::Char(only));
+        }
+        if let Some(number) = name.strip_prefix('F') {
+            if let Ok(index) = number.parse::<u8>() {
+                return Some(KeyCode::F(index));
+            }
+        }
+        match name {
+            "ArrowDown" => Some(KeyCode::Down),
+            "ArrowLeft" => Some(KeyCode::Left),
+            "ArrowRight" => Some(KeyCode::Right),
+            "ArrowUp" => Some(KeyCode::Up),
+            "Backspace" => Some(KeyCode::Backspace),
+            "Delete" => Some(KeyCode::Delete),
+            "End" => Some(KeyCode::End),
+            "Enter" => Some(KeyCode::Enter),
+            "Escape" => Some(KeyCode::Escape),
+            "Home" => Some(KeyCode::Home),
+            "Insert" => Some(KeyCode::Insert),
+            "PageDown" => Some(KeyCode::PageDown),
+            "PageUp" => Some(KeyCode::PageUp),
+            "Tab" => Some(KeyCode::Tab),
+            _ => None,
+        }
+    }
+}
+
+// ========================================================================
 // Constants
 // ========================================================================
 
@@ -447,6 +537,27 @@ pub(super) mod test_support {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn test_web_key_names_map_to_the_codes_winter_binds() {
+        // A surface hands keys back by their DOM name, so a name that maps to
+        // nothing is a key that silently stops working inside a document.
+        assert_eq!(KeyCode::from_web_name("j"), Some(KeyCode::Char('j')));
+        assert_eq!(KeyCode::from_web_name("J"), Some(KeyCode::Char('J')));
+        assert_eq!(KeyCode::from_web_name(" "), Some(KeyCode::Space));
+        assert_eq!(KeyCode::from_web_name("ArrowDown"), Some(KeyCode::Down));
+        assert_eq!(KeyCode::from_web_name("Escape"), Some(KeyCode::Escape));
+        assert_eq!(KeyCode::from_web_name("F5"), Some(KeyCode::F(5)));
+    }
+
+    #[test]
+    fn test_a_bare_modifier_is_not_a_key() {
+        // Holding Shift fires a keydown of its own; routing it as a key would
+        // send a stray press to the page on every chord typed.
+        assert_eq!(KeyCode::from_web_name("Shift"), None);
+        assert_eq!(KeyCode::from_web_name("Control"), None);
+        assert_eq!(KeyCode::from_web_name("Unidentified"), None);
+    }
     use super::test_support::resolve_simple;
     use super::*;
 

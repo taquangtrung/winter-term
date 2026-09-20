@@ -84,6 +84,12 @@ pub struct EditorPage {
     /// What the last command reported, shown in the header until the next key.
     message: Option<String>,
     mode: EditMode,
+    /// Buffer indices, most recently shown first, so a recency walk and the
+    /// buffer list both read in the order the files were last worked on.
+    mru: Vec<usize>,
+    /// Cursor into the recency order while a walk is in progress, so repeated
+    /// steps go on through it instead of restarting from the current buffer.
+    mru_walk: Option<usize>,
     nav: VimNav,
     /// An operator waiting for the motion or object that says how far it
     /// reaches.
@@ -186,6 +192,8 @@ impl EditorPage {
             last_change: Vec::new(),
             message: None,
             mode: EditMode::Normal,
+            mru: vec![0],
+            mru_walk: None,
             nav: VimNav::new(),
             operator: None,
             painted: Vec::new(),
@@ -216,7 +224,7 @@ impl EditorPage {
     /// than a second editor.
     pub fn open(&mut self, path: PathBuf, line: Option<usize>) {
         if let Some(at) = self.docs.iter().position(|doc| doc.path == path) {
-            self.show(at);
+            self.select_buffer(at);
             if let Some(line) = line {
                 self.buffer_mut().move_to_line(line.saturating_sub(1));
             }
@@ -225,14 +233,52 @@ impl EditorPage {
         match Document::open(path, line) {
             Ok(doc) => {
                 self.docs.push(doc);
-                self.show(self.docs.len() - 1);
+                self.select_buffer(self.docs.len() - 1);
             }
             Err(e) => self.message = Some(format!("{e}")),
         }
     }
 
+    /// Show buffer `at` as a deliberate choice: it becomes the most recently
+    /// used, which also ends any recency walk in progress.
+    pub(super) fn select_buffer(&mut self, at: usize) {
+        self.touch_mru(at);
+        self.show(at);
+    }
+
+    /// Move `at` to the front of the recency order, ending any walk.
+    fn touch_mru(&mut self, at: usize) {
+        self.mru.retain(|&i| i != at);
+        self.mru.insert(0, at);
+        self.mru_walk = None;
+    }
+
+    /// Step through the buffers in recency order: `forward` comes back toward
+    /// the most recent, its opposite goes further back. Walking over one does
+    /// not make it recent, so repeated steps go on rather than bouncing.
+    pub(super) fn recent_buffer(&mut self, forward: bool) {
+        let count = self.docs.len();
+        if count <= 1 {
+            return;
+        }
+        // Guard against any drift from open/close bookkeeping: a malformed
+        // order is rebuilt with the buffer being read most-recent.
+        if self.mru.len() != count {
+            self.mru = (0..count).collect();
+            self.touch_mru(self.at);
+        }
+        let cursor = self.mru_walk.unwrap_or(0);
+        let next = match forward {
+            true => (cursor + count - 1) % count,
+            false => (cursor + 1) % count,
+        };
+        self.mru_walk = Some(next);
+        self.show(self.mru[next]);
+    }
+
     /// Put buffer `at` in front of the keys, with nothing half-typed carried
-    /// over from the one being left.
+    /// over from the one being left. The recency order is untouched, so a walk
+    /// passing through keeps its place.
     fn show(&mut self, at: usize) {
         // The unnamed register follows the eye rather than staying with the
         // file it was filled from: a yank in one buffer puts in the next.
@@ -261,21 +307,30 @@ impl EditorPage {
         self.at
     }
 
-    /// Show buffer `at`, for the keys that step between them.
-    pub(super) fn show_buffer(&mut self, at: usize) {
-        self.show(at);
-    }
-
     /// How each open buffer reads in a list: its path, and whether it holds
     /// edits that are not on disk.
     pub(super) fn buffer_list(&self) -> Vec<String> {
-        self.docs
+        // Most recently used first, so the file being bounced to and from sits
+        // at the top rather than wherever it happened to be opened. An index
+        // the order has drifted out of step with is dropped rather than
+        // panicking on it, and anything the order missed is appended.
+        let named = |doc: &Document| match doc.buffer.is_dirty() {
+            true => format!("{}{DIRTY_MARK}", doc.path.display()),
+            false => doc.path.display().to_string(),
+        };
+        let mut listed: Vec<String> = self
+            .mru
             .iter()
-            .map(|doc| match doc.buffer.is_dirty() {
-                true => format!("{}{DIRTY_MARK}", doc.path.display()),
-                false => doc.path.display().to_string(),
-            })
-            .collect()
+            .filter_map(|&i| self.docs.get(i).map(named))
+            .collect();
+        listed.extend(
+            self.docs
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| !self.mru.contains(i))
+                .map(|(_, doc)| named(doc)),
+        );
+        listed
     }
 
     /// The text under the cursor.
@@ -350,7 +405,16 @@ impl EditorPage {
             return PageOutcome::Close;
         }
         let gone = name_of(&self.docs.remove(self.at).path);
-        self.show(self.at.saturating_sub(1));
+        // The indices above the hole all shift down by one, so the order has
+        // to be renumbered or a later walk lands on the wrong file.
+        let closed = self.at;
+        self.mru.retain(|&i| i != closed);
+        for i in self.mru.iter_mut() {
+            if *i > closed {
+                *i -= 1;
+            }
+        }
+        self.select_buffer(self.at.saturating_sub(1));
         self.message = Some(format!("closed {gone}"));
         PageOutcome::Consumed
     }
@@ -826,7 +890,7 @@ impl Page for EditorPage {
                         .iter()
                         .position(|doc| doc.path.to_string_lossy() == path)
                     {
-                        self.show(at);
+                        self.select_buffer(at);
                     }
                 }
                 PageOutcome::Consumed
@@ -839,6 +903,12 @@ impl Page for EditorPage {
             },
             _ => PageOutcome::Consumed,
         }
+    }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        // The buffer being edited, not the one the editor opened with, so
+        // stepping through buffers takes the answer with it.
+        self.doc().path.parent().map(PathBuf::from)
     }
 }
 
@@ -1465,6 +1535,67 @@ mod tests {
     }
 
     #[test]
+    fn test_the_recency_chord_goes_to_the_last_file_worked_on_not_the_next_one() {
+        // The whole point of the chord over `]b`: with three files open and
+        // the middle one visited last, it goes back to that rather than to
+        // whichever file happens to sit beside this one in opening order.
+        let tmp = TempDir::new("recent-buffers");
+        let mut page = tmp.page("one\n");
+        page.open(tmp.file("b.txt", "two\n"), None);
+        page.open(tmp.file("c.txt", "three\n"), None);
+        press(&mut page, "[b");
+        assert_eq!(page.buffer().lines(), ["two"], "visited second");
+        press(&mut page, "]b");
+        assert_eq!(page.buffer().lines(), ["three"], "and back to the third");
+
+        page.recent_buffer(false);
+        assert_eq!(page.buffer().lines(), ["two"], "the one worked on before");
+        page.recent_buffer(false);
+        assert_eq!(page.buffer().lines(), ["one"], "and further back again");
+        page.recent_buffer(true);
+        assert_eq!(page.buffer().lines(), ["two"], "forward toward the recent");
+    }
+
+    #[test]
+    fn test_a_walk_does_not_reshuffle_what_it_passes_over() {
+        // Walking past a file must not make it the most recent, or a second
+        // press would bounce between two files instead of going on back.
+        let tmp = TempDir::new("recent-walk");
+        let mut page = tmp.page("one\n");
+        page.open(tmp.file("b.txt", "two\n"), None);
+        page.open(tmp.file("c.txt", "three\n"), None);
+        page.recent_buffer(false);
+        page.recent_buffer(false);
+        assert_eq!(
+            page.buffer().lines(),
+            ["one"],
+            "two steps back, not a toggle"
+        );
+    }
+
+    #[test]
+    fn test_closing_a_buffer_renumbers_the_recency_order_behind_it() {
+        // The indices above a closed buffer all shift down; without
+        // renumbering, a later walk lands on the wrong file or on none.
+        let tmp = TempDir::new("recent-close");
+        let mut page = tmp.page("one\n");
+        page.open(tmp.file("b.txt", "two\n"), None);
+        page.open(tmp.file("c.txt", "three\n"), None);
+        // Close the middle file, so index 2 ("three") becomes index 1.
+        press(&mut page, "[b");
+        assert_eq!(page.buffer().lines(), ["two"]);
+        press(&mut page, "q");
+        assert_eq!(page.buffer_count(), 2);
+        for _ in 0..page.buffer_count() * 2 {
+            page.recent_buffer(false);
+            assert!(
+                page.buffer().lines() != ["two"],
+                "the closed file is never walked back onto"
+            );
+        }
+    }
+
+    #[test]
     fn test_coming_back_to_a_buffer_re_reads_a_file_written_to_meanwhile() {
         let tmp = TempDir::new("buffer-stale");
         let mut page = tmp.page("before\n");
@@ -1489,10 +1620,14 @@ mod tests {
             panic!("`gb` asks for one of the open buffers");
         };
         assert_eq!(request.items.len(), 2);
+        // Most recently used first: the file in front heads the list, and the
+        // one before it follows, so the usual next choice is a row away.
+        assert!(request.items[0].ends_with("b.txt"), "the file in front");
+        assert!(request.items[1].ends_with("a.txt"), "the one before it");
 
-        let first = request.items[0].clone();
+        let previous = request.items[1].clone();
         page.on_prompt(PromptReply {
-            answer: Some(first),
+            answer: Some(previous),
             tag: request.tag,
         });
         assert_eq!(page.buffer().lines(), ["one"]);

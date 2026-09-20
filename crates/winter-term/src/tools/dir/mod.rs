@@ -29,8 +29,8 @@ use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
     find_match, row_height, row_text, wrap_window, JobReply, JobRequest, OpenTarget, Page,
-    PageContent, PageIcon, PageOutcome, PageSpan, PageStyle, PageWindow, PickQuestion, PromptMode,
-    PromptReply, PromptRequest,
+    PageContent, PageIcon, PageMenuItem, PageOutcome, PageSpan, PageStyle, PageWindow,
+    PickQuestion, PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
 
@@ -63,6 +63,22 @@ const ASK_SEARCH: &str = "search";
 /// jumplist's own depth, for the same reason: enough to walk back through a
 /// session's wandering, bounded so it cannot grow without limit.
 const MAX_HISTORY: usize = 100;
+
+/// What the menu opened over a row calls each of the entries it offers. An
+/// operation acts on the marked entries when there are any, which is why
+/// these name the operation rather than the entry under the cursor.
+const LABEL_COPY: &str = "Copy...";
+const LABEL_DELETE: &str = "Delete...";
+const LABEL_MARK: &str = "Mark";
+const LABEL_MOVE: &str = "Move...";
+const LABEL_NEW_DIR: &str = "New Directory...";
+const LABEL_NEW_FILE: &str = "New File...";
+const LABEL_OPEN: &str = "Open";
+const LABEL_OPEN_EXTERNAL: &str = "Open With System Handler";
+const LABEL_OPEN_IN_EDITOR: &str = "Open in $EDITOR";
+const LABEL_RELOAD: &str = "Reload";
+const LABEL_RENAME: &str = "Rename...";
+const LABEL_UNMARK: &str = "Unmark";
 
 // ========================================================================
 // Data Structures
@@ -1136,6 +1152,74 @@ impl Page for DirPage {
             },
         }
     }
+
+    fn cwd(&self) -> Option<PathBuf> {
+        // A directory row is itself the answer; any other row means the
+        // directory holding it. With the tree folded open the cursor can sit
+        // well below the listing's root, which is the whole point of asking
+        // the cursor rather than the root.
+        let Some(row) = self.selected() else {
+            return Some(self.root.clone());
+        };
+        match row.entry.is_dir() {
+            true => Some(row.entry.path.clone()),
+            false => row.entry.path.parent().map(PathBuf::from),
+        }
+    }
+
+    fn context_items(&self) -> Vec<PageMenuItem> {
+        let Some(row) = self.selected() else {
+            // Below the listing there is no entry to act on, so the only
+            // things left are the ones that make a new one.
+            return vec![
+                PageMenuItem::new(Key::plain(KeyCode::Char('_')), LABEL_NEW_FILE),
+                PageMenuItem::new(Key::plain(KeyCode::Char('+')), LABEL_NEW_DIR),
+                PageMenuItem::new(Key::plain(KeyCode::Char('G')), LABEL_RELOAD),
+            ];
+        };
+        let is_dir = row.entry.is_dir();
+        let marked = self.marks.contains(&row.entry.path);
+        let mut items = vec![PageMenuItem::new(Key::plain(KeyCode::Enter), LABEL_OPEN)];
+        if !is_dir {
+            items.push(PageMenuItem::new(
+                Key::with_ctrl(KeyCode::Char('o')),
+                LABEL_OPEN_IN_EDITOR,
+            ));
+            items.push(PageMenuItem::new(
+                Key::plain(KeyCode::Char('&')),
+                LABEL_OPEN_EXTERNAL,
+            ));
+        }
+        items.push(PageMenuItem::new(
+            Key::plain(KeyCode::Char('R')),
+            LABEL_RENAME,
+        ));
+        items.push(PageMenuItem::new(
+            Key::plain(KeyCode::Char('C')),
+            LABEL_COPY,
+        ));
+        items.push(PageMenuItem::new(
+            Key::with_alt(KeyCode::Char('m')),
+            LABEL_MOVE,
+        ));
+        items.push(PageMenuItem::new(
+            Key::plain(KeyCode::Char('x')),
+            LABEL_DELETE,
+        ));
+        items.push(match marked {
+            true => PageMenuItem::new(Key::plain(KeyCode::Char('u')), LABEL_UNMARK),
+            false => PageMenuItem::new(Key::plain(KeyCode::Char('m')), LABEL_MARK),
+        });
+        items.push(PageMenuItem::new(
+            Key::plain(KeyCode::Char('_')),
+            LABEL_NEW_FILE,
+        ));
+        items.push(PageMenuItem::new(
+            Key::plain(KeyCode::Char('+')),
+            LABEL_NEW_DIR,
+        ));
+        items
+    }
 }
 
 // ========================================================================
@@ -1447,6 +1531,56 @@ mod tests {
         page.selected()
             .map(|row| row.entry.name.clone())
             .unwrap_or_default()
+    }
+
+    #[test]
+    fn test_every_menu_entry_runs_a_key_the_listing_binds() {
+        // The menu offers keys rather than commands of its own, so an entry
+        // naming a chord the page does not match is an entry that silently
+        // does nothing when it is chosen. Nothing else checks the two sides
+        // against each other.
+        let tree = TempTree::new("menu_keys");
+        tree.touch("a.txt");
+        tree.dir("sub");
+        let page = DirPage::new(tree.0.clone());
+
+        for item in page.context_items() {
+            let mut probe = DirPage::new(tree.0.clone());
+            assert_ne!(
+                probe.on_key(&item.key),
+                PageOutcome::Ignored,
+                "the menu offers {:?}, which the listing does not bind",
+                item.label
+            );
+        }
+    }
+
+    #[test]
+    fn test_the_menu_offers_a_directory_only_what_a_directory_can_do() {
+        // Handing a directory to $EDITOR or to the system handler as if it
+        // were a file is the mistake a menu built without looking at the row
+        // makes.
+        let tree = TempTree::new("menu_rows");
+        tree.touch("a.txt");
+        tree.dir("sub");
+        let mut page = DirPage::new(tree.0.clone());
+
+        let labels = |page: &DirPage| -> Vec<String> {
+            page.context_items()
+                .into_iter()
+                .map(|item| item.label)
+                .collect()
+        };
+
+        while selected_name(&page) != "sub" {
+            page.on_key(&press(KeyCode::Char('j')));
+        }
+        assert!(!labels(&page).contains(&LABEL_OPEN_IN_EDITOR.to_string()));
+
+        while selected_name(&page) != "a.txt" {
+            page.on_key(&press(KeyCode::Char('j')));
+        }
+        assert!(labels(&page).contains(&LABEL_OPEN_IN_EDITOR.to_string()));
     }
 
     #[test]

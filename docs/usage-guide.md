@@ -216,6 +216,8 @@ Every tool asks the same way, in the middle of the window. A question with a kno
 
 Every tool answers to `Alt-Shift-,` and `Alt-Shift-.` for the top and the bottom of what it is showing, which are emacs' `M-<` and `M->` under the fingers, so a page is read with either set of habits: the Vim `gg` and `G` reach the same two rows.
 
+Right-clicking inside a tool opens that tool's own menu, rather than the terminal's: over a listing there is nothing to paste into, and the entries that would mean something act on rows the terminal knows nothing about. The click moves the cursor to the row it landed on before the menu opens, so what is chosen acts on what was clicked. What the menu offers follows that row, because a commit cannot be staged and a section heading has no path to copy. Each entry is a key the tool already binds, shown by name, so the menu is a way of finding a command rather than a second set of them.
+
 Every tool searches the same way. `/` asks for text and moves the cursor to the next row holding it, `n` and `N` step through the rest of the matches and wrap at the ends, and a search that finds nothing says so instead of sitting still. Matching is literal and pays no attention to case: a directory listing matches on the entry's name, every other tool on the whole row as it is painted, so a chord is as findable as the command beside it. A search moves the cursor and nothing else: marks, folds, and everything staged stay as they were. Grep is the one exception to the first part, since its rows already are a search: `/` there asks for a new one.
 
 **Dir** (`Ctrl-Shift-d`, or `Dir: Open Working Directory`) lists a directory, rooted at the working directory of the pane it opened from.
@@ -387,11 +389,12 @@ The walk skips what would swamp the results rather than reading everything: `.gi
 | `Ctrl-s` | Write the file |
 | `Z Z` / `Z Q` | Write and close; close, discarding edits |
 | `Ctrl-o` | Hand the file to `$EDITOR` in a new tab, at the cursor's line |
-| `]b` / `[b` | The next open buffer, the one before |
-| `gb` | List the open buffers and go to one |
+| `]b` / `[b` | The next open buffer, the one before, in the order they were opened |
+| `Ctrl-Alt-[` / `Ctrl-Alt-]` | Back through the buffers you last worked on, and forward again |
+| `gb` | List the open buffers, most recently used first, and go to one |
 | `q` | Close this buffer, asking first if it has unsaved edits |
 
-One editor holds as many files as you open into it. Opening a file while the editor is up (from the file browser, or `gx` on a path) adds it as another buffer rather than covering the editor with a second one, and opening a file that is already open goes to it. `]b` and `[b` step through them, `gb` lists them, and the header says which of how many you are on. `q` and `ZZ` close the buffer you are reading and leave the rest; closing the last one closes the editor and gives the pane back. A buffer with unsaved edits asks before it goes, one buffer at a time, so nothing is dropped quietly.
+One editor holds as many files as you open into it. Opening a file while the editor is up (from the file browser, or `gx` on a path) adds it as another buffer rather than covering the editor with a second one, and opening a file that is already open goes to it. `]b` and `[b` step through them in the order they were opened, and the header says which of how many you are on. `Ctrl-Alt-[` and `Ctrl-Alt-]` walk them by how recently you worked on them instead, which is usually what you want when two files are in play: one press of `Ctrl-Alt-[` goes back to the file you just left, and pressing it again goes further back rather than bouncing between the two. Walking over a file does not make it the recent one, so the order stays put until you stop and work in it. `gb` lists them in that same order, the file in front at the top and the one before it a row below, and it works in any of the editor's modes. `q` and `ZZ` close the buffer you are reading and leave the rest; closing the last one closes the editor and gives the pane back. A buffer with unsaved edits asks before it goes, one buffer at a time, so nothing is dropped quietly.
 
 What the buffers share is what Vim shares: the registers, the last search, the last char search, and the last change `.` repeats. What belongs to each file stays with it: its marks, its undo history, where the cursor and the window are in it, and what it looked like on disk.
 
@@ -425,6 +428,66 @@ Saving writes through a temporary file beside the original and renames it over t
 | `Ctrl-Shift-f` again, or `Esc` | Put it away |
 
 Directories come first, then files, with the hidden ones after each group and `../` at the top, so a listing opens on what is usually wanted and typing reaches the rest. The path being browsed is shown above the list, and a directory's row says `dir` where a file's says its size. It reads one directory at a time rather than walking the tree, so it opens instantly however large the tree below it is.
+
+**PDF** opens wherever a file does, on any path ending in `.pdf`: `Enter` in Dir, Git, or Grep, the file browser, or a `gx` reference. Like the editor it has no chord of its own and opens over the tool it was reached from, so closing it puts the listing back. The document itself is drawn by a web engine rather than by Winter, because a rendered page is not text and cannot be painted as rows; the header above it is Winter's own, in the terminal's font and theme, and says which file and which page of how many. The renderer is packed into the binary, along with the fourteen standard fonts a PDF is allowed to name without carrying, so a document opens with nothing installed and no network access and draws the right shapes on a machine with no fonts of its own. The viewer can read nothing but the file it was opened on.
+
+| Key | Action |
+|---|---|
+| `{count}` before a motion | Repeat it that many times, as vim does: `3j`, `12k` |
+| `j` `k` or `Down` `Up` | Scroll down, up |
+| `h` `l` or `Left` `Right` | Scroll left, right, for a page zoomed past the pane |
+| `Ctrl-e` / `Ctrl-y` | A line down, up, without moving what is on screen otherwise |
+| `Ctrl-d` / `Ctrl-u` | Half a screen down, up |
+| `Ctrl-f` / `Ctrl-b`, `Space` / `b`, `PageDown` / `PageUp` | A screen down, up |
+| `gg` / `G`, or `Home` / `End` | First page, last page |
+| `{count}gg` / `{count}G` | Go to that page |
+| `]` / `[` | Next page, previous page |
+| `zt` / `zz` / `zb` | Put this page at the top, middle, bottom of the pane |
+| `Ctrl-g` | Say which file, which page of how many, and how far through |
+| `+` / `-` | Zoom in, out |
+| `=` | Fit the page to the pane's width again |
+| `i` | Put a cursor in the text, for the motions below |
+| `/{text}` / `?{text}` | Search down the document, back up it; the cursor lands on what is found |
+| `n` / `N` | The same search again, the same way or the other |
+| `Esc` | Abandon a half-typed command |
+| `q` | Close, giving the pane back |
+
+The motions are vim's, and they compose the way vim's do: a count is typed before the motion it multiplies and is spent by it, `g` and `z` wait for the key that completes them, and the pane's own key-hint card says what finishes one while it is pending. The header shows a count as it is typed, so one entered by accident is visible before it moves anything. The two places a count is read as a position rather than a repeat are `gg` and `G`, exactly as in vim: `5G` is page five, not five pages on.
+
+Where the motions differ from vim's, it is because a document is not a buffer. There is no cursor to move, so `h` and `l` scroll sideways instead of stepping characters, and `Ctrl-d` moves half the pane rather than half a file's worth of lines. `zt`, `zz`, and `zb` move the window and not the page being read, which is what they do in vim too.
+
+`i` puts a cursor in the document's own text, and from there the keys are vim's text motions rather than the window's. `Esc` takes it back out, one step at a time: a half-typed command first, then the selection, then the cursor itself.
+
+| Key | Action |
+|---|---|
+| `h` `j` `k` `l` or the arrows | Move the cursor left, down, up, right |
+| `w` / `b` / `e` | Forward a word, back a word, to a word's end |
+| `0` / `^` / `$` | Start of the line, its first non-blank, its end |
+| `{` / `}` | Back, forward a paragraph |
+| `(` / `)` | Back, forward a sentence on this line |
+| `f{char}` / `F{char}` | To the next, previous occurrence of a character on this line |
+| `t{char}` / `T{char}` | To just before, just after it |
+| `;` / `,` | The last `f`/`F`/`t`/`T` again, the same way or the other |
+| `gg` / `G` | The first, last character of the document, across pages |
+| `{count}gg` / `{count}G` | The start of that page |
+| `H` / `M` / `L` | The line nearest the top, middle, bottom of the pane, without scrolling |
+| `zt` / `zz` / `zb` | Scroll so the cursor's own line lands at the top, middle, bottom |
+| `v` / `V` | Select by character, by line; the same key again drops the selection |
+| `o` | Put the cursor on the other end of the selection |
+| `y` (with a selection) | Copy it |
+| `y{motion}` | Copy exactly what the motion spans: `yw`, `ye`, `y$`, `y}`, `yfx` |
+| `yy` / `Y` | Copy whole lines from the cursor's own |
+| `/{text}` / `?{text}`, `n` / `N` | Search, and walk the matches |
+| `y/{text}` | Copy from the cursor up to what the search finds |
+| `{count}` before any of them | Repeat it that many times |
+
+The motions divide into inclusive and exclusive the way vim's do, which is the difference between `yw` and `ye` over the same word: both land in the same place, but `ye` takes the last letter and `yw` stops before the next word starts. The window keys keep working with a cursor in the text, so `Space`, `Ctrl-d`, `]` and the rest still page through the document the cursor is sitting in.
+
+A PDF carries no structure to ask about any of this, so the text is modelled rather than read. The page is cut into blocks along the empty bands that run right across it: a band down the page is the gutter of a two-column paper, so the motions read down one column and then down the other, and a band across it separates a banner or a footnote from the body, so a title reads before the columns under it rather than in the middle of them. Within a block, glyph runs are clustered into lines by how close their baselines are, a gap wide enough to have been a space becomes one, and a paragraph break is a line gap noticeably wider than that page's usual. Where a document's layout defeats the model, the motions follow the model rather than the page.
+
+Search is Winter's one convention that holds whichever way a document is being read: `/` and `?` ask for text in the terminal's own prompt, and `n` and `N` walk the matches, wrapping around the document once. A pattern typed in lower case matches either case and a capital in one matches exactly, which is the rule the editor searches its files by. A search made with no cursor in the text puts one on what it found, with the whole match drawn under it, since a page that moved with nothing marking what matched would be half an answer.
+
+A document is drawn by a web engine, and a web engine takes the keyboard for the whole window while it is on screen. Winter does not leave it there: the surface hands every key straight back, and it is resolved the way a key typed into any other tool is, its page first and the window chords after. So splitting, zooming, moving between panes and switching tabs all work from inside a PDF, and `q` closes it, exactly as they do everywhere else.
 
 **Keys** (`Keys: Show Every Command`) lists every command and the chord bound to it, read from the keymap in force, so it cannot disagree with what the keys actually do. `/`, `n`, and `N` search it, over both columns, so a chord you pressed by accident is as easy to look up as a command you are hunting for. `Enter` runs the command under the cursor: the page hands the pane back first, so a command that opens a tool of its own has somewhere to open.
 

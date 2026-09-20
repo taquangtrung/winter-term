@@ -77,9 +77,10 @@ impl App {
     /// Open a new tab with a fresh shell pane and switch to it.
     pub(crate) fn new_tab(&mut self) {
         let id = self.alloc_pane_id();
-        // Open the new tab in the focused pane's working directory rather than
-        // the process default (usually `$HOME`).
-        let cwd = self.focused_cwd();
+        // Open the new tab where the focused pane was being used rather than
+        // at the process default (usually `$HOME`): under a tool that is the
+        // directory the tool is looking at, not the shell's own.
+        let cwd = self.focused_start_cwd();
         let (cols, rows) = self
             .renderer
             .as_ref()

@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<!-- Everything this document can load comes off Winter's own surface protocol:
+     the vendored pdf.js build, its worker, and the single file the page asked
+     to open. There is no network origin in this policy at all, so a malicious
+     PDF has nowhere to call out to even if it gets script running. -->
+<meta http-equiv="Content-Security-Policy" content="
+  default-src 'none';
+  script-src 'self';
+  worker-src 'self' blob:;
+  connect-src 'self' blob:;
+  img-src 'self' blob: data:;
+  style-src 'self' 'unsafe-inline';
+  font-src 'self';
+">
+<style>
+:root {
+  --winter-bg: #1f1f1f;
+  --winter-fg: #d8d8d8;
+  --winter-gutter: 12px;
+}
+* { margin: 0; padding: 0; box-sizing: border-box; }
+html, body {
+  height: 100%;
+  background: var(--winter-bg);
+  color: var(--winter-fg);
+}
+body {
+  overflow-y: auto;
+  /* A page zoomed past the pane's width has to be reachable sideways, which
+     is what h/l scroll. */
+  overflow-x: auto;
+  padding: var(--winter-gutter);
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  /* The host draws no scrollbar anywhere else, and a native one over the
+     terminal's own palette reads as a foreign widget. */
+  scrollbar-width: none;
+}
+body::-webkit-scrollbar { display: none; }
+.page {
+  position: relative;
+  margin: 0 auto var(--winter-gutter);
+  background: #ffffff;
+  box-shadow: 0 1px 6px rgba(0, 0, 0, 0.45);
+}
+.page:last-child { margin-bottom: 0; }
+.page canvas { display: block; width: 100%; height: 100%; }
+/* The cursor and what it has selected, drawn over the page rather than in it:
+   pdf.js paints text to a canvas, so there is nothing in the DOM to put a
+   caret inside of. */
+#winter-caret {
+  position: absolute;
+  display: none;
+  background: var(--winter-fg);
+  opacity: 0.75;
+  mix-blend-mode: difference;
+  pointer-events: none;
+  z-index: 3;
+}
+.winter-caret-selection {
+  position: absolute;
+  background: var(--winter-fg);
+  opacity: 0.25;
+  pointer-events: none;
+  z-index: 2;
+}
+/* What a search landed on: outlined rather than filled, so it reads as a
+   match the cursor is sitting in and not as a selection the next yank would
+   take. */
+.winter-caret-match {
+  position: absolute;
+  background: var(--winter-fg);
+  opacity: 0.18;
+  outline: 1px solid var(--winter-fg);
+  pointer-events: none;
+  z-index: 2;
+}
+#message {
+  padding: 1em;
+  opacity: 0.8;
+  white-space: pre-wrap;
+}
+</style>
+</head>
+<body>
+<div id="pages"></div>
+<div id="message"></div>
+<script type="module" src="./viewer.mjs"></script>
+</body>
+</html>

@@ -477,6 +477,52 @@ pub struct PageCaret {
     pub insert: bool,
 }
 
+/// One entry a page offers in the menu opened over its own rows.
+///
+/// An entry names a key the page already binds, rather than a command of its
+/// own. A menu built that way cannot offer something the keyboard cannot do,
+/// cannot drift from what the keys mean, and costs a page one list rather
+/// than a second dispatch path beside `on_key`.
+pub struct PageMenuItem {
+    /// The key choosing this entry stands for.
+    pub key: Key,
+    /// What the host shows for it.
+    pub label: String,
+}
+
+/// A WebView a page owns, covering the pane below whatever rows the page
+/// paints itself.
+///
+/// A page returns one when its content is something Winter cannot draw as
+/// styled text: a rendered PDF page, for instance. The host gives it a real
+/// web engine over the pane's pixels, and goes on painting the page's own
+/// rows above it, so the header and the key hints stay in the terminal's font
+/// and theme while the document is drawn by the engine.
+pub struct PageSurface {
+    /// Resolves a path under the surface's own asset root to the bytes to
+    /// serve for it. A plain `fn` rather than a closure so the host can hand
+    /// it to a protocol handler that outlives this call.
+    pub assets: fn(&str) -> Option<SurfaceAsset>,
+    /// A file the surface is allowed to read, served to it as the document.
+    /// Nothing else on disk is reachable from inside the surface.
+    pub document: PathBuf,
+    /// The document to load, as a path under the surface's asset root.
+    pub entry: String,
+    /// The first pane row the surface covers. Rows above it are painted as
+    /// ordinary page rows, which is how a page keeps a native header over a
+    /// surface it does not draw.
+    pub top_row: usize,
+}
+
+/// One asset a [`PageSurface`] serves to its own WebView.
+pub struct SurfaceAsset {
+    /// The file's contents.
+    pub bytes: Vec<u8>,
+    /// The `Content-Type` to serve it under. A web engine refuses to run a
+    /// module script sent as anything but a JavaScript type.
+    pub mime: &'static str,
+}
+
 /// A file a page wants opened, and where in it to land.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct OpenTarget {
@@ -742,12 +788,53 @@ pub trait Page {
         None
     }
 
+    /// Where a tool or shell opened from this page starts: the directory it
+    /// is looking at, following the cursor rather than its root. Pages tied
+    /// to nowhere on disk never implement it.
+    fn cwd(&self) -> Option<PathBuf> {
+        None
+    }
+
     /// The page is showing again after another one was closed over the top of
     /// it. What it was showing may have changed while it was covered, so a
     /// page that reads the world re-reads it here. Pages showing something
     /// that cannot go stale never implement it.
     fn on_resume(&mut self) -> PageOutcome {
         PageOutcome::Consumed
+    }
+
+    /// The WebView this page owns, if its content is something Winter cannot
+    /// paint as text. Pages that draw themselves in rows never implement it.
+    fn surface(&self) -> Option<PageSurface> {
+        None
+    }
+
+    /// Script the page wants run inside its surface, taken and cleared: this
+    /// is how a key the page bound reaches the document the engine is
+    /// drawing. Pages with no surface never implement it.
+    fn take_surface_script(&mut self) -> Option<String> {
+        None
+    }
+
+    /// Hand back what the page's surface posted out of the engine, which is
+    /// how a surface reports state (the page it scrolled to, how many there
+    /// are) that only it knows.
+    fn on_surface_message(&mut self, _message: String) -> PageOutcome {
+        PageOutcome::Consumed
+    }
+
+    /// What to offer in a menu opened over the page's rows, for the row the
+    /// cursor is on: the host puts the cursor under the pointer before
+    /// asking, so a page answers for what was clicked.
+    ///
+    /// An empty list, the default, means the page offers no menu and the
+    /// click does nothing. Pages whose rows all mean the same thing never
+    /// implement it, and neither does a page drawn by a [`PageSurface`]: the
+    /// child WebView takes the click before the window sees it, and the menu
+    /// is painted by the GPU underneath a native view that is always on top
+    /// of it.
+    fn context_items(&self) -> Vec<PageMenuItem> {
+        Vec::new()
     }
 }
 
@@ -808,6 +895,16 @@ impl OpenTarget {
 // ========================================================================
 // PageSpan
 // ========================================================================
+
+impl PageMenuItem {
+    /// An entry called `label`, run by `key`.
+    pub fn new(key: Key, label: impl Into<String>) -> Self {
+        Self {
+            key,
+            label: label.into(),
+        }
+    }
+}
 
 impl PageSpan {
     /// A run drawn in `style`.

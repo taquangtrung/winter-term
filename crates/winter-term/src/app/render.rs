@@ -1,5 +1,7 @@
 //! Frame composition and WebView tile management.
 
+use std::collections::HashMap;
+
 use base64::Engine;
 use serde_json::Value;
 
@@ -11,7 +13,7 @@ use crate::model::palette::{Palette, PaletteMode};
 use crate::model::settings_page::{Control, SettingsField, SettingsPage};
 use crate::terminal::block_queue::{BlockEntry, BlockKind};
 use crate::terminal::pane::{Pane, MAX_IMAGE_ROWS};
-use crate::terminal::webview;
+use crate::terminal::webview::{self, PaneViewport, SurfaceMessage, SurfaceParams, TilePlacement};
 use winter_core::winter_proto::EmitBlock;
 use winter_render::renderer::{PaneRect, PaneView};
 use winter_render::{
@@ -446,6 +448,22 @@ struct BlockClip {
     y: f32,
 }
 
+/// Hand a page surface the colors it has to match, as a global its document
+/// reads on load. Only the host knows the theme, and a surface that guessed
+/// would sit in the pane as an obviously foreign rectangle.
+fn surface_theme_script(theme: &Theme) -> String {
+    format!(
+        "window.winterTheme={{\"background\":\"{}\",\"foreground\":\"{}\"}};",
+        css_color(theme.background),
+        css_color(theme.foreground)
+    )
+}
+
+/// One theme color as CSS hex.
+fn css_color(color: ThemeRgb) -> String {
+    format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+}
+
 /// Clip a block's `display_h`-tall image to the `band_h` pixels of its reserved
 /// band still available to it, and to the pane, given the image's top edge
 /// `band_top` pixels below the pane's own top.
@@ -827,7 +845,8 @@ impl App {
             which_key_view.as_ref(),
         );
 
-        self.reposition_block_tiles(&rects, full_rows, ch);
+        self.reposition_block_tiles(&rects, ch);
+        self.place_page_surfaces(&rects, ch);
     }
 
     // --------------------------------------------------------------------
@@ -1073,59 +1092,130 @@ impl App {
     }
 
     /// Move the WebView block tiles to follow this frame's scroll and layout.
-    fn reposition_block_tiles(&mut self, rects: &[(PaneId, Rect)], full_rows: usize, ch: f32) {
-        let focused = self.tabs.all[self.tabs.active].focused();
-        // Tiles for panes outside the active tab are hidden so background tabs
-        // don't show through; the active tab's tiles are positioned by scroll.
-        let active_panes: std::collections::HashSet<PaneId> = self.tabs.all[self.tabs.active]
-            .panes()
-            .into_iter()
-            .collect();
-        // Panes whose viewport something else owns: an alternate-screen app,
-        // or a tool page covering the terminal. Their WebView tiles are hidden
-        // for the same reason `image_placements` skips them, and they reappear
-        // once the app exits or the page closes. Tracked in the layout key so
-        // the flip itself repositions.
-        let mut covered_panes: std::collections::HashSet<PaneId> = self
-            .panes
-            .iter()
-            .filter(|(_, pane)| pane.grid().is_alt_screen())
-            .map(|(id, _)| *id)
-            .collect();
-        covered_panes.extend(self.pages.keys().copied());
-        if let Some(pane) = self.panes.get(&focused) {
-            // Tiles are anchored absolutely, so what moves them is the absolute
-            // row currently at the top of the viewport: it advances both when
-            // the user scrolls and when new output pushes lines into history.
-            let viewport_top = pane.grid().to_absolute_row(0);
+    fn reposition_block_tiles(&mut self, rects: &[(PaneId, Rect)], ch: f32) {
+        let viewports = self.tile_viewports(rects);
+        // Placing every tile is a round-trip to the platform WebView each, so
+        // only do it when a pane actually moved or scrolled; otherwise plain
+        // typing, which never moves a tile, stalls on that IPC.
+        if self.last_tile_layout.as_ref() == Some(&viewports) {
+            return;
+        }
+        self.webview_mgr.reposition_tiles(&viewports, ch);
+        self.last_tile_layout = Some(viewports);
+    }
 
-            let focused_rect = rects.iter().find(|(id, _)| *id == focused);
-            let pane_y = focused_rect.map(|(_, r)| r.y).unwrap_or(0.0);
+    /// Give every page that owns a surface a WebView over its pane, building
+    /// it the first time the page is drawn, and take off screen the surfaces
+    /// of panes that no longer show the page they belong to.
+    ///
+    /// A surface covers its pane from the first row its page leaves it down:
+    /// the rows above stay the page's own, painted in the terminal's font, so
+    /// a PDF keeps a native header over a document Winter cannot draw.
+    fn place_page_surfaces(&mut self, rects: &[(PaneId, Rect)], ch: f32) {
+        let Some(window) = self.window.clone() else {
+            return;
+        };
+        let theme_script = match &self.renderer {
+            Some(renderer) => surface_theme_script(renderer.theme()),
+            None => return,
+        };
 
-            // Repositioning every tile does a GTK round-trip per WebView; only do
-            // it when the scroll position or layout actually changed, otherwise
-            // plain typing (which never moves tiles) stalls on GTK IPC.
-            let mut covered_key: Vec<PaneId> = covered_panes.iter().copied().collect();
-            covered_key.sort_by_key(|id| id.0);
-            let layout = (
-                viewport_top,
-                full_rows,
-                ch.to_bits(),
-                pane_y.to_bits(),
-                covered_key,
-            );
-            if self.last_tile_layout.as_ref() != Some(&layout) {
-                self.last_tile_layout = Some(layout);
-                self.webview_mgr.reposition_tiles(
-                    viewport_top,
-                    full_rows,
-                    ch,
-                    pane_y,
-                    &active_panes,
-                    &covered_panes,
-                );
+        let mut showing: Vec<PaneId> = Vec::new();
+        for (pane_id, rect) in rects {
+            let Some(slot) = self.pages.get(pane_id) else {
+                continue;
+            };
+            let Some(surface) = slot.page.surface() else {
+                continue;
+            };
+            let pane_rect = Self::layout_rect_to_pane(*rect);
+            let top = pane_rect.y + surface.top_row as f32 * ch;
+            let placement = TilePlacement {
+                height: (pane_rect.y + pane_rect.height - top).max(0.0) as u32,
+                // A surface fills the rect it is given, so nothing of it is
+                // ever hidden by an edge the way a scrolled tile's band is.
+                scroll_top: 0,
+                width: pane_rect.width.max(0.0) as u32,
+                x: pane_rect.x as i32,
+                y: top as i32,
+            };
+            if !self.webview_mgr.has_surface(*pane_id) {
+                let params = SurfaceParams {
+                    init_script: theme_script.clone(),
+                    rect: placement,
+                    surface,
+                };
+                if let Err(e) = self.webview_mgr.create_surface(*pane_id, params, &window) {
+                    eprintln!("winter: page surface error: {e}");
+                    continue;
+                }
+            }
+            self.webview_mgr.place_surface(*pane_id, &placement);
+            showing.push(*pane_id);
+        }
+        self.webview_mgr.hide_surfaces_except(&showing);
+    }
+
+    /// Run whatever the open pages have queued for their surfaces, and hand
+    /// each page back what its own surface posted out.
+    pub(crate) fn pump_page_surfaces(&mut self) {
+        for (pane_id, slot) in self.pages.iter_mut() {
+            if let Some(js) = slot.page.take_surface_script() {
+                self.webview_mgr.run_surface_script(*pane_id, &js);
             }
         }
+        for message in self.webview_mgr.drain_surface_messages() {
+            match message {
+                SurfaceMessage::Key(relayed) => {
+                    self.route_surface_key(relayed.pane_id, relayed.key)
+                }
+                SurfaceMessage::Text(said) => {
+                    let Some(slot) = self.pages.get_mut(&said.pane_id) else {
+                        continue;
+                    };
+                    let outcome = slot.page.on_surface_message(said.body);
+                    self.act_on_page_outcome(said.pane_id, outcome);
+                }
+            }
+            self.dirty = true;
+        }
+    }
+
+    /// Where each pane's grid sits this frame, for the panes whose tiles
+    /// should show.
+    ///
+    /// `rects` covers the active tab alone, so a background tab's panes are
+    /// already out. Left out on top of those: a pane showing an
+    /// alternate-screen app, and a pane a tool page covers. Those are the
+    /// panes `image_placements` skips too, for the same reason: something
+    /// else owns the viewport, and a primary-screen block painted over it
+    /// would hide what does until it goes away.
+    fn tile_viewports(&self, rects: &[(PaneId, Rect)]) -> HashMap<PaneId, PaneViewport> {
+        let mut viewports = HashMap::new();
+        for (pane_id, rect) in rects {
+            let Some(pane) = self.panes.get(pane_id) else {
+                continue;
+            };
+            if pane.grid().is_alt_screen() || self.pages.contains_key(pane_id) {
+                continue;
+            }
+            let pane_rect = Self::layout_rect_to_pane(*rect);
+            viewports.insert(
+                *pane_id,
+                PaneViewport {
+                    height: pane_rect.height,
+                    // Tiles are anchored absolutely, so what moves them is the
+                    // absolute row at the top of this pane's viewport: it
+                    // advances both when the user scrolls and when new output
+                    // pushes lines into history.
+                    top_row: pane.grid().to_absolute_row(0),
+                    width: pane_rect.width,
+                    x: pane_rect.x,
+                    y: pane_rect.y,
+                },
+            );
+        }
+        viewports
     }
 
     /// Draw the settings page as a single full-window grid: no tabbar, status
@@ -1304,7 +1394,7 @@ impl App {
                 x: pane_rect.x as i32,
                 y: pane_rect.y as i32,
                 width: pane_rect.width as u32,
-                height: webview::WebViewManager::block_pixel_height(ch),
+                height: (entry.reserved_rows as f32 * ch) as u32,
             };
             match self
                 .webview_mgr
@@ -1613,7 +1703,6 @@ impl App {
                 report.block_index,
                 report.segment_index,
                 want,
-                ch,
             );
             self.last_tile_layout = None;
         }
