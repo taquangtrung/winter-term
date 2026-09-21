@@ -6,6 +6,9 @@ members = [
     "crates/winter-render",
     "clients/client-rs",
 ]
+# Vendored third-party crates are patch targets, not workspace members, so
+# workspace-wide test and lint runs leave them alone.
+exclude = ["vendor"]
 resolver = "2"
 
 [workspace.package]
@@ -43,3 +46,10 @@ regex = "1"
 vte = "0.15"
 wgpu = "30"
 winresource = "0.1"
+
+# portable-pty 0.9.0 with one Windows fix: never LoadLibrary a bare "conpty.dll"
+# (a PATH search that can load another app's deadlocking ConPTY build). See
+# vendor/portable-pty/src/win/psuedocon.rs. Drop this once upstream stops
+# searching PATH for the sideloaded DLL.
+[patch.crates-io]
+portable-pty = { path = "vendor/portable-pty" }

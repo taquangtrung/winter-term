@@ -57,7 +57,7 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
+use winit::event::{ElementState, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey, PhysicalKey};
 use winit::window::{ResizeDirection, Window, WindowId};

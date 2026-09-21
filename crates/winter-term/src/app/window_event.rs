@@ -16,8 +16,8 @@ use super::App;
 use super::Selection;
 use super::{
     escape_clears_selection, escape_forwarded_to_pty, forwarded_to_pty,
-    is_alt_screen_escape_double_tap, winit_key_to_code, APPROX_CELL_HEIGHT, CURSOR_BLINK_PERIOD,
-    SCROLLBAR_CLICK_WIDTH, SCROLL_LINES_PER_WHEEL_NOTCH,
+    is_alt_screen_escape_double_tap, is_pre_focus_key_leak, winit_key_to_code,
+    APPROX_CELL_HEIGHT, CURSOR_BLINK_PERIOD, SCROLLBAR_CLICK_WIDTH, SCROLL_LINES_PER_WHEEL_NOTCH,
 };
 
 // ========================================================================

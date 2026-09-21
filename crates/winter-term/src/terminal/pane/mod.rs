@@ -8,7 +8,9 @@ mod shell;
 
 use performer::{ApcDecision, CombinedPerformer};
 pub(crate) use shell::osc52_read_response;
-use shell::{parse_foreground_process, resolve_shell};
+#[cfg(target_os = "linux")]
+use shell::parse_foreground_process;
+use shell::resolve_shell;
 
 use std::io::Write;
 use std::sync::mpsc;
