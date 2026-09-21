@@ -4,7 +4,7 @@ use crate::config::PromptEditBindings;
 use crate::model::input::{self, Action, CursorMove, EditAction, InsertAt, VisualKind};
 use crate::model::layout::{PaneId, Rect};
 use crate::model::mode::{Mode, ModeEvent};
-use crate::model::palette::Palette;
+use crate::model::palette::{Palette, PaletteMode};
 
 use super::navigation::search::SearchFrom;
 use super::prompt_edit::{
@@ -394,6 +394,20 @@ impl App {
                     self.open_swoop(focused);
                 }
             }
+            Action::Jump => {
+                if let Some(pal) = &self.palette {
+                    if pal.mode == PaletteMode::Jump {
+                        self.cancel_jump(focused);
+                        self.palette = None;
+                        self.dirty = true;
+                        return;
+                    }
+                }
+                if self.close_open_palette() {
+                    self.open_jump(focused);
+                }
+            }
+            Action::CopyCwd => self.copy_pane_cwd(focused),
             Action::RunCommand(name) => self.run_command(&name, focused),
             Action::Ignore => {}
         }

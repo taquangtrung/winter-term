@@ -202,6 +202,11 @@ impl Scrollback {
         self.cwd = Some(cwd);
     }
 
+    /// The most recent working directory reported via OSC 7, if any.
+    pub fn cwd(&self) -> Option<&str> {
+        self.cwd.as_deref()
+    }
+
     pub(crate) fn emit(&mut self, block: EmitBlock) {
         let bytes = block
             .bundle
@@ -440,6 +445,7 @@ mod tests {
     fn test_cwd_is_inherited_by_next_block() {
         let mut sb = Scrollback::new();
         sb.set_cwd("/home/user".to_string());
+        assert_eq!(sb.cwd(), Some("/home/user"));
         sb.prompt_start();
         assert_eq!(
             sb.blocks().last().unwrap().cwd,

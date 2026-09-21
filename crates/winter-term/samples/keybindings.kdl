@@ -111,6 +111,7 @@ window {
     // Clipboard.
     "C+S+v" "paste_from_clipboard"
     "C+S+c" "copy_selection"
+    "M+'" "copy_cwd"
 
     // Settings and font size.
     "C+," "open_settings"
@@ -123,6 +124,7 @@ window {
     "C+S+p" "toggle_command_palette"
     "M+x" "toggle_command_palette"
     "C+S+r" "toggle_history_palette"
+    "C+j" "jump"
     // Opens the pane switcher. Once it's open, pressing the digit shown next
     // to a pane (1-9) jumps straight to it: no separate binding for that.
     "C+S+z" "select_pane"

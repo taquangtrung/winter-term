@@ -5,6 +5,8 @@
 
 mod performer;
 mod shell;
+#[cfg(target_os = "windows")]
+mod win_process;
 
 use performer::{ApcDecision, CombinedPerformer};
 pub(crate) use shell::osc52_read_response;
@@ -160,7 +162,24 @@ impl Pane {
             });
 
         let mut command = CommandBuilder::new(resolve_shell(&shell));
-        if let Some(dir) = cwd {
+        let effective_cwd = cwd.map(std::path::PathBuf::from).or_else(|| {
+            #[cfg(target_os = "windows")]
+            {
+                if let Ok(cur) = std::env::current_dir() {
+                    let cur_str = cur.to_string_lossy();
+                    if cur_str.ends_with("System32") || cur_str.ends_with("system32") {
+                        return crate::model::path::home_dir();
+                    }
+                    return Some(cur);
+                }
+                crate::model::path::home_dir()
+            }
+            #[cfg(not(target_os = "windows"))]
+            {
+                None
+            }
+        });
+        if let Some(dir) = effective_cwd {
             command.cwd(dir);
         }
         Self::with_command(cols, rows, command, max_scrollback)
@@ -678,6 +697,17 @@ impl Pane {
     /// platforms, for a mux pane (the process runs on the server's
     /// machine), or when the PID is not available.
     pub fn cwd(&self) -> Option<String> {
+        if let Some(cwd) = self.combined.cwd() {
+            return Some(cwd);
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let PaneTransport::Local { child, .. } = &self.transport else {
+                return None;
+            };
+            let pid = child.process_id()?;
+            win_process::query_process_cwd(pid)
+        }
         #[cfg(target_os = "linux")]
         {
             let PaneTransport::Local { child, .. } = &self.transport else {
@@ -688,7 +718,7 @@ impl Pane {
                 .ok()
                 .and_then(|p| p.into_os_string().into_string().ok())
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(all(not(target_os = "windows"), not(target_os = "linux")))]
         {
             None
         }

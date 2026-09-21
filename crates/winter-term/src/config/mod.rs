@@ -40,7 +40,7 @@
 //!     background "#2a2f31"
 //!     foreground "#d8d8d8"
 //!     cursor-bg "#52ad70"
-//!     selection-bg "#fffacd"
+//!     selection-bg "#2257a0"
 //!     split "#51554f"
 //!     visual-bell "#202020"
 //!     ansi {

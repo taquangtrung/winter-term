@@ -324,7 +324,19 @@ fn cwd_from_osc7(value: &[u8]) -> Option<String> {
         Some(slash) => &without_scheme[slash..],
         None => without_scheme,
     };
-    Some(percent_decode(path))
+    let decoded = percent_decode(path);
+    // A Windows file URI path begins with a leading slash before the drive letter
+    // (RFC 8089, e.g. `/C:/Users/...`). Dropping it yields a valid Windows filesystem path.
+    let clean = if decoded.starts_with('/')
+        && decoded.len() >= 3
+        && decoded.as_bytes()[2] == b':'
+        && decoded.as_bytes()[1].is_ascii_alphabetic()
+    {
+        decoded[1..].to_string()
+    } else {
+        decoded
+    };
+    Some(clean)
 }
 
 /// Decode the `%XX` escapes an OSC 7 URI carries.
@@ -666,5 +678,14 @@ mod tests {
     fn test_osc0_sets_pending_title() {
         let mut term = feed(b"\x1b]0;icon and title\x1b\\");
         assert_eq!(term.take_title(), Some("icon and title".to_string()));
+    }
+
+    #[test]
+    fn test_osc7_sets_cwd_and_strips_windows_drive_slash() {
+        let term = feed(b"\x1b]7;file://localhost/C:/Users/Trung\x1b\\");
+        assert_eq!(term.scrollback().cwd(), Some("C:/Users/Trung"));
+
+        let term_posix = feed(b"\x1b]7;file:///home/user\x1b\\");
+        assert_eq!(term_posix.scrollback().cwd(), Some("/home/user"));
     }
 }

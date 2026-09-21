@@ -113,6 +113,8 @@ pub enum WindowAction {
     NextTab,
     /// Copy the current selection to the clipboard.
     Copy,
+    /// Copy the current working directory or file reference to the clipboard.
+    CopyCwd,
     /// Paste the clipboard into the PTY.
     Paste,
     /// Open a new tab.
@@ -135,6 +137,8 @@ pub enum WindowAction {
     TogglePaneSwitcher,
     /// Show or hide buffer swoop.
     ToggleSwoop,
+    /// Jump to target in current buffer view (fuzzy completion dialog).
+    Jump,
     /// Move to the next command block.
     NextBlock,
     /// Move to the previous command block.
@@ -167,6 +171,7 @@ impl WindowAction {
         matches!(
             self,
             WindowAction::Copy
+                | WindowAction::CopyCwd
                 | WindowAction::Paste
                 | WindowAction::NewTab
                 | WindowAction::CloseTab
@@ -178,6 +183,7 @@ impl WindowAction {
                 | WindowAction::ToggleHistoryPalette
                 | WindowAction::TogglePaneSwitcher
                 | WindowAction::ToggleSwoop
+                | WindowAction::Jump
                 | WindowAction::NextBlock
                 | WindowAction::PrevBlock
         )
@@ -287,6 +293,7 @@ impl WindowAction {
             WindowAction::PrevTab => Action::PrevTab,
             WindowAction::NextTab => Action::NextTab,
             WindowAction::Copy => Action::Copy,
+            WindowAction::CopyCwd => Action::CopyCwd,
             WindowAction::Paste => Action::Paste,
             WindowAction::NewTab => Action::NewTab,
             WindowAction::CloseTab => Action::CloseTab(None),
@@ -298,6 +305,7 @@ impl WindowAction {
             WindowAction::ToggleHistoryPalette => Action::ToggleHistoryPalette,
             WindowAction::TogglePaneSwitcher => Action::TogglePaneSwitcher,
             WindowAction::ToggleSwoop => Action::ToggleSwoop,
+            WindowAction::Jump => Action::Jump,
             WindowAction::NextBlock => Action::FocusBlock(BlockNav::Next),
             WindowAction::PrevBlock => Action::FocusBlock(BlockNav::Previous),
         }
@@ -324,6 +332,7 @@ impl WindowAction {
             "prev_tab" => WindowAction::PrevTab,
             "next_tab" => WindowAction::NextTab,
             "copy_selection" => WindowAction::Copy,
+            "copy_cwd" | "copy_reference" | "copy_file_reference" => WindowAction::CopyCwd,
             "paste_from_clipboard" => WindowAction::Paste,
             "new_tab" => WindowAction::NewTab,
             "close_tab" => WindowAction::CloseTab,
@@ -335,6 +344,7 @@ impl WindowAction {
             "toggle_history_palette" => WindowAction::ToggleHistoryPalette,
             "select_pane" => WindowAction::TogglePaneSwitcher,
             "swoop" | "toggle_swoop" => WindowAction::ToggleSwoop,
+            "jump" | "toggle_jump" => WindowAction::Jump,
             "next_block" => WindowAction::NextBlock,
             "prev_block" => WindowAction::PrevBlock,
             _ => return None,

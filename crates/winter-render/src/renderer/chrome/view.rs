@@ -47,6 +47,8 @@ pub struct PaletteItem {
 }
 /// The command palette state the renderer needs to draw its overlay.
 pub struct PaletteView {
+    /// Whether the palette is docked to the top of the window with 1/2 window height.
+    pub align_top: bool,
     /// Text shown when the filtered list is empty.
     pub empty_message: String,
     /// The entries to draw, already filtered and ranked by the caller.

@@ -332,6 +332,8 @@ pub enum Action {
     ScrollToBottom,
     /// Copy the current selection to the clipboard.
     Copy,
+    /// Copy the current working directory or file reference to the clipboard.
+    CopyCwd,
     /// Open the settings page.
     OpenSettings,
     /// Increase the font size one step.
@@ -348,6 +350,8 @@ pub enum Action {
     TogglePaneSwitcher,
     /// Show or hide buffer swoop.
     ToggleSwoop,
+    /// Jump to target in current buffer view (fuzzy completion dialog).
+    Jump,
     /// A chord bound to a command-palette action name with no `WindowAction`
     /// variant (`mux_new_session`, `export_block_svg`, …); dispatched the
     /// same way selecting that palette entry would be.

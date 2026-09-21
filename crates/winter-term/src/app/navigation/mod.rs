@@ -596,6 +596,25 @@ impl App {
         self.set_nav_cursor(focused, (view_row, col));
     }
 
+    /// Scroll `pos` into view such that `abs_row` is vertically centered in the pane,
+    /// and park the Normal-mode cursor on it.
+    pub(crate) fn reveal_position_centered(
+        &mut self,
+        focused: PaneId,
+        (abs_row, col): (usize, usize),
+    ) {
+        let Some(pane) = self.panes.get_mut(&focused) else {
+            return;
+        };
+        let grid = pane.grid_mut();
+        let rows = grid.rows();
+        let scrollback = grid.scrollback_len();
+        grid.set_scroll_offset((rows / 2 + scrollback).saturating_sub(abs_row));
+        let top = grid.scrollback_len() - grid.scroll_offset();
+        let view_row = abs_row.saturating_sub(top).min(rows.saturating_sub(1));
+        self.set_nav_cursor(focused, (view_row, col));
+    }
+
     /// Park the traversal cursor on the cell the pointer is selecting, so the
     /// block cursor follows the mouse through clicks and selection drags.
     /// Insert-mode panes are skipped: they hide the traversal cursor (and
@@ -2749,6 +2768,150 @@ mod tests {
         // Palette closed and cursor restored to (0, 2)
         assert!(app.palette.is_none());
         assert_eq!(app.nav_cursor(id), Some((0, 2)));
+    }
+
+    #[test]
+    fn test_buffer_jump_terminal_opens_navigates_and_confirms() {
+        use winit::keyboard::{Key, NamedKey, PhysicalKey};
+
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        app.panes.insert(
+            id,
+            pane_with_lines(&["alpha line", "beta target", "gamma last"]),
+        );
+        app.modes.insert(id, Mode::Normal);
+        app.set_nav_cursor(id, (0, 0));
+
+        // Open Jump on terminal pane
+        app.open_jump(id);
+        let palette = app.palette.as_ref().expect("palette is active");
+        assert_eq!(palette.mode, crate::model::palette::PaletteMode::Jump);
+        assert_eq!(palette.title.as_deref(), Some("Jump: Terminal"));
+        assert_eq!(palette.entries.len(), 3);
+
+        // Move down to row 1
+        let key_down = Key::Named(NamedKey::ArrowDown);
+        let phys = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let mut pal = app.palette.take().unwrap();
+        app.handle_palette_input(&mut pal, &key_down, &phys, id);
+        app.palette = Some(pal);
+
+        // Check preview
+        assert_eq!(app.nav_cursor(id), Some((1, 0)));
+
+        // Confirm
+        let key_enter = Key::Named(NamedKey::Enter);
+        let mut pal = app.palette.take().unwrap();
+        app.handle_palette_input(&mut pal, &key_enter, &phys, id);
+        assert!(app.palette.is_none());
+        assert_eq!(app.nav_cursor(id), Some((1, 0)));
+        let jl = app.vim.jump_lists.get_mut(&id).expect("jumplist entry");
+        assert_eq!(jl.older((1, 0)), Some((0, 0)));
+    }
+
+    #[test]
+    fn test_buffer_jump_cancel_restores_position() {
+        use winit::keyboard::{Key, NamedKey, PhysicalKey};
+
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        app.panes.insert(
+            id,
+            pane_with_lines(&["alpha line", "beta target", "gamma last"]),
+        );
+        app.modes.insert(id, Mode::Normal);
+        app.set_nav_cursor(id, (0, 3));
+
+        app.open_jump(id);
+
+        let key_down = Key::Named(NamedKey::ArrowDown);
+        let phys = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let mut pal = app.palette.take().unwrap();
+        app.handle_palette_input(&mut pal, &key_down, &phys, id);
+        app.palette = Some(pal);
+        assert_eq!(app.nav_cursor(id), Some((1, 0)));
+
+        // Cancel with Escape
+        let key_esc = Key::Named(NamedKey::Escape);
+        let mut pal = app.palette.take().unwrap();
+        app.handle_palette_input(&mut pal, &key_esc, &phys, id);
+        assert!(app.palette.is_none());
+        assert_eq!(app.nav_cursor(id), Some((0, 3)));
+    }
+
+    #[test]
+    fn test_buffer_jump_on_page_previews_confirms_and_cancels() {
+        use crate::tools::dir::DirPage;
+        use winit::keyboard::{Key, NamedKey, PhysicalKey};
+
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        let dir = std::env::temp_dir().join("winter_jump_page_test");
+        let _ = std::fs::create_dir_all(&dir);
+        let _ = std::fs::write(dir.join("a.txt"), "hello");
+        let _ = std::fs::write(dir.join("b.txt"), "world");
+
+        let page = Box::new(DirPage::new(dir.clone()));
+        app.show_page("dir", page);
+
+        // Open Jump over the page
+        app.open_jump(id);
+        let palette = app.palette.as_ref().expect("palette active");
+        assert_eq!(palette.mode, crate::model::palette::PaletteMode::Jump);
+        assert!(palette.title.as_ref().unwrap().starts_with("Jump: "));
+
+        // Preview down to item 1
+        let key_down = Key::Named(NamedKey::ArrowDown);
+        let phys = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
+        let mut pal = app.palette.take().unwrap();
+        app.handle_palette_input(&mut pal, &key_down, &phys, id);
+        app.palette = Some(pal);
+
+        assert_eq!(app.pages.get(&id).unwrap().page.jump_cursor(), Some(1));
+
+        // Escape cancels and restores to 0
+        let key_esc = Key::Named(NamedKey::Escape);
+        let mut pal = app.palette.take().unwrap();
+        app.handle_palette_input(&mut pal, &key_esc, &phys, id);
+        assert!(app.palette.is_none());
+        assert_eq!(app.pages.get(&id).unwrap().page.jump_cursor(), Some(0));
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_action_jump_toggles_palette() {
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        app.panes
+            .insert(id, pane_with_lines(&["alpha line", "beta target"]));
+
+        // Action::Jump opens jump palette
+        app.handle_action(crate::model::input::Action::Jump, id);
+        assert!(app.palette.is_some());
+        assert_eq!(
+            app.palette.as_ref().unwrap().mode,
+            crate::model::palette::PaletteMode::Jump
+        );
+
+        // Second Action::Jump toggles it closed and cancels jump
+        app.handle_action(crate::model::input::Action::Jump, id);
+        assert!(app.palette.is_none());
+    }
+
+    #[test]
+    fn test_reveal_position_centered_vertically_centers_in_pane() {
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
+        let str_lines: Vec<&str> = lines.iter().map(String::as_str).collect();
+        app.panes.insert(id, pane_with_lines(&str_lines));
+        app.modes.insert(id, Mode::Normal);
+
+        // Center on row 10 in a 20-row pane: view_row lands on 10 (20 / 2)
+        app.reveal_position_centered(id, (10, 0));
+        assert_eq!(app.nav_cursor(id), Some((10, 0)));
     }
 
     #[test]

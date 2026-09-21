@@ -597,6 +597,7 @@ fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) ->
         PaletteMode::Panes => "No matching panes",
         PaletteMode::RecentDirs => "No recent directories",
         PaletteMode::Swoop => "No matching lines",
+        PaletteMode::Jump => "No matching targets",
         PaletteMode::Commands
         | PaletteMode::MuxAttachRemote
         | PaletteMode::MuxKill
@@ -604,14 +605,18 @@ fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) ->
         | PaletteMode::MuxSessions => "No matching commands",
     };
     PaletteView {
+        align_top: palette.mode == PaletteMode::Jump,
         empty_message: empty_message.to_string(),
         // A page's list is headed by what it is a list of, and a browser by
         // where it is; the command palette needs no naming and is drawn
         // without a heading.
-        title: match &palette.dir {
-            Some(dir) => dir.display().to_string(),
-            None if palette.mode == PaletteMode::Tools => TOOLS_TITLE.to_string(),
-            None => pick.unwrap_or_default().to_string(),
+        title: match &palette.title {
+            Some(title) => title.clone(),
+            None => match &palette.dir {
+                Some(dir) => dir.display().to_string(),
+                None if palette.mode == PaletteMode::Tools => TOOLS_TITLE.to_string(),
+                None => pick.unwrap_or_default().to_string(),
+            },
         },
         items: palette
             .filtered
@@ -1985,6 +1990,11 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         PageStyle::Header => Style {
             bold: true,
             foreground: theme_rgb(theme.foreground),
+            ..Style::default()
+        },
+        PageStyle::HeaderAccent => Style {
+            bold: true,
+            foreground: theme_rgb(theme.cursor_bg),
             ..Style::default()
         },
         // A section's heading wears the hue of what sits under it, the way

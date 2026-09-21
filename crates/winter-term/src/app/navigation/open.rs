@@ -336,19 +336,32 @@ impl App {
         }
     }
 
-    /// The palette's "Copy: Working Directory": copy the focused pane's OSC 7
-    /// cwd to the system clipboard, confirming in the status bar.
+    /// Copy the focused pane's working directory or active file reference to
+    /// the system clipboard, formatted with `~` abbreviation and confirming
+    /// in the status bar.
     pub(crate) fn copy_pane_cwd(&mut self, focused: PaneId) {
-        let Some(cwd) = self.panes.get(&focused).and_then(|p| p.cwd()) else {
-            self.set_notice("no working directory reported yet");
-            return;
-        };
+        let reference = self
+            .pages
+            .get(&focused)
+            .and_then(|slot| slot.page.file_reference())
+            .or_else(|| {
+                self.panes
+                    .get(&focused)
+                    .and_then(|p| p.cwd())
+                    .map(|c| crate::model::path::format_file_reference(&c))
+            })
+            .unwrap_or_else(|| {
+                let start_dir = self.focused_start_dir();
+                crate::model::path::abbreviate_home(&start_dir)
+            });
+
         let copied = self
             .clipboard()
-            .and_then(|cb| cb.set_text(&cwd).ok())
+            .and_then(|cb| cb.set_text(&reference).ok())
             .is_some();
         if copied {
-            self.set_notice(format!("copied {cwd}"));
+            let display = reference.replace('\n', ", ");
+            self.set_notice(format!("copied {display}"));
         } else {
             self.set_error("clipboard unavailable");
         }

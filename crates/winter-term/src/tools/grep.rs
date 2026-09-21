@@ -377,6 +377,14 @@ impl Page for GrepPage {
             .or_else(|| Some(self.root.clone()))
     }
 
+    fn file_reference(&self) -> Option<String> {
+        if let Some(hit) = self.selected() {
+            let base = crate::model::path::abbreviate_home(&hit.path);
+            return Some(format!("{base}:{}", hit.line));
+        }
+        Some(crate::model::path::abbreviate_home(&self.root))
+    }
+
     fn context_items(&self) -> Vec<PageMenuItem> {
         // Everything here acts on the match under the cursor, so a row that
         // is not one (a file heading, the header) offers only a new search.

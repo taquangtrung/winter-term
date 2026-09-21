@@ -12,7 +12,7 @@
 //! as an interface to build on. It carries no semver guarantee; pin an exact
 //! version if you depend on it.
 
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 pub mod app;

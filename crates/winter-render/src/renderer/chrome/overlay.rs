@@ -8,7 +8,8 @@ use super::view::{DropdownImage, InputView, PaletteView, WhichKeyView};
 use super::{
     DROPDOWN_RADIUS, DROPDOWN_SHADOW, DROPDOWN_SHADOW_ALPHA, INPUT_WIDTH_RATIO, MENU_BORDER_MIX,
     MENU_HOVER_INSET, PALETTE_HEIGHT_RATIO, PALETTE_ITEM_PAD_X, PALETTE_ITEM_PAD_Y,
-    PALETTE_WIDTH_RATIO, SHADOW_COLOR, WHICH_KEY_HEIGHT_RATIO, WHICH_KEY_WIDTH_RATIO,
+    PALETTE_JUMP_HEIGHT_RATIO, PALETTE_WIDTH_RATIO, SHADOW_COLOR, WHICH_KEY_HEIGHT_RATIO,
+    WHICH_KEY_WIDTH_RATIO,
 };
 use crate::renderer::colors::mix_rgb;
 use crate::renderer::glyphs::FontCtx;
@@ -519,13 +520,25 @@ pub(super) fn palette_rgba(
         .min(surface_w - 40.0)
         .floor()
         .max(300.0);
-    let panel_h = (surface_h * PALETTE_HEIGHT_RATIO)
+    let height_ratio = match view.align_top {
+        true => PALETTE_JUMP_HEIGHT_RATIO,
+        false => PALETTE_HEIGHT_RATIO,
+    };
+    let panel_h = (surface_h * height_ratio)
         .min(surface_h - 40.0)
         .floor()
         .max(inner_pad * 2.0 + title_h + input_h + 1.0 + item_h);
     let row_count =
         (((panel_h - inner_pad * 2.0 - title_h - input_h - 1.0) / item_h).floor() as usize).max(1);
-    let display_count = view.items.len().min(row_count);
+    let total_items = view.items.len();
+    let display_count = total_items.min(row_count);
+    let start_idx = if total_items <= row_count {
+        0
+    } else {
+        view.selected
+            .saturating_sub(row_count / 2)
+            .min(total_items.saturating_sub(row_count))
+    };
 
     let width = (panel_w + 2.0 * margin) as u32;
     let height = (panel_h + 2.0 * margin) as u32;
@@ -573,7 +586,10 @@ pub(super) fn palette_rgba(
     let divider_y = margin + inner_pad + title_h + input_h;
     let results_top = divider_y + 1.0;
     if display_count > 0 {
-        let sel = view.selected.min(display_count - 1);
+        let sel = view
+            .selected
+            .saturating_sub(start_idx)
+            .min(display_count.saturating_sub(1));
         // The highlight fills the row vertically (only a 1px breath) so it covers
         // the text and selected rows butt against their neighbours with no gap.
         let hover_v_inset = 1.0;
@@ -690,7 +706,13 @@ pub(super) fn palette_rgba(
         );
     } else {
         let item_pad = PALETTE_ITEM_PAD_X as i32;
-        for (i, item) in view.items.iter().take(display_count).enumerate() {
+        for (i, item) in view
+            .items
+            .iter()
+            .skip(start_idx)
+            .take(display_count)
+            .enumerate()
+        {
             let row_y = (results_top + i as f32 * item_h) as i32 + item_text_dy;
 
             if item.match_positions.is_empty() || view.query.is_empty() {
@@ -749,7 +771,10 @@ pub(super) fn palette_rgba(
     // one keystroke's worth of attention, and a picker opened from the middle
     // of a view should not send the eye to the top of the window for it.
     let palette_x = ((surface_w - panel_w) / 2.0).max(0.0);
-    let palette_y = ((surface_h - panel_h) / 2.0).max(0.0);
+    let palette_y = match view.align_top {
+        true => 0.0,
+        false => ((surface_h - panel_h) / 2.0).max(0.0),
+    };
 
     DropdownImage {
         height,
@@ -1201,6 +1226,7 @@ mod tests {
         let (surface_w, surface_h) = (1000.0, 800.0);
         let mut card = |matches: usize| {
             let view = PaletteView {
+                align_top: false,
                 empty_message: "Nothing matches".to_string(),
                 items: (0..matches)
                     .map(|i| crate::renderer::chrome::view::PaletteItem {
@@ -1234,6 +1260,47 @@ mod tests {
             (full.0 as f32 - (surface_w * PALETTE_WIDTH_RATIO + 2.0 * DROPDOWN_SHADOW)).abs() < 2.0,
             "and it is sized against the window, got {full:?}"
         );
+    }
+
+    #[test]
+    fn test_palette_align_top_docked_at_window_top_with_half_height() {
+        let mut font_system = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let (surface_w, surface_h) = (1000.0, 800.0);
+        let view = PaletteView {
+            align_top: true,
+            empty_message: "No targets".to_string(),
+            items: (0..20)
+                .map(|i| crate::renderer::chrome::view::PaletteItem {
+                    action: i.to_string(),
+                    label: format!("line {i}"),
+                    match_positions: Vec::new(),
+                    shortcut: String::new(),
+                })
+                .collect(),
+            match_underline: false,
+            query: String::new(),
+            selected: 0,
+            title: "Jump: Buffer".to_string(),
+        };
+        let image = palette_rgba(
+            &mut font_system,
+            &mut swash,
+            &ctx,
+            &theme,
+            &view,
+            surface_w,
+            surface_h,
+        );
+
+        // Aligned at the top: y equals -DROPDOWN_SHADOW so panel rect begins at y = 0.0
+        assert_eq!(image.y, -DROPDOWN_SHADOW);
+        // Height is half window height + 2 * shadow margin
+        let expected_panel_h = (surface_h * PALETTE_JUMP_HEIGHT_RATIO).floor();
+        let expected_total_h = (expected_panel_h + 2.0 * DROPDOWN_SHADOW) as u32;
+        assert_eq!(image.height, expected_total_h);
     }
 
     #[test]

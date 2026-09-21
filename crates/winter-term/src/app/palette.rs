@@ -51,13 +51,17 @@ impl App {
                 let lower = c.to_lowercase();
                 if lower == "n" {
                     palette.move_down();
-                    if palette.mode == PaletteMode::Swoop {
+                    if palette.mode == PaletteMode::Jump {
+                        self.update_jump_preview(palette, focused);
+                    } else if palette.mode == PaletteMode::Swoop {
                         self.update_swoop_preview(palette, focused);
                     }
                     return;
                 } else if lower == "p" {
                     palette.move_up();
-                    if palette.mode == PaletteMode::Swoop {
+                    if palette.mode == PaletteMode::Jump {
+                        self.update_jump_preview(palette, focused);
+                    } else if palette.mode == PaletteMode::Swoop {
                         self.update_swoop_preview(palette, focused);
                     }
                     return;
@@ -69,13 +73,17 @@ impl App {
                 let lower = c.to_lowercase();
                 if lower == "p" {
                     palette.history_prev();
-                    if palette.mode == PaletteMode::Swoop {
+                    if palette.mode == PaletteMode::Jump {
+                        self.update_jump_preview(palette, focused);
+                    } else if palette.mode == PaletteMode::Swoop {
                         self.update_swoop_preview(palette, focused);
                     }
                     return;
                 } else if lower == "n" {
                     palette.history_next();
-                    if palette.mode == PaletteMode::Swoop {
+                    if palette.mode == PaletteMode::Jump {
+                        self.update_jump_preview(palette, focused);
+                    } else if palette.mode == PaletteMode::Swoop {
                         self.update_swoop_preview(palette, focused);
                     }
                     return;
@@ -84,7 +92,9 @@ impl App {
         }
         match key {
             Key::Named(NamedKey::Escape) => {
-                if palette.mode == PaletteMode::Swoop {
+                if palette.mode == PaletteMode::Jump {
+                    self.cancel_jump(focused);
+                } else if palette.mode == PaletteMode::Swoop {
                     if let Some((pid, (r, c))) = self.swoop_initial_cursor.take() {
                         if pid == focused {
                             self.nav_cursors.insert(focused, (r, c));
@@ -169,7 +179,9 @@ impl App {
             }
             _ => {}
         }
-        if palette.mode == PaletteMode::Swoop {
+        if palette.mode == PaletteMode::Jump {
+            self.update_jump_preview(palette, focused);
+        } else if palette.mode == PaletteMode::Swoop {
             self.update_swoop_preview(palette, focused);
         }
     }
@@ -242,6 +254,22 @@ impl App {
                         self.nav_cursors.insert(focused, (abs_row, 0));
                         self.reveal_position(focused, (abs_row, 0));
                         self.modes.insert(focused, Mode::Normal);
+                    }
+                }
+            }
+            PaletteMode::Jump => {
+                if let Some(action) = action {
+                    if let Ok(target) = action.parse::<usize>() {
+                        if let Some(slot) = self.pages.get_mut(&focused) {
+                            slot.page.jump_confirm(target);
+                        } else {
+                            if let Some((_pid, origin)) = self.swoop_initial_cursor.take() {
+                                self.vim.jump_lists.entry(focused).or_default().push(origin);
+                            }
+                            self.nav_cursors.insert(focused, (target, 0));
+                            self.reveal_position_centered(focused, (target, 0));
+                            self.modes.insert(focused, Mode::Normal);
+                        }
                     }
                 }
             }
@@ -435,6 +463,97 @@ impl App {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
+            }
+        }
+    }
+
+    /// Buffer jump: open fuzzy target completion dialog for the active buffer view.
+    pub(crate) fn open_jump(&mut self, focused: PaneId) {
+        if let Some(slot) = self.pages.get_mut(&focused) {
+            if let Some(targets) = slot.page.jump_targets() {
+                let title = format!("Jump: {}", slot.page.title());
+                let initial_cursor = slot.page.jump_cursor();
+                let mut palette = Palette::open_jump(targets, Some(title))
+                    .with_query_history(self.palette_history.clone());
+                if let Some(cur) = initial_cursor {
+                    palette.preselect_nearest(cur);
+                }
+                if let Some(action) = palette.selected_action() {
+                    if let Ok(target) = action.parse::<usize>() {
+                        slot.page.jump_to(target);
+                    }
+                }
+                self.palette = Some(palette);
+                self.dirty = true;
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return;
+            }
+        }
+
+        let Some(pane) = self.panes.get(&focused) else {
+            return;
+        };
+        let initial = self.nav_cursor(focused).or_else(|| {
+            Some((
+                pane.grid().to_absolute_row(pane.grid().cursor().0),
+                pane.grid().cursor().1,
+            ))
+        });
+        if let Some(pos) = initial {
+            self.swoop_initial_cursor = Some((focused, pos));
+        }
+        self.modes.insert(focused, Mode::Normal);
+        let lines = navigation::swoop::extract_swoop_lines(pane.grid());
+        let targets = lines
+            .into_iter()
+            .map(|(abs_row, line)| (abs_row, format!("{:>5}  {}", abs_row + 1, line)))
+            .collect();
+        let mut palette = Palette::open_jump(targets, Some("Jump: Terminal".to_string()))
+            .with_query_history(self.palette_history.clone());
+        if let Some((abs_row, _)) = initial {
+            palette.preselect_nearest(abs_row);
+        }
+        if let Some(action) = palette.selected_action() {
+            if let Ok(abs_row) = action.parse::<usize>() {
+                self.nav_cursors.insert(focused, (abs_row, 0));
+                self.reveal_position_centered(focused, (abs_row, 0));
+            }
+        }
+        self.palette = Some(palette);
+        self.dirty = true;
+        if let Some(window) = &self.window {
+            window.request_redraw();
+        }
+    }
+
+    /// Update the live preview cursor during Buffer Jump.
+    pub(crate) fn update_jump_preview(&mut self, palette: &Palette, focused: PaneId) {
+        if let Some(action) = palette.selected_action() {
+            if let Ok(target) = action.parse::<usize>() {
+                if let Some(slot) = self.pages.get_mut(&focused) {
+                    slot.page.jump_to(target);
+                } else {
+                    self.nav_cursors.insert(focused, (target, 0));
+                    self.reveal_position_centered(focused, (target, 0));
+                }
+                self.dirty = true;
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+            }
+        }
+    }
+
+    /// Restore the pre-jump view/cursor position when jump is cancelled.
+    pub(crate) fn cancel_jump(&mut self, focused: PaneId) {
+        if let Some(slot) = self.pages.get_mut(&focused) {
+            slot.page.jump_cancel();
+        } else if let Some((pid, (r, c))) = self.swoop_initial_cursor.take() {
+            if pid == focused {
+                self.nav_cursors.insert(focused, (r, c));
+                self.reveal_position(focused, (r, c));
             }
         }
     }

@@ -1,8 +1,11 @@
-//! Embeds the Windows executable icon, and packs the bundled SVG icon set.
+//! Embeds the Windows executable icon, packs the bundled SVG icon set, and
+//! stamps the version with the commit id on builds between releases.
 
+use std::env;
 use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use flate2::write::DeflateEncoder;
 use flate2::Compression;
@@ -53,6 +56,14 @@ const PDFJS_INDEX_NAME: &str = "pdfjs_index.rs";
 /// The `pdfjs-dist` release `assets/pdfjs` was taken from.
 const PDFJS_VERSION: &str = "5.4.624";
 
+/// Compile-time variable carrying the version `winter --version` prints.
+/// Not `WINTER_VERSION`: the Makefile already exports that name for the
+/// installer, and it would read as the plain release number.
+const BUILD_VERSION_ENV: &str = "WINTER_BUILD_VERSION";
+
+/// Prefix of a release tag, as `release.yml` triggers on (`v0.1.0`).
+const RELEASE_TAG_PREFIX: &str = "v";
+
 fn main() {
     #[cfg(windows)]
     WindowsResource::new()
@@ -62,6 +73,55 @@ fn main() {
 
     pack_icons();
     pack_pdfjs();
+    stamp_version();
+}
+
+/// Export the build's version: the crate version when HEAD is that
+/// release's tag, or the crate version with the commit id as semver build
+/// metadata (`0.1.0+7744bde`) when HEAD is anything else.
+///
+/// A build outside a git checkout (a release tarball, a crates.io source)
+/// gets the bare crate version, since the only such sources are releases.
+fn stamp_version() {
+    let release = env::var("CARGO_PKG_VERSION").expect("cargo sets CARGO_PKG_VERSION");
+    let version = match git(&["rev-parse", "--short", "HEAD"]) {
+        Some(commit) if !head_is_release(&release) => format!("{release}+{commit}"),
+        _ => release,
+    };
+    println!("cargo:rustc-env={BUILD_VERSION_ENV}={version}");
+    watch_git_head();
+}
+
+/// Whether HEAD carries the tag of release `version`.
+fn head_is_release(version: &str) -> bool {
+    let tag = format!("{RELEASE_TAG_PREFIX}{version}");
+    git(&["tag", "--points-at", "HEAD"]).is_some_and(|tags| tags.lines().any(|t| t == tag))
+}
+
+/// Rerun this script when HEAD moves or a tag is added, so a new commit or
+/// a fresh release tag changes the stamped version without a clean build.
+fn watch_git_head() {
+    let Some(git_dir) = git(&["rev-parse", "--absolute-git-dir"]) else {
+        return;
+    };
+    let git_dir = Path::new(&git_dir);
+    println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
+    println!("cargo:rerun-if-changed={}", git_dir.join("packed-refs").display());
+    println!("cargo:rerun-if-changed={}", git_dir.join("refs/tags").display());
+    if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
+        println!("cargo:rerun-if-changed={}", git_dir.join(branch).display());
+    }
+}
+
+/// Trimmed stdout of a git command, or `None` when git is missing, the
+/// source is not a checkout, or the command fails.
+fn git(args: &[&str]) -> Option<String> {
+    let output = Command::new("git").args(args).output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let text = String::from_utf8(output.stdout).ok()?;
+    Some(text.trim().to_owned())
 }
 
 /// Deflate every bundled SVG into one payload, and write the sorted

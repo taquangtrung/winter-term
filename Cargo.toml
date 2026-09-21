@@ -45,6 +45,7 @@ regex = "1"
 # so disabling defaults now silently truncates any TBP escape over 1 KiB.
 vte = "0.15"
 wgpu = "30"
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
 winresource = "0.1"
 
 # portable-pty 0.9.0 with one Windows fix: never LoadLibrary a bare "conpty.dll"

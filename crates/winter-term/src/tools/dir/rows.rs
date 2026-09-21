@@ -1,14 +1,15 @@
 //! Painting a listing: the header line, one line per entry, and the detail
 //! columns behind the details toggle.
 
+use std::path::Path;
 use std::time::{Duration, SystemTime};
 
 use crate::model::page::{PageIcon, PageIconKind, PageRow, PageSpan, PageStyle};
+use crate::model::path::format_full_path;
 use crate::model::units::format_size;
 
 use super::entry::{Entry, EntryKind, Meta};
 use super::icons::icon_for;
-use super::listing::SortKey;
 use super::tree::Row;
 
 // ========================================================================
@@ -70,11 +71,72 @@ pub struct HeaderFlags {
 // Functions
 // ========================================================================
 
+/// Decorate a path with syntax spans:
+/// - Path separators (`/` and `\`) styled as subtle delimiters (`PageStyle::SyntaxComment`).
+/// - All directory components styled with the bold directory color (`PageStyle::HeaderAccent`).
+pub fn path_spans(path: &str) -> Vec<PageSpan> {
+    if path.is_empty() {
+        return Vec::new();
+    }
+
+    // A bare root (e.g. "/" or "\" or "C:\" or "C:/") is itself the active directory.
+    let is_root = path == "/"
+        || path == "\\"
+        || (path.len() <= 3 && path.ends_with(':'))
+        || (path.len() == 3
+            && path.as_bytes()[1] == b':'
+            && (path.as_bytes()[2] == b'\\' || path.as_bytes()[2] == b'/'));
+    if is_root {
+        return vec![PageSpan::new(PageStyle::HeaderAccent, path)];
+    }
+
+    enum Token {
+        Separator(String),
+        Component(String),
+    }
+
+    let mut tokens: Vec<Token> = Vec::new();
+    let mut current = String::new();
+    let mut in_sep = false;
+
+    for ch in path.chars() {
+        let is_sep = ch == '/' || ch == '\\';
+        if is_sep == in_sep {
+            current.push(ch);
+        } else {
+            if !current.is_empty() {
+                if in_sep {
+                    tokens.push(Token::Separator(current));
+                } else {
+                    tokens.push(Token::Component(current));
+                }
+                current = String::new();
+            }
+            in_sep = is_sep;
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        if in_sep {
+            tokens.push(Token::Separator(current));
+        } else {
+            tokens.push(Token::Component(current));
+        }
+    }
+
+    tokens
+        .into_iter()
+        .map(|token| match token {
+            Token::Separator(sep) => PageSpan::new(PageStyle::SyntaxComment, sep),
+            Token::Component(comp) => PageSpan::new(PageStyle::HeaderAccent, comp),
+        })
+        .collect()
+}
+
 /// The header: where the listing is, which toggles are on, how much is marked,
 /// and what the last operation reported.
 pub fn header_row(
     root: &str,
-    sort: SortKey,
     flags: HeaderFlags,
     marked: usize,
     message: Option<&str>,
@@ -85,28 +147,35 @@ pub fn header_row(
         show_details,
         show_sizes,
     } = flags;
-    let mut text = format!("sort:{}", sort.label());
+
+    let formatted_root = format_full_path(Path::new(root));
+    let mut spans = path_spans(&formatted_root);
+
+    // Status tags: active editor mode, toggles, marked count.
     if let Some(mode) = editing {
-        text.push_str(&format!("  editing:{mode}"));
+        spans.push(PageSpan::new(PageStyle::Dim, "  editing:"));
+        spans.push(PageSpan::new(PageStyle::HeaderAccent, mode));
     }
     if show_hidden {
-        text.push_str("  dotfiles");
+        spans.push(PageSpan::new(PageStyle::Dim, "  "));
+        spans.push(PageSpan::new(PageStyle::Header, "dotfiles"));
     }
     if show_details {
-        text.push_str("  details");
+        spans.push(PageSpan::new(PageStyle::Dim, "  "));
+        spans.push(PageSpan::new(PageStyle::Header, "details"));
     }
     if show_sizes {
-        text.push_str("  sizes");
+        spans.push(PageSpan::new(PageStyle::Dim, "  "));
+        spans.push(PageSpan::new(PageStyle::Header, "sizes"));
     }
     if marked > 0 {
-        text.push_str(&format!("  {marked} marked"));
+        spans.push(PageSpan::new(PageStyle::Dim, "  "));
+        spans.push(PageSpan::new(PageStyle::SyntaxNumber, marked.to_string()));
+        spans.push(PageSpan::new(PageStyle::Dim, " marked"));
     }
-    let mut spans = vec![
-        PageSpan::new(PageStyle::Header, format!("{root}  ")),
-        PageSpan::new(PageStyle::Dim, text),
-    ];
     if let Some(message) = message {
-        spans.push(PageSpan::new(PageStyle::Accent, format!("  {message}")));
+        spans.push(PageSpan::new(PageStyle::Dim, "  "));
+        spans.push(PageSpan::new(PageStyle::HeaderAccent, message));
     }
     spans
 }
@@ -540,11 +609,10 @@ mod tests {
 
     #[test]
     fn test_the_header_says_when_the_names_are_editable() {
-        let plain = header_row("/tmp", SortKey::Name, HeaderFlags::default(), 0, None);
+        let plain = header_row("/tmp", HeaderFlags::default(), 0, None);
         assert!(!text(plain).contains("editing"));
         let editing = header_row(
             "/tmp",
-            SortKey::Name,
             HeaderFlags {
                 editing: Some("insert"),
                 ..HeaderFlags::default()
@@ -553,5 +621,112 @@ mod tests {
             None,
         );
         assert!(text(editing).contains("editing"));
+    }
+
+    #[test]
+    fn test_the_header_path_is_formatted_for_os() {
+        #[cfg(windows)]
+        {
+            let home = crate::model::path::home_dir().unwrap_or_else(|| PathBuf::from(r"C:\Users\User"));
+            let sub = home.join("projects").join("winter");
+            let row = header_row(&sub.to_string_lossy(), HeaderFlags::default(), 0, None);
+            let row_str = text(row);
+            let expected_prefix = crate::model::path::format_full_path(&sub);
+            assert!(row_str.starts_with(&expected_prefix), "expected {expected_prefix}, got {row_str:?}");
+
+            let forward_slash_path = "C:/Windows/System32";
+            let row_win = header_row(forward_slash_path, HeaderFlags::default(), 0, None);
+            let row_win_str = text(row_win);
+            assert!(row_win_str.starts_with(r"C:\Windows\System32"), "got {row_win_str:?}");
+        }
+        #[cfg(not(windows))]
+        {
+            let home = crate::model::path::home_dir().unwrap_or_else(|| PathBuf::from("/home/user"));
+            let sub = home.join("projects").join("winter");
+            let row = header_row(&sub.to_string_lossy(), HeaderFlags::default(), 0, None);
+            let row_str = text(row);
+            let expected_prefix = crate::model::path::format_full_path(&sub);
+            assert!(row_str.starts_with(&expected_prefix), "expected {expected_prefix}, got {row_str:?}");
+
+            let posix_path = "/var/log";
+            let row_posix = header_row(posix_path, HeaderFlags::default(), 0, None);
+            let row_posix_str = text(row_posix);
+            assert!(row_posix_str.starts_with("/var/log"), "got {row_posix_str:?}");
+        }
+    }
+
+    #[test]
+    fn test_path_spans_syntax_decorating() {
+        // Windows-style path
+        let win_spans = path_spans(r"C:\Users\Trung\winter-term");
+        assert_eq!(
+            win_spans,
+            vec![
+                PageSpan::new(PageStyle::HeaderAccent, "C:"),
+                PageSpan::new(PageStyle::SyntaxComment, "\\"),
+                PageSpan::new(PageStyle::HeaderAccent, "Users"),
+                PageSpan::new(PageStyle::SyntaxComment, "\\"),
+                PageSpan::new(PageStyle::HeaderAccent, "Trung"),
+                PageSpan::new(PageStyle::SyntaxComment, "\\"),
+                PageSpan::new(PageStyle::HeaderAccent, "winter-term"),
+            ]
+        );
+
+        // POSIX-style path
+        let posix_spans = path_spans("/home/user/winter-term");
+        assert_eq!(
+            posix_spans,
+            vec![
+                PageSpan::new(PageStyle::SyntaxComment, "/"),
+                PageSpan::new(PageStyle::HeaderAccent, "home"),
+                PageSpan::new(PageStyle::SyntaxComment, "/"),
+                PageSpan::new(PageStyle::HeaderAccent, "user"),
+                PageSpan::new(PageStyle::SyntaxComment, "/"),
+                PageSpan::new(PageStyle::HeaderAccent, "winter-term"),
+            ]
+        );
+
+        // Root paths are active directory headers
+        assert_eq!(
+            path_spans("/"),
+            vec![PageSpan::new(PageStyle::HeaderAccent, "/")]
+        );
+        assert_eq!(
+            path_spans(r"C:\"),
+            vec![PageSpan::new(PageStyle::HeaderAccent, r"C:\")]
+        );
+        assert_eq!(
+            path_spans("C:/"),
+            vec![PageSpan::new(PageStyle::HeaderAccent, "C:/")]
+        );
+        assert_eq!(
+            path_spans("single"),
+            vec![PageSpan::new(PageStyle::HeaderAccent, "single")]
+        );
+        assert_eq!(path_spans(""), Vec::<PageSpan>::new());
+    }
+
+    #[test]
+    fn test_header_row_syntax_decorating_spans() {
+        let flags = HeaderFlags {
+            editing: Some("insert"),
+            show_hidden: true,
+            show_details: true,
+            show_sizes: true,
+        };
+        let row = header_row("/tmp", flags, 5, Some("file created"));
+
+        // Verify sort information is removed
+        assert!(!row.iter().any(|span| span.text.contains("sort")));
+
+        // Verify key and value styling
+        assert!(row.iter().any(|span| span.style == PageStyle::Dim && span.text == "  editing:"));
+        assert!(row.iter().any(|span| span.style == PageStyle::HeaderAccent && span.text == "insert"));
+        assert!(row.iter().any(|span| span.style == PageStyle::Header && span.text == "dotfiles"));
+        assert!(row.iter().any(|span| span.style == PageStyle::Header && span.text == "details"));
+        assert!(row.iter().any(|span| span.style == PageStyle::Header && span.text == "sizes"));
+        assert!(row.iter().any(|span| span.style == PageStyle::SyntaxNumber && span.text == "5"));
+        assert!(row.iter().any(|span| span.style == PageStyle::Dim && span.text == " marked"));
+        assert!(row.iter().any(|span| span.style == PageStyle::HeaderAccent && span.text == "file created"));
     }
 }

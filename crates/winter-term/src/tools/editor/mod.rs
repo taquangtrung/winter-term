@@ -79,6 +79,8 @@ pub struct EditorPage {
     docs: Vec<Document>,
     /// The last char search, for `;` and `,` to do again.
     find: Option<FindChar>,
+    /// Where the cursor and scroll were before jump previewing started: (row, col, scroll).
+    jump_origin: Option<(usize, usize, usize)>,
     /// The keys of the last command that changed the text, for `.`.
     last_change: Vec<Key>,
     /// What the last command reported, shown in the header until the next key.
@@ -189,6 +191,7 @@ impl EditorPage {
             count: None,
             docs: vec![Document::open(path, line)?],
             find: None,
+            jump_origin: None,
             last_change: Vec::new(),
             message: None,
             mode: EditMode::Normal,
@@ -915,6 +918,68 @@ impl Page for EditorPage {
         // The buffer being edited, not the one the editor opened with, so
         // stepping through buffers takes the answer with it.
         self.doc().path.parent().map(PathBuf::from)
+    }
+
+    fn file_reference(&self) -> Option<String> {
+        let base = crate::model::path::abbreviate_home(&self.doc().path);
+        if self.mode == EditMode::Visual {
+            if let Some(anchor) = self.anchor {
+                let start = anchor.row.min(self.buffer().row()) + 1;
+                let end = anchor.row.max(self.buffer().row()) + 1;
+                let suffix = if start == end {
+                    format!(":{start}")
+                } else {
+                    format!(":{start}-{end}")
+                };
+                return Some(format!("{base}{suffix}"));
+            }
+        }
+        Some(base)
+    }
+
+    fn jump_targets(&self) -> Option<Vec<(usize, String)>> {
+        let lines = self.buffer().lines();
+        let mut targets: Vec<(usize, String)> = lines
+            .iter()
+            .enumerate()
+            .filter(|(_, line)| !line.trim().is_empty())
+            .map(|(idx, line)| (idx, format!("{:>5}  {}", idx + 1, line.trim())))
+            .collect();
+        if targets.is_empty() && !lines.is_empty() {
+            targets = lines
+                .iter()
+                .enumerate()
+                .map(|(idx, line)| (idx, format!("{:>5}  {}", idx + 1, line)))
+                .collect();
+        }
+        Some(targets)
+    }
+
+    fn jump_cursor(&self) -> Option<usize> {
+        Some(self.buffer().row())
+    }
+
+    fn jump_to(&mut self, target: usize) {
+        if self.jump_origin.is_none() {
+            self.jump_origin = Some((self.buffer().row(), self.buffer().col(), self.doc().scroll));
+        }
+        self.buffer_mut().move_to_line(target);
+        self.doc_mut().scroll = target.saturating_sub(self.viewport / 2);
+    }
+
+    fn jump_cancel(&mut self) {
+        if let Some((row, col, scroll)) = self.jump_origin.take() {
+            self.buffer_mut().move_to(row, col);
+            self.doc_mut().scroll = scroll;
+        }
+    }
+
+    fn jump_confirm(&mut self, target: usize) {
+        if let Some((row, col, _)) = self.jump_origin.take() {
+            self.doc_mut().jump = Some((row, col));
+        }
+        self.buffer_mut().move_to_line(target);
+        self.doc_mut().scroll = target.saturating_sub(self.viewport / 2);
     }
 }
 
@@ -2138,6 +2203,38 @@ let y = 2;
         press(&mut page, "0");
         page.content(10, 40, false);
         assert_eq!(page.doc().hscroll, 0, "and back again");
+    }
+
+    #[test]
+    fn test_editor_jump_targets_preview_confirm_and_cancel() {
+        let tmp = TempDir::new("editor_jump");
+        let mut page = tmp.page("first line\n\nthird line\nfourth line\n");
+        let targets = page.jump_targets().expect("jump targets");
+        assert_eq!(targets.len(), 3);
+        assert_eq!(targets[0].0, 0);
+        assert_eq!(targets[1].0, 2);
+        assert_eq!(targets[2].0, 3);
+        assert_eq!(page.jump_cursor(), Some(0));
+
+        // Live preview to line 2
+        page.jump_to(2);
+        assert_eq!(page.buffer().row(), 2);
+
+        // Cancel restores cursor to line 0
+        page.jump_cancel();
+        assert_eq!(page.buffer().row(), 0);
+
+        // With painted viewport (e.g. 10 rows), preview centers at viewport / 2
+        page.content(10, 40, false);
+        page.jump_to(3);
+        assert_eq!(page.buffer().row(), 3);
+        assert_eq!(page.doc().scroll, 3_usize.saturating_sub(10 / 2));
+
+        // Preview to line 3 and confirm
+        page.jump_confirm(3);
+        assert_eq!(page.buffer().row(), 3);
+        assert_eq!(page.doc().scroll, 3_usize.saturating_sub(10 / 2));
+        assert_eq!(page.doc().jump, Some((0, 0)));
     }
 
     fn page_key(page: &mut EditorPage, code: KeyCode) {

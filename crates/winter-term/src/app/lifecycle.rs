@@ -308,6 +308,9 @@ impl App {
             "swoop" => {
                 self.open_swoop(focused);
             }
+            "jump" => {
+                self.open_jump(focused);
+            }
             "copy_scrollback" => {
                 self.copy_scrollback(focused);
             }

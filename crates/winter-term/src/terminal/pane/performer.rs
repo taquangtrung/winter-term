@@ -352,6 +352,11 @@ impl CombinedPerformer {
         self.pending_clipboard_write.take()
     }
 
+    /// Working directory reported by OSC 7, if any.
+    pub(super) fn cwd(&self) -> Option<String> {
+        self.performer.scrollback().cwd().map(str::to_string)
+    }
+
     /// Take the flag raised by an `OSC 52 ; c ; ?` read query, if any. The
     /// pane cannot reach the OS clipboard, so the app layer answers it,
     /// honoring the `clipboard-read` setting: after each parse batch.

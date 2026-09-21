@@ -927,6 +927,14 @@ impl Page for PdfPage {
         self.path.parent().map(Path::to_path_buf)
     }
 
+    fn file_reference(&self) -> Option<String> {
+        let base = crate::model::path::abbreviate_home(&self.path);
+        if self.page > 0 {
+            return Some(format!("{base}:{}", self.page));
+        }
+        Some(base)
+    }
+
     fn surface(&self) -> Option<PageSurface> {
         Some(PageSurface {
             assets: assets::asset,

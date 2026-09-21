@@ -192,8 +192,8 @@ security {
 //     foreground       "#d8d8d8"
 //     cursor-bg        "#52ad70"
 //     cursor-fg        "#000000"
-//     selection-bg     "#fffacd"
-//     selection-fg     "#000000"
+//     selection-bg     "#2257a0"
+//     selection-fg     "#ffffff"
 //     split            "#51554f"   // pane separator line color (see also pane-border-width)
 //     status-bar-border "#3b414f"  // 1px line above the status bar
 //     visual-bell      "#e08020"   // tab-bar flash color on bell (uses built-in default when unset)

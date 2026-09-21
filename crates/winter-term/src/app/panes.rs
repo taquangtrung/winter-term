@@ -63,12 +63,24 @@ impl App {
     /// with no page there does the shell's own directory decide.
     pub(crate) fn focused_start_dir(&self) -> PathBuf {
         let focused = self.tab().focused();
-        self.pages
+        let dir = self.pages
             .get(&focused)
             .and_then(|slot| slot.page.cwd())
             .or_else(|| self.focused_cwd().map(PathBuf::from))
-            .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("/"))
+            .or_else(|| {
+                let cur = std::env::current_dir().ok()?;
+                #[cfg(windows)]
+                {
+                    let s = cur.to_string_lossy();
+                    if s.ends_with("System32") || s.ends_with("system32") {
+                        return crate::model::path::home_dir();
+                    }
+                }
+                Some(cur)
+            })
+            .or_else(crate::model::path::home_dir)
+            .unwrap_or_else(|| PathBuf::from("/"));
+        crate::model::path::normalize_path(dir)
     }
     /// The same directory as a shell's working directory, dropped when the
     /// path cannot be spelled as one.

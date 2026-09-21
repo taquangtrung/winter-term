@@ -8,6 +8,7 @@ pub mod input;
 pub mod layout;
 pub mod mode;
 pub mod page;
+pub mod path;
 pub mod palette;
 pub mod settings_page;
 pub mod units;

@@ -47,6 +47,8 @@ pub enum PaletteMode {
     PagePick,
     /// Buffer swoop: fuzzy line search over the active pane's scrollback and grid.
     Swoop,
+    /// Jump to target in current buffer view (fuzzy completion dialog).
+    Jump,
     /// Mux session switcher: selecting an entry attaches or switches to that daemon session.
     MuxSessions,
     /// Mux session killer: selecting an entry terminates that daemon session.
@@ -99,6 +101,8 @@ pub struct Palette {
     pub query_history: Vec<String>,
     /// Index into the filtered rows, not into the entries.
     pub selected: usize,
+    /// Custom title shown above the palette query, or None to infer from mode.
+    pub title: Option<String>,
 }
 
 // ========================================================================
@@ -122,6 +126,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -141,6 +146,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -169,6 +175,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -202,6 +209,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -229,6 +237,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -257,6 +266,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -287,7 +297,59 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
+    }
+
+    /// Open the palette in jump mode over `targets`, which are `(target_id, label)` pairs.
+    pub fn open_jump(targets: Vec<(usize, String)>, title: Option<String>) -> Self {
+        let entries = targets
+            .into_iter()
+            .map(|(target_id, label)| PaletteEntry {
+                action: target_id.to_string(),
+                label,
+                match_positions: Vec::new(),
+                shortcut: String::new(),
+            })
+            .collect::<Vec<_>>();
+        let filtered = (0..entries.len()).collect();
+        Palette {
+            active: true,
+            dir: None,
+            entries,
+            filtered,
+            history: EditHistory::new(String::new()),
+            history_index: None,
+            live_query: String::new(),
+            mode: PaletteMode::Jump,
+            query: String::new(),
+            query_history: Vec::new(),
+            selected: 0,
+            title,
+        }
+    }
+
+    /// Preselect the entry closest to `target_id` among the filtered items.
+    pub fn preselect_nearest(&mut self, target_id: usize) {
+        if self.filtered.is_empty() {
+            return;
+        }
+        let mut best_index = 0;
+        let mut min_diff = usize::MAX;
+        for (filtered_idx, &entry_idx) in self.filtered.iter().enumerate() {
+            if let Ok(id) = self.entries[entry_idx].action.parse::<usize>() {
+                if id >= target_id {
+                    self.selected = filtered_idx;
+                    return;
+                }
+                let diff = target_id.abs_diff(id);
+                if diff < min_diff {
+                    min_diff = diff;
+                    best_index = filtered_idx;
+                }
+            }
+        }
+        self.selected = best_index;
     }
 
     /// Open the palette in mux session switcher mode.
@@ -314,6 +376,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -341,6 +404,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -367,6 +431,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -393,6 +458,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -413,6 +479,7 @@ impl Palette {
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
+            title: None,
         }
     }
 
@@ -796,6 +863,7 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ("font_decrease", "Font Size: Decrease", ""),
         ("font_increase", "Font Size: Increase", ""),
         ("font_reset", "Font Size: Reset", ""),
+        ("jump", "Navigate: Jump to Target", ""),
         ("keys_page", "Keys: Show Every Command", ""),
         ("mux_attach_remote", "Mux: Attach Remote Session...", ""),
         ("mux_detach_session", "Mux: Detach Current Session", ""),
@@ -1272,5 +1340,36 @@ mod tests {
         }
         assert_eq!(p.filtered.len(), 1, "the prompt must never be filtered out");
         assert_eq!(p.query, "box.example.com work");
+    }
+
+    #[test]
+    fn test_palette_open_jump_and_preselect_nearest() {
+        let targets = vec![
+            (10, "   11  first line".to_string()),
+            (25, "   26  second line".to_string()),
+            (50, "   51  third line".to_string()),
+        ];
+        let mut p = Palette::open_jump(targets, Some("Jump: test.rs".to_string()));
+        assert_eq!(p.mode, PaletteMode::Jump);
+        assert_eq!(p.title.as_deref(), Some("Jump: test.rs"));
+        assert_eq!(p.entries.len(), 3);
+        assert_eq!(p.selected, 0);
+
+        // Preselect nearest to line 20 -> picks line 25 (the first >= 20)
+        p.preselect_nearest(20);
+        assert_eq!(p.selected, 1);
+        assert_eq!(p.selected_action(), Some("25"));
+
+        // Preselect nearest to line 100 -> beyond all targets, picks closest (index 2: 50)
+        p.preselect_nearest(100);
+        assert_eq!(p.selected, 2);
+        assert_eq!(p.selected_action(), Some("50"));
+
+        // Fuzzy filter by typing
+        for c in "third".chars() {
+            p.push_char(c);
+        }
+        assert_eq!(p.filtered.len(), 1);
+        assert_eq!(p.selected_action(), Some("50"));
     }
 }

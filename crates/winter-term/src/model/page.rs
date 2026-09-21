@@ -360,6 +360,8 @@ pub enum PageStyle {
     Dim,
     /// A title or a column header.
     Header,
+    /// A header or title emphasized in the theme's accent color, in bold.
+    HeaderAccent,
     /// The heading over paths a merge left contested.
     HeadingConflict,
     /// The heading over changes that are staged.
@@ -795,6 +797,13 @@ pub trait Page {
         None
     }
 
+    /// A file or directory reference for the current view, formatted for copying.
+    /// Pages with a more specific location (like an active selection or cursor line)
+    /// override this.
+    fn file_reference(&self) -> Option<String> {
+        self.cwd().map(|p| crate::model::path::abbreviate_home(&p))
+    }
+
     /// Whether the page is holding work that would be lost with it.
     ///
     /// The host asks before closing a pane or a tab over one, keeps it out of
@@ -846,6 +855,28 @@ pub trait Page {
     fn context_items(&self) -> Vec<PageMenuItem> {
         Vec::new()
     }
+
+    /// Jump targets in the current view: pairs of `(target_id, display_label)`.
+    /// `target_id` is an internal index (e.g. line or row) understood by
+    /// [`jump_to`] and [`jump_confirm`].
+    fn jump_targets(&self) -> Option<Vec<(usize, String)>> {
+        None
+    }
+
+    /// Current cursor row or position index corresponding to target indices
+    /// in [`jump_targets`], used to preselect the nearest target when opening jump.
+    fn jump_cursor(&self) -> Option<usize> {
+        None
+    }
+
+    /// Move the view/cursor to preview `target` while fuzzy jumping.
+    fn jump_to(&mut self, _target: usize) {}
+
+    /// Restore the pre-jump view/cursor position when jump is cancelled.
+    fn jump_cancel(&mut self) {}
+
+    /// Confirm jumping to `target`, committing the move and saving the jump origin.
+    fn jump_confirm(&mut self, _target: usize) {}
 }
 
 // ========================================================================

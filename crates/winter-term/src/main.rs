@@ -6,7 +6,8 @@
 //! **Headless demo** (with args): runs the given command under a PTY and prints
 //! the live cell grid and parsed block list.
 
-#![forbid(unsafe_code)]
+// `deny` rather than `forbid` so `attach_parent_console` alone can opt out.
+#![deny(unsafe_code)]
 // No-op on non-Windows targets. On Windows it links the GUI subsystem instead
 // of the default console subsystem, so launching `winter.exe` without an
 // inherited console (e.g. via ShellExecute, as RightKeys does) no longer
@@ -28,6 +29,10 @@ use winter_render::Screen;
 /// distro package is `winter-term`; the user-facing name is neither.
 const PROGRAM_NAME: &str = "winter";
 
+/// The release version, suffixed with the commit id (`0.1.0+7744bde`) when
+/// built from a commit that is not a release tag. Stamped by `build.rs`.
+const VERSION: &str = env!("WINTER_BUILD_VERSION");
+
 // ============================================================================
 // Entry point
 // ============================================================================
@@ -38,6 +43,8 @@ fn main() -> ExitCode {
     if args.is_empty() {
         return run_window();
     }
+    #[cfg(windows)]
+    attach_parent_console();
     // `--help`/`--version` are matched before the headless fallthrough, which
     // would otherwise hand them to a PTY and try to execute `--version` as a
     // command. Packagers and `command -v`-style probes expect both.
@@ -47,12 +54,35 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         "-V" | "--version" | "version" => {
-            println!("{} {}", PROGRAM_NAME, env!("CARGO_PKG_VERSION"));
+            println!("{PROGRAM_NAME} {VERSION}");
             ExitCode::SUCCESS
         }
         "mux" => run_mux(&args[1..]),
         "--reload" => run_reload(),
         _ => run_headless(&args),
+    }
+}
+
+/// Borrow the console of the shell that launched us, so command-line output
+/// reaches the terminal it was typed in.
+///
+/// The GUI subsystem (see `windows_subsystem` above) starts the process with
+/// no console, and anything printed is dropped. Standard handles that are
+/// already set, a pipe or a redirect, are left alone. Launched from Explorer
+/// there is no parent console to attach to, and nothing is lost by failing.
+#[cfg(windows)]
+#[allow(unsafe_code)]
+fn attach_parent_console() {
+    use windows_sys::Win32::System::Console::{
+        AttachConsole, GetStdHandle, ATTACH_PARENT_PROCESS, STD_OUTPUT_HANDLE,
+    };
+
+    // SAFETY: both calls take plain integer arguments and touch no memory of
+    // ours; a null handle means "no stdout", and a failed attach is ignored.
+    unsafe {
+        if GetStdHandle(STD_OUTPUT_HANDLE).is_null() {
+            AttachConsole(ATTACH_PARENT_PROCESS);
+        }
     }
 }
 
@@ -64,7 +94,7 @@ fn main() -> ExitCode {
 fn help_text() -> String {
     format!(
         "\
-{PROGRAM_NAME} {version}: a web-native terminal
+{PROGRAM_NAME} {VERSION}: a web-native terminal
 
 USAGE:
     winter                        Open a terminal window
@@ -92,7 +122,6 @@ ENVIRONMENT:
 
 Config lives in ~/.config/winter-term/ (settings.kdl, keybindings.kdl).
 Docs: {repository}",
-        version = env!("CARGO_PKG_VERSION"),
         repository = env!("CARGO_PKG_REPOSITORY"),
     )
 }

@@ -87,6 +87,8 @@ pub(super) const WHICH_KEY_HEIGHT_RATIO: f32 = 0.55;
 /// of them.
 pub(super) const PALETTE_WIDTH_RATIO: f32 = 0.7;
 pub(super) const PALETTE_HEIGHT_RATIO: f32 = 0.6;
+/// The palette's height as a fraction of the surface when docked at the top for Jump mode.
+pub(super) const PALETTE_JUMP_HEIGHT_RATIO: f32 = 0.5;
 
 /// Extra horizontal padding inside each palette result row, in pixels, applied
 /// to both the left label and the right shortcut hint.

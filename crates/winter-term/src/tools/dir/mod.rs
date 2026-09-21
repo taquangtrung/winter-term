@@ -32,9 +32,11 @@ use crate::model::page::{
     PageContent, PageIcon, PageMenuItem, PageOutcome, PageSpan, PageStyle, PageWindow,
     PickQuestion, PromptMode, PromptReply, PromptRequest,
 };
+use crate::model::path::{abbreviate_home, format_full_path, normalize_path};
 use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
 
 use edit::{EditAction, EditMode, EditState};
+use icons::icon_for;
 use listing::SortKey;
 use marks::Marks;
 use tree::{Folds, Row};
@@ -108,6 +110,8 @@ pub struct DirPage {
     folds: Folds,
     /// Directories stepped back out of, most recent last.
     forward: Vec<PathBuf>,
+    /// Where the cursor and scroll were before jump previewing started: (cursor, scroll).
+    jump_origin: Option<(usize, usize)>,
     /// What the last operation reported, shown in the header until the next key.
     message: Option<String>,
     marks: Marks,
@@ -146,12 +150,14 @@ pub struct DirPage {
 impl DirPage {
     /// A listing of `root`, collapsed, sorted by name, hiding dotfiles.
     pub fn new(root: PathBuf) -> Self {
+        let root = normalize_path(root);
         let mut page = Self {
             back: Vec::new(),
             cursor: 0,
             edit: None,
             folds: Folds::new(),
             forward: Vec::new(),
+            jump_origin: None,
             marks: Marks::new(),
             message: None,
             pending: None,
@@ -237,6 +243,7 @@ impl DirPage {
     }
 
     fn set_root(&mut self, root: PathBuf) {
+        let root = normalize_path(root);
         if root == self.root {
             return;
         }
@@ -957,9 +964,9 @@ impl Page for DirPage {
         // Remember the viewport for the half-page motions, which key handling
         // needs between paints.
         self.viewport = rows.saturating_sub(HEADER_ROWS);
+        let root = format_full_path(&self.root);
         let mut page_rows = vec![rows::header_row(
-            &self.root.to_string_lossy(),
-            self.sort,
+            &root,
             rows::HeaderFlags {
                 editing: self.edit.as_ref().map(|edit| match edit.mode() {
                     EditMode::Normal => "normal",
@@ -1167,6 +1174,18 @@ impl Page for DirPage {
         }
     }
 
+    fn file_reference(&self) -> Option<String> {
+        let targets = self.targets();
+        if targets.is_empty() {
+            return Some(abbreviate_home(&self.root));
+        }
+        let refs: Vec<String> = targets
+            .iter()
+            .map(|p| abbreviate_home(p))
+            .collect();
+        Some(refs.join("\n"))
+    }
+
     fn context_items(&self) -> Vec<PageMenuItem> {
         let Some(row) = self.selected() else {
             // Below the listing there is no entry to act on, so the only
@@ -1219,6 +1238,57 @@ impl Page for DirPage {
             LABEL_NEW_DIR,
         ));
         items
+    }
+
+    fn jump_targets(&self) -> Option<Vec<(usize, String)>> {
+        let targets = self
+            .rows
+            .iter()
+            .enumerate()
+            .map(|(idx, row)| {
+                let name = self
+                    .edited_name(idx, row)
+                    .map(|e| e.text)
+                    .unwrap_or_else(|| row.entry.name.clone());
+                let icon = icon_for(&row.entry);
+                (
+                    idx,
+                    format!(
+                        "{:>5}  {}{} {}",
+                        idx + 1,
+                        "  ".repeat(row.depth),
+                        icon,
+                        name
+                    ),
+                )
+            })
+            .collect();
+        Some(targets)
+    }
+
+    fn jump_cursor(&self) -> Option<usize> {
+        Some(self.cursor)
+    }
+
+    fn jump_to(&mut self, target: usize) {
+        if self.jump_origin.is_none() {
+            self.jump_origin = Some((self.cursor, self.scroll));
+        }
+        self.cursor = target.min(self.rows.len().saturating_sub(1));
+        self.scroll = self.cursor.saturating_sub(self.viewport / 2);
+    }
+
+    fn jump_cancel(&mut self) {
+        if let Some((cursor, scroll)) = self.jump_origin.take() {
+            self.cursor = cursor.min(self.rows.len().saturating_sub(1));
+            self.scroll = scroll;
+        }
+    }
+
+    fn jump_confirm(&mut self, target: usize) {
+        self.jump_origin = None;
+        self.cursor = target.min(self.rows.len().saturating_sub(1));
+        self.scroll = self.cursor.saturating_sub(self.viewport / 2);
     }
 }
 
@@ -2856,5 +2926,103 @@ mod tests {
         let mut page = DirPage::new(tree.0.clone());
         toggle_edit(&mut page);
         assert!(page.edit.is_none());
+    }
+
+    #[test]
+    fn test_dir_jump_targets_preview_confirm_and_cancel() {
+        let tree = TempTree::new("dir-jump");
+        tree.touch("apple.txt");
+        tree.touch("banana.txt");
+        tree.touch("cherry.txt");
+        let mut page = DirPage::new(tree.0.clone());
+        let targets = page.jump_targets().expect("targets");
+        assert_eq!(targets.len(), 3);
+        assert_eq!(page.jump_cursor(), Some(0));
+        let expected_apple_icon = icon_for(&page.rows[0].entry);
+        assert_eq!(
+            targets[0].1,
+            format!("{:>5}  {} apple.txt", 1, expected_apple_icon)
+        );
+
+        // Preview to row 2
+        page.viewport = 10;
+        page.jump_to(2);
+        assert_eq!(page.cursor, 2);
+        assert_eq!(page.scroll, 2_usize.saturating_sub(10 / 2));
+
+        // Cancel restores to 0 and original scroll
+        page.jump_cancel();
+        assert_eq!(page.cursor, 0);
+        assert_eq!(page.scroll, 0);
+
+        // Preview to 1 and confirm
+        page.jump_to(1);
+        page.jump_confirm(1);
+        assert_eq!(page.cursor, 1);
+        assert_eq!(page.scroll, 1_usize.saturating_sub(10 / 2));
+        assert!(page.jump_origin.is_none());
+    }
+
+    #[test]
+    fn test_dir_jump_targets_includes_icons_and_depth() {
+        let tree = TempTree::new("dir-jump-icons");
+        tree.dir("sub");
+        tree.touch("sub/child.rs");
+        tree.touch("main.rs");
+        let mut page = DirPage::new(tree.0.clone());
+        let sub_idx = page
+            .rows
+            .iter()
+            .position(|r| r.entry.name == "sub")
+            .expect("sub folder");
+        page.cursor = sub_idx;
+        page.toggle_fold();
+
+        let targets = page.jump_targets().expect("targets");
+        assert_eq!(targets.len(), 3);
+
+        for (idx, label) in &targets {
+            let row = &page.rows[*idx];
+            let expected_icon = icon_for(&row.entry);
+            assert!(
+                label.contains(expected_icon),
+                "target label '{label}' should contain icon '{expected_icon}'"
+            );
+            if row.depth > 0 {
+                let indent = "  ".repeat(row.depth);
+                assert!(
+                    label.contains(&format!("  {indent}{expected_icon}")),
+                    "target label '{label}' should contain indent '{indent}' before icon"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_dir_page_header_displays_formatted_path() {
+        let tree = TempTree::new("dir-header-path");
+        let mut page = DirPage::new(tree.0.clone());
+        let header = crate::model::page::row_text(&page.content(10, 80, false).rows[0]);
+        let expected = format_full_path(&tree.0);
+        assert!(
+            header.starts_with(&expected),
+            "expected header starting with '{expected}', got {header:?}"
+        );
+        assert!(!header.contains("sort"), "header should not contain sort information");
+    }
+
+    #[test]
+    fn test_dir_page_reads_entries_even_with_leading_slash_on_windows_path() {
+        let tree = TempTree::new("dir-osc7-path");
+        tree.touch("file.txt");
+        let raw = tree.0.to_string_lossy();
+        let uri_style_path = if raw.starts_with('/') {
+            tree.0.clone()
+        } else {
+            PathBuf::from(format!("/{raw}"))
+        };
+        let page = DirPage::new(uri_style_path);
+        assert_eq!(page.rows.len(), 1);
+        assert_eq!(page.rows[0].entry.name, "file.txt");
     }
 }

@@ -178,6 +178,8 @@ pub struct GitPage {
     diffs: HashMap<FileRow, FileDiff>,
     /// Files whose diff is showing.
     expanded: HashSet<FileRow>,
+    /// Where the cursor and scroll were before jump previewing started: (cursor, scroll).
+    jump_origin: Option<(usize, usize)>,
     cursor: usize,
     /// What the last command reported, shown in the header.
     message: Option<String>,
@@ -236,6 +238,7 @@ impl GitPage {
             commits: Vec::new(),
             diffs: HashMap::new(),
             expanded: HashSet::new(),
+            jump_origin: None,
             cursor: 0,
             loaded: false,
             message: None,
@@ -993,7 +996,7 @@ impl GitPage {
         };
         match (popup, choice) {
             // A jump needs no repository: it moves within what is drawn.
-            (Popup::Jump, _) => self.jump_to(code),
+            (Popup::Jump, _) => self.jump_to_section(code),
             (Popup::Branch, 'b') => {
                 self.pick(ASK_BRANCH_CHECKOUT, "Checkout", exec::Candidates::Branches)
             }
@@ -1217,7 +1220,7 @@ impl GitPage {
 
     /// Resolve the key after `g`: each names a section to jump to, and
     /// anything else abandons the sequence.
-    fn jump_to(&mut self, code: KeyCode) -> PageOutcome {
+    fn jump_to_section(&mut self, code: KeyCode) -> PageOutcome {
         match code {
             // `gg` is the one Vim motion the view's own leader resolves,
             // because the leader claims the prefix first.
@@ -1860,6 +1863,17 @@ impl Page for GitPage {
             .or_else(|| self.root.clone())
     }
 
+    fn file_reference(&self) -> Option<String> {
+        if let Some(target) = self.file_at_point() {
+            let base = crate::model::path::abbreviate_home(&target.path);
+            if let Some(line) = target.line {
+                return Some(format!("{base}:{line}"));
+            }
+            return Some(base);
+        }
+        self.root.as_ref().map(|r| crate::model::path::abbreviate_home(r))
+    }
+
     fn context_items(&self) -> Vec<PageMenuItem> {
         // What a row offers is what that kind of row can do, which is why the
         // menu is built per item rather than as one list with things greyed
@@ -1910,6 +1924,72 @@ impl Page for GitPage {
                 PageMenuItem::new(Key::plain(KeyCode::Char('G')), LABEL_RELOAD),
             ],
         }
+    }
+
+    fn jump_targets(&self) -> Option<Vec<(usize, String)>> {
+        if let Some(output) = &self.output {
+            let targets = output
+                .lines
+                .iter()
+                .enumerate()
+                .map(|(idx, line)| (idx, format!("{:>5}  {}", idx + 1, line)))
+                .collect();
+            Some(targets)
+        } else {
+            let targets = self
+                .rows
+                .iter()
+                .enumerate()
+                .map(|(idx, row)| (idx, format!("{:>5}  {}", idx + 1, row_text(&row.spans))))
+                .collect();
+            Some(targets)
+        }
+    }
+
+    fn jump_cursor(&self) -> Option<usize> {
+        if let Some(output) = &self.output {
+            Some(output.cursor)
+        } else {
+            Some(self.cursor)
+        }
+    }
+
+    fn jump_to(&mut self, target: usize) {
+        if self.jump_origin.is_none() {
+            let cur = if let Some(output) = &self.output {
+                output.cursor
+            } else {
+                self.cursor
+            };
+            self.jump_origin = Some((cur, self.scroll));
+        }
+        if let Some(output) = self.output.as_mut() {
+            output.cursor = target.min(output.lines.len().saturating_sub(1));
+        } else {
+            self.cursor = target.min(self.rows.len().saturating_sub(1));
+        }
+        self.scroll = target.saturating_sub(self.viewport / 2);
+    }
+
+    fn jump_cancel(&mut self) {
+        if let Some((origin, scroll)) = self.jump_origin.take() {
+            if let Some(output) = self.output.as_mut() {
+                output.cursor = origin.min(output.lines.len().saturating_sub(1));
+            } else {
+                self.cursor = origin.min(self.rows.len().saturating_sub(1));
+            }
+            self.scroll = scroll;
+        }
+    }
+
+    fn jump_confirm(&mut self, target: usize) {
+        self.jump_origin = None;
+        if let Some(output) = self.output.as_mut() {
+            output.cursor = target.min(output.lines.len().saturating_sub(1));
+        } else {
+            self.cursor = target.min(self.rows.len().saturating_sub(1));
+        }
+        self.scroll = target.saturating_sub(self.viewport / 2);
     }
 }
 
@@ -3992,5 +4072,44 @@ index aaa..bbb 100644
         ] {
             assert_eq!(page.on_key(&press(code)), PageOutcome::Consumed);
         }
+    }
+
+    #[test]
+    fn test_git_jump_status_rows_and_output_lines() {
+        let mut page = loaded_page();
+        let targets = page.jump_targets().expect("status jump targets");
+        assert!(!targets.is_empty());
+        assert_eq!(page.jump_cursor(), Some(0));
+
+        // Jump preview on status view
+        page.viewport = 10;
+        page.jump_to(1);
+        assert_eq!(page.cursor, 1);
+        assert_eq!(page.scroll, 1_usize.saturating_sub(10 / 2));
+        page.jump_cancel();
+        assert_eq!(page.cursor, 0);
+        assert_eq!(page.scroll, 0);
+
+        // Jump preview and confirm on status view
+        page.jump_to(1);
+        page.jump_confirm(1);
+        assert_eq!(page.cursor, 1);
+        assert_eq!(page.scroll, 1_usize.saturating_sub(10 / 2));
+        assert!(page.jump_origin.is_none());
+
+        // Now with output (e.g. blame)
+        page.on_job(reply(exec::TAG_BLAME, "line 1\nline 2\nline 3\n"));
+        let output_targets = page.jump_targets().expect("output jump targets");
+        assert_eq!(output_targets.len(), 3);
+        assert_eq!(page.jump_cursor(), Some(0));
+
+        page.jump_to(2);
+        assert_eq!(page.output.as_ref().unwrap().cursor, 2);
+        page.jump_cancel();
+        assert_eq!(page.output.as_ref().unwrap().cursor, 0);
+
+        page.jump_to(2);
+        page.jump_confirm(2);
+        assert_eq!(page.output.as_ref().unwrap().cursor, 2);
     }
 }

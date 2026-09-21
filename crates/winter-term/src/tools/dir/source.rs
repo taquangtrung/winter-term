@@ -76,7 +76,8 @@ fn collect_dirs(dir: &Path, show_hidden: bool, depth: usize, found: &mut Vec<Pat
 
 /// Every entry of `dir`, unsorted.
 fn read_entries(dir: &Path, show_hidden: bool) -> Vec<Entry> {
-    let Ok(reader) = fs::read_dir(dir) else {
+    let normalized = crate::model::path::normalize_path(dir);
+    let Ok(reader) = fs::read_dir(&normalized) else {
         return Vec::new();
     };
     reader
