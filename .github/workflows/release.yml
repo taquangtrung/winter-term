@@ -111,7 +111,7 @@ jobs:
               > release-notes.md
           fi
           cat release-notes.md
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
           body_path: release-notes.md
