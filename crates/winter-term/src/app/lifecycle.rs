@@ -57,7 +57,6 @@ impl App {
             last_find: None,
             image_blocks: Vec::new(),
             last_tile_layout: None,
-            preferred_size: None,
             modifiers: winit::event::Modifiers::default(),
             exit_requested: false,
             pending_reload: false,
@@ -112,13 +111,7 @@ impl App {
         }
     }
     pub(crate) fn save_app_state(&self) {
-        // The size Winter settled on, not the one the window currently
-        // reports: see [`App::preferred_size`]. Before one has been settled
-        // the reported size is the best guess there is.
-        let window_size = self
-            .preferred_size
-            .or_else(|| self.window.as_ref().map(|w| w.inner_size()))
-            .map(|s| (s.width, s.height));
+        let window_size = self.window.as_ref().map(|w| w.inner_size()).map(|s| (s.width, s.height));
         crate::config::save_state(&crate::config::AppState {
             palette_history: self.palette_history.clone(),
             window_size,

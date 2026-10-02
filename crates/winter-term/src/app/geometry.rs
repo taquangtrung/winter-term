@@ -11,7 +11,7 @@ use winter_render::MenuStyle;
 
 use super::App;
 use super::{
-    content_band, edge_resize_direction_at, snap_height_to_rows, snap_width_to_cols,
+    content_band, edge_resize_direction_at,
     AUTO_SCROLL_EDGE_MARGIN, AUTO_SCROLL_INTERVAL, AUTO_SCROLL_MAX_LINES_PER_TICK,
     WINDOW_RESIZE_BORDER_PX,
 };
@@ -213,55 +213,6 @@ impl App {
             y,
             width: right - x,
             height: bottom - y,
-        }
-    }
-    /// Rounds the window size to the nearest whole row/column fit so a drag
-    /// settles with zero leftover slack. Skipped while maximized/fullscreen;
-    /// a no-op once already snapped, so `Resized` can't loop.
-    pub(crate) fn snap_window_to_cell_grid(&mut self) {
-        let Some(window) = self.window.clone() else {
-            return;
-        };
-        if window.is_maximized() || window.fullscreen().is_some() {
-            return;
-        }
-        let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) else {
-            return;
-        };
-        if cw <= 0.0 || ch <= 0.0 {
-            return;
-        }
-        let size = window.inner_size();
-        let top_h_on_screen = if self.config.menu_style == MenuStyle::Modern {
-            winter_render::modern_tabbar_height_px(ch)
-        } else {
-            self.top_chrome_rows() as f32 * ch
-        };
-        let status_h = if self.status_bar_visible() {
-            winter_render::STATUS_BAR_HEIGHT * ch
-        } else {
-            0.0
-        };
-        let ideal_h = snap_height_to_rows(size.height as f32, top_h_on_screen, status_h, ch) as u32;
-        let ideal_w =
-            snap_width_to_cols(size.width as f32, 2.0 * winter_render::PANE_H_PAD, cw) as u32;
-        // Recorded before the early return, since a window already on the grid
-        // has still settled on this size and it is the one worth remembering.
-        self.preferred_size = Some(winit::dpi::PhysicalSize::new(ideal_w, ideal_h));
-        if ideal_h == size.height && ideal_w == size.width {
-            return;
-        }
-        let applied = window.request_inner_size(winit::dpi::PhysicalSize::new(ideal_w, ideal_h));
-        // Some platforms apply the requested size synchronously and never send
-        // the follow-up `Resized` that would otherwise drive this; without
-        // this, the GPU surface and pane grids are left at the old size while
-        // the OS-reported window is already the new one, showing as a gap.
-        if let Some(actual) = applied {
-            let scale_factor = window.scale_factor();
-            if let Some(renderer) = &mut self.renderer {
-                renderer.resize(actual.width, actual.height, scale_factor);
-            }
-            self.resize_all_panes();
         }
     }
 }

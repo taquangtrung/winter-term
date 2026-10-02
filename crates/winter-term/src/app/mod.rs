@@ -57,7 +57,9 @@ use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
 use winit::application::ApplicationHandler;
-use winit::event::{ElementState, WindowEvent};
+#[cfg(target_os = "windows")]
+use winit::event::ElementState;
+use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, NamedKey, PhysicalKey};
 use winit::window::{ResizeDirection, Window, WindowId};
@@ -219,29 +221,6 @@ pub(crate) fn edge_resize_direction_at(
     } else {
         None
     }
-}
-
-/// The nearest window height with zero leftover slack below a whole number
-/// of cell rows, given `top_h`/`status_h` pixels of fixed chrome and `ch`-tall
-/// rows in between.
-pub(crate) fn snap_height_to_rows(h: f32, top_h: f32, status_h: f32, ch: f32) -> f32 {
-    let rows = ((h - top_h - status_h) / ch).round().max(1.0);
-    // Ceiling, not nearest: `content_band` floors back down to a row count at
-    // render time, so if `top_h`/`status_h` aren't whole pixels (e.g. the
-    // Modern tabbar), rounding to nearest can land a fraction of a pixel
-    // under the exact height and lose the whole row it was aiming to keep.
-    (top_h + rows * ch + status_h).ceil()
-}
-
-/// The nearest window width with zero leftover slack past a whole number of
-/// cell columns, given `h_pad` pixels of fixed horizontal chrome (both edges'
-/// [`winter_render::PANE_H_PAD`] combined) and `cw`-wide columns in between.
-pub(crate) fn snap_width_to_cols(w: f32, h_pad: f32, cw: f32) -> f32 {
-    let cols = ((w - h_pad) / cw).round().max(1.0);
-    // Ceiling for the same reason as `snap_height_to_rows`: the renderer
-    // floors back down to a column count, so rounding to nearest can land
-    // under the exact width and lose the whole column it was aiming to keep.
-    (cols * cw + h_pad).ceil()
 }
 
 fn status_bar(
@@ -591,11 +570,6 @@ pub struct App {
     /// by anything that changes a tile without moving a pane: a new tile, a
     /// fold, a band that grew, a page covering the grid.
     pub(crate) last_tile_layout: Option<HashMap<PaneId, PaneViewport>>,
-    /// The inner size Winter itself settled on, and the one persisted. A
-    /// window manager that hands back something smaller must not have its
-    /// answer saved as the preference, or restoring it becomes the starting
-    /// point for the next correction and the size walks down on every launch.
-    pub(crate) preferred_size: Option<winit::dpi::PhysicalSize<u32>>,
     pub(crate) modifiers: winit::event::Modifiers,
     /// Set when the custom window-close control is clicked, drained by the mouse
     /// handler into the same quit path as a native close request.
@@ -995,7 +969,6 @@ impl ApplicationHandler for App {
                     }
                     if size_changed {
                         self.resize_all_panes();
-                        self.snap_window_to_cell_grid();
                         self.dirty = true;
                         // Windows reports a bogus small size (the legacy "iconic"
                         // size, not 0x0) when the window is minimized; skip
@@ -1572,87 +1545,6 @@ mod tests {
         assert_eq!(
             edge_resize_direction_at(w / 2.0, h / 2.0, w, h, border),
             None
-        );
-    }
-
-    #[test]
-    fn test_snap_height_to_rows_lands_on_a_whole_number_of_rows() {
-        let (top_h, status_h, ch) = (40.0, 20.0, 19.0);
-        // 682.8px content area (h - top_h - status_h = 622.8) floors to 32
-        // rows with a leftover fraction; snapping must round to the nearest
-        // row boundary, not floor (which would shrink the window on every
-        // resize instead of settling on the closer fit).
-        let snapped = snap_height_to_rows(682.8, top_h, status_h, ch);
-        assert_eq!(snapped, top_h + 33.0 * ch + status_h);
-
-        // Exact fits are left untouched.
-        let exact = top_h + 10.0 * ch + status_h;
-        assert_eq!(snap_height_to_rows(exact, top_h, status_h, ch), exact);
-
-        // Never rounds down to zero rows, even for a height smaller than the
-        // chrome itself.
-        assert_eq!(
-            snap_height_to_rows(10.0, top_h, status_h, ch),
-            top_h + ch + status_h
-        );
-    }
-
-    #[test]
-    fn test_snap_height_to_rows_survives_a_fractional_pixel_top_chrome() {
-        // Regression: the Modern tabbar's height is a fractional number of
-        // pixels (e.g. 36.2), so the exact height for a row count is also
-        // fractional (36.2 + 33 * 19.0 = 663.2). Rounding to *nearest* landed
-        // on 663, and `content_band`'s `floor()` at render time then read
-        // that as only 32 rows, dumping the whole missing 0.2px's neighboring
-        // row back in as ~9px of padding on each side. Snapping must round
-        // up, so the snapped height always contains the intended row count.
-        let (top_h, status_h, ch) = (36.2_f32, 0.0, 19.0);
-        let snapped = snap_height_to_rows(665.0, top_h, status_h, ch);
-        let (rows, pad) = content_band(snapped - top_h - status_h, ch);
-        assert_eq!(
-            rows, 33,
-            "the snapped height must floor back to the row count it targeted"
-        );
-        assert_eq!(
-            pad, 0.0,
-            "a correctly snapped height leaves no padding to center"
-        );
-    }
-
-    #[test]
-    fn test_snapping_a_snapped_size_never_moves_it_again() {
-        // The window used to lose a cell row on every launch, and ruling the
-        // snap out as the cause is what pointed at the resize-increment hint
-        // instead. Re-snapping a snapped size has to be a no-op on both axes
-        // and at a fractional chrome height, or the size walks down by itself
-        // however the window manager behaves.
-        let (top_h, status_h, ch) = (36.2_f32, 0.0, 19.0);
-        let (h_pad, cw) = (4.0_f32, 9.42);
-        for h in 100..900 {
-            let once = snap_height_to_rows(h as f32, top_h, status_h, ch);
-            let twice = snap_height_to_rows(once, top_h, status_h, ch);
-            assert_eq!(once, twice, "height {h} kept moving after it was snapped");
-        }
-        for w in 100..900 {
-            let once = snap_width_to_cols(w as f32, h_pad, cw);
-            let twice = snap_width_to_cols(once, h_pad, cw);
-            assert_eq!(once, twice, "width {w} kept moving after it was snapped");
-        }
-    }
-
-    #[test]
-    fn test_snap_width_to_cols_survives_a_fractional_cell_width() {
-        // Same failure mode as the row case, but on the column axis: real
-        // cell widths are rarely whole pixels (font-metric derived), so
-        // rounding to *nearest* can land a fraction of a pixel under the
-        // exact width and lose the whole column `grid_size_for`'s floor was
-        // aiming to keep, showing up as leftover slack past the last column.
-        let (h_pad, cw) = (4.0_f32, 9.42);
-        let snapped = snap_width_to_cols(522.0, h_pad, cw);
-        let cols = ((snapped - h_pad) / cw).floor() as usize;
-        assert_eq!(
-            cols, 55,
-            "the snapped width must floor back to the column count it targeted"
         );
     }
 

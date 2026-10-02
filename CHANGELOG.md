@@ -65,6 +65,7 @@ While the major version is `0`, the TBP wire format, the KDL config schema, and 
 
 ### Fixed
 
+- **Winter keeps the window size it is given.** Every resize, by a drag or by a tiling tool, was followed by Winter resizing its own window to the nearest whole number of rows and columns, which could round up: a window tiled to the bottom of the screen grew past it by up to half a row. The window now stays exactly the size it was set to, and the space short of a whole row or column is centred as padding instead. The size saved for the next launch is the window's own size.
 - **Rich blocks sit in the pane they belong to.** Every WebView block was placed from the focused pane's scroll position and pixel origin, so in a split a block in any other pane drifted with the wrong pane's scrolling and sat at the wrong height. Each block is placed against its own pane now.
 - **A rich block is cropped at the pane's edge instead of disappearing at it.** A block whose first row had scrolled above the pane was hidden outright, so a tall one vanished the moment its top line did, and a block anchored on the last visible row drew its full height straight over the status bar. Both are clipped to the pane now and slide under its boundary the way the rows around them do, which is what the natively drawn image blocks already did.
 - **Rich blocks follow a pane that is resized or split.** A block's width and horizontal position were set once when it was built and never updated, so splitting a pane or resizing the window left it at its old size over its old column.

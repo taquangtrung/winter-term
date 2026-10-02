@@ -241,12 +241,15 @@ impl App {
         if let Some(message) = self.pending_config_error.take() {
             self.set_error(message);
         }
-        // No resize increments are set, deliberately: a height holding whole
-        // rows is the chrome plus a multiple of the cell, which X11 spells as
-        // a base size the increment alone cannot carry. A window manager that
-        // honours a bare cell increment floors off the chrome's pixels, and
-        // the snap below then banked that loss into the saved size, costing a
-        // row per launch. Aligning to the grid is the snap's job regardless.
+        // Winter never sizes its own window once it is up: the size belongs to
+        // whoever set it (the window manager, a tiling tool, a drag), and a
+        // terminal that rounded it to whole cells would push past a tile's
+        // edge. Space short of a whole row or column is centred as padding
+        // instead (see [`content_band`]). No resize increments are set either:
+        // a height holding whole rows is the chrome plus a multiple of the
+        // cell, which X11 spells as a base size the increment alone cannot
+        // carry, so a manager honouring a bare cell increment would floor off
+        // the chrome's pixels.
 
         // Restore previous session layout if configured and a session file exists.
         // This replaces the single bootstrap pane with the saved split tree.
@@ -256,7 +259,6 @@ impl App {
         if !restored {
             self.resize_all_panes();
         }
-        self.snap_window_to_cell_grid();
         self.dirty = true;
 
         // Now that the theme and initial layout are both in place, reveal the
