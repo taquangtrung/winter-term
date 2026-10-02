@@ -1,21 +1,14 @@
 name: CI
 
-# Cost shape: the Linux jobs run automatically because they are cheap and catch
-# nearly everything. Windows and macOS are on demand and on a weekly schedule,
-# because on a private repo GitHub bills their minutes at 2x and 10x, and a
-# macOS run on every push would exhaust a month's allowance in about a dozen
-# pushes. On a public repo all of this is free, so the schedule is the only
-# thing keeping cross-platform breakage from rotting unnoticed.
+# Cost shape: CI runs on pull requests only, never on a push to main. The
+# Linux jobs run on every pull request because they are cheap and catch nearly
+# everything. Windows and macOS run only when the workflow is started by hand
+# (`gh workflow run CI`), because on a private repo GitHub bills their minutes
+# at 2x and 10x, and a macOS run on every pull request would exhaust a month's
+# allowance in about a dozen of them.
 on:
-  push:
-    branches: [main]
-    paths-ignore: ["**.md", "docs/**", "LICENSE", ".gitignore"]
   pull_request:
     paths-ignore: ["**.md", "docs/**", "LICENSE", ".gitignore"]
-  schedule:
-    # Mondays, 06:00 UTC. Catches a dependency or runner-image change that
-    # breaks Windows or macOS without anyone touching the code.
-    - cron: "0 6 * * 1"
   workflow_dispatch:
 
 env:
@@ -68,8 +61,8 @@ jobs:
 
   test-cross-platform:
     name: test (${{ matrix.os }})
-    # Not on every push: see the cost note at the top of this file.
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    # Not on pull requests: see the cost note at the top of this file.
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -117,11 +110,11 @@ jobs:
       - working-directory: clients/client-py
         run: uv run --with mypy mypy src
 
-  # Advisories are published without anyone touching this repository, so the
-  # weekly schedule above is what makes this job useful; a push-triggered run
-  # alone would only ever check code that just changed. The workspace exists to
-  # parse bytes it does not trust and the lockfile pulls in over 500 crates, so
-  # an unreviewed advisory is the most likely way a problem arrives here.
+  # Advisories are published without anyone touching this repository, and with
+  # no scheduled run this job only sees one when a pull request is opened or the
+  # workflow is started by hand. The workspace exists to parse bytes it does not
+  # trust and the lockfile pulls in over 500 crates, so an unreviewed advisory
+  # is the most likely way a problem arrives here: start a run now and then.
   audit:
     name: security advisories
     runs-on: ubuntu-latest
