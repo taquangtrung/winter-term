@@ -800,11 +800,11 @@ mod tests {
             ctrl: true,
             shift: false,
         };
-        let shift_alt = |c: char| Key {
-            alt: true,
+        let ctrl_bracket = |c: char| Key {
+            alt: false,
             code: KeyCode::Char(c),
-            ctrl: false,
-            shift: true,
+            ctrl: true,
+            shift: false,
         };
         assert_eq!(resolve_simple(Mode::Normal, &ctrl_pageup), Action::PrevTab);
         assert_eq!(
@@ -812,11 +812,11 @@ mod tests {
             Action::NextTab
         );
         assert_eq!(
-            resolve_simple(Mode::Normal, &shift_alt('[')),
+            resolve_simple(Mode::Normal, &ctrl_bracket('[')),
             Action::PrevTab
         );
         assert_eq!(
-            resolve_simple(Mode::Normal, &shift_alt(']')),
+            resolve_simple(Mode::Normal, &ctrl_bracket(']')),
             Action::NextTab
         );
 
@@ -827,11 +827,11 @@ mod tests {
             Action::NextTab
         );
         assert_eq!(
-            resolve_simple(Mode::Insert, &shift_alt('[')),
+            resolve_simple(Mode::Insert, &ctrl_bracket('[')),
             Action::PrevTab
         );
         assert_eq!(
-            resolve_simple(Mode::Insert, &shift_alt(']')),
+            resolve_simple(Mode::Insert, &ctrl_bracket(']')),
             Action::NextTab
         );
     }

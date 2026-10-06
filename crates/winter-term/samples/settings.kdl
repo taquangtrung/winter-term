@@ -131,7 +131,8 @@ icons "svg"
 // ── Status bar ────────────────────────────────────────────────────────────────
 status-bar {
     // Show or hide the entire status bar (freeing its reserved row when hidden).
-    show #true
+    // Default: hidden.
+    show #false
 
     // Show the current mode label (NORMAL / INSERT / VISUAL …).
     show-mode #true

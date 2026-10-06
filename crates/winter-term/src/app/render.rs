@@ -693,8 +693,8 @@ impl App {
         // PTY's row count always agree with what's drawn here.
         let status_enabled = self.status_bar_visible();
         // When the status bar is (really) hidden it can't surface the notice,
-        // so float it as a bottom-center toast instead (avoids showing it in
-        // both places).
+        // so float it as a top-right pill below the tabbar instead (avoids
+        // showing it in both places).
         let toast = if status_enabled { None } else { notice.clone() };
         // Built before the renderer is borrowed, since it reads tab/menu state.
         let tabbar = self.build_top_tabbar();

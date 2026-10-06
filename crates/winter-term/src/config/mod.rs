@@ -153,7 +153,7 @@ pub struct StatusBarConfig {
 impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
-            enabled: true,
+            enabled: false,
             icons: StatusBarIconsConfig::default(),
             show_mode: true,
         }
@@ -628,7 +628,7 @@ impl Config {
             .map(|sb| {
                 let defaults = StatusBarIconsConfig::default();
                 StatusBarConfig {
-                    enabled: sb.show.unwrap_or(true),
+                    enabled: sb.show.unwrap_or(false),
                     icons: StatusBarIconsConfig {
                         normal: sb.normal_icon.unwrap_or(defaults.normal),
                         insert: sb.insert_icon.unwrap_or(defaults.insert),
@@ -1545,9 +1545,9 @@ cursor {
     }
 
     #[test]
-    fn test_status_bar_visibility_defaults_on_and_parses_off() {
+    fn test_status_bar_visibility_defaults_off_and_parses_on() {
         let default = Config::default().status_bar;
-        assert!(default.enabled && default.show_mode);
+        assert!(!default.enabled && default.show_mode);
 
         let config = Config::parse(
             r#"
@@ -1558,6 +1558,15 @@ status-bar {
         );
         assert!(!config.status_bar.enabled);
         assert!(config.status_bar.show_mode);
+
+        let config = Config::parse(
+            r#"
+status-bar {
+    show #true
+}
+"#,
+        );
+        assert!(config.status_bar.enabled);
     }
 
     #[test]

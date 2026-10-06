@@ -65,11 +65,13 @@ window {
     "S+M+," "scroll_to_top"
     "S+M+." "scroll_to_bottom"
 
-    // Switch active tabs.
+    // Switch active tabs. Ctrl-[ / Ctrl-] claim the chords a terminal
+    // would otherwise send as the Esc (0x1b) and GS (0x1d) control bytes;
+    // the Esc key itself still reaches the terminal.
     "C+PageUp" "prev_tab"
     "C+PageDown" "next_tab"
-    "M+S+[" "prev_tab"
-    "M+S+]" "next_tab"
+    "C+[" "prev_tab"
+    "C+]" "next_tab"
     "C+Tab" "next_tab"
     "C+S+Tab" "prev_tab"
     "C+S+t" "new_tab"
@@ -121,7 +123,6 @@ window {
     "C+0" "font_reset"
 
     // Palettes.
-    "C+S+p" "toggle_command_palette"
     "M+x" "toggle_command_palette"
     "C+S+r" "toggle_history_palette"
     "C+j" "jump"

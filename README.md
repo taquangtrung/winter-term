@@ -51,7 +51,7 @@ A Winter pane is always in one of five modes: **Insert** (owns the PTY), **Norma
 | | `Ctrl-Shift-s` | Search the tree for text |
 | | `/` then `n` / `N` | Search an open tool, next and previous match |
 | | `q` | Close the tool, giving the pane back |
-| **Palette** | `Ctrl-Shift-p` or `Alt-x` | Open command palette |
+| **Palette** | `Alt-x` | Open command palette |
 
 See the [keybinding reference](docs/usage-guide.md#keybinding-reference) in the usage guide for the complete keymap.
 

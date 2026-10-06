@@ -6,7 +6,7 @@ For what Winter is and how to install it, see the [README](../README.md). For ho
 
 ## Modes
 
-A Winter pane is always in exactly one of five modes, and each pane keeps its own. The mode is shown in the status bar.
+A Winter pane is always in exactly one of five modes, and each pane keeps its own. The mode is shown in the status bar, which is hidden by default (`status-bar { show #true }` brings it back).
 
 | Mode | Who owns the keyboard | Enter it with |
 |---|---|---|
@@ -18,7 +18,7 @@ A Winter pane is always in exactly one of five modes, and each pane keeps its ow
 
 Insert is the default, so Winter behaves like a normal terminal until you ask it not to.
 
-**Getting into Normal mode.** Press `Esc`. The one exception is when a full-screen program is running (vim, btop, less) or a tab completion is pending: there `Esc` belongs to that program, so Winter forwards it and you press `Esc` twice within 400ms to take the keyboard back instead.
+**Getting into Normal mode.** Press `Esc` at the shell prompt. When a program is running (vim, btop, less) or a tab completion is pending, `Esc` belongs to that program and Winter forwards it — every press, exactly as a classical terminal would. Press `Esc` a second time, however much later, and Winter takes the keyboard back; any other key in between restarts the count. `Ctrl-Shift-Space` enters Normal mode in one press, whatever is running.
 
 **Getting out.** `i`, `a`, or `o` return to Insert. `Esc` in Normal stays in Normal, deliberately: the key that means "stop what I am doing" everywhere else must not drop your next keystroke into the shell mid-navigation.
 
@@ -194,6 +194,7 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Ctrl-Shift-t` / `Ctrl-Shift-w` | New tab, close tab |
 | `Ctrl-Tab` / `Ctrl-Shift-Tab` | Next tab, previous tab |
 | `Ctrl-PageUp` / `Ctrl-PageDown` | Previous tab, next tab |
+| `Ctrl-[` / `Ctrl-]` | Previous tab, next tab |
 | `Ctrl-1` .. `Ctrl-9` | Go to tab N |
 | `Ctrl-Shift-c` / `Ctrl-Shift-v` | Copy selection, paste |
 | `Ctrl-,` | Open settings |
@@ -202,7 +203,7 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Ctrl-Shift-g` | Show Git over the focused pane (toggle) |
 | `Ctrl-Shift-u` | Put back the last thing closed: a tool, or a whole pane |
 | `Ctrl-Shift-e` | Pick from every tool: the open ones, then the closed ones |
-| `Ctrl-Shift-p` or `Alt-x` | Command palette |
+| `Alt-x` | Command palette |
 | `Ctrl-Shift-r` | History palette |
 | `Ctrl-Shift-z` | Pane switcher (then press the digit shown on a pane) |
 | `Ctrl-Shift-Up/Down` | Previous, next prompt block |
@@ -542,7 +543,7 @@ Changes apply on save, without a restart. `winter --reload` asks a running insta
 | `prompt-edit-bindings` | `"emacs"` (default) or `"none"`, see above |
 | `icons` | Tool-pane entry icons: `"svg"` (default), `"font"`, or `"none"` |
 | `cursor { ... }` | `blink`, `hide-in-inactive`, plus the shape per mode: `insert`, `normal`, `visual`, `block-focus` |
-| `status-bar { ... }` | `show`, `show-mode`, and the per-mode icons |
+| `status-bar { ... }` | `show` (default off), `show-mode`, and the per-mode icons |
 | `clipboard-read` | Let programs read the clipboard through OSC 52 |
 | `security { ... }` | `block-max-trust`, `block-remote-assets` |
 

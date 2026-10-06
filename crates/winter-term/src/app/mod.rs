@@ -102,6 +102,10 @@ pub(crate) const STATUS_BAR_ROWS: usize = 1;
 /// How long a transient status-bar notice stays on screen before it expires
 /// and the bar returns to showing the pane title.
 const NOTICE_DURATION: Duration = Duration::from_secs(3);
+/// How long the mode toast (`flash_mode`) names the pane's new mode when the
+/// status bar is hidden. Shorter than a notice: it is confirmation of a
+/// keystroke that already happened, not a message to read.
+const MODE_FLASH_DURATION: Duration = Duration::from_millis(1200);
 /// How long the span a yank took stays lit. Long enough to register as
 /// "that is what was copied", short enough to be gone before the next
 /// keystroke's motion, which is vim-highlightedyank's own default.
@@ -118,10 +122,6 @@ const AUTO_SCROLL_MAX_LINES_PER_TICK: usize = 4;
 /// margin, so history advances at a readable pace rather than once per
 /// `about_to_wait` tick.
 const AUTO_SCROLL_INTERVAL: Duration = Duration::from_millis(50);
-/// How soon a second bare Escape on the same pane must follow the first
-/// PTY-forwarded one to count as a double tap and switch to Normal mode
-/// instead - see [`App::last_alt_screen_escape`].
-const ALT_SCREEN_ESCAPE_DOUBLE_TAP: Duration = Duration::from_millis(400);
 
 /// Pixel width of the scrollbar hit region at the right edge of each pane.
 const SCROLLBAR_CLICK_WIDTH: f32 = 8.0;
@@ -461,20 +461,6 @@ fn escape_forwarded_to_pty(has_foreground_process: bool, pending_tab_completion:
     has_foreground_process || pending_tab_completion
 }
 
-/// Whether `now` is a second bare Escape completing a double tap against
-/// `prev`, the pane and instant of the last one forwarded to a full-screen
-/// app - see [`App::last_alt_screen_escape`]. `prev` must come from the same
-/// pane and land within [`ALT_SCREEN_ESCAPE_DOUBLE_TAP`] of `now`.
-fn is_alt_screen_escape_double_tap(
-    prev: Option<(PaneId, Instant)>,
-    pane: PaneId,
-    now: Instant,
-) -> bool {
-    prev.is_some_and(|(prev_pane, at)| {
-        prev_pane == pane && now.duration_since(at) < ALT_SCREEN_ESCAPE_DOUBLE_TAP
-    })
-}
-
 /// Whether a plain Escape should clear a mouse-drag selection instead of
 /// falling through to its usual mode-switch/PTY-forward handling. Visual
 /// mode is excluded: there Escape already clears the selection via the
@@ -642,15 +628,13 @@ pub struct App {
     /// Normal mode underneath a completion the shell never got a chance to
     /// close - see `escape_forwarded_to_pty` and its use in `window_event`.
     pub(crate) pending_tab_completion: HashSet<PaneId>,
-    /// The pane and instant of the last bare Escape that was forwarded to a
-    /// full-screen app instead of switching to Normal mode. A second bare
-    /// Escape on the same pane within [`ALT_SCREEN_ESCAPE_DOUBLE_TAP`]
-    /// switches to Normal mode instead of forwarding: vim's own Escape (and
-    /// htop's, etc.) still gets every single press, so double-tapping is the
-    /// only way in, not a hijack of the app's own key. Cleared by any other
-    /// key so an Escape typed long after an unrelated keystroke never counts
-    /// as the second tap.
-    pub(crate) last_alt_screen_escape: Option<(PaneId, Instant)>,
+    /// The pane of the last bare Escape that was forwarded to the program
+    /// owning it instead of switching to Normal mode. A second bare Escape
+    /// on the same pane - however much time passes between the two presses,
+    /// so long as no other key intervenes - switches to Normal mode instead
+    /// of forwarding again. The program still gets every single press it
+    /// would in a classical terminal except that one.
+    pub(crate) last_alt_screen_escape: Option<PaneId>,
     /// Per-pane shadow model of the editable prompt line, powering `Ctrl-/`
     /// undo and `Ctrl-\` redo at the shell prompt.
     pub(crate) prompt_shadows: HashMap<PaneId, PromptShadow>,
@@ -1762,36 +1746,6 @@ mod tests {
         assert!(escape_forwarded_to_pty(false, true));
         assert!(escape_forwarded_to_pty(true, true));
         assert!(!escape_forwarded_to_pty(false, false));
-    }
-
-    #[test]
-    fn test_alt_screen_escape_double_tap_requires_same_pane_within_window() {
-        // Regression: the second Escape must land on the same pane the first
-        // one was forwarded from, and within the double-tap window - an
-        // Escape on a different pane, or one that arrives too late, must
-        // forward to the full-screen app again rather than switching modes.
-        let pane = PaneId(1);
-        let other_pane = PaneId(2);
-        let first = Instant::now();
-        let soon = first + Duration::from_millis(1);
-        let late = first + ALT_SCREEN_ESCAPE_DOUBLE_TAP;
-
-        assert!(is_alt_screen_escape_double_tap(
-            Some((pane, first)),
-            pane,
-            soon
-        ));
-        assert!(!is_alt_screen_escape_double_tap(
-            Some((other_pane, first)),
-            pane,
-            soon
-        ));
-        assert!(!is_alt_screen_escape_double_tap(
-            Some((pane, first)),
-            pane,
-            late
-        ));
-        assert!(!is_alt_screen_escape_double_tap(None, pane, soon));
     }
 
     #[cfg(target_os = "windows")]

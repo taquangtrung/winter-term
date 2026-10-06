@@ -427,6 +427,18 @@ impl App {
         self.clear_find_labels();
         self.leave_mode(old_mode, new_mode, focused);
         self.enter_mode(old_mode, new_mode, focused);
+        // With the status bar hidden, crossing the Insert/Normal boundary has
+        // no other on-screen cue, so confirm it with the brief mode toast.
+        // Visual/BlockFocus/Page carry their own visible state (a selection,
+        // a block cursor, a whole page) and are left out.
+        if !self.config.status_bar.enabled
+            && matches!(
+                (old_mode, new_mode),
+                (Mode::Insert, Mode::Normal) | (Mode::Normal, Mode::Insert)
+            )
+        {
+            self.flash_mode(new_mode);
+        }
         self.dirty = true;
     }
 

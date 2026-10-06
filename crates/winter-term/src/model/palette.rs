@@ -1,5 +1,5 @@
 //! Native command palette: a lightweight text-mode overlay activated by
-//! `Ctrl-Shift-P` (or the configured key). Renders as GPU quads at the top
+//! `Alt-X` (or the configured key). Renders as GPU quads at the top
 //! of the focused pane, no WebView required.
 
 use std::collections::HashSet;

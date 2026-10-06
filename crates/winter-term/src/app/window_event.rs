@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
+use winit::keyboard::{Key, PhysicalKey};
 
 use crate::model::page::PagePoint;
 use winit::event_loop::ActiveEventLoop;
@@ -17,8 +18,7 @@ use super::is_pre_focus_key_leak;
 use super::App;
 use super::Selection;
 use super::{
-    escape_clears_selection, escape_forwarded_to_pty, forwarded_to_pty,
-    is_alt_screen_escape_double_tap, winit_key_to_code,
+    escape_clears_selection, escape_forwarded_to_pty, forwarded_to_pty, winit_key_to_code,
     APPROX_CELL_HEIGHT, CURSOR_BLINK_PERIOD, SCROLLBAR_CLICK_WIDTH, SCROLL_LINES_PER_WHEEL_NOTCH,
 };
 
@@ -31,11 +31,26 @@ impl App {
     /// palette, settings page, which-key), then the focused pane's modal
     /// keymap, and finally the PTY.
     pub(crate) fn on_keyboard_input(&mut self, event: KeyEvent, event_loop: &ActiveEventLoop) {
+        if self.handle_key(event.state, event.logical_key, event.physical_key) {
+            self.quit(event_loop);
+        }
+    }
+
+    /// The keyboard handler proper, split from [`Self::on_keyboard_input`] so
+    /// tests can drive it without an `ActiveEventLoop` (winit's `KeyEvent`
+    /// has no public constructor). Returns `true` when the app should quit,
+    /// standing in for the former inline `quit(event_loop); return;` sites.
+    pub(super) fn handle_key(
+        &mut self,
+        state: ElementState,
+        logical_key: Key,
+        physical_key: PhysicalKey,
+    ) -> bool {
         // winit synthesizes KeyboardInput::Pressed events for every
         // physically-held key on XI_FocusIn (handle_pressed_keys). Swallow
         // those here so e.g. the Tab from Alt+Tab never reaches the PTY.
-        if event.state == ElementState::Pressed && self.suppress_synthesized_keys {
-            return;
+        if state == ElementState::Pressed && self.suppress_synthesized_keys {
+            return false;
         }
 
         // Windows-only: drop a key event that raced ahead of this
@@ -43,22 +58,22 @@ impl App {
         // `is_pre_focus_key_leak`'s doc for why this can happen).
         #[cfg(target_os = "windows")]
         if is_pre_focus_key_leak(
-            event.state,
+            state,
             self.window.as_ref().is_some_and(|w| w.has_focus()),
         ) {
-            return;
+            return false;
         }
 
         let focused = self.tab().focused();
         let mods_state = self.modifiers.state();
-        let code = winit_key_to_code(&event.logical_key, &event.physical_key);
+        let code = winit_key_to_code(&logical_key, &physical_key);
         let key = input::Key {
             alt: mods_state.alt_key(),
             code,
             ctrl: mods_state.control_key(),
             shift: mods_state.shift_key(),
         };
-        if event.state == ElementState::Released {
+        if state == ElementState::Released {
             let kitty_flags = self
                 .panes
                 .get(&focused)
@@ -73,7 +88,7 @@ impl App {
                     window.request_redraw();
                 }
             }
-            return;
+            return false;
         }
 
         // Reset blink to the "visible" phase on every key press so the
@@ -85,10 +100,9 @@ impl App {
 
         let mode = self.modes.get(&focused).copied().unwrap_or_default();
 
-        // Taken (not just read) unconditionally so every key other than
-        // the matching second Escape clears it - see the field's doc.
-        // The bare-Escape branch below is the only place that puts a
-        // value back.
+        // Taken (not just read) unconditionally so every key other than the
+        // second Escape clears it - see the field's doc. The bare-Escape
+        // branch below is the only place that puts a value back.
         let prev_alt_screen_escape = self.last_alt_screen_escape.take();
 
         // While a tab rename is in progress, intercept all keyboard
@@ -122,7 +136,7 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // A page's prompt owns the keyboard while it is up, ahead of the
@@ -132,7 +146,7 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // While a new-theme name is being entered, intercept all keyboard
@@ -163,14 +177,14 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // While the settings page is up it owns all input: edits apply
         // live, Enter/Escape close it, and every key is swallowed so none
         // reaches the PTY.
         if self.settings_page.is_some() {
-            let logical = event.logical_key.clone();
+            let logical = logical_key.clone();
             let mut page = self.settings_page.take().unwrap();
             if self.handle_settings_input(&mut page, &logical) {
                 self.settings_page = Some(page);
@@ -180,7 +194,7 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // Esc dismisses an open menu before anything else acts on it.
@@ -189,7 +203,7 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // Esc clears a mouse-drag selection before anything else acts on it.
@@ -199,7 +213,7 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // Global app shortcuts (settings, font size, tab/pane management,
@@ -212,27 +226,26 @@ impl App {
             self.handle_action(action, focused);
             if self.exit_requested {
                 self.exit_requested = false;
-                self.quit(event_loop);
-                return;
+                return true;
             }
             self.update_window_title();
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         if self.palette.is_some() {
-            let key = event.logical_key.clone();
+            let key = logical_key.clone();
             let mut palette = self.palette.take().unwrap();
-            self.handle_palette_input(&mut palette, &key, &event.physical_key, focused);
+            self.handle_palette_input(&mut palette, &key, &physical_key, focused);
             if palette.active {
                 self.palette = Some(palette);
             }
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // The page text cursor takes every key while it is up, ahead of the
@@ -243,7 +256,7 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // A tool page owns the keys it binds, and only those: anything it
@@ -254,7 +267,7 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // `v` in a page the tool did not bind it in starts a text cursor, the
@@ -269,7 +282,7 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
 
         // Escape in Insert mode: forwarded to the PTY if a foreground process
@@ -277,10 +290,9 @@ impl App {
         // other foreground process group leader) or the pane is mid the
         // shell's own tab-completion; otherwise, at a bare shell prompt with
         // no completion in progress, it switches straight to Normal mode.
-        // A second bare Escape on the same pane, arriving within
-        // `ALT_SCREEN_ESCAPE_DOUBLE_TAP` of one that was forwarded, switches
-        // to Normal mode instead of forwarding again - see
-        // `last_alt_screen_escape`.
+        // A second bare Escape on the same pane, however much time passes
+        // between the two presses, switches to Normal mode instead of
+        // forwarding again - see `last_alt_screen_escape`.
         let bare_esc = mode == Mode::Insert
             && key.code == KeyCode::Escape
             && !key.alt
@@ -297,12 +309,10 @@ impl App {
             // did forward to is now the shell's problem to resolve, not
             // this app's - either way the next Escape starts fresh.
             let pending_tab_completion = self.pending_tab_completion.remove(&focused);
-            let now = Instant::now();
-            let double_tap = is_alt_screen_escape_double_tap(prev_alt_screen_escape, focused, now);
-            if !double_tap
-                && escape_forwarded_to_pty(has_foreground_process, pending_tab_completion)
+            let second_press = prev_alt_screen_escape == Some(focused);
+            if !second_press && escape_forwarded_to_pty(has_foreground_process, pending_tab_completion)
             {
-                self.last_alt_screen_escape = Some((focused, now));
+                self.last_alt_screen_escape = Some(focused);
                 if let Some(pane) = self.panes.get_mut(&focused) {
                     pane.write(&[0x1b]);
                 }
@@ -316,7 +326,7 @@ impl App {
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
-            return;
+            return false;
         }
         let at_prompt = self.panes.get(&focused).is_some_and(|p| p.is_at_prompt());
         let kitty_flags = self
@@ -370,13 +380,13 @@ impl App {
         self.handle_action(action, focused);
         if self.exit_requested {
             self.exit_requested = false;
-            self.quit(event_loop);
-            return;
+            return true;
         }
         self.update_window_title();
         if let Some(window) = &self.window {
             window.request_redraw();
         }
+        false
     }
     /// Route a mouse button press or release. The tabbar and any open menu
     /// take precedence over the panes, so a click on chrome never reaches a
@@ -808,5 +818,162 @@ impl App {
                 window.request_redraw();
             }
         }
+    }
+}
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::mode::Mode;
+    use crate::terminal::pane::Pane;
+    use winit::keyboard::{KeyCode as WinitKeyCode, NamedKey};
+
+    /// A pane with a real PTY running `cat`, mirroring how a full-screen app
+    /// holds the keyboard: a foreground process (cat) plus the alt screen.
+    fn app_pane_and_id() -> (App, crate::model::layout::PaneId) {
+        let mut app = App::new();
+        // Isolate from the developer's own ~/.config keybindings.
+        app.window_keymap = crate::model::input::WindowKeymap::default();
+        let id = app.tab().panes()[0];
+        let pane = Pane::with_command(
+            40,
+            10,
+            portable_pty::CommandBuilder::new("cat"),
+            winter_render::MAX_SCROLLBACK,
+        )
+        .expect("test pane spawn");
+        app.panes.insert(id, pane);
+        app.modes.insert(id, Mode::Insert);
+        (app, id)
+    }
+
+    fn esc() -> (Key, PhysicalKey) {
+        (
+            Key::Named(NamedKey::Escape),
+            PhysicalKey::Code(WinitKeyCode::Escape),
+        )
+    }
+
+    #[test]
+    fn test_second_consecutive_escape_switches_to_normal_inside_a_full_screen_app() {
+        let (mut app, id) = app_pane_and_id();
+        app.config.status_bar.enabled = false;
+        app.panes
+            .get_mut(&id)
+            .unwrap()
+            .grid_mut()
+            .enter_alt_screen();
+
+        // First Escape: the app owns the keyboard, so it is forwarded and
+        // remembered rather than switching modes underneath it.
+        let (logical, physical) = esc();
+        assert!(!app.handle_key(ElementState::Pressed, logical, physical));
+        assert_eq!(app.modes[&id], Mode::Insert);
+        assert!(app.notice.is_none());
+
+        // Second bare Escape, with no timing requirement: Winter takes the
+        // keyboard back, and with the status bar hidden the switch is
+        // confirmed by the brief mode toast.
+        let (logical, physical) = esc();
+        assert!(!app.handle_key(ElementState::Pressed, logical, physical));
+        assert_eq!(app.modes[&id], Mode::Normal);
+        assert_eq!(app.active_notice().map(|(m, _)| m), Some("NORMAL"));
+    }
+
+    #[test]
+    fn test_a_key_between_two_escapes_restarts_the_count() {
+        let (mut app, id) = app_pane_and_id();
+        app.panes
+            .get_mut(&id)
+            .unwrap()
+            .grid_mut()
+            .enter_alt_screen();
+
+        let (logical, physical) = esc();
+        assert!(!app.handle_key(ElementState::Pressed, logical, physical));
+        // Any other key clears the remembered press, so the next Escape is a
+        // first one again: forwarded, mode unchanged.
+        assert!(!app.handle_key(
+            ElementState::Pressed,
+            Key::Named(NamedKey::Space),
+            PhysicalKey::Code(WinitKeyCode::Space)
+        ));
+        let (logical, physical) = esc();
+        assert!(!app.handle_key(ElementState::Pressed, logical, physical));
+        assert_eq!(app.modes[&id], Mode::Insert);
+    }
+
+    #[test]
+    fn test_mode_switch_is_silent_while_the_status_bar_is_shown() {
+        let (mut app, id) = app_pane_and_id();
+        app.config.status_bar.enabled = true;
+        app.panes
+            .get_mut(&id)
+            .unwrap()
+            .grid_mut()
+            .enter_alt_screen();
+        // The entry chord switches even inside a full-screen app; with the
+        // status bar shown, no mode toast accompanies it.
+        app.modifiers =
+            (winit::keyboard::ModifiersState::CONTROL | winit::keyboard::ModifiersState::SHIFT)
+                .into();
+        let (logical, physical) = (
+            Key::Named(NamedKey::Space),
+            PhysicalKey::Code(WinitKeyCode::Space),
+        );
+        assert!(!app.handle_key(ElementState::Pressed, logical, physical));
+        assert_eq!(app.modes[&id], Mode::Normal);
+        assert!(app.notice.is_none());
+    }
+
+    #[test]
+    fn test_single_escape_switches_to_normal_at_a_bare_prompt() {
+        // A real shell sitting at its prompt: primary screen, no foreground
+        // child, so a single Escape switches modes.
+        let mut app = App::new();
+        app.window_keymap = crate::model::input::WindowKeymap::default();
+        let id = app.tab().panes()[0];
+        let mut pane = Pane::with_command(
+            40,
+            10,
+            portable_pty::CommandBuilder::new("bash"),
+            winter_render::MAX_SCROLLBACK,
+        )
+        .expect("test pane spawn");
+        for _ in 0..150 {
+            pane.drain_output();
+            if !pane.has_foreground_process() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        app.panes.insert(id, pane);
+        app.modes.insert(id, Mode::Insert);
+        let (logical, physical) = esc();
+        assert!(!app.handle_key(ElementState::Pressed, logical, physical));
+        assert_eq!(app.modes[&id], Mode::Normal);
+    }
+
+    #[test]
+    fn test_entry_chord_switches_to_normal_even_inside_a_full_screen_app() {
+        let (mut app, id) = app_pane_and_id();
+        app.panes
+            .get_mut(&id)
+            .unwrap()
+            .grid_mut()
+            .enter_alt_screen();
+        app.modifiers =
+            (winit::keyboard::ModifiersState::CONTROL | winit::keyboard::ModifiersState::SHIFT)
+                .into();
+        assert!(!app.handle_key(
+            ElementState::Pressed,
+            Key::Named(NamedKey::Space),
+            PhysicalKey::Code(WinitKeyCode::Space)
+        ));
+        assert_eq!(app.modes[&id], Mode::Normal);
     }
 }
