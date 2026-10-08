@@ -24,13 +24,17 @@ impl Grid {
     /// enabled. With word wrap on, the wrap breaks at the row's last word
     /// boundary instead of exactly at the margin: the partial word after the
     /// last breakable space moves down with the wrap (see [`Self::take_word_break`]).
+    /// Hanging indent, like word wrap, is a primary-screen behavior only: a
+    /// full-screen app addresses the grid by exact coordinates and draws its
+    /// own continuation layout, so an indented continuation would put text
+    /// where the app's screen model says nothing is.
     pub(super) fn auto_wrap(&mut self) {
         self.cursor.wrap_pending = false;
         let prev_row = self.cursor.row;
         if let Some(flag) = self.row_wrapped.get_mut(prev_row) {
             *flag = true;
         }
-        let indent = if self.wrap_indent {
+        let indent = if self.wrap_indent && self.alt_buffer.is_none() {
             let mut first_row = prev_row;
             while first_row > 0 && self.row_wraps(first_row - 1) {
                 first_row -= 1;

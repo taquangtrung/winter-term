@@ -588,6 +588,24 @@ mod tests {
         assert_eq!(grid.visible_cell(1, 2).map(|c| c.ch), Some('Z'));
     }
     #[test]
+    fn test_wrap_indent_is_a_primary_screen_behavior_only() {
+        // A full-screen app addresses the grid by exact coordinates and lays
+        // out its own continuations, so the alternate screen must wrap at
+        // column zero even with hanging indent on.
+        let mut grid = Grid::new(10, 3)
+            .with_wrap_indent(true)
+            .with_word_wrap(false);
+        grid.enter_alt_screen();
+        for ch in "  abc12345XYZ".chars() {
+            grid.print(ch);
+        }
+        assert!(grid.row_wraps(0));
+        assert_eq!(grid.row_wrap_indent(1), 0);
+        assert_eq!(grid.visible_cell(1, 0).map(|c| c.ch), Some('X'));
+        assert_eq!(grid.visible_cell(1, 1).map(|c| c.ch), Some('Y'));
+        assert_eq!(grid.visible_cell(1, 2).map(|c| c.ch), Some('Z'));
+    }
+    #[test]
     fn test_wrap_indent_multi_row_inherits_first_line_indent() {
         // 10-column grid: 2 leading spaces, then fills 2 full rows and spills into 3rd row.
         let mut grid = Grid::new(10, 4)

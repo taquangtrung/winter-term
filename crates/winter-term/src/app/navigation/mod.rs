@@ -1102,6 +1102,9 @@ impl App {
         if abs_r1 != abs_row || abs_r2 != abs_row || c1 >= c2 {
             return;
         }
+        if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(pane, &[nav_col, c1, c2])) {
+            return;
+        }
         if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
             shadow.desync();
         }
@@ -1132,6 +1135,9 @@ impl App {
             return;
         };
         if abs_r1 != abs_row || abs_r2 != abs_row || c1 >= c2 {
+            return;
+        }
+        if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(pane, &[nav_col, c1, c2])) {
             return;
         }
         let Some((open, close, _)) = vim::surround_pair_chars(replacement) else {
@@ -2965,6 +2971,33 @@ mod tests {
         // Cursor moved to column 1 and stays in Normal mode
         assert_eq!(app.nav_cursor(id), Some((0, 1)));
         assert_eq!(app.modes.get(&id), Some(&Mode::Normal));
+    }
+
+    #[test]
+    fn test_prompt_edits_refuse_the_shells_own_prompt_text() {
+        // With the B mark recorded, a Vim operator aimed left of the command
+        // line - at the shell's \"$ \" decoration - must be refused rather
+        // than mistranslated into readline chords that edit the wrong
+        // characters.
+        let mut app = App::new();
+        let id = app.tab().panes()[0];
+        let mut pane = pane_with_lines(&[]);
+        pane.feed_program_output(b"\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\ls -l");
+        app.panes.insert(id, pane);
+        app.modes.insert(id, Mode::Normal);
+        app.set_nav_cursor(id, (0, 0)); // the '$' of the decoration
+
+        app.handle_action(input::Action::ReplaceChar('X'), id);
+        assert!(app.active_notice().is_some(), "refused with a dedicated error");
+        assert_eq!(app.nav_cursor(id), Some((0, 0)), "nothing moved");
+
+        app.handle_action(input::Action::DeleteCharForward, id);
+        assert!(app.active_notice().is_some());
+
+        // The same edit on the command text itself still works.
+        app.set_nav_cursor(id, (0, 3)); // 'l' of \"ls\"
+        app.handle_action(input::Action::ToggleCaseChar, id);
+        assert_eq!(app.nav_cursor(id), Some((0, 4)), "edit past the decoration proceeds");
     }
 
     #[test]

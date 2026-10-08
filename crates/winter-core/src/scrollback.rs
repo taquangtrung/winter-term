@@ -54,6 +54,12 @@ pub struct Scrollback {
     eviction_cursor: usize,
     live_indices: HashMap<BlockId, LiveIndex>,
     phase: Phase,
+    /// Whether any OSC 133 mark has been seen. Distinguishes a real
+    /// "command running" (`Phase::Output` reached via a `C` mark) from the
+    /// construction-time default of a shell that simply never emits marks,
+    /// so callers can fall back to their own heuristics when integration is
+    /// absent ([`Self::shell_integration_active`]).
+    saw_marks: bool,
 }
 
 /// Tracks where a live block lives in the block list so `patch`/`close` can
@@ -93,6 +99,7 @@ impl Scrollback {
             eviction_cursor: 0,
             live_indices: HashMap::new(),
             phase: Phase::Output,
+            saw_marks: false,
         }
     }
 
@@ -105,6 +112,15 @@ impl Scrollback {
     /// phase). False when a process is running or shell integration is absent.
     pub fn is_at_prompt(&self) -> bool {
         matches!(self.phase, Phase::Prompt | Phase::Input)
+    }
+
+    /// Whether the stream has carried any OSC 133 mark, i.e. whether
+    /// [`Self::is_at_prompt`] is a real reading rather than the default
+    /// `Output` phase a shell without integration never leaves. Callers
+    /// without marks to rely on should fall back to their own prompt
+    /// detection instead of trusting the phase.
+    pub fn shell_integration_active(&self) -> bool {
+        self.saw_marks
     }
 
     /// For each block, the starting row offset assuming the first block starts at
@@ -179,18 +195,22 @@ impl Scrollback {
         let cwd = self.cwd.clone();
         self.current_mut().cwd = cwd;
         self.active_link = None;
+        self.saw_marks = true;
         self.phase = Phase::Prompt;
     }
 
     pub(crate) fn command_start(&mut self) {
+        self.saw_marks = true;
         self.phase = Phase::Input;
     }
 
     pub(crate) fn output_start(&mut self) {
+        self.saw_marks = true;
         self.phase = Phase::Output;
     }
 
     pub(crate) fn command_end(&mut self, exit_code: Option<i32>) {
+        self.saw_marks = true;
         self.current_mut().exit_code = exit_code;
         self.phase = Phase::Output;
     }
@@ -379,6 +399,30 @@ mod tests {
         assert_eq!(block.command, "ls");
         assert_eq!(block.output, vec![Segment::Text("a\nb\n".to_string())]);
         assert_eq!(block.exit_code, Some(0));
+    }
+
+    #[test]
+    fn test_shell_integration_active_distinguishes_marks_from_the_default_phase() {
+        // Without any mark the phase sits at its Output default, which must
+        // not read as "a command is running": integration is simply absent.
+        let mut sb = Scrollback::new();
+        assert!(!sb.shell_integration_active());
+        assert!(!sb.is_at_prompt());
+
+        // The first mark flips integration on, and the phase becomes a real
+        // reading: at the prompt while editing, running once the C mark lands,
+        // back at the prompt when the next prompt draws.
+        sb.prompt_start();
+        assert!(sb.shell_integration_active());
+        assert!(sb.is_at_prompt());
+        sb.command_start();
+        assert!(sb.is_at_prompt());
+        sb.output_start();
+        assert!(!sb.is_at_prompt());
+        sb.command_end(Some(0));
+        assert!(!sb.is_at_prompt());
+        sb.prompt_start();
+        assert!(sb.is_at_prompt());
     }
 
     #[test]

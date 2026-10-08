@@ -11,6 +11,7 @@ use super::prompt_edit::{
     self, edit_action_bytes, prompt_delete_bytes, rebuild_line_bytes, PromptDelete, READLINE_UNDO,
 };
 use super::{App, LastVisual, FONT_SIZE_STEP};
+use crate::terminal::pane::Pane;
 
 // ========================================================================
 // App: action handling
@@ -648,6 +649,26 @@ impl App {
         self.set_error("Prompt editing is off (prompt-edit-bindings); your shell's own editor handles the line");
     }
 
+    /// Whether any of `targets`, the grid columns a Normal-mode prompt edit
+    /// would touch, falls inside the shell's own prompt decoration - left of
+    /// where OSC 133's `B` mark said the command line begins. Such an edit
+    /// cannot be translated: readline's buffer starts at the command text, so
+    /// the arrow-key alignment would overshoot it and the following Delete
+    /// keypresses would eat characters the operator never targeted.
+    pub(crate) fn prompt_edit_hits_decoration(pane: &Pane, targets: &[usize]) -> bool {
+        pane.prompt_line_start()
+            .is_some_and(|start| targets.iter().any(|&col| col < start))
+    }
+
+    /// Refuse an edit that [`Self::prompt_edit_hits_decoration`] flags, so the
+    /// keypress does not just vanish. Returns whether it refused.
+    pub(crate) fn decline_decoration_edit(&mut self, blocked: bool) -> bool {
+        if blocked {
+            self.set_error("Cannot edit: that is the shell's own prompt, not the command line");
+        }
+        blocked
+    }
+
     /// Apply a Vim delete operator to the last prompt by sending the shell the
     /// equivalent readline edit. Only the live prompt line (the row holding the
     /// shell cursor) is editable; deletes aimed at scrollback history are ignored.
@@ -666,6 +687,13 @@ impl App {
             // prompt line is editable, so report the attempt instead of silently
             // dropping it.
             self.set_error("Cannot delete: not on the editable prompt line");
+            return;
+        }
+        let mut targets = vec![nav_col];
+        if let PromptDelete::Range { start_col, .. } = &op {
+            targets.push(*start_col);
+        }
+        if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(pane, &targets)) {
             return;
         }
         if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
@@ -716,6 +744,9 @@ impl App {
             self.set_error("Cannot replace: not on the editable prompt line");
             return;
         }
+        if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(pane, &[nav_col])) {
+            return;
+        }
         if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
             shadow.desync();
         }
@@ -743,6 +774,9 @@ impl App {
             return;
         }
         let ch = pane.grid().cell(prompt_row, nav_col).map(|c| c.ch);
+        if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(pane, &[nav_col])) {
+            return;
+        }
         if let Some(c) = ch {
             let toggled = if c.is_ascii_uppercase() {
                 c.to_ascii_lowercase()

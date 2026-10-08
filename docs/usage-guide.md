@@ -538,7 +538,7 @@ Changes apply on save, without a restart. `winter --reload` asks a running insta
 | `window-title-template` | Window title, e.g. `"{{ app_name }} - {{ pane_title }}"` |
 | `rainbow-parens` | Color brackets by nesting depth |
 | `sentence-highlight` | Alternating bands over sentences, as a reading aid |
-| `wrap-indent` | Hang the continuation of a soft-wrapped line under its start |
+| `wrap-indent` | Hang the continuation of a soft-wrapped line under its start (primary screen only; a full-screen app lays out its own continuations) |
 | `wrap-words` | Break soft wraps at word boundaries instead of mid-word |
 | `prompt-edit-bindings` | `"emacs"` (default) or `"none"`, see above |
 | `icons` | Tool-pane entry icons: `"svg"` (default), `"font"`, or `"none"` |
@@ -566,7 +566,7 @@ source /usr/share/winter-term/shell-integration/winter.zsh
 source /usr/share/winter-term/shell-integration/winter.fish
 ```
 
-Without it Winter still works, but the whole session is one rolling block: no per-command boundaries, no exit-code tags, no folding.
+Without it Winter still works, but the whole session is one rolling block: no per-command boundaries, no exit-code tags, no folding. The marks also sharpen two behaviors elsewhere: with them, Winter knows exactly when a command owns the pane - a REPL or an agent CLI running on the primary screen keeps `Esc` belonging to it, and a fresh prompt gives the key back the moment the shell does - and where the editable command line begins, so a Vim operator aimed at the shell's own `❯ ` decoration is refused ("that is the shell's own prompt, not the command line") instead of mistranslating into readline chords that edit the wrong characters.
 
 ## Rich blocks
 

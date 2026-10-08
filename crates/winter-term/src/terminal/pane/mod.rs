@@ -524,9 +524,38 @@ impl Pane {
         self.combined.scrollback()
     }
 
+    /// The grid column where the editable command line begins on the row
+    /// holding the shell cursor, per OSC 133's `B` mark: the shell's own
+    /// prompt decoration sits to its left. `None` when the boundary is
+    /// unknown (no shell integration, or mid-draw of a fresh prompt).
+    pub fn prompt_line_start(&self) -> Option<usize> {
+        self.combined.prompt_line_start()
+    }
+
+    /// Advance the parser with bytes as if the program on the PTY had written
+    /// them, through the same path [`Pane::drain_output`] uses. Test-only:
+    /// lets tests fake shell-integration output without a real shell.
+    #[cfg(test)]
+    pub(crate) fn feed_program_output(&mut self, bytes: &[u8]) {
+        self.parser.advance(&mut self.combined, bytes);
+    }
+
     /// True when no full-screen process is running. Uses the alternate screen as
-    /// a proxy: full-screen apps (vim, fzf, less) enter it; the shell prompt does not.
+    /// a proxy: full-screen apps (vim, fzf, less) enter it; the shell prompt does
+    /// not. When the shell emits OSC 133 integration marks, the mark-driven
+    /// phase refines this: a command owns the pane even on the primary screen
+    /// (see [`Self::is_at_prompt`]'s integration branch).
     pub fn is_at_prompt(&self) -> bool {
+        // Shell-integration marks (OSC 133), when the shell emits them, are
+        // authoritative: the prompt and command phases mean the shell itself
+        // is waiting for input, the output phase means a command owns the
+        // pane even on the primary screen - a REPL, an agent CLI, an
+        // `exec`ed program sharing the shell's process group, a mux pane
+        // whose process table lives on the server. Without marks, fall back
+        // to the alt-screen heuristic.
+        if self.scrollback().shell_integration_active() {
+            return !self.combined.grid().is_alt_screen() && self.scrollback().is_at_prompt();
+        }
         !self.combined.grid().is_alt_screen()
     }
 
@@ -794,6 +823,40 @@ mod tests {
             text.contains("hello"),
             "expected 'hello' in output, got: {text}"
         );
+    }
+
+    #[test]
+    fn test_shell_integration_marks_drive_prompt_state_and_line_start() {
+        // A shell emitting OSC 133: the pane's prompt state follows the marks
+        // rather than the alt-screen heuristic, and the B mark records where
+        // the editable command line begins.
+        let mut pane = Pane::with_command(
+            40,
+            10,
+            portable_pty::CommandBuilder::new("cat"),
+            winter_render::MAX_SCROLLBACK,
+        )
+        .expect("test pane spawn");
+        assert!(pane.is_at_prompt(), "no marks yet: primary-screen heuristic applies");
+        assert_eq!(pane.prompt_line_start(), None);
+
+        pane.feed_program_output(b"\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\");
+        assert!(pane.is_at_prompt(), "shell is drawing/accepting its prompt");
+        assert_eq!(pane.prompt_line_start(), Some(2), "command text starts after \"$ \"");
+
+        // The C mark means a command owns the pane even though it never
+        // entered the alt screen - a REPL or agent CLI on the primary screen.
+        pane.feed_program_output(b"ls\x1b]133;C\x1b\\");
+        assert!(!pane.is_at_prompt());
+        // Still mid-command: the D mark ends it, and the next A starts a
+        // fresh prompt whose line-start boundary is unknown until its B.
+        pane.feed_program_output(b"out\r\n\x1b]133;D;0\x1b\\\r\n");
+        assert!(!pane.is_at_prompt(), "between D and the next prompt");
+        pane.feed_program_output(b"\x1b]133;A\x1b\\");
+        assert!(pane.is_at_prompt());
+        assert_eq!(pane.prompt_line_start(), None, "A clears the stale boundary");
+        pane.feed_program_output(b"$ \x1b]133;B\x1b\\");
+        assert_eq!(pane.prompt_line_start(), Some(2));
     }
 
     #[test]

@@ -285,6 +285,14 @@ pub(super) struct CombinedPerformer {
     /// clipboard by [`Pane::take_clipboard_write`] after each parse batch.
     pending_clipboard_read: bool,
     pending_clipboard_write: Option<String>,
+    /// Grid column where the shell's own prompt decoration ends and the
+    /// editable command line begins, from the column the cursor sat at when
+    /// OSC 133's `B` mark arrived. `None` while the decoration is being
+    /// drawn (after `A`), for shells without integration, or once a new
+    /// prompt starts. Read by the prompt-edit guards so a Vim operator aimed
+    /// at the prompt's own text is refused instead of mistranslating into
+    /// readline chords that edit the wrong characters.
+    prompt_line_start: Option<usize>,
     /// Accumulated Sixel payload between `DCS <params> q` and the String
     /// Terminator. Decoded and emitted as an image block on `unhook`.
     sixel_buf: Vec<u8>,
@@ -313,6 +321,7 @@ impl CombinedPerformer {
             performer: Performer::new(),
             pending_clipboard_read: false,
             pending_clipboard_write: None,
+            prompt_line_start: None,
             pending_responses: Vec::new(),
             sixel_buf: Vec::new(),
             sixel_in: false,
@@ -657,6 +666,14 @@ impl CombinedPerformer {
         self.performer.scrollback()
     }
 
+    /// The grid column where the editable command line begins on the row
+    /// holding the shell cursor, per OSC 133's `B` mark. `None` when the
+    /// boundary is unknown (no integration, decoration mid-draw, or a new
+    /// prompt started).
+    pub(super) fn prompt_line_start(&self) -> Option<usize> {
+        self.prompt_line_start
+    }
+
     pub(super) fn take_title(&mut self) -> Option<String> {
         self.performer.take_title()
     }
@@ -855,6 +872,18 @@ impl Perform for CombinedPerformer {
                 .join(";");
             let safe = !uri.is_empty() && is_safe_url_scheme(&uri);
             self.grid.set_active_link(safe.then_some(uri.as_str()));
+        }
+
+        // OSC 133 shell-integration marks: the grid column at the `B` mark is
+        // where the editable command line begins (the shell has just finished
+        // drawing its prompt decoration), and `A` starts a fresh prompt whose
+        // boundary is not known yet.
+        if params.first() == Some(&b"133".as_slice()) {
+            if params.get(1) == Some(&b"A".as_slice()) {
+                self.prompt_line_start = None;
+            } else if params.get(1) == Some(&b"B".as_slice()) {
+                self.prompt_line_start = Some(self.grid.cursor().1);
+            }
         }
 
         let before = content_segment_count(self.performer.scrollback());
