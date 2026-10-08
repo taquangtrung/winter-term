@@ -182,7 +182,7 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | Chord | Action |
 |---|---|
 | `Shift-Alt--` / `Shift-Alt-\` | Split horizontally, vertically |
-| `Shift-Alt-=` / `Ctrl-Shift-m` | Zoom the focused pane (toggle) |
+| `Shift-Alt-=` | Zoom the focused pane (toggle) |
 | `Ctrl-Shift-q` | Close the focused pane |
 | `Shift-Alt-o` | Close every other pane |
 | `Alt-h/j/k/l` | Move focus between panes |
@@ -192,7 +192,6 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Shift-Alt-k/j` | Scroll line up, line down |
 | `Shift-Alt-a` / `Shift-Alt-e` | Scroll to top, to bottom |
 | `Ctrl-Shift-t` / `Ctrl-Shift-w` | New tab, close tab |
-| `Ctrl-Tab` / `Ctrl-Shift-Tab` | Next tab, previous tab |
 | `Ctrl-PageUp` / `Ctrl-PageDown` | Previous tab, next tab |
 | `Ctrl-[` / `Ctrl-]` | Previous tab, next tab |
 | `Ctrl-1` .. `Ctrl-9` | Go to tab N |

@@ -18,7 +18,8 @@ use winter_render::TabbarHit;
 /// Every open tab, which one is active, and the state of the tab bar drawn
 /// across the top of them: hover, in-progress drag, and the rename prompt.
 ///
-/// The most-recently-used ring is what `Ctrl-Tab` walks, so it is ordered by
+/// The most-recently-used ring is what the `recent_tab_back`/
+/// `recent_tab_forward` commands walk, so it is ordered by
 /// visit rather than by position.
 pub(crate) struct TabsState {
     /// Which tab is shown; index into [`Self::tabs`].

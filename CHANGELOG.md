@@ -67,6 +67,8 @@ While the major version is `0`, the TBP wire format, the KDL config schema, and 
 - **A new line keeps the indent of the one it came from.** `Enter` in the middle of an indented line used to drop the cursor back to column zero, which is the indentation retyped on every split.
 - **The editor takes the mouse.** A click puts the cursor on the character under the pointer, dragging from it selects, and the wheel scrolls the file rather than the shell hidden behind it.
 - **A file changed on disk is read again** when an editor with nothing unsaved in it comes back to the front. With unsaved edits it leaves your work alone and still asks at save time.
+- **`Ctrl-Shift-m` no longer zooms a pane.** It was a second chord for the command `Shift-Alt-=` already performs, and it is unbound now, leaving the chord free for a user to bind to something of their own. The hamburger menu's Zoom row no longer advertises it.
+- **`Ctrl-Tab` and `Ctrl-Shift-Tab` no longer switch tabs.** They were a third pair of chords for the positional cycling `Ctrl-PageUp`/`Ctrl-PageDown`, `Ctrl-[`/`Ctrl-]`, and `gt`/`gT` already perform, and both chords are unbound now. The most-recently-used walk is untouched: the `recent_tab_back`/`recent_tab_forward` commands drove it all along, not `Ctrl-Tab`.
 
 ### Fixed
 

@@ -84,7 +84,7 @@ const SEPARATOR: ItemDef = leaf("-", "-", "");
 const LAYOUT_ITEMS: &[ItemDef] = &[
     leaf("split_vertical", "Split Vertical", ""),
     leaf("split_horizontal", "Split Horizontal", ""),
-    leaf("toggle_pane_zoom", "Zoom Pane", "Ctrl-Shift-M"),
+    leaf("toggle_pane_zoom", "Zoom Pane", ""),
     leaf("close_pane", "Close Pane", ""),
 ];
 

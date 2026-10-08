@@ -1369,7 +1369,7 @@ mod tests {
         }
     }
     #[test]
-    fn test_zoom_has_default_and_ctrl_shift_m_chords() {
+    fn test_zoom_binds_shift_alt_equals_only() {
         let shift_alt_equals = Key {
             alt: true,
             shift: true,
@@ -1384,10 +1384,9 @@ mod tests {
             resolve_simple(Mode::Normal, &shift_alt_equals),
             Action::ZoomPane
         );
-        assert_eq!(
-            resolve_simple(Mode::Normal, &ctrl_shift_m),
-            Action::ZoomPane
-        );
+        // Ctrl-Shift-m used to be an alternative zoom chord; unbound, it
+        // reaches nothing rather than zooming.
+        assert_eq!(resolve_simple(Mode::Normal, &ctrl_shift_m), Action::Ignore);
     }
     #[test]
     fn test_shift_alt_o_closes_other_panes() {

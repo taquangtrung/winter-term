@@ -41,7 +41,6 @@ window {
 
     // Zoom the focused pane to fill the window (toggle).
     "S+M+=" "zoom_pane"
-    "C+S+m" "toggle_pane_zoom"
 
     // Close the focused pane.
     "C+S+q" "close_pane"
@@ -72,8 +71,6 @@ window {
     "C+PageDown" "next_tab"
     "C+[" "prev_tab"
     "C+]" "next_tab"
-    "C+Tab" "next_tab"
-    "C+S+Tab" "prev_tab"
     "C+S+t" "new_tab"
     "C+S+w" "close_tab"
 
