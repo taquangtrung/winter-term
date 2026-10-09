@@ -2,8 +2,11 @@
 //! of terminal output.
 
 use std::path::PathBuf;
+use std::time::Instant;
 
 use super::input::Key;
+use super::process::ProcessSample;
+use super::system::SystemSample;
 
 // ========================================================================
 // Data Structures
@@ -106,12 +109,16 @@ pub enum JobRequest {
     Command(CommandRequest),
     /// Total the bytes under this directory.
     DirSize(PathBuf),
+    /// Take a snapshot of every process on the machine.
+    Processes,
     /// Read these files, skipping the ones that are not there. For the small
     /// state files a program keeps beside its data, where "not there" is an
     /// answer rather than a failure.
     ReadFiles(Vec<PathBuf>),
     /// Find the lines under a directory that hold some text.
     Search(SearchRequest),
+    /// Take a snapshot of the machine's CPU, memory, disks, and GPUs.
+    System,
 }
 
 /// A program to run on a page's behalf.
@@ -232,8 +239,12 @@ pub enum JobReply {
     /// What the files that could be read hold, keyed by the path asked for.
     /// A file that is missing or unreadable is simply absent.
     Files(Vec<(PathBuf, String)>),
+    /// Every process, or why the system would not list them.
+    Processes(Result<ProcessSample, String>),
     /// The lines a search found.
     Search(SearchResult),
+    /// The machine, or why the system would not describe it.
+    System(Result<SystemSample, String>),
 }
 
 /// What running a program produced. A program that could not be started at all
@@ -780,6 +791,20 @@ pub trait Page {
 
     /// Hand back the result of work the page asked for.
     fn on_job(&mut self, _reply: JobReply) -> PageOutcome {
+        PageOutcome::Consumed
+    }
+
+    /// When the page next wants [`Page::on_tick`], for a page that keeps
+    /// itself current without being asked. The host wakes for the earliest
+    /// deadline of any page showing. Pages whose content changes only on a key
+    /// never implement it.
+    fn next_tick(&self) -> Option<Instant> {
+        None
+    }
+
+    /// The deadline from [`Page::next_tick`] has passed: refresh whatever the
+    /// page shows, usually by asking for a job.
+    fn on_tick(&mut self, _now: Instant) -> PageOutcome {
         PageOutcome::Consumed
     }
 

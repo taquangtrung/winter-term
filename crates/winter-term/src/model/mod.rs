@@ -10,6 +10,8 @@ pub mod mode;
 pub mod page;
 pub mod path;
 pub mod palette;
+pub mod process;
 pub mod settings_page;
+pub mod system;
 pub mod units;
 pub mod vim;

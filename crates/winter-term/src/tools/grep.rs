@@ -363,7 +363,11 @@ impl Page for GrepPage {
         match reply {
             JobReply::Search(found) => self.on_found(found),
             // The page runs no commands and asks for no directory totals.
-            JobReply::Command(_) | JobReply::DirSize { .. } | JobReply::Files(_) => {}
+            JobReply::Command(_)
+            | JobReply::DirSize { .. }
+            | JobReply::Files(_)
+            | JobReply::Processes(_)
+            | JobReply::System(_) => {}
         }
         PageOutcome::Consumed
     }

@@ -1848,8 +1848,12 @@ impl Page for GitPage {
                 self.rebuild();
                 PageOutcome::Consumed
             }
-            // The view asks for no directory walks and no searches.
-            JobReply::DirSize { .. } | JobReply::Search(_) => PageOutcome::Consumed,
+            // The view asks for no directory walks, no searches, and no
+            // listings of the machine.
+            JobReply::DirSize { .. }
+            | JobReply::Processes(_)
+            | JobReply::Search(_)
+            | JobReply::System(_) => PageOutcome::Consumed,
         }
     }
 

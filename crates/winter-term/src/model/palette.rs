@@ -865,6 +865,8 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ("font_reset", "Font Size: Reset", ""),
         ("jump", "Navigate: Jump to Target", ""),
         ("keys_page", "Keys: Show Every Command", ""),
+        ("proc_page", "Processes: Monitor", ""),
+        ("sys_page", "System: Monitor", ""),
         ("mux_attach_remote", "Mux: Attach Remote Session...", ""),
         ("mux_detach_session", "Mux: Detach Current Session", ""),
         ("mux_kill_session", "Mux: Kill Background Session...", ""),

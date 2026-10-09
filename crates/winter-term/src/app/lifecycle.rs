@@ -182,6 +182,12 @@ impl App {
             "grep_page" => {
                 self.open_grep_page();
             }
+            "proc_page" => {
+                self.open_proc_page();
+            }
+            "sys_page" => {
+                self.open_sys_page();
+            }
             "keys_page" => {
                 self.open_keys_page();
             }

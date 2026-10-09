@@ -931,9 +931,11 @@ impl Page for DirPage {
     fn on_job(&mut self, reply: JobReply) -> PageOutcome {
         match reply {
             // A listing runs no commands and asks for no searches of its own.
-            JobReply::Command(_) | JobReply::Files(_) | JobReply::Search(_) => {
-                return PageOutcome::Consumed
-            }
+            JobReply::Command(_)
+            | JobReply::Files(_)
+            | JobReply::Processes(_)
+            | JobReply::Search(_)
+            | JobReply::System(_) => return PageOutcome::Consumed,
             JobReply::DirSize { bytes, path } => {
                 self.sizes.insert(path, bytes);
             }

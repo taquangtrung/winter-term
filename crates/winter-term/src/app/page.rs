@@ -1,7 +1,7 @@
 //! Tool pages over panes: opening one in place, closing it, and offering it
 //! keys before the modal keymap sees them.
 
-use std::time::SystemTime;
+use std::time::{Instant, SystemTime};
 
 use crate::model::input::{self, Key, KeyCode};
 use crate::model::layout::{LayoutTree, PaneId};
@@ -16,6 +16,8 @@ use crate::tools::git::GitPage;
 use crate::tools::grep::GrepPage;
 use crate::tools::keys::KeysPage;
 use crate::tools::pdf::PdfPage;
+use crate::tools::proc::ProcPage;
+use crate::tools::sys::SysPage;
 use crate::tools::reltime;
 use winter_render::Grid;
 use winter_render::InputView;
@@ -43,6 +45,12 @@ const KEYS_TOOL: &str = "keys";
 
 /// Tool name recorded for the PDF viewer.
 const PDF_TOOL: &str = "pdf";
+
+/// Tool name recorded for the process monitor.
+const PROC_TOOL: &str = "proc";
+
+/// Tool name recorded for the system monitor.
+const SYS_TOOL: &str = "sys";
 
 /// How many closed things are kept for reopening. The point of the stash is
 /// the tool just closed by accident, not a history of every tool ever closed,
@@ -83,13 +91,15 @@ const HINT_TEXT: &str = "Enter to accept, Esc to cancel";
 
 /// The glyph each tool shows in the status bar, in place of a mode icon. One
 /// line per tool, from the Font Awesome range every Nerd Font carries.
-const TOOL_ICONS: [(&str, char); 6] = [
+const TOOL_ICONS: [(&str, char); 8] = [
     (DIR_TOOL, '\u{f07b}'),
     (EDITOR_TOOL, '\u{f044}'),
     (GIT_TOOL, '\u{f1d3}'),
     (GREP_TOOL, '\u{f002}'),
     (KEYS_TOOL, '\u{f11c}'),
     (PDF_TOOL, '\u{f1c1}'),
+    (PROC_TOOL, '\u{f080}'),
+    (SYS_TOOL, '\u{f2db}'),
 ];
 
 // ========================================================================
@@ -444,6 +454,47 @@ impl App {
             return;
         }
         self.show_page(GREP_TOOL, Box::new(GrepPage::new(self.focused_start_dir())));
+    }
+
+    /// Show the machine's processes over the focused pane, or close the
+    /// monitor if it is already showing there. It asks for its own first
+    /// snapshot on the next tick.
+    pub(crate) fn open_proc_page(&mut self) {
+        if self.close_page_if_showing(PROC_TOOL) {
+            return;
+        }
+        self.show_page(PROC_TOOL, Box::new(ProcPage::new()));
+    }
+
+    /// Show the machine's CPU, memory, disks, and GPUs over the focused pane,
+    /// or close the monitor if it is already showing there.
+    pub(crate) fn open_sys_page(&mut self) {
+        if self.close_page_if_showing(SYS_TOOL) {
+            return;
+        }
+        self.show_page(SYS_TOOL, Box::new(SysPage::new()));
+    }
+
+    /// Refresh each page that keeps itself current, and say when the earliest
+    /// of them next wants to be asked.
+    pub(crate) fn tick_pages(&mut self, now: Instant) -> Option<Instant> {
+        let due: Vec<PaneId> = self
+            .pages
+            .iter()
+            .filter(|(_, slot)| slot.page.next_tick().is_some_and(|at| at <= now))
+            .map(|(pane, _)| *pane)
+            .collect();
+        for pane_id in due {
+            let Some(slot) = self.pages.get_mut(&pane_id) else {
+                continue;
+            };
+            let outcome = slot.page.on_tick(now);
+            self.act_on_page_outcome(pane_id, outcome);
+        }
+        self.pages
+            .values()
+            .filter_map(|slot| slot.page.next_tick())
+            .min()
     }
 
     /// Show `target`'s file over whatever the focused pane is showing, in

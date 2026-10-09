@@ -651,9 +651,11 @@ mod tests {
     fn args_of(request: &JobRequest) -> Vec<String> {
         match request {
             JobRequest::Command(command) => command.args.clone(),
-            JobRequest::DirSize(_) | JobRequest::ReadFiles(_) | JobRequest::Search(_) => {
-                panic!("expected a command")
-            }
+            JobRequest::DirSize(_)
+            | JobRequest::Processes
+            | JobRequest::ReadFiles(_)
+            | JobRequest::Search(_)
+            | JobRequest::System => panic!("expected a command"),
         }
     }
 

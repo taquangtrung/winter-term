@@ -363,6 +363,41 @@ The walk runs off the event loop, so the pane stays live while a large tree is r
 
 The walk skips what would swamp the results rather than reading everything: `.git`, `.hg`, `.svn`, `node_modules`, and `target`, files over a megabyte, anything that does not read as text, and symlinks, which are never followed. It stops at 500 matches and says so in the header, because a query loose enough to pass that is one to narrow.
 
+**Processes** (`Ctrl-Shift-,`, or `Processes: Monitor`) lists every process on the machine, refreshed every two seconds. CPU use is a share of one core, so a busy multi-threaded process passes 100. The columns are PID, NAME, CPU%, MEM%, RSS, VRAM, STATE, USER, and the command line. The tree lives in the NAME column, as an indent and a fold marker before the name, so the command stays whole. The list is the tree of who started whom by default, sorted by CPU within each level; `v` flattens it into one sorted list. Linux reads `/proc`, macOS and the BSDs read `ps`, and Windows asks PowerShell, so the working-directory column is missing on Windows and the state is always `run` there. A `VRAM` column of per-process video memory appears when `nvidia-smi` is on the path and answers, on any platform; there is no vendor-neutral way to read it, so AMD and Intel GPUs show no column.
+
+| Key | Action |
+|---|---|
+| `j` `k` or `Down` `Up` | Move down, up; the vim motions (`gg`, `G`, `Ctrl-d`, `Ctrl-u`) work too |
+| `s` / `S` | Sort by the next column, reverse the direction |
+| Click a heading | Sort by that column; click the sorted one again to reverse it |
+| Click a process | Move the cursor onto it |
+| `v` | Switch between the tree and one sorted list |
+| `Enter` `Space` `Tab` | Fold or unfold the children of the process under the cursor |
+| `h` / `l` | Fold, unfold |
+| `/` | Filter by name, command, pid, or user; a match keeps the processes it descends from |
+| `Esc` | Clear the filter, then close |
+| `x` / `X` | Terminate, kill (asks first) |
+| `t` / `T` | Terminate, kill the process and everything under it (asks first) |
+| `z` / `Z` | Suspend, resume (not on Windows) |
+| `R` | Renice: a nice value from -20 to 19, or a priority class on Windows |
+| `r` / `p` | Refresh now, pause or resume the refreshing |
+| `y` / `Y` | Copy the pid, the command line |
+| `q` | Close |
+
+A strip under the list describes the process under the cursor: its pid, parent, owner, state, CPU, memory and video memory shares, executable path, working directory, and the whole command line. It is left out of a pane shorter than twelve rows so the list keeps the room.
+
+Signals go through the system's own `kill`, `renice`, and `taskkill`, so Winter needs no special privilege and is refused exactly where those are: another user's process needs `sudo` from a terminal. On Windows a terminate only asks a process's windows to close, which a console or background process declines; `X` forces it.
+
+**System** (`System: Monitor` in the command palette; it has no default chord) shows the machine as a whole, refreshed every two seconds: host, operating system, uptime and load average; processor use as a total and a grid of cores with their clocks; memory and swap; each NVIDIA GPU's video memory, load and temperature; and the local disks with a bar for each. Bars turn yellow at 75 percent and red at 90. Linux reads `/proc` and `df`, macOS and the BSDs read `sysctl`, `vm_stat`, `ps` and `df`, and Windows asks PowerShell. macOS has no per-core counter without a system library, so it shows the total only, worked out from what the processes are using. The GPU section needs `nvidia-smi` on the path and is left out otherwise.
+
+| Key | Action |
+|---|---|
+| `j` `k` or `Down` `Up` | Scroll down, up; the vim motions (`gg`, `G`, `Ctrl-d`, `Ctrl-u`, `Ctrl-f`, `Ctrl-b`) work too |
+| `Ctrl-e` / `Ctrl-y` | Scroll one line down, up |
+| `n` / `N` | Jump to the next, previous section |
+| `r` / `p` | Refresh now, pause or resume the refreshing |
+| `q` | Close |
+
 **Editor** opens the file a tool was pointing at, as editable text. It is not reached by a chord of its own: `Enter` on a file in Dir, Git, or Grep opens it, at the line that tool knew about. It opens *over* the tool rather than in place of it, so closing it puts the listing back where you left it, re-read in case what you just saved changed what it says.
 
 | Key | Action |

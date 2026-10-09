@@ -1190,6 +1190,9 @@ impl ApplicationHandler for App {
         if self.jobs.is_busy() {
             self.last_activity = Instant::now();
         }
+        // Pages that keep themselves current (the process monitor) ask for
+        // their next refresh here, and the loop wakes for the earliest.
+        let page_tick = self.tick_pages(Instant::now());
         let progress = self.jobs.progress();
         if progress != self.job_progress {
             self.job_progress = progress;
@@ -1221,6 +1224,9 @@ impl ApplicationHandler for App {
         } else {
             next_poll
         };
+        if let Some(deadline) = page_tick {
+            wakeup = wakeup.min(deadline);
+        }
         // A yank's highlight goes out on its own deadline, and the loop wakes
         // for it rather than leaving it lit until the next PTY poll.
         if let Some(deadline) = self.expire_yank_flash() {

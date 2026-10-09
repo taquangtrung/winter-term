@@ -13,6 +13,9 @@ use crate::model::page::{
     CommandOutput, CommandRequest, JobReply, JobRequest, SearchHit, SearchRequest, SearchResult,
 };
 
+use crate::tools::proc::collect;
+use crate::tools::sys;
+
 use super::App;
 
 // ========================================================================
@@ -222,8 +225,10 @@ fn run(request: JobRequest, cancel: &AtomicBool) -> JobReply {
             let bytes = walk_size(&path, cancel, 0);
             JobReply::DirSize { bytes, path }
         }
+        JobRequest::Processes => JobReply::Processes(collect::collect(cancel)),
         JobRequest::ReadFiles(paths) => JobReply::Files(read_files(&paths)),
         JobRequest::Search(request) => JobReply::Search(search_tree(&request, cancel)),
+        JobRequest::System => JobReply::System(sys::collect::collect()),
     }
 }
 
