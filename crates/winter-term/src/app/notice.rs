@@ -138,11 +138,17 @@ impl App {
         None
     }
 
-    /// The current notice text and kind, if one is set and has not yet expired.
+    /// The current notice text and kind, if one is set and has not yet expired;
+    /// otherwise the progress of a program still running.
     pub(crate) fn active_notice(&self) -> Option<(&str, NoticeKind)> {
         self.notice
             .as_ref()
             .filter(|(_, _, expiry)| Instant::now() < *expiry)
             .map(|(text, kind, _)| (text.as_str(), *kind))
+            .or_else(|| {
+                self.job_progress
+                    .as_deref()
+                    .map(|text| (text, NoticeKind::Progress))
+            })
     }
 }

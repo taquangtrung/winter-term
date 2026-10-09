@@ -422,6 +422,34 @@ pub(super) fn build_bg_vertices_offset(
                 }
             }
 
+            // Strikethrough bar for SGR 9, through the middle of the cell in the
+            // glyph's foreground color.
+            if let Some(cell) = cell {
+                if cell.style.strikethrough {
+                    let strike_color = if let GridColor::Default = cell.style.foreground {
+                        theme.foreground.as_linear()
+                    } else {
+                        grid_color_to_rgb(&cell.style.foreground, theme)
+                    };
+                    let (sr, sg, sb) = if dim {
+                        lerp_to_bg(strike_color, bg_lin)
+                    } else {
+                        strike_color
+                    };
+                    let px0 = offset_x + col as f32 * cw;
+                    let py_top = offset_y + row as f32 * ch + (ch - STRIKETHROUGH_THICKNESS) / 2.0;
+                    verts.extend_from_slice(&quad_vertices(
+                        px0,
+                        py_top,
+                        px0 + cw,
+                        py_top + STRIKETHROUGH_THICKNESS,
+                        (sr, sg, sb),
+                        surface_w,
+                        surface_h,
+                    ));
+                }
+            }
+
             // When the font lacks braille, draw braille cells as dot quads (in
             // the cell's foreground color) so btop's graphs stay aligned and
             // legible instead of using a misaligned proportional fallback.
@@ -490,6 +518,8 @@ pub(super) const DIVIDER_THICKNESS: f32 = 1.0;
 const UNDERLINE_THICKNESS: f32 = 1.0;
 /// Distance from the bottom of a cell to the top of its underline bar.
 const UNDERLINE_BOTTOM_OFFSET: f32 = 2.0;
+/// Height of the strikethrough bar drawn for SGR 9.
+const STRIKETHROUGH_THICKNESS: f32 = 1.0;
 
 pub(super) fn lerp_to_bg(c: (f32, f32, f32), bg: (f32, f32, f32)) -> (f32, f32, f32) {
     (

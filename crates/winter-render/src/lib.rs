@@ -39,7 +39,7 @@ pub const PANE_H_PAD: f32 = 2.0;
 
 /// Height of the Modern-style tabbar, expressed as a multiple of cell height.
 /// Classic style always uses exactly `tabbar_rows() * ch` (i.e. 2.0).
-pub(crate) const MODERN_TABBAR_HEIGHT: f32 = 1.8;
+pub(crate) const MODERN_TABBAR_HEIGHT: f32 = 1.6;
 
 /// Flat pixel top-up added on top of `MODERN_TABBAR_HEIGHT * cell_height`,
 /// independent of font size (unlike that ratio). `tabbar::tab_top_inset_px`

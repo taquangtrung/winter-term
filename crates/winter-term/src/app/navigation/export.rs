@@ -58,6 +58,8 @@ pub(crate) fn export_scrollback_ansi(grid: &Grid, _theme: &Theme) -> String {
         let mut last_fg = Color::Default;
         let mut last_bg = Color::Default;
         let mut last_bold = false;
+        let mut last_faint = false;
+        let mut last_strikethrough = false;
         let mut last_italic = false;
         let mut last_underline = false;
         let mut last_reversed = false;
@@ -78,6 +80,8 @@ pub(crate) fn export_scrollback_ansi(grid: &Grid, _theme: &Theme) -> String {
             let style_changed = cell.style.foreground != last_fg
                 || cell.style.background != last_bg
                 || cell.style.bold != last_bold
+                || cell.style.faint != last_faint
+                || cell.style.strikethrough != last_strikethrough
                 || cell.style.italic != last_italic
                 || cell.style.underline != last_underline
                 || cell.style.reversed != last_reversed;
@@ -87,11 +91,17 @@ pub(crate) fn export_scrollback_ansi(grid: &Grid, _theme: &Theme) -> String {
                 if cell.style.bold {
                     row_str.push_str("\x1b[1m");
                 }
+                if cell.style.faint {
+                    row_str.push_str("\x1b[2m");
+                }
                 if cell.style.italic {
                     row_str.push_str("\x1b[3m");
                 }
                 if cell.style.underline {
                     row_str.push_str("\x1b[4m");
+                }
+                if cell.style.strikethrough {
+                    row_str.push_str("\x1b[9m");
                 }
                 if cell.style.reversed {
                     row_str.push_str("\x1b[7m");
@@ -120,6 +130,8 @@ pub(crate) fn export_scrollback_ansi(grid: &Grid, _theme: &Theme) -> String {
                 last_fg = cell.style.foreground;
                 last_bg = cell.style.background;
                 last_bold = cell.style.bold;
+                last_faint = cell.style.faint;
+                last_strikethrough = cell.style.strikethrough;
                 last_italic = cell.style.italic;
                 last_underline = cell.style.underline;
                 last_reversed = cell.style.reversed;
@@ -129,6 +141,8 @@ pub(crate) fn export_scrollback_ansi(grid: &Grid, _theme: &Theme) -> String {
         }
 
         if last_bold
+            || last_faint
+            || last_strikethrough
             || last_italic
             || last_underline
             || last_reversed
@@ -201,8 +215,16 @@ pub(crate) fn export_scrollback_html(grid: &Grid, theme: &Theme) -> String {
             if cell.style.italic {
                 style_parts.push("font-style:italic;".to_string());
             }
-            if cell.style.underline {
-                style_parts.push("text-decoration:underline;".to_string());
+            if cell.style.faint {
+                style_parts.push("opacity:0.5;".to_string());
+            }
+            match (cell.style.underline, cell.style.strikethrough) {
+                (true, true) => {
+                    style_parts.push("text-decoration:underline line-through;".to_string())
+                }
+                (true, false) => style_parts.push("text-decoration:underline;".to_string()),
+                (false, true) => style_parts.push("text-decoration:line-through;".to_string()),
+                (false, false) => {}
             }
 
             match cell.style.foreground {

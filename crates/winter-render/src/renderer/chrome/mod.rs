@@ -639,6 +639,7 @@ impl GpuRenderer {
         let text_color = match notice.kind {
             NoticeKind::Error => self.theme.ansi[1],
             NoticeKind::Info => self.theme.ansi[4],
+            NoticeKind::Progress => self.theme.ansi[3],
         };
         // Tuck the toast below the tab bar so it never overlaps the tabs. Mirrors
         // the top-inset math used elsewhere (rows of tabbar chrome × cell height).

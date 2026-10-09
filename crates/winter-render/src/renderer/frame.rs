@@ -10,8 +10,8 @@ use super::background::{
 };
 use super::chrome::{InputView, PaletteView, TabbarText, WhichKeyView, DIM_FACTOR};
 use super::colors::{
-    block_cursor_cell, cell_text_fg, cursor_contrast_fg, needs_dark_on_light_bold,
-    srgb_to_linear_f64, theme_indexed_color,
+    block_cursor_cell, cell_text_fg, cursor_contrast_fg, mix_rgb, needs_dark_on_light_bold,
+    srgb_to_linear_f64, theme_indexed_color, FAINT_FACTOR,
 };
 use super::glyphs::{
     base_family, effective_bold_weight, glyph_key, is_braille, needs_complex_shaping, parse_weight,
@@ -810,6 +810,27 @@ impl GpuRenderer {
         // A glyph that would be lost inside the block cursor's fill is
         // repainted in a contrasting color instead.
         let text_fg = context.cursor_text_fg.unwrap_or(text_fg);
+        // SGR 2 (faint): fade the glyph toward whatever sits behind it, which
+        // is the foreground color when the cell is reversed.
+        let text_fg = if cell.style.faint {
+            let behind = if cell.style.reversed { fg_rgb } else { bg_rgb };
+            let faded = mix_rgb(
+                Rgb {
+                    r: text_fg.0,
+                    g: text_fg.1,
+                    b: text_fg.2,
+                },
+                Rgb {
+                    r: behind.0,
+                    g: behind.1,
+                    b: behind.2,
+                },
+                FAINT_FACTOR,
+            );
+            (faded.r, faded.g, faded.b)
+        } else {
+            text_fg
+        };
         // An explicit cell background (an SGR color, not the pane's base
         // background) or a reversed cell counts as a highlight, so it gets the
         // same synthetic-bold compensation as a selection.
@@ -835,6 +856,7 @@ impl GpuRenderer {
 
         let text_color_explicit = cell.style.foreground != GridColor::Default
             || cell.style.reversed
+            || cell.style.faint
             || context.cursor_text_fg.is_some()
             || context.bracket_rgb.is_some();
         if let Some((r, g, b)) = context.bracket_rgb {
@@ -1027,6 +1049,7 @@ impl GpuRenderer {
             let notice_attrs = match notice.kind {
                 NoticeKind::Error => error_attrs,
                 NoticeKind::Info => info_attrs,
+                NoticeKind::Progress => muted_attrs.clone(),
             };
             let notice_start = status_text.len();
             status_text.push_str(&notice.text);

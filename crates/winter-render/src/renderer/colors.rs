@@ -22,6 +22,10 @@ const DARK_ON_LIGHT_BOLD_MARGIN: i32 = 90;
 /// and repainted in a contrasting color.
 const CURSOR_CONTRAST_MIN: f32 = 96.0;
 
+/// How far a faint (SGR 2) glyph is blended from its color toward the
+/// background behind it, `0.0` (unchanged) to `1.0` (invisible).
+pub(super) const FAINT_FACTOR: f32 = 0.5;
+
 // ========================================================================
 // Implementation
 // ========================================================================

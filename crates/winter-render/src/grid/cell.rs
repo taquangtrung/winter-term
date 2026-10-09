@@ -38,6 +38,8 @@ pub struct Style {
     pub background: Color,
     /// SGR 1.
     pub bold: bool,
+    /// SGR 2 (faint/dim): the glyph is blended toward its background at render time.
+    pub faint: bool,
     /// Glyph color.
     pub foreground: Color,
     /// SGR 3.
@@ -46,6 +48,8 @@ pub struct Style {
     pub link: u16,
     /// SGR 7 (reverse video): foreground and background are swapped at render time.
     pub reversed: bool,
+    /// SGR 9.
+    pub strikethrough: bool,
     /// SGR 4.
     pub underline: bool,
 }

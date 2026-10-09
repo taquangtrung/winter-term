@@ -48,6 +48,7 @@ impl App {
             _config_watcher: config_watcher,
             dirty: true,
             notice: None,
+            job_progress: None,
             yank_flash: None,
             pending_config_error: config_error,
             clipboard: None,

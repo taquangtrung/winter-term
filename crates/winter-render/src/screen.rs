@@ -11,6 +11,13 @@ use crate::grid::{Color, CursorShape, EraseMode, Grid, RgbColor, Style};
 
 const SGR_EXT_RGB: u16 = 2;
 const SGR_EXT_INDEXED: u16 = 5;
+const SGR_FOREGROUND_EXT: u16 = 38;
+const SGR_BACKGROUND_EXT: u16 = 48;
+const SGR_UNDERLINE_COLOR_EXT: u16 = 58;
+const SGR_UNDERLINE: u16 = 4;
+const SGR_UNDERLINE_NONE: u16 = 0;
+/// Shortest colon-joined true-color group: `x:2:r:g:b`.
+const SGR_RGB_GROUP_LEN: usize = 5;
 const BRIGHT_OFFSET: u8 = 8;
 const BELL: u8 = 0x07;
 
@@ -217,18 +224,68 @@ fn erase_mode(value: usize) -> EraseMode {
     }
 }
 
-/// Apply an SGR sequence to `style`. Subparameters are flattened so the colon and
-/// semicolon forms of extended colors (`38:5:n` and `38;5;n`) are handled alike.
+/// Apply an SGR sequence to `style`. A colon-joined group (`4:3`, `38:2::r:g:b`)
+/// is one code with sub-parameters; semicolon-separated codes are independent,
+/// and the semicolon form of extended colors (`38;5;n`) spans several groups.
 fn apply_sgr(params: &Params, style: &mut Style) {
-    let flat: Vec<u16> = params.iter().flatten().copied().collect();
-    if flat.is_empty() {
+    let groups: Vec<&[u16]> = params.iter().collect();
+    if groups.is_empty() {
         *style = Style::default();
         return;
     }
 
     let mut index = 0;
-    while index < flat.len() {
-        index += apply_sgr_code(&flat[index..], style);
+    while index < groups.len() {
+        let group = groups[index];
+        if group.len() > 1 {
+            apply_sgr_subparams(group, style);
+            index += 1;
+        } else {
+            let flat: Vec<u16> = groups[index..]
+                .iter()
+                .filter_map(|g| g.first().copied())
+                .collect();
+            index += apply_sgr_code(&flat, style);
+        }
+    }
+}
+
+/// Apply one colon-joined SGR group: an underline style (`4:n`) or an extended
+/// color whose components arrive as sub-parameters.
+fn apply_sgr_subparams(group: &[u16], style: &mut Style) {
+    match group[0] {
+        SGR_UNDERLINE => style.underline = group[1] != SGR_UNDERLINE_NONE,
+        SGR_FOREGROUND_EXT => {
+            if let Some(color) = subparam_color(group) {
+                style.foreground = color;
+            }
+        }
+        SGR_BACKGROUND_EXT => {
+            if let Some(color) = subparam_color(group) {
+                style.background = color;
+            }
+        }
+        // 58 (underline color) is accepted and dropped: underlines draw in the
+        // glyph's foreground color.
+        _ => {}
+    }
+}
+
+/// The color in a colon-joined `38`/`48` group: `x:5:n` indexed, or `x:2:r:g:b`
+/// true color with an optional colorspace slot before the channels
+/// (`x:2::r:g:b`).
+fn subparam_color(group: &[u16]) -> Option<Color> {
+    match group.get(1) {
+        Some(&SGR_EXT_INDEXED) => group.get(2).map(|&value| Color::Indexed(value as u8)),
+        Some(&SGR_EXT_RGB) if group.len() >= SGR_RGB_GROUP_LEN => {
+            let channels = &group[group.len() - 3..];
+            Some(Color::Rgb(RgbColor {
+                r: channels[0] as u8,
+                g: channels[1] as u8,
+                b: channels[2] as u8,
+            }))
+        }
+        _ => None,
     }
 }
 
@@ -239,28 +296,37 @@ fn apply_sgr_code(codes: &[u16], style: &mut Style) -> usize {
     match code {
         0 => *style = Style::default(),
         1 => style.bold = true,
+        2 => style.faint = true,
         3 => style.italic = true,
         4 => style.underline = true,
         7 => style.reversed = true,
-        22 => style.bold = false,
+        9 => style.strikethrough = true,
+        22 => {
+            style.bold = false;
+            style.faint = false;
+        }
         23 => style.italic = false,
         24 => style.underline = false,
         27 => style.reversed = false,
+        29 => style.strikethrough = false,
         30..=37 => style.foreground = Color::Indexed((code - 30) as u8),
         90..=97 => style.foreground = Color::Indexed((code - 90) as u8 + BRIGHT_OFFSET),
         39 => style.foreground = Color::Default,
         40..=47 => style.background = Color::Indexed((code - 40) as u8),
         100..=107 => style.background = Color::Indexed((code - 100) as u8 + BRIGHT_OFFSET),
         49 => style.background = Color::Default,
-        38 => return extended_color(codes, |color| style.foreground = color),
-        48 => return extended_color(codes, |color| style.background = color),
+        SGR_FOREGROUND_EXT => return extended_color(codes, |color| style.foreground = color),
+        SGR_BACKGROUND_EXT => return extended_color(codes, |color| style.background = color),
+        // Underline color: consume its operands so they are not misread as
+        // codes of their own, but keep drawing underlines in the foreground.
+        SGR_UNDERLINE_COLOR_EXT => return extended_color(codes, |_| {}),
         _ => {}
     }
     1
 }
 
-/// Parse `38`/`48` extended color (`;5;n` indexed or `;2;r;g;b` true color),
-/// returning the number of codes consumed including the leading `38`/`48`.
+/// Parse `38`/`48`/`58` extended color (`;5;n` indexed or `;2;r;g;b` true color),
+/// returning the number of codes consumed including the leading code.
 fn extended_color(codes: &[u16], mut set: impl FnMut(Color)) -> usize {
     match codes.get(1) {
         Some(&SGR_EXT_INDEXED) => match codes.get(2) {
@@ -404,6 +470,80 @@ mod tests {
         let cell = screen.grid().cell(0, 0).expect("cell exists");
         assert!(!cell.style.bold);
         assert_eq!(cell.style.foreground, Color::Default);
+    }
+
+    #[test]
+    fn test_sgr_faint_set_and_cleared_by_normal_intensity() {
+        let screen = feed(4, 1, b"\x1b[2mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert!(cell.style.faint);
+        assert!(!cell.style.bold);
+
+        let screen = feed(4, 1, b"\x1b[1;2m\x1b[22mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert!(!cell.style.faint);
+        assert!(!cell.style.bold);
+    }
+
+    #[test]
+    fn test_sgr_strikethrough_set_and_cleared() {
+        let screen = feed(4, 1, b"\x1b[9mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert!(cell.style.strikethrough);
+
+        let screen = feed(4, 1, b"\x1b[9m\x1b[29mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert!(!cell.style.strikethrough);
+    }
+
+    #[test]
+    fn test_sgr_underline_color_operands_are_not_read_as_codes() {
+        let screen = feed(4, 1, b"\x1b[58;2;100;150;200mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert!(!cell.style.faint);
+        assert!(!cell.style.bold);
+        assert!(!cell.style.reversed);
+        assert_eq!(cell.style.foreground, Color::Default);
+
+        let screen = feed(4, 1, b"\x1b[58;5;1mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert!(!cell.style.bold);
+
+        let screen = feed(4, 1, b"\x1b[58:2::1:2:3;1mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert!(cell.style.bold);
+        assert_eq!(cell.style.foreground, Color::Default);
+    }
+
+    #[test]
+    fn test_sgr_colon_underline_style_does_not_leak_into_other_codes() {
+        let screen = feed(4, 1, b"\x1b[4:3mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert!(cell.style.underline);
+        assert!(!cell.style.italic);
+
+        let screen = feed(4, 1, b"\x1b[1m\x1b[4:0mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert!(!cell.style.underline);
+        assert!(cell.style.bold);
+    }
+
+    #[test]
+    fn test_sgr_colon_extended_colors() {
+        let rgb = Color::Rgb(RgbColor {
+            r: 10,
+            g: 20,
+            b: 30,
+        });
+        for bytes in [&b"\x1b[38:2:10:20:30mZ"[..], b"\x1b[38:2::10:20:30mZ"] {
+            let screen = feed(4, 1, bytes);
+            let cell = screen.grid().cell(0, 0).expect("cell exists");
+            assert_eq!(cell.style.foreground, rgb);
+        }
+
+        let screen = feed(4, 1, b"\x1b[48:5:200mZ");
+        let cell = screen.grid().cell(0, 0).expect("cell exists");
+        assert_eq!(cell.style.background, Color::Indexed(200));
     }
 
     #[test]

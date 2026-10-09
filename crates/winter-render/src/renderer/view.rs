@@ -148,4 +148,6 @@ pub enum NoticeKind {
     Error,
     /// A confirmation, drawn in green.
     Info,
+    /// Work still under way, drawn muted in the status bar.
+    Progress,
 }

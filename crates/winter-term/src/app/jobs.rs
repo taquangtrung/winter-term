@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::model::layout::PaneId;
 use crate::model::page::{
@@ -39,6 +40,13 @@ const SEARCH_MAX_FILE_BYTES: u64 = 1 << 20;
 /// How deep a search walks, matching the size walk's own ceiling.
 const SEARCH_MAX_DEPTH: usize = 32;
 
+/// How long a command runs before the status bar mentions it. Most finish
+/// inside this, and flashing a label for each would only flicker.
+const PROGRESS_DELAY: Duration = Duration::from_millis(400);
+
+/// Longest command line the status bar shows before it is cut short.
+const PROGRESS_LABEL_MAX_CHARS: usize = 60;
+
 /// Directories a search never enters: version-control internals and build
 /// output, which are derived rather than written and would swamp every result.
 const SEARCH_SKIP_DIRS: [&str; 5] = [".git", ".hg", ".svn", "node_modules", "target"];
@@ -60,7 +68,11 @@ pub(crate) struct Jobs {
 /// A job in flight: who asked, and the flag that asks it to stop.
 struct RunningJob {
     cancel: Arc<AtomicBool>,
+    /// The command line, for a job that runs a program; `None` for the rest,
+    /// which are not worth announcing.
+    label: Option<String>,
     pane: PaneId,
+    started: Instant,
 }
 
 /// A finished job: which page asked, and what came back.
@@ -92,6 +104,17 @@ impl Jobs {
         !self.running.is_empty()
     }
 
+    /// What the longest-running program is doing, once it has run long enough
+    /// to be worth mentioning: its command line and whole seconds elapsed.
+    pub(crate) fn progress(&self) -> Option<String> {
+        self.running
+            .values()
+            .filter_map(|job| Some((job.label.as_ref()?, job.started.elapsed())))
+            .filter(|(_, elapsed)| *elapsed >= PROGRESS_DELAY)
+            .max_by_key(|(_, elapsed)| *elapsed)
+            .map(|(label, elapsed)| format!("{label} ({}s)", elapsed.as_secs()))
+    }
+
     /// Start `request` on behalf of `pane`. Dropped when the runner is already
     /// at capacity.
     pub(crate) fn spawn(&mut self, pane: PaneId, request: JobRequest) {
@@ -105,7 +128,9 @@ impl Jobs {
             id,
             RunningJob {
                 cancel: Arc::clone(&cancel),
+                label: progress_label(&request),
                 pane,
+                started: Instant::now(),
             },
         );
 
@@ -170,6 +195,23 @@ impl App {
 // ========================================================================
 // Functions
 // ========================================================================
+
+/// The command line a program-running request shows while it runs, cut to fit
+/// the status bar. `None` for requests that run no program.
+fn progress_label(request: &JobRequest) -> Option<String> {
+    let JobRequest::Command(command) = request else {
+        return None;
+    };
+    let line = std::iter::once(command.program.as_str())
+        .chain(command.args.iter().map(String::as_str))
+        .collect::<Vec<_>>()
+        .join(" ");
+    if line.chars().count() <= PROGRESS_LABEL_MAX_CHARS {
+        return Some(line);
+    }
+    let kept: String = line.chars().take(PROGRESS_LABEL_MAX_CHARS).collect();
+    Some(format!("{kept}..."))
+}
 
 /// Do the work a request asks for, checking `cancel` often enough that a
 /// cancelled job stops within a directory or two rather than at the end.
@@ -381,6 +423,60 @@ mod tests {
             std::thread::sleep(POLL_STEP);
         }
         collected
+    }
+
+    fn command(program: &str, args: &[&str]) -> JobRequest {
+        JobRequest::Command(CommandRequest {
+            args: args.iter().map(|a| a.to_string()).collect(),
+            cwd: PathBuf::from("."),
+            program: program.to_string(),
+            stdin: None,
+            tag: "test",
+        })
+    }
+
+    #[test]
+    fn test_progress_label_joins_the_program_and_its_arguments() {
+        let label = progress_label(&command("git", &["push", "origin", "main"]));
+        assert_eq!(label.as_deref(), Some("git push origin main"));
+    }
+
+    #[test]
+    fn test_progress_label_cuts_a_long_command_line() {
+        let long = "x".repeat(PROGRESS_LABEL_MAX_CHARS * 2);
+        let label = progress_label(&command("git", &[&long])).expect("a command has a label");
+        assert_eq!(label.chars().count(), PROGRESS_LABEL_MAX_CHARS + 3);
+        assert!(label.ends_with("..."));
+    }
+
+    #[test]
+    fn test_progress_label_ignores_jobs_that_run_no_program() {
+        assert_eq!(
+            progress_label(&JobRequest::DirSize(PathBuf::from("."))),
+            None
+        );
+    }
+
+    #[test]
+    fn test_progress_stays_quiet_until_a_command_has_run_a_while() {
+        let mut jobs = Jobs::new();
+        jobs.spawn(PaneId(1), command("sleep", &["5"]));
+        assert_eq!(
+            jobs.progress(),
+            None,
+            "a command that just started is not announced"
+        );
+
+        for job in jobs.running.values_mut() {
+            job.started = Instant::now() - PROGRESS_DELAY - Duration::from_secs(2);
+        }
+        assert_eq!(jobs.progress().as_deref(), Some("sleep 5 (2s)"));
+        jobs.cancel_for(PaneId(1));
+        assert_eq!(
+            jobs.progress(),
+            None,
+            "a cancelled job is no longer reported"
+        );
     }
 
     /// How long to sleep between polls, so waiting does not spin a core.

@@ -520,6 +520,9 @@ pub struct App {
     /// a Vim edit aimed at the non-editable scrollback area) or an info
     /// confirmation (e.g. "Copied to clipboard").
     pub(crate) notice: Option<(String, NoticeKind, Instant)>,
+    /// What the slowest running program is doing, shown in the status bar
+    /// until it finishes; see [`Jobs::progress`].
+    pub(crate) job_progress: Option<String>,
     /// The span a yank just took and the instant its highlight burns out. The
     /// span is kept so the expiry only clears a selection still showing what
     /// the yank copied, never one made since.
@@ -1186,6 +1189,11 @@ impl ApplicationHandler for App {
         }
         if self.jobs.is_busy() {
             self.last_activity = Instant::now();
+        }
+        let progress = self.jobs.progress();
+        if progress != self.job_progress {
+            self.job_progress = progress;
+            self.dirty = true;
         }
 
         // Turn the app-wide "what is drawn no longer matches the state" flag
