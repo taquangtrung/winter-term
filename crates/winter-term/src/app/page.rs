@@ -141,6 +141,8 @@ pub(crate) struct ActivePick {
 pub(crate) enum PendingClose {
     /// Every pane but the one holding this tab.
     OtherPanes(PaneId),
+    /// Every tab but this one, in its pane.
+    OtherTabs(PaneId),
     /// The pane holding this tab, and every tab in it.
     Pane(PaneId),
     /// This one tab.
@@ -309,6 +311,20 @@ pub(crate) struct PageSlot {
 // ========================================================================
 
 impl PageSlot {
+    /// The directory the page is looking at, if it is tied to one.
+    pub(crate) fn cwd(&self) -> Option<std::path::PathBuf> {
+        self.page.cwd()
+    }
+
+    /// The packed icon a pane strip draws before the tab's title. An editor
+    /// shows the type icon of the file it has open; every other tool its own.
+    pub(crate) fn tab_icon(&self) -> String {
+        match self.tool == EDITOR_TOOL {
+            true => crate::icons::file_icon(&self.page.title()),
+            false => crate::icons::tool_icon(self.tool),
+        }
+    }
+
     /// How the status bar names what owns the keyboard: the tool's glyph, when
     /// it has one, then the page's own title.
     pub(crate) fn status_label(&self) -> String {
@@ -319,14 +335,16 @@ impl PageSlot {
         }
     }
 
-    /// How a pane strip names the tab: the tool's name rather than the status
-    /// bar's glyph, so the tab reads in any font and names the tool even
-    /// where the page's title alone would not: a dir page titled
-    /// "winter-term" says a directory, not that `dir` is the one listing it.
-    /// A title that merely restates the tool's name ("Keys") is dropped
-    /// rather than doubled up.
+    /// How a pane strip names the tab. A tool whose icon already names it (an
+    /// editor's file-type icon, `dir`'s folder) shows just the page's title; a
+    /// tool on the default file icon keeps its name in front, so the tab still
+    /// says what is listing what.
     pub(crate) fn tab_label(&self) -> String {
-        page_label(self.tool, &self.page.title())
+        let title = self.page.title();
+        match self.tool == EDITOR_TOOL || crate::icons::has_tool_icon(self.tool) {
+            true => title,
+            false => page_label(self.tool, &title),
+        }
     }
 }
 
@@ -594,6 +612,17 @@ impl App {
         self.ask_before_closing(&others, "other panes", PendingClose::OtherPanes(keep))
     }
 
+    /// The same, for every tab in `keep`'s pane but `keep`.
+    pub(crate) fn ask_before_closing_other_tabs(&mut self, keep: PaneId) -> bool {
+        let others: Vec<PaneId> = self
+            .layout()
+            .group_members(keep)
+            .into_iter()
+            .filter(|tab| *tab != keep)
+            .collect();
+        self.ask_before_closing(&others, "other tabs", PendingClose::OtherTabs(keep))
+    }
+
     /// The same, for one tab.
     pub(crate) fn ask_before_closing_tab(&mut self, pane_id: PaneId) -> bool {
         self.ask_before_closing(&[pane_id], "tab", PendingClose::Tab(pane_id))
@@ -649,6 +678,7 @@ impl App {
         }
         match pending {
             PendingClose::OtherPanes(keep) => self.close_other_panes_now(keep),
+            PendingClose::OtherTabs(keep) => self.close_other_tabs_now(keep),
             PendingClose::Pane(pane) => self.close_pane_now(pane),
             PendingClose::Tab(pane) => self.close_tab_now(pane, Closing::Keep),
         }

@@ -121,6 +121,8 @@ pub enum WindowAction {
     NewTab,
     /// Close the active tab.
     CloseTab,
+    /// Close every tab in the focused pane except the active one.
+    CloseOtherTabs,
     /// Open the settings page.
     OpenSettings,
     /// Increase the font size one step.
@@ -175,6 +177,7 @@ impl WindowAction {
                 | WindowAction::Paste
                 | WindowAction::NewTab
                 | WindowAction::CloseTab
+                | WindowAction::CloseOtherTabs
                 | WindowAction::OpenSettings
                 | WindowAction::FontIncrease
                 | WindowAction::FontDecrease
@@ -297,6 +300,7 @@ impl WindowAction {
             WindowAction::Paste => Action::Paste,
             WindowAction::NewTab => Action::NewTab,
             WindowAction::CloseTab => Action::CloseTab(None),
+            WindowAction::CloseOtherTabs => Action::CloseOtherTabs,
             WindowAction::OpenSettings => Action::OpenSettings,
             WindowAction::FontIncrease => Action::IncreaseFontSize,
             WindowAction::FontDecrease => Action::DecreaseFontSize,
@@ -336,6 +340,7 @@ impl WindowAction {
             "paste_from_clipboard" => WindowAction::Paste,
             "new_tab" => WindowAction::NewTab,
             "close_tab" => WindowAction::CloseTab,
+            "close_other_tabs" => WindowAction::CloseOtherTabs,
             "open_settings" => WindowAction::OpenSettings,
             "font_increase" => WindowAction::FontIncrease,
             "font_decrease" => WindowAction::FontDecrease,
@@ -905,18 +910,34 @@ mod tests {
             ),
             Action::Ignore
         );
-        // An unmentioned action keeps its default (Ctrl-Shift-q still closes).
+        // An unmentioned action keeps its default (Ctrl-Shift-q still closes the tab).
         let ctrl_shift_q = Key {
             alt: false,
             code: KeyCode::Char('q'),
             ctrl: true,
             shift: true,
         };
+        assert_eq!(keymap.global_action(&ctrl_shift_q), Some(Action::CloseTab(None)));
+    }
+    #[test]
+    fn test_shift_alt_q_and_w_close_other_tabs_and_the_pane_by_default() {
+        let keymap = WindowKeymap::default();
+        let shift_alt = |ch: char| Key {
+            alt: true,
+            code: KeyCode::Char(ch),
+            ctrl: false,
+            shift: true,
+        };
+        // Closing tabs is global, so it is resolved ahead of the overlays.
+        assert_eq!(
+            keymap.global_action(&shift_alt('q')),
+            Some(Action::CloseOtherTabs)
+        );
         let mut pending = PendingPrefix::None;
         assert_eq!(
             resolve_with(
                 Mode::Normal,
-                &ctrl_shift_q,
+                &shift_alt('w'),
                 &mut pending,
                 &keymap,
                 0,

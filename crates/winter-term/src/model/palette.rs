@@ -872,6 +872,7 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
     let entries: &[(&str, &str, &str)] = &[
         ("cd_recent", "CD: Recent Directory", ""),
         ("close_pane", "Close Pane", ""),
+        ("close_other_tabs", "Close Other Tabs", ""),
         ("close_tab", "Close Tab", ""),
         ("copy_cwd", "Copy: Working Directory", ""),
         ("copy_scrollback", "Copy: Full Scrollback", ""),

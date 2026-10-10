@@ -30,7 +30,7 @@ pub(crate) const TAB_H_PAD_CELLS: f32 = 0.8;
 /// `renderer::rasterize_tabbar_strip` (the pill's own background geometry, via
 /// `tab_top_inset_px`) and `renderer::draw_tabbar` (text centering), so a
 /// label and its pill never drift apart. A tab pill floats with a small
-/// top/bottom margin and all four corners rounded (Brave-style), rather than
+/// top/bottom margin and square corners, rather than
 /// sitting flush against the strip's bottom edge.
 pub(crate) const TAB_TOP_VPAD_PX: f32 = 1.0;
 /// Vertical padding below a tab pill, in pixels. See `TAB_TOP_VPAD_PX`.
@@ -41,27 +41,14 @@ pub(crate) const TAB_BOTTOM_VPAD_PX: f32 = 0.0;
 ///: the tab's hit-test `Region`, title, and close-button positions are
 /// unaffected, so click targets stay exactly as wide as before.
 pub(crate) const TAB_GAP_PX: f32 = 0.5;
-/// Extra vertical inset the new-tab button's hover pill carries on its own
-/// bottom edge (on top of `TAB_TOP_VPAD_PX`'s top inset), as a fraction of
-/// the cell height, making it read shorter than the other titlebar buttons'
-/// hover pills. The `+` glyph itself centers on the plain tab shape instead
-/// (see `renderer::draw_tabbar`), not on this pill.
-pub(crate) const NEW_TAB_BOTTOM_INSET_RATIO: f32 = 0.15;
 /// Extra padding cleared on the first tab's own left edge, in cells: keeps
 /// it off whatever's immediately to its left (window controls, or the
 /// hamburger's open space), on top of `TAB_H_PAD_CELLS`'s inner title inset.
 const FIRST_TAB_LEFT_PAD_CELLS: f32 = 0.0;
-/// Width of the new-tab (`+`) button, in cells. Matches `CLOSE_CONTROL_CELLS`
-/// so the two outermost titlebar-edge buttons read as the same size.
+/// Width of a pane strip's new-tab (`+`) button, in cells.
 const NEW_TAB_CELLS: f32 = 4.0;
-/// Horizontal padding used to size every titlebar button's shared hover-pill
-/// width (see `renderer::rasterize_tabbar_strip`): the pill is
-/// `NEW_TAB_CELLS - 2 * this` wide, centered in whichever button is hovered.
-/// `layout` below reserves extra spacing around narrower buttons (minimize,
-/// maximize, close) so that shared pill never bleeds into a neighbor.
-pub(crate) const HOVER_PILL_H_PAD_CELLS: f32 = 0.3;
 /// Width of the modern hamburger (`☰`) button, in cells. Kept just wide
-/// enough to clear the shared hover-pill width (`HOVER_PILL_H_PAD_CELLS`) plus
+/// enough to clear its square hover pill (one cell-height on a side) plus
 /// `HAMBURGER_RIGHT_PAD_CELLS`, so the box neither leaves visible empty
 /// tabbar band around the pill nor lets it overflow past the box's own edge.
 const HAMBURGER_CELLS: f32 = 4.0;
@@ -194,6 +181,9 @@ pub struct TopTabbar {
     pub selected_item: Option<usize>,
     /// The highlighted submenu child (mouse hover), if any.
     pub selected_subitem: Option<usize>,
+    /// The working path of the focused pane, drawn centered in the free space
+    /// of the title bar; empty draws nothing.
+    pub path: String,
     /// The open tabs, left to right.
     pub tabs: Vec<TabLabel>,
     /// URL of the hyperlink under the cursor, with the cursor position (surface
@@ -226,6 +216,8 @@ pub struct PaneTab {
     pub title: String,
     /// Whether this tab is currently the active tab in its pane group.
     pub active: bool,
+    /// SVG document of the icon drawn before the title, or `None` for no icon.
+    pub icon: Option<Vec<u8>>,
 }
 
 /// What a point on a pane tab strip lands on.
@@ -297,9 +289,11 @@ pub(crate) struct TabbarLayout {
     pub hamburger: Option<Region>,
     /// Classic menubar band top (`y`), or `None` in modern style.
     pub menubar_top: Option<f32>,
+    /// The free stretch of the tabbar row between the left and right
+    /// elements (hamburger, window controls), where the working path is drawn.
+    pub path: Region,
     /// Classic menu-title targets, parallel to `menus`; empty in modern style.
     pub menu_titles: Vec<Region>,
-    pub new_tab: Region,
     /// Left scroll arrow (`‹`), present only when the tab strip is paginated.
     pub scroll_left: Option<Region>,
     /// Right scroll arrow (`›`), present only when the tab strip is paginated.
@@ -332,8 +326,6 @@ pub enum TabbarHit {
     MenuTitle(usize),
     /// The window minimize (`—`) control.
     Minimize,
-    /// The `+` button that opens a new tab.
-    NewTab,
     /// Nothing hit: empty tabbar space, or a point outside it.
     None,
     /// The left tab-strip scroll arrow: navigate to the previous tab.
@@ -437,9 +429,6 @@ pub fn hit_test(
         if region.contains(x, y) {
             return TabbarHit::Tab(i);
         }
-    }
-    if layout.new_tab.contains(x, y) {
-        return TabbarHit::NewTab;
     }
     if let Some(hamburger) = &layout.hamburger {
         if hamburger.contains(x, y) {
@@ -597,7 +586,7 @@ pub fn hit_test_pane_strip(
 /// tabbar's total height (0 in Classic style, which doesn't use that flat
 /// top-up). A pill's rendered height is `tab.h - tab_top_inset_px(..) -
 /// TAB_BOTTOM_VPAD_PX` (`renderer::rasterize_tabbar_strip` insets the bottom
-/// edge by `TAB_BOTTOM_VPAD_PX`, for a floating, fully-rounded pill), so
+/// edge by `TAB_BOTTOM_VPAD_PX`, for a floating, square-cornered pill), so
 /// growing the top-up grows only the empty space above the tabs: it cancels
 /// out of the pill's own height.
 pub(crate) fn tab_top_inset_px(menu_style: MenuStyle) -> f32 {
@@ -627,13 +616,13 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
     // hamburger, but window controls (if enabled) still reserve their edge.
     let controls_left = tabbar.controls_side == ControlsSide::Left;
     let hamburger_w = HAMBURGER_CELLS * cw;
-    // The shared hover-pill width (matched to the new-tab button, see
-    // `HOVER_PILL_H_PAD_CELLS`) is wider than minimize/maximize's own box and
-    // close's (post-left-pad) box, so centering it there would bleed into a
-    // neighboring button. `control_margin`/`close_margin` are exactly the
-    // overflow on each side of those boxes: the extra spacing below inserts
-    // just enough room to absorb it, wherever the two-sided need doubles.
-    let hover_pill_cells = NEW_TAB_CELLS - 2.0 * HOVER_PILL_H_PAD_CELLS;
+    // Every button's hover pill is a square one cell-height on a side. When
+    // that is wider than minimize/maximize's own box or close's (post-left-pad)
+    // box, centering it there would bleed into a neighboring button.
+    // `control_margin`/`close_margin` are exactly the overflow on each side of
+    // those boxes: the extra spacing below inserts just enough room to absorb
+    // it, wherever the two-sided need doubles.
+    let hover_pill_cells = ch / cw;
     let control_margin = ((hover_pill_cells - CONTROL_CELLS) * 0.5).max(0.0) * cw;
     let close_box_cells = CLOSE_CONTROL_CELLS - CLOSE_CONTROL_LEFT_PAD_CELLS;
     let close_margin = ((hover_pill_cells - close_box_cells) * 0.5).max(0.0) * cw;
@@ -684,7 +673,6 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
 
     let close_w = CLOSE_CELLS * cw;
     let right_pad = TAB_H_PAD_CELLS * cw;
-    let new_tab_w = NEW_TAB_CELLS * cw;
     let min_tab_w = MIN_TAB_CELLS * cw;
     let max_tab_w = MAX_TAB_CELLS * cw;
     let scroll_w = TAB_SCROLL_CELLS * cw;
@@ -693,11 +681,17 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
     let strip_left = tabs_left;
     let strip_right = (surface_w - right_reserve).max(strip_left);
     let strip_w = strip_right - strip_left;
+    let path = Region {
+        h: bar_h,
+        w: strip_w,
+        x: strip_left,
+        y: tab_row_top,
+    };
 
     // Tabs grow to share the available width up to MAX, never below MIN. When
     // even MIN-width tabs overflow, paginate: clamp to MIN-ish, reserve arrows,
     // and show only the page containing the active tab.
-    let avail_no_nav = (strip_w - new_tab_w).max(0.0);
+    let avail_no_nav = strip_w.max(0.0);
     let paginated = n > 1 && (n as f32) * min_tab_w > avail_no_nav;
 
     let off = Region {
@@ -719,9 +713,9 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
         };
         (strip_left, tab_w, 0, n)
     } else {
-        // Reserve both arrows and the new-tab button, then fit as many tabs as
-        // the remaining width allows and divide it evenly among them.
-        let avail = (strip_w - 2.0 * scroll_w - new_tab_w).max(min_tab_w);
+        // Reserve both arrows, then fit as many tabs as the remaining width
+        // allows and divide it evenly among them.
+        let avail = (strip_w - 2.0 * scroll_w).max(min_tab_w);
         let count = ((avail / min_tab_w).floor() as usize).clamp(1, n);
         let tab_w = (avail / count as f32).clamp(min_tab_w, max_tab_w);
         // Page-based window keyed on the active tab so it is always visible.
@@ -774,20 +768,6 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
         };
     }
 
-    // The new-tab button follows the visible tabs (after the right arrow when
-    // paginated, so it stays on screen regardless of the scroll position).
-    let new_tab_x = if paginated {
-        scroll_right.as_ref().map_or(strip_left, |r| r.x + r.w)
-    } else {
-        strip_left + n as f32 * tab_w
-    };
-    let new_tab = Region {
-        h: bar_h,
-        w: new_tab_w,
-        x: new_tab_x,
-        y: tab_row_top,
-    };
-
     // Window controls hug the edge chosen by `controls_side`. Close is always
     // the outermost button (nearest the edge that side hugs) and is wider
     // than minimize/maximize, with its own left edge padded so it clears
@@ -795,7 +775,7 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
     // real empty gap after it instead: its own box (and hover pill) stays
     // full width, unlike close's inset. `control_margin`/`close_margin` widen
     // every remaining internal boundary just enough that the shared, wider
-    // hover pill (see `HOVER_PILL_H_PAD_CELLS`) never bleeds past it.
+    // hover pill never bleeds past it.
     let controls = tabbar.window_controls.then(|| {
         let w = CONTROL_CELLS * cw;
         let close_w = CLOSE_CONTROL_CELLS * cw;
@@ -946,7 +926,7 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
         hamburger,
         menubar_top,
         menu_titles,
-        new_tab,
+        path,
         scroll_left,
         scroll_right,
         submenu,
@@ -1027,6 +1007,7 @@ mod tests {
             menu_style: style,
             menus,
             open_menu: open,
+            path: String::new(),
             open_submenu: None,
             selected_item: None,
             selected_subitem: None,
@@ -1081,7 +1062,25 @@ mod tests {
     }
 
     #[test]
-    fn test_hit_test_picks_tab_then_new_tab() {
+    fn test_path_region_is_the_free_stretch_between_hamburger_and_controls() {
+        let mut c = tabbar(MenuStyle::Modern, 0, None);
+        c.window_controls = true;
+        for side in [ControlsSide::Left, ControlsSide::Right] {
+            c.controls_side = side;
+            let l = layout(&c, SURFACE_W, CW, CH);
+            let hamburger = l.hamburger.expect("modern style has a hamburger");
+            let [minimize, maximize, close] = l.controls.expect("controls present");
+            let (left, right) = (l.path.x, l.path.x + l.path.w);
+            for button in [hamburger, minimize, maximize, close] {
+                let clear = button.x + button.w <= left + 0.01 || button.x >= right - 0.01;
+                assert!(clear, "{button:?} overlaps the path region {:?} under {side:?}", l.path);
+            }
+            assert!(l.path.w > 0.0, "{side:?}");
+        }
+    }
+
+    #[test]
+    fn test_hit_test_picks_each_tab_and_nothing_past_the_last() {
         let c = tabbar(MenuStyle::Modern, 2, None);
         let l = layout(&c, SURFACE_W, CW, CH);
         // A point in each tab's left title area, clear of the close button.
@@ -1094,11 +1093,12 @@ mod tests {
             hit_test(&c, SURFACE_W, CW, CH, title_pt(l.tabs[1]), 5.0),
             TabbarHit::Tab(1)
         );
-        // The new-tab button sits just past the last tab.
-        let nt = l.new_tab;
+        // Just past the last tab is empty tabbar space: the title bar has no
+        // new-tab button.
+        let past = l.tabs[1].x + l.tabs[1].w + CW;
         assert_eq!(
-            hit_test(&c, SURFACE_W, CW, CH, nt.x + nt.w / 2.0, 5.0),
-            TabbarHit::NewTab
+            hit_test(&c, SURFACE_W, CW, CH, past, 5.0),
+            TabbarHit::None
         );
     }
 
@@ -1224,13 +1224,13 @@ mod tests {
     #[test]
     fn test_minimize_maximize_hover_pills_do_not_overlap() {
         // Minimize and maximize sit flush against each other with no
-        // button-level gap. The shared hover-pill width (matched to the
-        // wider new-tab button) exceeds their own box width, so without
+        // button-level gap. The square hover pill (one cell-height on a side)
+        // can exceed their own box width, so without
         // `control_margin` reserving extra spacing, their centered hover
         // pills would bleed into each other.
         let mut c = tabbar(MenuStyle::Modern, 1, None);
         c.window_controls = true;
-        let hover_pill_w = NEW_TAB_CELLS * CW - 2.0 * HOVER_PILL_H_PAD_CELLS * CW;
+        let hover_pill_w = CH;
 
         for side in [ControlsSide::Left, ControlsSide::Right] {
             c.controls_side = side;

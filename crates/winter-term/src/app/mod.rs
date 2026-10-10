@@ -103,10 +103,6 @@ pub(crate) const STATUS_BAR_ROWS: usize = 1;
 /// How long a transient status-bar notice stays on screen before it expires
 /// and the bar returns to showing the pane title.
 const NOTICE_DURATION: Duration = Duration::from_secs(3);
-/// How long the mode toast (`flash_mode`) names the pane's new mode when the
-/// status bar is hidden. Shorter than a notice: it is confirmation of a
-/// keystroke that already happened, not a message to read.
-const MODE_FLASH_DURATION: Duration = Duration::from_millis(1200);
 /// How long the span a yank took stays lit. Long enough to register as
 /// "that is what was copied", short enough to be gone before the next
 /// keystroke's motion, which is vim-highlightedyank's own default.

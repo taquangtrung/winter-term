@@ -91,6 +91,8 @@ pub enum Action {
     ClosePane,
     /// Close every pane in the tab except the focused one.
     CloseOtherPanes,
+    /// Close every tab in the focused pane except the active one.
+    CloseOtherTabs,
     /// Close a tab: the active one (`None`) or the Nth tab, 1-based (`Some(n)`).
     CloseTab(Option<usize>),
     /// Change surrounding delimiter pair `target` to `replacement`.

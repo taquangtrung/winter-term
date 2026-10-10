@@ -168,10 +168,20 @@ impl App {
             .iter()
             .map(|&pane| winter_render::PaneTab {
                 active: pane == area.active,
+                icon: self.tab_icon(pane),
                 pane_id: pane.0,
                 title: self.strip_title(pane),
             })
             .collect()
+    }
+
+    /// The SVG naming what `pane` holds: a terminal's, or its page's.
+    fn tab_icon(&self, pane: PaneId) -> Option<Vec<u8>> {
+        let name = match self.pages.get(&pane) {
+            Some(slot) => slot.tab_icon(),
+            None => crate::icons::terminal_icon(),
+        };
+        crate::icons::svg(&name)
     }
 
     /// How a strip names `pane`: the rename being typed while it is the

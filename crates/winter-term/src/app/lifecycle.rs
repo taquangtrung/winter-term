@@ -126,6 +126,9 @@ impl App {
             "close_tab" => {
                 self.close_tab(focused);
             }
+            "close_other_tabs" => {
+                self.close_other_tabs(focused);
+            }
             "rename_tab" => {
                 self.tabs.rename_input =
                     Some(self.tabs.names.get(&focused).cloned().unwrap_or_default());

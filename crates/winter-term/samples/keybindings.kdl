@@ -42,8 +42,8 @@ window {
     // Zoom the focused pane to fill the window (toggle).
     "S+M+=" "zoom_pane"
 
-    // Close the focused pane.
-    "C+S+q" "close_pane"
+    // Close the focused pane, with every tab in it.
+    "S+M+w" "close_pane"
 
     // Close every pane except the focused one.
     "S+M+o" "close_other_panes"
@@ -73,6 +73,10 @@ window {
     "C+]" "next_tab"
     "C+S+t" "new_tab"
     "C+S+w" "close_tab"
+    "C+S+q" "close_tab"
+
+    // Close every other tab in the focused pane.
+    "S+M+q" "close_other_tabs"
 
     // Close pane N.
     "C+M+1" "close_pane_1"

@@ -50,6 +50,43 @@ pub(super) fn blend_px(rgba: &mut [u8], idx: usize, color: Rgb, alpha: f32) {
     let out_a = a + (rgba[idx + 3] as f32 / 255.0) * inv;
     rgba[idx + 3] = (out_a * 255.0) as u8;
 }
+/// Rasterize `svg` into the `size`-pixel square whose top-left is `(x, y)` and
+/// blend it over `rgba`, in the artwork's own colors. Does nothing when the
+/// document does not parse.
+pub(super) fn blit_svg(
+    rgba: &mut [u8],
+    canvas: (u32, u32),
+    svg: &[u8],
+    (x, y): (i32, i32),
+    size: u32,
+) {
+    let Ok(tree) = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default()) else {
+        return;
+    };
+    let natural = tree.size();
+    let Some(mut pixmap) = resvg::tiny_skia::Pixmap::new(size, size) else {
+        return;
+    };
+    let scale = (size as f32 / natural.width()).min(size as f32 / natural.height());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    for (i, pixel) in pixmap.pixels().iter().enumerate() {
+        let px = x + (i as u32 % size) as i32;
+        let py = y + (i as u32 / size) as i32;
+        if px < 0 || py < 0 || px >= canvas.0 as i32 || py >= canvas.1 as i32 {
+            continue;
+        }
+        let idx = (py as usize * canvas.0 as usize + px as usize) * 4;
+        // tiny-skia stores premultiplied alpha; blending wants straight color.
+        let straight = pixel.demultiply();
+        let color = Rgb::new(straight.red(), straight.green(), straight.blue());
+        blend_px(rgba, idx, color, straight.alpha() as f32 / 255.0);
+    }
+}
+
 /// Signed distance from `(px, py)` to the rounded rectangle `(x, y, w, h)` with
 /// corner `radius`: negative inside, zero on the edge, positive outside.
 pub(super) fn rounded_rect_sdf(px: f32, py: f32, rect: (f32, f32, f32, f32), radius: f32) -> f32 {

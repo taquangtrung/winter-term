@@ -170,6 +170,7 @@ pub(crate) mod test_support {
             }],
             open_menu: Some(0),
             open_submenu: None,
+            path: String::new(),
             selected_item: selected,
             selected_subitem: None,
             tabs: vec![TabLabel {

@@ -17,7 +17,7 @@ use super::{NoticeKind, StatusNotice};
 use crate::image::ImagePlacement;
 use crate::tabbar::{
     self, layout as tabbar_layout, PaneStripEdges, PaneStripHit, PaneStripLayout, PaneTab, Region, TabbarHit,
-    TabbarLayout, TopTabbar, HOVER_PILL_H_PAD_CELLS, NEW_TAB_BOTTOM_INSET_RATIO, TAB_H_PAD_CELLS,
+    TabbarLayout, TopTabbar, TAB_H_PAD_CELLS,
     ZOOM_CELLS,
 };
 use crate::theme::{Rgb, Theme};
@@ -27,7 +27,7 @@ use overlay::{
     url_tooltip_rgba, which_key_rgba,
 };
 use paint::{
-    composite_buffer, fill_line_segment, fill_rounded_rect, shape_chrome_line, text_bounds,
+    blit_svg, buffer_width, composite_buffer, fill_line_segment, fill_rounded_rect, shape_chrome_line, text_bounds,
     truncate_label,
 };
 
@@ -106,6 +106,10 @@ pub(super) const PALETTE_ITEM_PAD_Y: f32 = 4.0;
 /// Corner radius of the dropdown menu panel and its hover highlight, in pixels.
 pub(super) const DROPDOWN_RADIUS: f32 = 12.0;
 
+/// Corner radius of every pill on the tabbar, title bar and pane strips: none,
+/// so their tabs and button highlights are square.
+const SQUARE_CORNER: f32 = 0.0;
+
 /// Width of the soft drop shadow cast around the dropdown panel, in pixels.
 pub(super) const DROPDOWN_SHADOW: f32 = 22.0;
 
@@ -122,9 +126,6 @@ pub(super) const MENU_HOVER_INSET: f32 = 6.0;
 /// toward white for a crisp, elevated edge against the content behind it.
 pub(super) const MENU_BORDER_MIX: f32 = 0.14;
 
-/// Corner radius of the rounded tab tops, as a fraction of the cell height.
-const TAB_CORNER_RADIUS_RATIO: f32 = 0.34;
-
 /// Flat pixels the close button (× glyph and its hover pill) is shifted
 /// right of its horizontally-centered position within its close slot.
 const TAB_CLOSE_SHIFT_RIGHT_PX: f32 = 3.0;
@@ -137,32 +138,17 @@ const TAB_CLOSE_SHIFT_UP_PX: f32 = 1.0;
 /// centered position on the tab shape.
 const TAB_LABEL_SHIFT_UP_PX: f32 = 1.0;
 
+/// The narrowest stretch of title bar, in cells, worth drawing the working
+/// path into; below it the path is left out rather than reduced to an ellipsis.
+const PATH_MIN_CELLS: f32 = 8.0;
+
+/// The fewest characters a shortened working path keeps, so it never ends up
+/// as a lone ellipsis.
+const PATH_MIN_KEPT_CHARS: usize = 4;
+
 /// How much larger the title bar's button icons (tab close, hamburger and
 /// window controls) are drawn than their base size, to suit the taller bar.
 const TITLEBAR_ICON_SCALE: f32 = 1.2;
-
-/// Flat pixels trimmed off the top of the hamburger/minimize/maximize/close
-/// control buttons' shared hover pill, shrinking its height from the top
-/// edge only (the bottom edge is unchanged).
-const CONTROL_HOVER_PILL_TOP_TRIM_PX: f32 = 2.0;
-
-/// Fraction of a cell height trimmed off the bottom of a titlebar button's
-/// hover pill, so it sits clear of the strip's lower edge.
-const CONTROL_HOVER_PILL_VPAD_RATIO: f32 = 0.1;
-
-/// Flat pixels the hamburger/minimize/maximize/close control buttons (icons
-/// and their shared hover pill) are shifted up, as a group, from their
-/// vertically-centered position on the tab shape.
-const CONTROL_SHIFT_UP_PX: f32 = 0.5;
-
-/// Flat pixels the new-tab `+` glyph is shifted down from its vertically-
-/// centered position on the tab shape.
-const NEW_TAB_GLYPH_SHIFT_DOWN_PX: f32 = 1.0;
-
-/// Flat pixels trimmed off the top of the new-tab button's own hover pill
-/// (the small pill behind the `+` glyph), shrinking its height from the top
-/// edge only (the bottom edge is unchanged).
-const NEW_TAB_HOVER_PILL_TOP_TRIM_PX: f32 = 2.0;
 
 /// How far the active tab's background is mixed toward `theme.foreground`
 /// from `theme.tab_active_bg`, so it reads as clearly highlighted rather
@@ -211,45 +197,26 @@ struct StripStyle<'a> {
     cell_w: f32,
     /// Fill of an inactive tab's pill.
     inactive_bg: Rgb,
-    /// Horizontal inset of a titlebar button's hover pill inside its own box.
-    new_tab_hpad: f32,
-    /// Corner radius shared by every pill on the strip.
-    pill_radius: f32,
     tab_vpad_bottom: f32,
     tab_vpad_top: f32,
     /// The palette every pass resolves its own colors from.
     theme: &'a Theme,
 }
 
-/// The footprint every titlebar-edge button's hover pill shares, so they all
-/// line up regardless of how wide their own boxes are.
-#[derive(Clone, Copy)]
-struct HoverPill {
-    /// `None` when the window draws no controls, so there is no close button
-    /// to take the height from; callers fall back to their own box.
-    height: Option<f32>,
-    /// Distance from the button box's top edge to the pill's, a bit further
-    /// down than a tab's own top inset.
-    top_inset: f32,
-    /// Bottom inset subtracted from the close button's height.
-    vpad: f32,
-    width: f32,
+/// The square hover pill behind a button's icon: one cell-height (to whole
+/// pixels) on a side wherever it is drawn, so every button's pill is the same
+/// size, centered on `(cx, cy)` to within half a pixel and snapped to whole
+/// pixels so its edges stay crisp. Returned as `(x, y, width, height)`.
+fn button_pill(cx: f32, cy: f32, cell_h: f32) -> (f32, f32, f32, f32) {
+    let side = cell_h.round().max(1.0);
+    ((cx - side / 2.0).round(), (cy - side / 2.0).round(), side, side)
 }
 
-impl HoverPill {
-    /// Derive the shared pill footprint from the strip metrics and layout.
-    fn new(style: &StripStyle<'_>, layout: &TabbarLayout) -> Self {
-        let vpad = style.cell_h * CONTROL_HOVER_PILL_VPAD_RATIO;
-        let top_inset = style.tab_vpad_top + CONTROL_HOVER_PILL_TOP_TRIM_PX;
-        Self {
-            height: layout
-                .controls
-                .map(|[_, _, close]| close.h - top_inset - vpad),
-            top_inset,
-            vpad,
-            width: layout.new_tab.w - style.new_tab_hpad * 2.0,
-        }
-    }
+/// The center of a button's pill, which is where the icon on it is drawn: the
+/// pill is snapped to whole pixels, so its center, not the button box's, is
+/// the point an icon has to be centered on to look centered on the pill.
+fn pill_center((x, y, w, h): (f32, f32, f32, f32)) -> (f32, f32) {
+    (x + w / 2.0, y + h / 2.0)
 }
 
 // ========================================================================
@@ -288,7 +255,6 @@ impl GpuRenderer {
         let ch = self.cell_height;
         let layout = tabbar_layout(tabbar, surface_w, cw, ch);
         let pad = cw * 0.4;
-        let muted = self.theme.ansi[8].to_glyphon();
         let foreground = self.theme.foreground.to_glyphon();
         // Brighten tab titles so they read clearly against the tab band. On a
         // dark theme that means blending toward white; on a light theme the
@@ -381,28 +347,6 @@ impl GpuRenderer {
             }
         }
 
-        // New-tab button: a bigger `+`, like the zoom glyph, centered on the
-        // "tab shape" (inset top and bottom, same as a real tab pill) rather
-        // than the hover pill's own shorter, doubly-inset bounds.
-        let new_tab = layout.new_tab;
-        let tab_shape_top = new_tab.y + tab_top_inset;
-        let tab_shape_h = new_tab.h - tab_top_inset - tab_bottom_inset;
-        let plus_cw = cw * TAB_BUTTON_GLYPH_RATIO;
-        let plus_ch = self.line_height * TAB_BUTTON_GLYPH_RATIO;
-        let plus = self.tabbar_button_buffer("+", muted, TAB_BUTTON_GLYPH_RATIO);
-        texts.push(TabbarText {
-            bounds: text_bounds(
-                new_tab.x,
-                new_tab.y,
-                new_tab.x + new_tab.w,
-                new_tab.y + new_tab.h,
-            ),
-            buffer: plus,
-            color: muted,
-            left: new_tab.x + (new_tab.w - plus_cw) / 2.0,
-            top: tab_shape_top + (tab_shape_h - plus_ch) / 2.0 + NEW_TAB_GLYPH_SHIFT_DOWN_PX,
-        });
-
         for (i, region) in layout.menu_titles.iter().enumerate() {
             let open = tabbar.open_menu == Some(i);
             let buffer = self.tabbar_line_buffer(&tabbar.menus[i].title, foreground, open, false);
@@ -415,7 +359,48 @@ impl GpuRenderer {
             });
         }
 
+        // The focused pane's working path, centered in the free stretch of the
+        // row between the hamburger and the window controls, muted like an
+        // inactive tab's label.
+        let path = layout.path;
+        let avail = path.w - 2.0 * cw;
+        if !tabbar.path.is_empty() && avail >= PATH_MIN_CELLS * cw {
+            let (buffer, width) = self.fitted_path_buffer(&tabbar.path, inactive_tab, avail);
+            texts.push(TabbarText {
+                bounds: text_bounds(path.x, path.y, path.x + path.w, path.y + path.h),
+                buffer,
+                color: inactive_tab,
+                left: path.x + (path.w - width) / 2.0,
+                top: vcenter(path.y, path.h) - TAB_LABEL_SHIFT_UP_PX,
+            });
+        }
+
         texts
+    }
+
+    /// Shape `path` as one line no wider than `avail` pixels, with its front
+    /// cut off (behind an ellipsis) when it does not fit: the end of a path is
+    /// the part that says where you are. Returns the buffer and its width.
+    fn fitted_path_buffer(
+        &mut self,
+        path: &str,
+        color: Color,
+        avail: f32,
+    ) -> (glyphon::Buffer, f32) {
+        let mut text = path.to_string();
+        loop {
+            let buffer = self.tabbar_line_buffer(&text, color, false, true);
+            let width = buffer_width(&buffer);
+            let kept = text.chars().count();
+            if width <= avail || kept <= PATH_MIN_KEPT_CHARS {
+                return (buffer, width);
+            }
+            // Scale the kept length by how far over it is, and always drop at
+            // least one character so the loop ends.
+            let target = ((kept as f32 * avail / width).floor() as usize).min(kept - 1);
+            let tail: String = path.chars().skip(path.chars().count() - target.saturating_sub(1)).collect();
+            text = format!("\u{2026}{tail}");
+        }
     }
 
     /// Rasterize the command palette overlay and upload it to the GPU. Returns
@@ -956,8 +941,6 @@ pub(super) fn tabbar_strip_rgba(
         // other titlebar button's hover pill matches. Shared with
         // `tabbar::layout`, which reserves extra spacing around the narrower
         // buttons so this wider pill never bleeds into a neighbor.
-        new_tab_hpad: HOVER_PILL_H_PAD_CELLS * cw,
-        pill_radius: ch * TAB_CORNER_RADIUS_RATIO,
         tab_vpad_bottom: tabbar::TAB_BOTTOM_VPAD_PX,
         tab_vpad_top: tabbar::tab_top_inset_px(tabbar.menu_style),
     };
@@ -965,13 +948,11 @@ pub(super) fn tabbar_strip_rgba(
     // centered horizontally in whichever button is hovered, and shares one
     // top inset, so the pills line up no matter how wide their own boxes
     // are. Only the background color varies between buttons.
-    let pill = HoverPill::new(&style, &layout);
 
     paint_tab_pills(&mut rgba, &style, &layout, tabbar);
-    paint_new_tab_hover(&mut rgba, &style, &layout, tabbar);
     paint_scroll_chevrons(&mut rgba, &style, &layout, tabbar);
-    paint_hamburger(&mut rgba, &style, pill, &layout, tabbar);
-    paint_window_controls(&mut rgba, &style, pill, &layout, tabbar);
+    paint_hamburger(&mut rgba, &style, &layout, tabbar);
+    paint_window_controls(&mut rgba, &style, &layout, tabbar);
 
     StripImage {
         height,
@@ -1011,7 +992,7 @@ fn paint_tab_pills(
             tab.w - tabbar::TAB_GAP_PX,
             tab.h - style.tab_vpad_top - style.tab_vpad_bottom,
         );
-        fill_rounded_rect(rgba, style.canvas, bounds, style.pill_radius, color, 1.0);
+        fill_rounded_rect(rgba, style.canvas, bounds, SQUARE_CORNER, color, 1.0);
         // Close button hover: rounded rectangle highlight over the × region.
         // Centered on the tab shape (inset top and bottom), like the ×
         // glyph itself below, not the taller full element region.
@@ -1030,7 +1011,7 @@ fn paint_tab_pills(
                         close.w - hpad * 2.0,
                         close.h - style.tab_vpad_top - style.tab_vpad_bottom - vpad * 2.0,
                     ),
-                    style.pill_radius,
+                    SQUARE_CORNER,
                     close_hover,
                     1.0,
                 );
@@ -1078,38 +1059,6 @@ fn paint_tab_pills(
         }
     }
 }
-/// Paint the new-tab button's hover pill behind its `+` glyph. Same style as
-/// every other titlebar button's pill, but with extra bottom inset of its own
-/// so it reads shorter than the others.
-fn paint_new_tab_hover(
-    rgba: &mut [u8],
-    style: &StripStyle<'_>,
-    layout: &TabbarLayout,
-    tabbar: &TopTabbar,
-) {
-    // New-tab button hover: small pill behind the + glyph. Same style as
-    // every other titlebar button's hover pill: top aligned with a
-    // tab's own top inset, fully rounded, but with extra bottom inset of
-    // its own so it reads shorter than the others.
-    if tabbar.tabbar_hover == TabbarHit::NewTab {
-        let nt = layout.new_tab;
-        let new_tab_vpad_bottom = NEW_TAB_BOTTOM_INSET_RATIO * style.cell_h;
-        let new_tab_hover = mix_rgb(style.band, style.theme.foreground, 0.12);
-        fill_rounded_rect(
-            rgba,
-            style.canvas,
-            (
-                nt.x + style.new_tab_hpad,
-                nt.y + style.tab_vpad_top + NEW_TAB_HOVER_PILL_TOP_TRIM_PX,
-                nt.w - style.new_tab_hpad * 2.0,
-                nt.h - style.tab_vpad_top - new_tab_vpad_bottom - NEW_TAB_HOVER_PILL_TOP_TRIM_PX,
-            ),
-            style.pill_radius,
-            new_tab_hover,
-            1.0,
-        );
-    }
-}
 /// Paint the tab-strip scroll arrows, dimmed and non-interactive at the ends
 /// of the tab list.
 fn paint_scroll_chevrons(
@@ -1147,7 +1096,7 @@ fn paint_scroll_chevrons(
                     r.w - hpad * 2.0,
                     r.h - style.tab_vpad_top - vpad,
                 ),
-                style.pill_radius,
+                SQUARE_CORNER,
                 mix_rgb(style.band, style.theme.foreground, 0.12),
                 1.0,
             );
@@ -1192,39 +1141,30 @@ fn paint_scroll_chevrons(
 fn paint_hamburger(
     rgba: &mut [u8],
     style: &StripStyle<'_>,
-    pill: HoverPill,
     layout: &TabbarLayout,
     tabbar: &TopTabbar,
 ) {
-    // Hamburger pill uses the same vertical inset and radius as tabs.
     if let Some(hb) = layout.hamburger {
         let is_hovered = tabbar.tabbar_hover == TabbarHit::Hamburger;
         let is_open = tabbar.open_menu.is_some();
+        let pill = button_pill(hb.x + hb.w / 2.0, hb.y + hb.h / 2.0, style.cell_h);
         if is_hovered || is_open {
-            let pw = pill.width;
-            let ph = pill.height.unwrap_or(hb.h - pill.top_inset - pill.vpad);
-            let px = hb.x + (hb.w - pw) / 2.0;
-            let py = hb.y + pill.top_inset - CONTROL_SHIFT_UP_PX;
             let btn_color = mix_rgb(style.band, style.theme.foreground, 0.12);
             fill_rounded_rect(
                 rgba,
                 style.canvas,
-                (px, py, pw, ph),
-                style.pill_radius,
+                pill,
+                SQUARE_CORNER,
                 btn_color,
                 1.0,
             );
         }
 
         // Draw modern vector hamburger icon (3 clean horizontal lines),
-        // centered on the tab shape (inset top and bottom) to align
-        // horizontally with the tab label.
+        // centered on its pill.
         let color = style.theme.foreground;
         let alpha = if is_hovered || is_open { 1.0 } else { 0.62 };
-        let cx = hb.x + hb.w / 2.0;
-        let cy =
-            hb.y + style.tab_vpad_top + (hb.h - style.tab_vpad_top - style.tab_vpad_bottom) / 2.0
-                - CONTROL_SHIFT_UP_PX;
+        let (cx, cy) = pill_center(pill);
         let size = (style.cell_h * 0.40 * TITLEBAR_ICON_SCALE).round();
         let half = size / 2.0;
         let thickness = 1.25;
@@ -1264,7 +1204,6 @@ fn paint_hamburger(
 fn paint_window_controls(
     rgba: &mut [u8],
     style: &StripStyle<'_>,
-    pill: HoverPill,
     layout: &TabbarLayout,
     tabbar: &TopTabbar,
 ) {
@@ -1281,17 +1220,16 @@ fn paint_window_controls(
             _ => None,
         };
         if let Some((region, color)) = hover_control {
-            let pw = pill.width;
-            let ph = pill
-                .height
-                .expect("controls present, so close's height was computed above");
-            let px = region.x + (region.w - pw) / 2.0;
-            let py = region.y + pill.top_inset - CONTROL_SHIFT_UP_PX;
+            let pill = button_pill(
+                region.x + region.w / 2.0,
+                region.y + region.h / 2.0,
+                style.cell_h,
+            );
             fill_rounded_rect(
                 rgba,
                 style.canvas,
-                (px, py, pw, ph),
-                style.pill_radius,
+                pill,
+                SQUARE_CORNER,
                 color,
                 1.0,
             );
@@ -1302,16 +1240,15 @@ fn paint_window_controls(
         let fg_color = style.theme.foreground;
         let muted_alpha = 0.62;
 
-        // Draw Minimize icon (horizontal line), centered on the tab shape
-        // (inset top and bottom) to align with the tab label.
+        // Draw Minimize icon (horizontal line), centered on its pill.
         {
             let is_hovered = tabbar.tabbar_hover == TabbarHit::Minimize;
             let alpha = if is_hovered { 1.0 } else { muted_alpha };
-            let cx = minimize.x + minimize.w / 2.0;
-            let cy = minimize.y
-                + style.tab_vpad_top
-                + (minimize.h - style.tab_vpad_top - style.tab_vpad_bottom) / 2.0
-                - CONTROL_SHIFT_UP_PX;
+            let (cx, cy) = pill_center(button_pill(
+                minimize.x + minimize.w / 2.0,
+                minimize.y + minimize.h / 2.0,
+                style.cell_h,
+            ));
             fill_line_segment(
                 rgba,
                 style.canvas,
@@ -1323,16 +1260,15 @@ fn paint_window_controls(
             );
         }
 
-        // Draw Maximize icon (hollow square), centered on the tab shape
-        // (inset top and bottom) to align with the tab label.
+        // Draw Maximize icon (hollow square), centered on its pill.
         {
             let is_hovered = tabbar.tabbar_hover == TabbarHit::Maximize;
             let alpha = if is_hovered { 1.0 } else { muted_alpha };
-            let cx = maximize.x + maximize.w / 2.0;
-            let cy = maximize.y
-                + style.tab_vpad_top
-                + (maximize.h - style.tab_vpad_top - style.tab_vpad_bottom) / 2.0
-                - CONTROL_SHIFT_UP_PX;
+            let (cx, cy) = pill_center(button_pill(
+                maximize.x + maximize.w / 2.0,
+                maximize.y + maximize.h / 2.0,
+                style.cell_h,
+            ));
             let sq_x = cx - size / 2.0;
             let sq_y = cy - size / 2.0;
 
@@ -1379,16 +1315,15 @@ fn paint_window_controls(
             );
         }
 
-        // Draw Close icon (X), centered on the tab shape (inset top and
-        // bottom) to align with the tab label.
+        // Draw Close icon (X), centered on its pill.
         {
             let is_hovered = tabbar.tabbar_hover == TabbarHit::Close;
             let alpha = if is_hovered { 1.0 } else { muted_alpha };
-            let cx = close.x + close.w / 2.0;
-            let cy = close.y
-                + style.tab_vpad_top
-                + (close.h - style.tab_vpad_top - style.tab_vpad_bottom) / 2.0
-                - CONTROL_SHIFT_UP_PX;
+            let (cx, cy) = pill_center(button_pill(
+                close.x + close.w / 2.0,
+                close.y + close.h / 2.0,
+                style.cell_h,
+            ));
             // Half-diagonal, not half-side: an X's corner-to-corner span is
             // its side length times sqrt(2), so `size / 2.0` here would read
             // visually larger than minimize's `size`-long line and
@@ -1425,9 +1360,11 @@ const PANE_STRIP_ACTIVE_BG: Rgb = Rgb::new(0x2a, 0x2f, 0x31);
 /// Non-occupied band background color (#1f2527).
 const PANE_STRIP_BAND_BG: Rgb = Rgb::new(0x1f, 0x25, 0x27);
 
-/// Corner radius of a pane strip's tab pills, as a fraction of cell height:
-/// much squarer than the title bar's, since a pill sits between two lines.
-const PANE_STRIP_PILL_RADIUS_RATIO: f32 = 0.12;
+/// Side of a tab's icon square, as a fraction of cell height.
+const TAB_ICON_HEIGHT_RATIO: f32 = 0.85;
+
+/// Gap between a tab's icon and its title, in cells.
+const TAB_ICON_GAP_CELLS: f32 = 0.5;
 
 /// Rasterize a pane-level tab strip into an RGBA buffer.
 #[allow(clippy::too_many_arguments)]
@@ -1458,10 +1395,14 @@ pub fn rasterize_pane_strip_rgba(
         1.0,
     );
 
-    let pill_radius = ch * PANE_STRIP_PILL_RADIUS_RATIO;
     let tab_vpad_top = crate::PANE_STRIP_TOP_PAD_PX;
     let tab_vpad_bottom = crate::PANE_STRIP_SEPARATOR_PX + crate::PANE_STRIP_SEPARATOR_INSET_PX;
     let inactive_bg = mix_rgb(PANE_STRIP_BAND_BG, PANE_STRIP_ACTIVE_BG, 0.4);
+    // Every button's icon and square hover pill is centered vertically in the
+    // strip, between its top edge and the separator along its bottom, which is
+    // also where the tab labels center, so the close, new-tab and scroll
+    // buttons line up with each other and with the text.
+    let pill_mid_y = |r: Region| r.y + (r.h - tab_vpad_bottom) / 2.0;
 
     let dark_theme = {
         let bg = theme.tabbar_bg;
@@ -1497,25 +1438,23 @@ pub fn rasterize_pane_strip_rgba(
             tab_reg.w - tabbar::TAB_GAP_PX,
             tab_reg.h - tab_vpad_top - tab_vpad_bottom,
         );
-        fill_rounded_rect(&mut rgba, canvas, pill_bounds, pill_radius, pill_color, 1.0);
+        fill_rounded_rect(&mut rgba, canvas, pill_bounds, SQUARE_CORNER, pill_color, 1.0);
 
         // Close button hover highlight
         let close_reg = layout.closes[i];
+        let close_pill = button_pill(
+            close_reg.x + close_reg.w / 2.0 + TAB_CLOSE_SHIFT_RIGHT_PX,
+            pill_mid_y(close_reg),
+            ch,
+        );
         let is_close_hovered = hover == PaneStripHit::CloseTab(tab.pane_id);
         if is_close_hovered {
-            let hpad = cw * 0.15;
-            let vpad = ch * 0.2;
             let close_hover_color = mix_rgb(pill_color, theme.foreground, 0.18);
             fill_rounded_rect(
                 &mut rgba,
                 canvas,
-                (
-                    close_reg.x + hpad + TAB_CLOSE_SHIFT_RIGHT_PX,
-                    close_reg.y + tab_vpad_top + vpad - TAB_CLOSE_SHIFT_UP_PX,
-                    close_reg.w - hpad * 2.0,
-                    close_reg.h - tab_vpad_top - tab_vpad_bottom - vpad * 2.0,
-                ),
-                pill_radius,
+                close_pill,
+                SQUARE_CORNER,
                 close_hover_color,
                 1.0,
             );
@@ -1528,11 +1467,7 @@ pub fn rasterize_pane_strip_rgba(
             } else {
                 theme.ansi[8]
             };
-            let cx = close_reg.x + close_reg.w / 2.0 + TAB_CLOSE_SHIFT_RIGHT_PX;
-            let cy = close_reg.y
-                + tab_vpad_top
-                + (close_reg.h - tab_vpad_top - tab_vpad_bottom) / 2.0
-                - TAB_CLOSE_SHIFT_UP_PX;
+            let (cx, cy) = pill_center(close_pill);
             let size = (ch * 0.35).round();
             let half = size / 2.0;
             let thickness = 1.25;
@@ -1560,15 +1495,31 @@ pub fn rasterize_pane_strip_rgba(
         let pad = cw * 0.4;
         let title_x = tab_reg.x + TAB_H_PAD_CELLS * cw;
         let title_end = close_reg.x;
-        let avail = (title_end - (title_x + pad)).max(cw);
-        let max_chars = (avail / cw).floor() as usize;
-        let labeled = format!("{}: {}", i + 1, tab.title);
-        let title = truncate_label(&labeled, max_chars);
+        let mut text_x = title_x + pad;
         let text_color = if tab.active {
             active_text_color
         } else {
             inactive_text_color
         };
+        if let Some(svg) = &tab.icon {
+            let icon_px = (ch * TAB_ICON_HEIGHT_RATIO).round().max(1.0) as u32;
+            let icon_y = tab_reg.y
+                + tab_vpad_top
+                + (tab_reg.h - tab_vpad_top - tab_vpad_bottom - icon_px as f32) / 2.0
+                - TAB_LABEL_SHIFT_UP_PX;
+            blit_svg(
+                &mut rgba,
+                canvas,
+                svg,
+                (text_x.round() as i32, icon_y.round() as i32),
+                icon_px,
+            );
+            text_x += icon_px as f32 + cw * TAB_ICON_GAP_CELLS;
+        }
+        let avail = (title_end - text_x).max(cw);
+        let max_chars = (avail / cw).floor() as usize;
+        let labeled = format!("{}: {}", i + 1, tab.title);
+        let title = truncate_label(&labeled, max_chars);
         let mut buffer = shape_chrome_line(font_system, ctx, &title, text_color, false, true);
         let vcenter_y = tab_reg.y
             + tab_vpad_top
@@ -1580,62 +1531,40 @@ pub fn rasterize_pane_strip_rgba(
             &mut rgba,
             canvas,
             &mut buffer,
-            ((title_x + pad).round() as i32, vcenter_y.round() as i32),
+            (text_x.round() as i32, vcenter_y.round() as i32),
             text_color,
         );
     }
 
     // 3. New-tab button (+)
     if let Some(nt) = layout.new_tab {
+        let pill = button_pill(nt.x + nt.w / 2.0, pill_mid_y(nt), ch);
         if hover == PaneStripHit::NewTab {
-            let new_tab_vpad_bottom = tab_vpad_bottom;
-            let new_tab_hpad = HOVER_PILL_H_PAD_CELLS * cw;
             let new_tab_hover = mix_rgb(PANE_STRIP_BAND_BG, theme.foreground, 0.12);
-            fill_rounded_rect(
-                &mut rgba,
-                canvas,
-                (
-                    nt.x + new_tab_hpad,
-                    nt.y + tab_vpad_top + NEW_TAB_HOVER_PILL_TOP_TRIM_PX,
-                    nt.w - new_tab_hpad * 2.0,
-                    nt.h - tab_vpad_top - new_tab_vpad_bottom - NEW_TAB_HOVER_PILL_TOP_TRIM_PX,
-                ),
-                pill_radius,
-                new_tab_hover,
-                1.0,
-            );
+            fill_rounded_rect(&mut rgba, canvas, pill, SQUARE_CORNER, new_tab_hover, 1.0);
         }
 
-        // Draw '+' icon vector graphic
-        let cx = nt.x + nt.w / 2.0;
-        let cy = nt.y + tab_vpad_top + (nt.h - tab_vpad_top - tab_vpad_bottom) / 2.0
-            + NEW_TAB_GLYPH_SHIFT_DOWN_PX;
-        let size = (ch * 0.35).round();
-        let half = size / 2.0;
-        let thickness = 1.35;
+        // The '+' is two pixel-aligned bars centered exactly on the pill, so
+        // its edges are crisp and its arms are even: a stroke straddling a
+        // pixel boundary would leave a half-lit row on one side. The bars'
+        // thickness and length share the pill's parity so that holds for an
+        // odd pill size as well.
+        let (_, _, side, _) = pill;
+        let (cx, cy) = pill_center(pill);
+        let odd = (side as u32 % 2) as f32;
+        let thickness = 2.0 - odd;
+        let len = ((ch * 0.35).round() + 2.0).max(2.0) + odd;
         let plus_color = if hover == PaneStripHit::NewTab {
             theme.foreground
         } else {
             theme.ansi[8]
         };
-        fill_line_segment(
-            &mut rgba,
-            canvas,
-            (cx - half, cy),
-            (cx + half, cy),
-            thickness,
-            plus_color,
-            1.0,
-        );
-        fill_line_segment(
-            &mut rgba,
-            canvas,
-            (cx, cy - half),
-            (cx, cy + half),
-            thickness,
-            plus_color,
-            1.0,
-        );
+        for bar in [
+            (cx - len / 2.0, cy - thickness / 2.0, len, thickness),
+            (cx - thickness / 2.0, cy - len / 2.0, thickness, len),
+        ] {
+            fill_rounded_rect(&mut rgba, canvas, bar, SQUARE_CORNER, plus_color, 1.0);
+        }
     }
 
     // 4. Scroll chevrons if paginated
@@ -1652,19 +1581,13 @@ pub fn rasterize_pane_strip_rgba(
             active_idx + 1 < tab_count
         };
         let hovered = active && hover == hit;
+        let pill = button_pill(r.x + r.w / 2.0, pill_mid_y(r), ch);
         if hovered {
-            let hpad = cw * 0.2;
-            let vpad = ch * 0.1;
             fill_rounded_rect(
                 &mut rgba,
                 canvas,
-                (
-                    r.x + hpad,
-                    r.y + tab_vpad_top,
-                    r.w - hpad * 2.0,
-                    r.h - tab_vpad_top - vpad,
-                ),
-                pill_radius,
+                pill,
+                SQUARE_CORNER,
                 mix_rgb(PANE_STRIP_BAND_BG, theme.foreground, 0.12),
                 1.0,
             );
@@ -1676,8 +1599,7 @@ pub fn rasterize_pane_strip_rgba(
         } else {
             theme.ansi[8]
         };
-        let cx = r.x + r.w / 2.0;
-        let cy = r.y + r.h / 2.0;
+        let (cx, cy) = pill_center(pill);
         let half = (ch * 0.2).round();
         let reach = half * 0.6;
         let thickness = 1.5;
@@ -2045,5 +1967,246 @@ mod tests {
             strip(&classic).height,
             (crate::tabbar::tabbar_rows(MenuStyle::Classic) as f32 * CELL_H).ceil() as u32
         );
+    }
+
+    /// The `(x, y, width, height)` box around every pixel where `after`
+    /// differs from `before`, over a `width`-wide RGBA image.
+    fn changed_box(before: &[u8], after: &[u8], width: u32) -> (u32, u32, u32, u32) {
+        let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0, 0);
+        for (i, (b, a)) in before.chunks(4).zip(after.chunks(4)).enumerate() {
+            if b != a {
+                let (x, y) = (i as u32 % width, i as u32 / width);
+                (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            }
+        }
+        assert!(x0 != u32::MAX, "nothing changed");
+        (x0, y0, x1 - x0 + 1, y1 - y0 + 1)
+    }
+
+    #[test]
+    fn test_pane_strip_button_hover_pills_are_equal_squares_centered_in_the_strip() {
+        use crate::renderer::test_support::sample_font_ctx;
+        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let mut fonts = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let w = 700;
+        let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
+        let tabs = vec![
+            PaneTab { active: true, icon: None, pane_id: 1, title: "zsh".into() },
+            PaneTab { active: false, icon: None, pane_id: 2, title: "a".into() },
+        ];
+        // Narrow enough to paginate, so the scroll arrows are there to hover.
+        let narrow = 300;
+        let layout = layout_pane_strip(&tabs, w as f32, h as f32, CELL_W, CELL_H, 0);
+        let paged = layout_pane_strip(&tabs, narrow as f32, h as f32, CELL_W, CELL_H, 0);
+        assert!(paged.scroll_right.is_some(), "the strip should paginate");
+        let mut paint = |layout: &PaneStripLayout, width, hover| {
+            rasterize_pane_strip_rgba(
+                &tabs, layout, width, h, CELL_W, CELL_H, &theme, hover, Rgb::new(60, 60, 60),
+                &mut fonts, &mut swash, &ctx,
+            )
+        };
+        let idle = paint(&layout, w, PaneStripHit::None);
+        let idle_paged = paint(&paged, narrow, PaneStripHit::None);
+        let boxes = [
+            changed_box(&idle, &paint(&layout, w, PaneStripHit::CloseTab(1)), w),
+            changed_box(&idle, &paint(&layout, w, PaneStripHit::NewTab), w),
+            changed_box(&idle_paged, &paint(&paged, narrow, PaneStripHit::ScrollRight), narrow),
+        ];
+        // The strip's content ends at the separator, two rows above the
+        // bottom, so its middle (in edge coordinates) is the pills' middle.
+        let pill_mid = (h - 2) as f32 / 2.0;
+        for (x, y, bw, bh) in boxes {
+            assert_eq!(bw, bh, "hover pill at ({x}, {y}) is {bw}x{bh}, not square");
+            assert!(
+                ((y as f32 + bh as f32 / 2.0) - pill_mid).abs() <= 0.5,
+                "hover pill at y {y} is off the strip center {pill_mid}"
+            );
+            assert!(bw as f32 <= CELL_H, "hover pill {bw}px is over a cell tall");
+        }
+        assert_eq!(boxes[0].2, boxes[1].2, "close and new-tab pills differ in size");
+        assert_eq!(boxes[0].2, boxes[2].2, "close and scroll pills differ in size");
+        assert_eq!(boxes[0].2 as f32, CELL_H, "pills are not one cell tall");
+    }
+
+    #[test]
+    fn test_titlebar_button_hover_pills_are_equal_squares_centered_in_the_bar() {
+        let theme = Theme::dark();
+        let mut bar = sample_menu_chrome(None);
+        bar.tabs.clear();
+        bar.open_menu = None;
+        bar.window_controls = true;
+        let paint = |bar: &TopTabbar| tabbar_strip_rgba(bar, 600.0, CELL_W, CELL_H, &theme);
+        let idle = paint(&bar);
+        let mut sides = Vec::new();
+        for hover in [
+            TabbarHit::Hamburger,
+            TabbarHit::Minimize,
+            TabbarHit::Maximize,
+            TabbarHit::Close,
+        ] {
+            bar.tabbar_hover = hover;
+            let (_, y, w, h) = changed_box(&idle.rgba, &paint(&bar).rgba, idle.width);
+            assert_eq!(w, h, "{hover:?} pill is {w}x{h}, not square");
+            let mid = y as f32 + h as f32 / 2.0;
+            assert!(
+                (mid - idle.height as f32 / 2.0).abs() <= 0.5,
+                "{hover:?} pill is centered at {mid} in a {}px bar",
+                idle.height
+            );
+            sides.push(w);
+        }
+        assert!(sides.windows(2).all(|p| p[0] == p[1]), "pill sizes differ: {sides:?}");
+        // The same size as the pane strips' pills, not just alike in the bar.
+        assert_eq!(sides[0] as f32, CELL_H, "pills are not one cell tall");
+    }
+
+    #[test]
+    fn test_pane_strip_tab_pills_have_square_corners() {
+        use crate::renderer::test_support::sample_font_ctx;
+        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let mut fonts = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let w = 400;
+        let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
+        let tabs = vec![PaneTab {
+            active: true,
+            icon: None,
+            pane_id: 1,
+            title: "zsh".into(),
+        }];
+        let layout = layout_pane_strip(&tabs, w as f32, h as f32, CELL_W, CELL_H, 0);
+        let rgba = rasterize_pane_strip_rgba(
+            &tabs, &layout, w, h, CELL_W, CELL_H, &theme, PaneStripHit::None,
+            Rgb::new(60, 60, 60), &mut fonts, &mut swash, &ctx,
+        );
+        let at = |x: u32, y: u32| {
+            let i = ((y * w + x) * 4) as usize;
+            rgba[i..i + 3].to_vec()
+        };
+        // The pill's top-left pixel is as filled as its interior; a rounded
+        // corner would leave it partly band-colored.
+        assert_eq!(at(1, 1), at(150, 12));
+    }
+
+    /// The center, in edge coordinates, of the icon drawn inside `pill` of a
+    /// `width`-wide RGBA image: the box around every pixel that differs from
+    /// the pill's own background (read at its corner).
+    fn icon_center(rgba: &[u8], width: u32, pill: (f32, f32, f32, f32)) -> (f32, f32) {
+        let (px, py, side, _) = pill;
+        let at = |x: u32, y: u32| &rgba[((y * width + x) * 4) as usize..][..3];
+        let (x0, y0) = (px as u32, py as u32);
+        let bg = at(x0, y0).to_vec();
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0, 0);
+        for y in y0..y0 + side as u32 {
+            for x in x0..x0 + side as u32 {
+                let diff: i32 = at(x, y).iter().zip(&bg).map(|(a, b)| (*a as i32 - *b as i32).abs()).sum();
+                if diff > 40 {
+                    (min_x, min_y) = (min_x.min(x), min_y.min(y));
+                    (max_x, max_y) = (max_x.max(x), max_y.max(y));
+                }
+            }
+        }
+        assert!(min_x != u32::MAX, "no icon inside the pill at {pill:?}");
+        ((min_x + max_x + 1) as f32 / 2.0, (min_y + max_y + 1) as f32 / 2.0)
+    }
+
+    #[test]
+    fn test_every_button_icon_is_centered_on_its_pill() {
+        use crate::renderer::test_support::sample_font_ctx;
+        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        let theme = Theme::dark();
+        let check = |what: &str, rgba: &[u8], width, pill: (f32, f32, f32, f32)| {
+            let (ix, iy) = icon_center(rgba, width, pill);
+            let (cx, cy) = pill_center(pill);
+            assert!(
+                (ix - cx).abs() < 0.01 && (iy - cy).abs() < 0.01,
+                "{what}: icon centered at ({ix}, {iy}), pill at ({cx}, {cy})"
+            );
+        };
+
+        // The title bar's hamburger and window controls.
+        let mut bar = sample_menu_chrome(None);
+        bar.tabs.clear();
+        bar.open_menu = None;
+        bar.window_controls = true;
+        let image = tabbar_strip_rgba(&bar, 600.0, CELL_W, CELL_H, &theme);
+        let layout = tabbar_layout(&bar, 600.0, CELL_W, CELL_H);
+        let [minimize, maximize, close] = layout.controls.expect("controls present");
+        let hamburger = layout.hamburger.expect("modern style has a hamburger");
+        for (what, r) in [("hamburger", hamburger), ("minimize", minimize), ("maximize", maximize), ("close", close)] {
+            let pill = button_pill(r.x + r.w / 2.0, r.y + r.h / 2.0, CELL_H);
+            // The strip is the text-free pass: icons are drawn into it.
+            check(what, &image.rgba, image.width, pill);
+        }
+
+        // A pane strip's close, new-tab and scroll buttons.
+        let ctx = sample_font_ctx();
+        let mut fonts = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
+        let tabs = vec![
+            PaneTab { active: true, icon: None, pane_id: 1, title: "zsh".into() },
+            PaneTab { active: false, icon: None, pane_id: 2, title: "a".into() },
+        ];
+        let mid = (h - 2) as f32 / 2.0;
+        let wide = layout_pane_strip(&tabs, 700.0, h as f32, CELL_W, CELL_H, 0);
+        let narrow = layout_pane_strip(&tabs, 300.0, h as f32, CELL_W, CELL_H, 0);
+        let mut paint = |layout: &PaneStripLayout, width: u32| {
+            rasterize_pane_strip_rgba(
+                &tabs, layout, width, h, CELL_W, CELL_H, &theme, PaneStripHit::None,
+                Rgb::new(60, 60, 60), &mut fonts, &mut swash, &ctx,
+            )
+        };
+        let wide_rgba = paint(&wide, 700);
+        let close = wide.closes[0];
+        let close_pill = button_pill(close.x + close.w / 2.0 + TAB_CLOSE_SHIFT_RIGHT_PX, mid, CELL_H);
+        check("pane close", &wide_rgba, 700, close_pill);
+        let nt = wide.new_tab.expect("the button fits");
+        check("new tab", &wide_rgba, 700, button_pill(nt.x + nt.w / 2.0, mid, CELL_H));
+        let narrow_rgba = paint(&narrow, 300);
+        for (what, r) in [("scroll left", narrow.scroll_left), ("scroll right", narrow.scroll_right)] {
+            let r = r.expect("the strip paginates");
+            check(what, &narrow_rgba, 300, button_pill(r.x + r.w / 2.0, mid, CELL_H));
+        }
+    }
+
+    #[test]
+    fn test_new_tab_plus_is_a_crisp_symmetric_cross_centered_on_its_pill() {
+        use crate::renderer::test_support::sample_font_ctx;
+        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let mut fonts = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let w = 400;
+        let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
+        let tabs = vec![PaneTab { active: true, icon: None, pane_id: 1, title: "zsh".into() }];
+        let layout = layout_pane_strip(&tabs, w as f32, h as f32, CELL_W, CELL_H, 0);
+        let nt = layout.new_tab.expect("the button fits");
+        let rgba = rasterize_pane_strip_rgba(
+            &tabs, &layout, w, h, CELL_W, CELL_H, &theme, PaneStripHit::None,
+            Rgb::new(60, 60, 60), &mut fonts, &mut swash, &ctx,
+        );
+        let px = |x: u32, y: u32| rgba[((y * w + x) * 4) as usize..][..3].to_vec();
+        let band = px(nt.x as u32 + 1, 1);
+        let ink: Vec<(u32, u32)> = (0..h - 2)
+            .flat_map(|y| (nt.x as u32..(nt.x + nt.w) as u32).map(move |x| (x, y)))
+            .filter(|&(x, y)| px(x, y) != band)
+            .collect();
+        let (x0, x1) = (ink.iter().map(|p| p.0).min().unwrap(), ink.iter().map(|p| p.0).max().unwrap());
+        let (y0, y1) = (ink.iter().map(|p| p.1).min().unwrap(), ink.iter().map(|p| p.1).max().unwrap());
+        assert_eq!(x1 - x0, y1 - y0, "the '+' is not as wide as it is tall");
+        let full = px(x0 + (x1 - x0) / 2, y0 + (y1 - y0) / 2);
+        // Crisp: every pixel it touches is the same full-strength color, with
+        // no half-lit edge.
+        assert!(ink.iter().all(|&(x, y)| px(x, y) == full), "the '+' has soft edges");
+        let pill = button_pill(nt.x + nt.w / 2.0, (h - 2) as f32 / 2.0, CELL_H);
+        let (cx, cy) = ((x0 + x1 + 1) as f32 / 2.0, (y0 + y1 + 1) as f32 / 2.0);
+        assert_eq!((cx, cy), (pill.0 + pill.2 / 2.0, pill.1 + pill.3 / 2.0), "off its pill");
     }
 }

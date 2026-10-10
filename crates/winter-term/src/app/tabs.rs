@@ -273,6 +273,27 @@ impl App {
         self.close_tab_now(pane, Closing::Keep);
     }
 
+    /// Close every other tab in the pane holding `keep`, leaving that tab.
+    pub(crate) fn close_other_tabs(&mut self, keep: PaneId) {
+        if self.ask_before_closing_other_tabs(keep) {
+            return;
+        }
+        self.close_other_tabs_now(keep);
+    }
+
+    /// The same, once the question has been answered or there was none.
+    pub(crate) fn close_other_tabs_now(&mut self, keep: PaneId) {
+        let others: Vec<PaneId> = self
+            .layout()
+            .group_members(keep)
+            .into_iter()
+            .filter(|tab| *tab != keep)
+            .collect();
+        for tab in others {
+            self.close_tab_now(tab, Closing::Keep);
+        }
+    }
+
     /// Close one tab without asking, keeping what it held for reopening or
     /// not. A group left with no tabs merges back into its sibling.
     pub(crate) fn close_tab_now(&mut self, pane: PaneId, closing: Closing) {

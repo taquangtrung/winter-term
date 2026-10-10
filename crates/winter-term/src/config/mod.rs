@@ -63,7 +63,7 @@
 //! // a two-chord binding sets the leader (default `C+w`). Actions:
 //! // split_vertical, split_horizontal, close_pane, close_other_panes,
 //! // focus_left, focus_down, focus_up, focus_right, toggle_pane_zoom,
-//! // prev_tab, next_tab, new_tab, close_tab, copy_selection,
+//! // prev_tab, next_tab, new_tab, close_tab, close_other_tabs, copy_selection,
 //! // paste_from_clipboard, open_settings, font_increase, font_decrease,
 //! // font_reset, toggle_command_palette, toggle_history_palette,
 //! // select_pane, next_block, prev_block. Pane/tab actions targeting one

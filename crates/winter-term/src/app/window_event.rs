@@ -925,12 +925,11 @@ mod tests {
         assert!(app.notice.is_none());
 
         // Second bare Escape, with no timing requirement: Winter takes the
-        // keyboard back, and with the status bar hidden the switch is
-        // confirmed by the brief mode toast.
+        // keyboard back. The switch raises no notice, status bar or not.
         let (logical, physical) = esc();
         assert!(!app.handle_key(ElementState::Pressed, logical, physical));
         assert_eq!(app.modes[&id], Mode::Normal);
-        assert_eq!(app.active_notice().map(|(m, _)| m), Some("NORMAL"));
+        assert!(app.notice.is_none());
     }
 
     #[test]
@@ -965,8 +964,8 @@ mod tests {
             .unwrap()
             .grid_mut()
             .enter_alt_screen();
-        // The entry chord switches even inside a full-screen app; with the
-        // status bar shown, no mode toast accompanies it.
+        // The entry chord switches even inside a full-screen app, and raises
+        // no notice.
         app.modifiers =
             (winit::keyboard::ModifiersState::CONTROL | winit::keyboard::ModifiersState::SHIFT)
                 .into();

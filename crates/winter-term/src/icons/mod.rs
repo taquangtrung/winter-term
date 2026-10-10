@@ -31,6 +31,21 @@ const FILE_SET: &str = "file";
 /// Set prefix for the Git status icons.
 const GIT_SET: &str = "git";
 
+/// Tool name to the packed icon naming it. A tool not listed gets
+/// [`FALLBACK_TOOL_ICON`].
+const TOOL_ICONS: [(&str, &str); 4] = [
+    ("dir", "file/default_folder"),
+    ("git", "file/file_git"),
+    ("grep", "file/file_search"),
+    ("pdf", "file/file_pdf"),
+];
+
+/// The icon for a terminal pane.
+const TERMINAL_ICON: &str = "file/file_terminal";
+
+/// The icon for a tool with no artwork of its own.
+const FALLBACK_TOOL_ICON: &str = "file/default_file";
+
 // ========================================================================
 // Free functions
 // ========================================================================
@@ -89,6 +104,26 @@ pub(crate) fn dir_icon(dir_name: &str, expanded: bool) -> String {
 /// The icon for a Git working-tree status.
 pub(crate) fn git_icon(status: &str) -> String {
     qualified(GIT_SET, status)
+}
+
+/// The icon naming a tool (`dir`, `git`, ...), or the default file icon when
+/// the tool has none of its own.
+pub(crate) fn tool_icon(tool: &str) -> String {
+    TOOL_ICONS
+        .iter()
+        .find(|(name, _)| *name == tool)
+        .map_or(FALLBACK_TOOL_ICON, |(_, icon)| icon)
+        .to_string()
+}
+
+/// Whether a tool has artwork of its own, rather than the default file icon.
+pub(crate) fn has_tool_icon(tool: &str) -> bool {
+    TOOL_ICONS.iter().any(|(name, _)| *name == tool)
+}
+
+/// The icon naming a terminal pane.
+pub(crate) fn terminal_icon() -> String {
+    TERMINAL_ICON.to_string()
 }
 
 /// The packed name for a page's declared icon, or `None` when nothing is
@@ -248,5 +283,16 @@ mod tests {
         ] {
             assert!(contains(&git_icon(status)), "{status} is not packed");
         }
+    }
+
+    #[test]
+    fn test_tool_icons_are_all_packed() {
+        for (tool, icon) in TOOL_ICONS {
+            assert_eq!(tool_icon(tool), icon);
+            assert!(contains(icon), "{icon} is not packed");
+        }
+        assert!(contains(TERMINAL_ICON));
+        assert!(contains(FALLBACK_TOOL_ICON));
+        assert_eq!(tool_icon("keys"), FALLBACK_TOOL_ICON);
     }
 }

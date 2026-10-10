@@ -9,7 +9,7 @@ use winter_render::NoticeKind;
 use super::strip::StripHit;
 use super::tabbar;
 use super::App;
-use super::{MODE_FLASH_DURATION, NOTICE_DURATION};
+use super::NOTICE_DURATION;
 use super::YANK_FLASH_DURATION;
 
 // ========================================================================
@@ -84,22 +84,6 @@ impl App {
     /// and clears once it expires.
     pub(crate) fn show_notice(&mut self, message: impl Into<String>, kind: NoticeKind) {
         self.notice = Some((message.into(), kind, Instant::now() + NOTICE_DURATION));
-        self.dirty = true;
-        if let Some(window) = &self.window {
-            window.request_redraw();
-        }
-    }
-    /// Briefly name the pane's new mode. Shown only while the status bar is
-    /// configured hidden, where a mode switch has no other on-screen cue:
-    /// an alt-screen app keeps drawing the whole pane and owns the cursor
-    /// shape, so without this an Insert/Normal switch is invisible.
-    pub(crate) fn flash_mode(&mut self, mode: crate::model::mode::Mode) {
-        let label = match mode {
-            crate::model::mode::Mode::Insert => "INSERT",
-            crate::model::mode::Mode::Normal => "NORMAL",
-            _ => return,
-        };
-        self.notice = Some((label.to_string(), NoticeKind::Info, Instant::now() + MODE_FLASH_DURATION));
         self.dirty = true;
         if let Some(window) = &self.window {
             window.request_redraw();

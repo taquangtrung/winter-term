@@ -1327,17 +1327,17 @@ mod tests {
         );
     }
     #[test]
-    fn test_ctrl_shift_q_closes_pane() {
+    fn test_ctrl_shift_q_closes_tab() {
         let ctrl_shift_q = Key {
             alt: false,
             code: KeyCode::Char('q'),
             ctrl: true,
             shift: true,
         };
-        let mut pending = PendingPrefix::None;
+        // Closing a tab is a global action, resolved ahead of the overlays.
         assert_eq!(
-            resolve(Mode::Normal, &ctrl_shift_q, &mut pending, 0),
-            Action::ClosePane
+            WindowKeymap::default().global_action(&ctrl_shift_q),
+            Some(Action::CloseTab(None))
         );
     }
     #[test]

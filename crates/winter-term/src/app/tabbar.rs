@@ -99,6 +99,7 @@ const SEARCH_ITEMS: &[ItemDef] = &[
 const MODERN_ITEMS: &[ItemDef] = &[
     leaf("new_tab", "New Tab", "Ctrl-Shift-T"),
     leaf("close_tab", "Close Tab", "Ctrl-Shift-W"),
+    leaf("close_other_tabs", "Close Other Tabs", "Shift-Alt-Q"),
     leaf("rename_tab", "Rename Tab", ""),
     SEPARATOR,
     parent("Layout", LAYOUT_ITEMS),
@@ -118,6 +119,7 @@ const CLASSIC_MENUS: &[MenuDef] = &[
         items: &[
             leaf("new_tab", "New Tab", "Ctrl-Shift-T"),
             leaf("close_tab", "Close Tab", "Ctrl-Shift-W"),
+            leaf("close_other_tabs", "Close Other Tabs", "Shift-Alt-Q"),
             leaf("rename_tab", "Rename Tab", ""),
             SEPARATOR,
             leaf("close_pane", "Close Pane", ""),
@@ -206,6 +208,27 @@ impl App {
             }
         }
         "Terminal".to_string()
+    }
+}
+
+/// `path` with a leading home directory written `~`, otherwise unchanged.
+pub(crate) fn home_relative(path: &str) -> String {
+    match std::env::var("HOME") {
+        Ok(home) => home_relative_to(path, &home),
+        Err(_) => path.to_string(),
+    }
+}
+
+/// [`home_relative`] against an explicit `home`. A sibling that merely shares
+/// the home directory's name as a prefix (`/home/ann2`) is not inside it.
+fn home_relative_to(path: &str, home: &str) -> String {
+    if home.is_empty() {
+        return path.to_string();
+    }
+    match path.strip_prefix(home) {
+        Some("") => "~".to_string(),
+        Some(rest) if rest.starts_with('/') => format!("~{rest}"),
+        _ => path.to_string(),
     }
 }
 
@@ -321,10 +344,23 @@ impl App {
             // Tabs live on each pane's own strip; the title bar keeps the
             // menus, the window controls, and a button opening a tab in the
             // focused pane.
+            path: self.titlebar_path(),
             tabs: Vec::new(),
             url_tooltip,
             window_controls: self.config.title_bar_style == TitleBarStyle::Modern,
         }
+    }
+
+    /// The working path the title bar shows: the focused tab's directory
+    /// (a terminal's shell, or what a tool page is looking at), with the home
+    /// directory written `~`. Empty when the tab is tied to no directory.
+    fn titlebar_path(&self) -> String {
+        let focused = self.layout().focused();
+        let cwd = match self.pages.get(&focused) {
+            Some(slot) => slot.cwd().map(|dir| dir.display().to_string()),
+            None => self.panes.get(&focused).and_then(|pane| pane.cwd()),
+        };
+        cwd.map(|cwd| home_relative(&cwd)).unwrap_or_default()
     }
 
     /// Close the right-click context menu.
@@ -475,10 +511,6 @@ impl App {
         let focused = self.layout().focused();
 
         match hit {
-            TabbarHit::NewTab => {
-                self.close_menu();
-                self.new_tab();
-            }
             TabbarHit::Tab(_)
             | TabbarHit::CloseTab(_)
             | TabbarHit::ScrollTabsLeft
@@ -751,6 +783,15 @@ mod tests {
     }
 
     #[test]
+    fn test_home_relative_writes_only_paths_inside_home_as_tilde() {
+        assert_eq!(home_relative_to("/home/ann", "/home/ann"), "~");
+        assert_eq!(home_relative_to("/home/ann/dev/x", "/home/ann"), "~/dev/x");
+        assert_eq!(home_relative_to("/home/ann2/dev", "/home/ann"), "/home/ann2/dev");
+        assert_eq!(home_relative_to("/etc", "/home/ann"), "/etc");
+        assert_eq!(home_relative_to("/etc", ""), "/etc");
+    }
+
+    #[test]
     fn test_a_tool_tab_is_named_after_its_tool() {
         let mut app = App::new();
         let keys = app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
@@ -760,8 +801,8 @@ mod tests {
             "a title restating the tool is not doubled up"
         );
 
-        // A tool whose page title says something else names both, so the tab
-        // reads in any font and says which tool is running.
+        // A tool whose icon names it shows just the page's title; one on the
+        // default file icon names both, so the tab still says which tool runs.
         struct Titled(&'static str);
         impl Page for Titled {
             fn title(&self) -> String {
@@ -775,7 +816,22 @@ mod tests {
             }
         }
         let dir = app.show_page("dir", Box::new(Titled("winter-term")));
-        assert_eq!(app.tab_title(dir), "dir: winter-term");
+        assert_eq!(app.tab_title(dir), "winter-term");
+        let proc = app.show_page("proc", Box::new(Titled("firefox")));
+        assert_eq!(app.tab_title(proc), "proc: firefox");
+    }
+
+    #[test]
+    fn test_close_other_tabs_leaves_only_the_kept_tab_in_its_pane() {
+        let mut app = App::new();
+        let first = app.layout().focused();
+        app.new_tab();
+        app.new_tab();
+        assert_eq!(app.layout().group_members(first).len(), 3);
+
+        app.close_other_tabs(first);
+
+        assert_eq!(app.layout().group_members(first), vec![first]);
     }
 
     #[test]

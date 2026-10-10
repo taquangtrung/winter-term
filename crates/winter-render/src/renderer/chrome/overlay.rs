@@ -179,7 +179,7 @@ pub(super) fn url_tooltip_rgba(
             .min((surface_w - total_w as f32).max(0.0))
             .round();
 
-        let tab_bottom_y = layout.new_tab.y + layout.new_tab.h;
+        let tab_bottom_y = tab_region.y + tab_region.h;
         let y = (tab_bottom_y + 2.0 - SHADOW_MARGIN)
             .max(0.0)
             .min((surface_h - total_h as f32).max(0.0))
