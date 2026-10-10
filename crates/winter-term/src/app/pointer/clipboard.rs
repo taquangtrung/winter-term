@@ -255,7 +255,7 @@ impl App {
     pub(crate) fn paste_from_primary(&mut self) {
         let text = self.get_primary_text();
         let Some(text) = text else { return };
-        let focused = self.tab().focused();
+        let focused = self.layout().focused();
         if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
             shadow.desync();
         }
@@ -291,7 +291,7 @@ impl App {
     }
 
     pub(crate) fn paste_text(&mut self, text: &str) {
-        let focused = self.tab().focused();
+        let focused = self.layout().focused();
         if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
             shadow.desync();
         }
@@ -410,7 +410,7 @@ mod tests {
     fn app_with_visual_selection(line: &str, anchor: usize, cursor: usize) -> crate::app::App {
         let mut app = crate::app::App::new();
         app.config.status_bar.enabled = true;
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let mut pane = crate::terminal::pane::Pane::with_command(
             20,
             4,
@@ -437,7 +437,7 @@ mod tests {
     /// into scrollback once they overflow the viewport.
     fn app_with_scrollback(lines: &[&str], rows: usize) -> (App, PaneId) {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let mut pane = crate::terminal::pane::Pane::with_command(
             20,
             rows,
@@ -513,7 +513,7 @@ mod tests {
     #[test]
     fn test_selected_text_joins_soft_wrapped_lines_and_skips_hanging_indent() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let mut pane = crate::terminal::pane::Pane::with_command(
             10,
             4,
@@ -547,7 +547,7 @@ mod tests {
         // break consumed lives in no cell, so the join has to reinsert it or
         // the copied line glues two words together.
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let mut pane = crate::terminal::pane::Pane::with_command(
             10,
             4,

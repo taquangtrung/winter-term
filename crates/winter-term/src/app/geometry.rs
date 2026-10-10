@@ -11,7 +11,7 @@ use winter_render::MenuStyle;
 
 use super::App;
 use super::{
-    content_band, edge_resize_direction_at,
+    edge_resize_direction_at,
     AUTO_SCROLL_EDGE_MARGIN, AUTO_SCROLL_INTERVAL, AUTO_SCROLL_MAX_LINES_PER_TICK,
     WINDOW_RESIZE_BORDER_PX,
 };
@@ -76,7 +76,7 @@ impl App {
         let status_enabled = self.status_bar_visible();
 
         let top_h_on_screen = if self.config.menu_style == MenuStyle::Modern {
-            winter_render::modern_tabbar_height_px(ch)
+            winter_render::modern_titlebar_height_px(ch)
         } else {
             top_rows as f32 * ch
         };
@@ -86,16 +86,15 @@ impl App {
             0.0
         };
 
-        // Floor to whole cell rows and center the leftover sub-row slack above
-        // and below the pane band, whether or not the status bar eats into it,
-        // so a window height that isn't an exact multiple of the cell height
-        // never leaves a dead, un-drawable strip pinned to one edge.
-        let (content_rows, top_padding) = content_band(h - top_h_on_screen - status_h, ch);
+        // Every pixel between the title bar and the status bar belongs to the
+        // pane band, so split dividers and pane backgrounds reach both. Panes
+        // floor their own row counts, so a sub-row remainder is just padding at
+        // the foot of the lowest panes.
         PaneRect {
             x: 0.0,
-            y: top_h_on_screen + top_padding,
+            y: top_h_on_screen,
             width: w,
-            height: (content_rows as f32 * ch).max(1.0),
+            height: (h - top_h_on_screen - status_h).max(1.0),
         }
     }
     /// The pane area as a layout `Rect` (same coordinates as [`PaneRect`]).

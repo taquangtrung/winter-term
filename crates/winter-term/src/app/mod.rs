@@ -42,6 +42,7 @@ mod prompt_edit;
 mod render;
 mod session_restore;
 mod settings;
+mod strip;
 mod tabbar;
 mod tabs;
 mod window_event;
@@ -168,24 +169,6 @@ const MIN_ROWS: u32 = 4;
 /// Rows available to panes after reserving the status bar row, never below one.
 pub(crate) fn content_rows(full_rows: usize) -> usize {
     full_rows.saturating_sub(STATUS_BAR_ROWS).max(1)
-}
-
-/// The pane band inside `available_px` (the pixels between the top chrome and the
-/// one-row status bar): how many whole cell rows fit, and the padding that
-/// centers the leftover sub-row slack above them.
-///
-/// Shared by [`App::viewport_rect`] and `render_frame` so the drawn geometry,
-/// pointer hit-testing and the PTY's row count can't drift. Deriving the rows
-/// from the pixels actually left: rather than subtracting chrome rows from the
-/// window's row count: is what keeps the panes clear of the status bar when the
-/// Modern tabbar's extra pixels eat into the slack.
-pub(crate) fn content_band(available_px: f32, ch: f32) -> (usize, f32) {
-    if ch <= 0.0 {
-        return (1, 0.0);
-    }
-    let rows = ((available_px / ch).floor() as usize).max(1);
-    let pad = ((available_px - rows as f32 * ch) / 2.0).floor().max(0.0);
-    (rows, pad)
 }
 
 /// The outer-edge/corner resize direction for a point at `(x, y)` in a `w`x`h`
@@ -589,13 +572,9 @@ pub struct App {
     pub(crate) icon_textures: HashMap<(String, u32, u32), Option<u64>>,
     /// The pixel box `icon_textures` was filled for.
     pub(crate) icon_texture_box: (u32, u32),
-    /// Panes a tool page is currently covering. The pane keeps its terminal,
-    /// which goes on running underneath and comes back when the page closes.
+    /// Tool tabs: each tab here is a page Winter paints itself, with no
+    /// terminal of its own. Every other tab is a terminal in `panes`.
     pub(crate) pages: HashMap<PaneId, page::PageSlot>,
-    /// Pages a later page was opened on top of, innermost last. Opening a file
-    /// from a listing covers the listing rather than replacing it, so closing
-    /// the file puts the user back where they were looking.
-    pub(crate) covered: HashMap<PaneId, Vec<page::PageSlot>>,
     /// Panes and pages that were closed, oldest first, for reopening. A pane
     /// or a tab closed with a tool on it used to drop the tool with no way
     /// back, which for an editor meant dropping edits nothing had asked
@@ -1060,7 +1039,7 @@ impl ApplicationHandler for App {
                         window.request_redraw();
                     }
                 }
-                let focused_pane = self.tab().focused();
+                let focused_pane = self.layout().focused();
                 if let Some(pane) = self.panes.get(&focused_pane) {
                     if pane.focus_event() {
                         let seq = if focused { "\x1b[I" } else { "\x1b[O" };
@@ -1132,7 +1111,7 @@ impl ApplicationHandler for App {
             // A Vim prompt edit just echoed back: re-seed the nav cursor onto the
             // shell's new cursor position so it tracks the edited line.
             if self.nav_resync_pending {
-                let focused = self.tab().focused();
+                let focused = self.layout().focused();
                 if self.modes.get(&focused) == Some(&Mode::Normal) {
                     self.init_nav_cursor(focused);
                 }
@@ -1251,14 +1230,13 @@ impl ApplicationHandler for App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::layout::Rect;
-    use crate::model::layout::Tab;
+    use crate::model::layout::{Direction, Rect};
     use crate::model::palette::PaletteMode;
 
     #[test]
     fn test_render_window_title_expands_pane_placeholders() {
         let mut app = App::new();
-        let focused = app.tabs.all[0].focused();
+        let focused = app.layout().focused();
         // An OSC 0/2 title set by the running app (e.g. butterfly naming its
         // open file) resolves into both `pane_title` and the tab `title`.
         app.pane_titles
@@ -1285,7 +1263,7 @@ mod tests {
         // to yank a scrolled-back pane down to the prompt mid-browse.
         let mut app = App::new();
         app.config.status_bar.enabled = true;
-        let focused = app.tab().focused();
+        let focused = app.layout().focused();
         let mut pane = Pane::with_command(
             40,
             8,
@@ -1336,7 +1314,7 @@ mod tests {
         // bytes to a shell that would misinterpret them.
         let mut app = App::new();
         app.config.prompt_edit_bindings = crate::config::PromptEditBindings::None;
-        let focused = app.tab().focused();
+        let focused = app.layout().focused();
         app.delete_on_prompt(crate::app::prompt_edit::PromptDelete::WordBack, focused);
         assert!(
             app.notice.is_some(),
@@ -1357,7 +1335,7 @@ mod tests {
         ];
         for action in entries {
             let mut app = App::new();
-            let focused = app.tab().focused();
+            let focused = app.layout().focused();
             let mut pane = Pane::with_command(
                 40,
                 8,
@@ -1396,7 +1374,7 @@ mod tests {
         // to the shell mid-navigation. It now behaves like vim's `:nohlsearch`:
         // the search highlight goes, the mode does not.
         let mut app = App::new();
-        let focused = app.tab().focused();
+        let focused = app.layout().focused();
         app.modes.insert(focused, Mode::Normal);
         app.search.query = Some("foo".to_string());
         app.search.match_total = 2;
@@ -1419,7 +1397,7 @@ mod tests {
             (Mode::Visual, input::InsertAt::Cursor),
         ] {
             let mut app = App::new();
-            let focused = app.tab().focused();
+            let focused = app.layout().focused();
             app.modes.insert(focused, mode);
             app.set_nav_cursor(focused, (0, 0));
 
@@ -1437,7 +1415,7 @@ mod tests {
     #[test]
     fn test_app_default_has_one_pane() {
         let app = App::new();
-        assert_eq!(app.tab().panes(), vec![PaneId(0)]);
+        assert_eq!(app.layout().panes(), vec![PaneId(0)]);
         assert!(app.panes.is_empty());
     }
 
@@ -1469,27 +1447,6 @@ mod tests {
         let mut app = App::new();
         assert_eq!(app.alloc_pane_id(), PaneId(1));
         assert_eq!(app.alloc_pane_id(), PaneId(2));
-    }
-
-    #[test]
-    fn test_content_band_fits_whole_rows_and_never_reaches_into_the_status_bar() {
-        let ch = 20.0;
-        // Exact fit: no padding.
-        assert_eq!(content_band(80.0, ch), (4, 0.0));
-        // Sub-row slack is centered above the rows, not handed to the bar.
-        assert_eq!(content_band(85.0, ch), (4, 2.0));
-        // The Modern tabbar's extra pixels can leave less than a whole row's worth
-        // of slack; the band still keeps at least one row and no negative padding,
-        // so panes never overlap the bar.
-        assert_eq!(content_band(19.0, ch), (1, 0.0));
-        assert_eq!(content_band(0.0, ch), (1, 0.0));
-        assert_eq!(content_band(100.0, 0.0), (1, 0.0));
-
-        // Whatever the height, the rows plus padding fit inside the band.
-        for h in [601.0_f32, 613.0, 640.0] {
-            let (rows, pad) = content_band(h, ch);
-            assert!(pad + rows as f32 * ch <= h, "band overflows at h={h}");
-        }
     }
 
     #[test]
@@ -1585,7 +1542,7 @@ mod tests {
     fn test_leaving_normal_mode_ends_a_search_and_hides_the_forced_status_bar() {
         let mut app = app_with_tabs(1);
         app.config.status_bar.enabled = false;
-        let focused = app.tab().focused();
+        let focused = app.layout().focused();
         app.modes.insert(focused, Mode::Normal);
 
         // Search executed, now browsing matches in Normal mode: the bar is
@@ -1824,7 +1781,7 @@ mod tests {
         // `Action::RunCommand`; `handle_action` must forward it to
         // `run_command` so the effect matches selecting it from the palette.
         let mut app = App::new();
-        let focused = app.tab().focused();
+        let focused = app.layout().focused();
         app.handle_action(
             input::Action::RunCommand("mux_new_session".to_string()),
             focused,
@@ -1859,24 +1816,33 @@ mod tests {
         assert_eq!(bar.notice.map(|n| n.text), Some("oops".to_string()));
     }
 
-    /// An app with `n` empty tabs (no panes/PTYs), active tab 0, MRU `[0, 1, ..]`.
+    /// An app whose one pane holds `n` empty tabs (no PTYs), `PaneId(0)`
+    /// first in the strip and shown, and the rest in order after it.
     fn app_with_tabs(n: usize) -> App {
         let mut app = App::new();
         for i in 1..n {
-            app.tabs.all.push(Tab::with_root(PaneId(i as u64)));
+            app.layout_mut().add_tab(PaneId(i as u64));
         }
-        app.tabs.mru = (0..n).collect();
+        app.layout_mut().focus(PaneId(0));
+        app.next_pane_id = app.next_pane_id.max(n as u64);
         app
     }
 
     #[test]
-    fn test_close_pane_keeps_last_pane_of_only_tab() {
+    fn test_close_pane_keeps_last_pane_of_the_window() {
         let mut app = app_with_tabs(1);
-        let pane = app.tab().panes()[0];
+        let pane = app.layout().panes()[0];
         app.close_pane(pane);
-        // The sole pane of the sole tab is preserved, not closed.
-        assert_eq!(app.tabs.all.len(), 1);
-        assert!(app.tab().panes().contains(&pane));
+        // The sole pane is preserved, not closed.
+        assert!(app.layout().panes().contains(&pane));
+    }
+
+    #[test]
+    fn test_close_pane_takes_every_tab_it_holds() {
+        let mut app = app_with_tabs(2);
+        app.layout_mut().split(Direction::Vertical, 0.5, PaneId(9));
+        app.close_pane(PaneId(1));
+        assert_eq!(app.layout().members(), vec![PaneId(9)]);
     }
 
     #[test]
@@ -1926,9 +1892,9 @@ mod tests {
 
         let mut app = App::new();
         app.new_mux_tab_at(&socket_path, "work");
-        // The bootstrap tab plus the new mux tab.
-        assert_eq!(app.tabs.all.len(), 2);
-        let focused = app.tab().focused();
+        // The bootstrap tab plus the new mux tab, side by side in one pane.
+        assert_eq!(app.layout().members().len(), 2);
+        let focused = app.layout().focused();
         assert_eq!(app.panes[&focused].mux_session(), Some("work"));
 
         let deadline = Instant::now() + Duration::from_secs(5);
@@ -1947,12 +1913,16 @@ mod tests {
             text.contains("mux tab live"),
             "attached pane must render session output, got: {text}"
         );
-        assert_eq!(app.tab_title(app.tabs.active), "mux: work");
+        assert_eq!(app.tab_title(focused), "mux: work");
 
         // Detaching closes the pane's tab view; the session itself lives
         // on the server, out of the app's hands.
         app.run_command("mux_detach_session", focused);
-        assert_eq!(app.tabs.all.len(), 1, "the mux tab must be closed");
+        assert_eq!(
+            app.layout().members().len(),
+            1,
+            "the mux tab must be closed"
+        );
         assert!(!app.panes.contains_key(&focused));
         assert!(app.active_notice().is_some());
 
@@ -1961,13 +1931,12 @@ mod tests {
     }
 
     #[test]
-    fn test_close_pane_closes_tab_when_other_tabs_exist() {
-        let mut app = app_with_tabs(2);
-        app.tabs.active = 0;
-        let pane = app.tabs.all[0].panes()[0];
-        app.close_pane(pane);
-        // The tab held a single pane and another tab exists, so the tab closes.
-        assert_eq!(app.tabs.all.len(), 1);
+    fn test_closing_the_shown_tab_shows_the_one_shown_before_it() {
+        let mut app = app_with_tabs(3);
+        app.switch_tab(2);
+        app.close_tab(PaneId(2));
+        assert_eq!(app.layout().members(), vec![PaneId(0), PaneId(1)]);
+        assert_eq!(app.layout().focused(), PaneId(0));
     }
 
     /// Inserts a real, already-exited `Pane` at `id` so `reap_dead_panes` sees
@@ -1987,20 +1956,19 @@ mod tests {
     }
 
     #[test]
-    fn test_reap_dead_panes_closes_tab_when_its_lone_pane_dies() {
+    fn test_reap_dead_panes_closes_the_tab_whose_shell_died() {
         let mut app = app_with_tabs(2);
-        let dead_id = app.tabs.all[0].panes()[0];
-        insert_dead_pane(&mut app, dead_id);
+        insert_dead_pane(&mut app, PaneId(0));
         app.reap_dead_panes();
-        // The dead pane was alone in its tab, so the whole tab closes.
-        assert_eq!(app.tabs.all.len(), 1);
-        assert!(!app.tabs.all.iter().any(|t| t.panes().contains(&dead_id)));
+        assert_eq!(app.layout().members(), vec![PaneId(1)]);
+        assert!(!app.exit_requested);
+        assert!(app.closed.is_empty(), "a shell that exited is not kept");
     }
 
     #[test]
-    fn test_reap_dead_panes_requests_exit_when_last_pane_of_last_tab_dies() {
+    fn test_reap_dead_panes_requests_exit_when_the_last_tab_dies() {
         let mut app = app_with_tabs(1);
-        let dead_id = app.tab().panes()[0];
+        let dead_id = app.layout().panes()[0];
         insert_dead_pane(&mut app, dead_id);
         app.reap_dead_panes();
         // Nothing else to fall back to, so this requests the app quit rather
@@ -2009,95 +1977,55 @@ mod tests {
     }
 
     #[test]
-    fn test_switch_tab_moves_to_front_of_mru() {
+    fn test_switch_tab_shows_the_tab_at_that_strip_position() {
         let mut app = app_with_tabs(3);
         app.switch_tab(2);
-        assert_eq!(app.tabs.active, 2);
-        assert_eq!(app.tabs.mru, vec![2, 0, 1]);
-        app.switch_tab(1);
-        assert_eq!(app.tabs.mru, vec![1, 2, 0]);
-        assert_eq!(app.tabs.mru_walk, None);
+        assert_eq!(app.layout().focused(), PaneId(2));
+        assert_eq!(
+            app.layout().recent_in_group(PaneId(2)),
+            vec![PaneId(2), PaneId(0), PaneId(1)]
+        );
+        assert!(app.tabs.recent_walk.is_none());
     }
 
     #[test]
     fn test_recent_tab_walks_backward_and_forward_without_reshuffling() {
         let mut app = app_with_tabs(3);
         app.switch_tab(2);
-        app.switch_tab(1); // MRU now [1, 2, 0], current tab 1.
+        app.switch_tab(1); // Recency now [1, 2, 0], showing 1.
 
-        // Backward steps toward less-recently-used, holding the order still.
+        // Backward steps toward less recently shown, holding the order still.
         app.recent_tab(false);
-        assert_eq!(app.tabs.active, 2);
-        assert_eq!(app.tabs.mru_walk, Some(1));
-        assert_eq!(app.tabs.mru, vec![1, 2, 0]);
+        assert_eq!(app.layout().focused(), PaneId(2));
         app.recent_tab(false);
-        assert_eq!(app.tabs.active, 0);
-        assert_eq!(app.tabs.mru_walk, Some(2));
+        assert_eq!(app.layout().focused(), PaneId(0));
 
-        // Forward steps back toward more-recently-used.
+        // Forward steps back toward more recently shown.
         app.recent_tab(true);
-        assert_eq!(app.tabs.active, 2);
-        assert_eq!(app.tabs.mru, vec![1, 2, 0]);
+        assert_eq!(app.layout().focused(), PaneId(2));
+        let walk = app.tabs.recent_walk.as_ref().unwrap();
+        assert_eq!(walk.order, vec![PaneId(1), PaneId(2), PaneId(0)]);
     }
 
     #[test]
-    fn test_deliberate_switch_ends_walk_and_reseeds_mru() {
+    fn test_deliberate_switch_ends_the_recency_walk() {
         let mut app = app_with_tabs(3);
-        app.switch_tab(1); // MRU [1, 0, 2], current tab 1.
-        app.recent_tab(false); // Walk to tab 0 (a less-recent tab).
-        assert_eq!(app.tabs.active, 0);
-        assert!(app.tabs.mru_walk.is_some());
-        // A deliberate switch to a different tab ends the walk and re-seeds.
+        app.switch_tab(1);
+        app.recent_tab(false);
+        assert!(app.tabs.recent_walk.is_some());
         app.switch_tab(2);
-        assert_eq!(app.tabs.mru_walk, None);
-        assert_eq!(app.tabs.mru[0], 2);
+        assert!(app.tabs.recent_walk.is_none());
+        assert_eq!(app.layout().recent_in_group(PaneId(2))[0], PaneId(2));
     }
 
     #[test]
     fn test_recent_tab_is_noop_with_one_tab() {
         let mut app = App::new();
+        let only = app.layout().focused();
         app.recent_tab(false);
         app.recent_tab(true);
-        assert_eq!(app.tabs.active, 0);
-        assert_eq!(app.tabs.mru_walk, None);
-    }
-
-    #[test]
-    fn test_close_tab_compacts_mru_indices() {
-        let mut app = app_with_tabs(3);
-        app.switch_tab(2); // MRU [2, 0, 1], current tab 2.
-        app.close_tab(0); // Tabs above the closed index shift down by one.
-        assert_eq!(app.tabs.all.len(), 2);
-        assert_eq!(app.tabs.active, 1);
-        // The closed index is gone and 1->0, 2->1; current tab re-seeded to front.
-        assert_eq!(app.tabs.mru, vec![1, 0]);
-        assert_eq!(app.tabs.mru_walk, None);
-    }
-
-    #[test]
-    fn test_swap_tabs_updates_active_tab_and_mru() {
-        let mut app = app_with_tabs(3);
-        app.switch_tab(1); // active = 1, MRU [1, 0, 2]
-        let tab0_id = app.tabs.all[0].focused();
-        let tab1_id = app.tabs.all[1].focused();
-        app.swap_tabs(0, 1);
-        // Content moved: tab1_id is now at index 0, tab0_id at index 1.
-        assert_eq!(app.tabs.all[0].focused(), tab1_id);
-        assert_eq!(app.tabs.all[1].focused(), tab0_id);
-        // active_tab follows the dragged content (was 1, src was 0, so active goes 0→nope:
-        // we were on tab 1, swapping 0 and 1 → active was 1 → now 0).
-        assert_eq!(app.tabs.active, 0);
-        // MRU: [1,0,2] → indices swapped → [0,1,2]
-        assert_eq!(app.tabs.mru[0], 0);
-    }
-
-    #[test]
-    fn test_swap_tabs_is_noop_for_same_index() {
-        let mut app = app_with_tabs(2);
-        let tab0_id = app.tabs.all[0].focused();
-        app.swap_tabs(0, 0);
-        assert_eq!(app.tabs.all[0].focused(), tab0_id);
-        assert_eq!(app.tabs.active, 0);
+        assert_eq!(app.layout().focused(), only);
+        assert!(app.tabs.recent_walk.is_none());
     }
 
     #[test]
@@ -2134,23 +2062,21 @@ mod tests {
     }
 
     #[test]
-    fn test_switch_to_pane_changes_tab_and_focus() {
+    fn test_switch_to_pane_shows_a_hidden_tab() {
         let mut app = App::new();
-        assert_eq!(app.tabs.active, 0);
-
-        // Add another tab (creates tab index 1)
+        let first = app.layout().focused();
         app.new_tab();
-        assert_eq!(app.tabs.all.len(), 2);
+        let second = app.layout().focused();
+        assert_ne!(first, second);
+        assert_eq!(
+            app.layout().panes(),
+            vec![second],
+            "one pane, showing the new tab"
+        );
 
-        // Switch back to tab index 0
-        app.switch_tab(0);
-        assert_eq!(app.tabs.active, 0);
-
-        // Switch to the pane in tab index 1
-        let second_tab_pane_id = app.tabs.all[1].focused();
-        app.switch_to_pane(second_tab_pane_id);
-        assert_eq!(app.tabs.active, 1);
-        assert_eq!(app.tabs.all[1].focused(), second_tab_pane_id);
+        app.switch_to_pane(first);
+        assert_eq!(app.layout().focused(), first);
+        assert_eq!(app.layout().panes(), vec![first]);
     }
 
     #[test]
@@ -2227,6 +2153,12 @@ mod tests {
     /// history rather than the live-bottom edge case. The lines are written
     /// straight into the grid, because waiting on a shell to emit them failed
     /// whenever the machine was busy.
+    /// A pointer height one pixel inside the auto-scroll margin at the top of
+    /// the viewport, wherever the title bar leaves that.
+    fn just_inside_top_edge(app: &App) -> f32 {
+        app.viewport_rect().y + AUTO_SCROLL_EDGE_MARGIN - 1.0
+    }
+
     fn pane_with_scrollback() -> Pane {
         let mut pane = Pane::with_command(
             40,
@@ -2261,7 +2193,7 @@ mod tests {
         // 800x600) viewport: barely deep enough to scroll, so one step moves
         // the minimum one line (see test_auto_scroll_selection_speed_scales_
         // with_edge_depth for the deep-in-margin case).
-        app.pointer.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, just_inside_top_edge(&app));
 
         app.auto_scroll_selection();
 
@@ -2300,7 +2232,7 @@ mod tests {
             end_col: 0,
             pane: id,
         });
-        app.pointer.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, just_inside_top_edge(&app));
 
         let mut ends = Vec::new();
         for _ in 0..3 {
@@ -2336,7 +2268,7 @@ mod tests {
                 end_col: 0,
                 pane: id,
             });
-            app.pointer.cursor_pos = (10.0, 23.0);
+            app.pointer.cursor_pos = (10.0, just_inside_top_edge(&app));
             app.auto_scroll_selection();
             app.panes[&id].grid().scroll_offset()
         };
@@ -2405,7 +2337,7 @@ mod tests {
             end_col: 0,
             pane: id,
         });
-        app.pointer.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, just_inside_top_edge(&app));
 
         // Scroll well past both a single page's worth of rows and the whole
         // available scrollback, so the offset saturates at the oldest line.
@@ -2448,7 +2380,7 @@ mod tests {
             end_col: 0,
             pane: id,
         });
-        app.pointer.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, just_inside_top_edge(&app));
 
         app.auto_scroll_selection();
         app.auto_scroll_selection();
@@ -2557,7 +2489,7 @@ mod tests {
             end_col: 30,
             pane: id,
         });
-        app.pointer.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, just_inside_top_edge(&app));
 
         app.auto_scroll_selection();
 
@@ -2608,7 +2540,7 @@ mod tests {
             end_col: 30,
             pane: id,
         });
-        app.pointer.cursor_pos = (10.0, 23.0);
+        app.pointer.cursor_pos = (10.0, just_inside_top_edge(&app));
 
         app.auto_scroll_selection();
 

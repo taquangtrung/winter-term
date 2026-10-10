@@ -220,7 +220,7 @@ impl App {
                 self.close_other_panes(focused);
             }
             Action::ZoomPane => {
-                self.tab_mut().toggle_zoom();
+                self.layout_mut().toggle_zoom();
                 // Zooming changes the focused pane's rect, so re-send the new
                 // size to the PTY; without this btop keeps reporting the old
                 // (small) split dimensions after maximizing.
@@ -229,17 +229,10 @@ impl App {
                 }
             }
             Action::MoveTabLeft => {
-                if self.tabs.active > 0 {
-                    let dst = self.tabs.active - 1;
-                    self.swap_tabs(self.tabs.active, dst);
-                }
+                self.move_tab(false);
             }
             Action::MoveTabRight => {
-                let last = self.tabs.all.len().saturating_sub(1);
-                if self.tabs.active < last {
-                    let dst = self.tabs.active + 1;
-                    self.swap_tabs(self.tabs.active, dst);
-                }
+                self.move_tab(true);
             }
             Action::NewTab => {
                 self.new_tab();
@@ -254,21 +247,28 @@ impl App {
                 self.switch_tab(n.saturating_sub(1));
             }
             Action::CloseTab(which) => {
-                let index = which
-                    .map(|n| n.saturating_sub(1))
-                    .unwrap_or(self.tabs.active);
-                self.close_tab(index);
+                let pane = match which {
+                    Some(n) => self
+                        .layout()
+                        .group_members(focused)
+                        .get(n.saturating_sub(1))
+                        .copied(),
+                    None => Some(focused),
+                };
+                if let Some(pane) = pane {
+                    self.close_tab(pane);
+                }
             }
             Action::FocusPane(dir) => {
                 let viewport = self.viewport_rect();
                 let layout_vp = Rect::new(viewport.x, viewport.y, viewport.width, viewport.height);
-                self.tab_mut().focus_in_direction(dir, layout_vp);
+                self.layout_mut().focus_in_direction(dir, layout_vp);
             }
             Action::FocusPaneByIndex(n) => {
-                self.tab_mut().focus_by_index(n.saturating_sub(1));
+                self.layout_mut().focus_by_index(n.saturating_sub(1));
             }
             Action::ClosePaneByIndex(n) => {
-                if let Some(&id) = self.tab().panes().get(n.saturating_sub(1)) {
+                if let Some(&id) = self.layout().panes().get(n.saturating_sub(1)) {
                     self.close_pane(id);
                 }
             }

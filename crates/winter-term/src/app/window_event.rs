@@ -11,10 +11,12 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::CursorIcon;
 
 use crate::model::input::{self, KeyCode};
+use crate::model::layout::PaneId;
 use crate::model::mode::Mode;
 
 #[cfg(target_os = "windows")]
 use super::is_pre_focus_key_leak;
+use super::strip::StripHit;
 use super::App;
 use super::Selection;
 use super::{
@@ -64,7 +66,7 @@ impl App {
             return false;
         }
 
-        let focused = self.tab().focused();
+        let focused = self.layout().focused();
         let mods_state = self.modifiers.state();
         let code = winit_key_to_code(&logical_key, &physical_key);
         let key = input::Key {
@@ -111,10 +113,11 @@ impl App {
             match key.code {
                 KeyCode::Enter => {
                     let name = self.tabs.rename_input.take().unwrap();
+                    let focused = self.layout().focused();
                     if name.is_empty() {
-                        self.tabs.names.remove(&self.tabs.active);
+                        self.tabs.names.remove(&focused);
                     } else {
-                        self.tabs.names.insert(self.tabs.active, name);
+                        self.tabs.names.insert(focused, name);
                     }
                 }
                 KeyCode::Escape => {
@@ -222,7 +225,11 @@ impl App {
         // an overlay (palette, tab rename, settings) would otherwise own
         // the key. Window-layout chords (split/close/focus/scroll/zoom)
         // are resolved later, once no overlay claims the key.
-        if let Some(action) = self.window_keymap.global_action(&key) {
+        let global = self
+            .window_keymap
+            .global_action(&key)
+            .filter(|action| !self.is_copy_yielded_to_page(action, focused));
+        if let Some(action) = global {
             self.handle_action(action, focused);
             if self.exit_requested {
                 self.exit_requested = false;
@@ -391,13 +398,25 @@ impl App {
     /// Route a mouse button press or release. The tabbar and any open menu
     /// take precedence over the panes, so a click on chrome never reaches a
     /// pane underneath it.
+    /// Whether the global copy chord, with nothing selected, should pass to
+    /// the tool page covering `focused` instead: with nothing to copy it
+    /// would do nothing, and a page may bind the same chord (the Git page
+    /// commits on `Ctrl-Shift-c`). A page that declines it still reaches the
+    /// ordinary keymap, where it resolves to the same harmless copy.
+    fn is_copy_yielded_to_page(&self, action: &input::Action, focused: PaneId) -> bool {
+        *action == input::Action::Copy
+            && self.palette.is_none()
+            && self.pages.contains_key(&focused)
+            && self.selected_text().is_none()
+    }
+
     pub(crate) fn on_mouse_input(
         &mut self,
         state: ElementState,
         button: MouseButton,
         event_loop: &ActiveEventLoop,
     ) {
-        let focused = self.tab().focused();
+        let focused = self.layout().focused();
 
         // Tabbar/menubar clicks take precedence over the panes (including
         // mouse-tracking apps), and any click resolves an open menu.
@@ -416,6 +435,34 @@ impl App {
                     self.exit_requested = false;
                     self.quit(event_loop);
                     return;
+                }
+                if let Some(window) = &self.window {
+                    window.request_redraw();
+                }
+                return;
+            }
+        }
+
+        // A press on a pane's strip of tabs belongs to the strip: it shows,
+        // closes, or opens a tab rather than reaching the pane below it. A
+        // split divider running past the strip still wins, so the drag that
+        // resizes panes can start anywhere along it.
+        if state == ElementState::Pressed
+            && matches!(button, MouseButton::Left | MouseButton::Middle)
+        {
+            let (x, y) = self.pointer.cursor_pos;
+            let on_divider = self
+                .layout()
+                .divider_at(x, y, self.content_viewport())
+                .is_some();
+            if !on_divider && self.handle_strip_press(x, y, button == MouseButton::Middle) {
+                if self.exit_requested {
+                    self.exit_requested = false;
+                    self.quit(event_loop);
+                    return;
+                }
+                if button == MouseButton::Left {
+                    self.pointer.mouse_down = true;
                 }
                 if let Some(window) = &self.window {
                     window.request_redraw();
@@ -499,16 +546,13 @@ impl App {
                 // Divider click: start a drag; skip scrollbar/focus changes.
                 let on_divider = {
                     let viewport = self.content_viewport();
-                    self.tab().divider_at(x, y, viewport).is_some()
+                    self.layout().divider_at(x, y, viewport).is_some()
                 };
                 if on_divider {
                     self.pointer.divider_drag = Some((x, y));
                 } else {
                     // Scrollbar click: right-edge strip of a pane navigates scrollback.
-                    let vp = self.viewport_rect();
-                    let layout_vp =
-                        crate::model::layout::Rect::new(vp.x, vp.y, vp.width, vp.height);
-                    'scroll: for (id, rect) in self.tab().rects(layout_vp) {
+                    'scroll: for (id, rect) in self.pane_rects() {
                         let pr = Self::layout_rect_to_pane(rect);
                         let sb_x = pr.x + pr.width - SCROLLBAR_CLICK_WIDTH;
                         if x >= sb_x && x <= pr.x + pr.width && y >= pr.y && y < pr.y + pr.height {
@@ -532,7 +576,7 @@ impl App {
                     }
 
                     if let Some((pane_id, pane_rect)) = self.pane_at_pixel(x, y) {
-                        self.tab_mut().focus(pane_id);
+                        self.layout_mut().focus(pane_id);
                         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
                         // A page covering the pane owns what is drawn there,
                         // so the click is its to answer before the grid's.
@@ -603,7 +647,7 @@ impl App {
                 let dy = y - prev_y;
                 let viewport = self.content_viewport();
                 if self
-                    .tab_mut()
+                    .layout_mut()
                     .drag_divider(prev_x, prev_y, dx, dy, viewport)
                 {
                     self.pointer.divider_drag = Some((x, y));
@@ -618,11 +662,8 @@ impl App {
 
             // Scrollbar drag: update scroll position proportionally.
             if let Some(sb_pane_id) = self.pointer.scrollbar_drag {
-                let vp = self.viewport_rect();
-                let layout_vp = crate::model::layout::Rect::new(vp.x, vp.y, vp.width, vp.height);
                 if let Some((_, rect)) = self
-                    .tab()
-                    .rects(layout_vp)
+                    .pane_rects()
                     .into_iter()
                     .find(|(id, _)| *id == sb_pane_id)
                 {
@@ -661,20 +702,28 @@ impl App {
             let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
             if hit != self.tabs.hover {
                 self.tabs.hover = hit;
-                if let winter_render::TabbarHit::Tab(_) = hit {
-                    self.tabs.hover_pos = Some(self.pointer.cursor_pos);
-                } else {
-                    self.tabs.hover_pos = None;
-                }
                 self.dirty = true;
-                self.update_window_title();
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
             }
         }
+        // The pane strips' hover, which also carries a tab's full title as a
+        // tooltip, since a strip may have had to cut it short.
+        let strip_before = self.tabs.strip_hover;
+        self.update_strip_hover(x, y);
+        if self.tabs.strip_hover != strip_before {
+            self.tabs.hover_pos = match self.tabs.strip_hover {
+                StripHit::Tab(_) => Some(self.pointer.cursor_pos),
+                _ => None,
+            };
+            self.update_window_title();
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
 
-        let focused = self.tab().focused();
+        let focused = self.layout().focused();
         if self.pointer.mouse_down
             && self
                 .panes
@@ -742,7 +791,7 @@ impl App {
         let icon = if let Some(direction) = self.edge_resize_direction(x, y) {
             CursorIcon::from(direction)
         } else {
-            match self.tab().divider_at(x, y, vp) {
+            match self.layout().divider_at(x, y, vp) {
                 Some(crate::model::layout::Direction::Vertical) => CursorIcon::EwResize,
                 Some(crate::model::layout::Direction::Horizontal) => CursorIcon::NsResize,
                 None => {
@@ -768,7 +817,7 @@ impl App {
             MouseScrollDelta::PixelDelta(pos) => (-pos.y / APPROX_CELL_HEIGHT as f64) as isize,
         };
 
-        let focused = self.tab().focused();
+        let focused = self.layout().focused();
         if scroll_lines != 0 && self.offer_scroll_to_page(focused, scroll_lines) {
             self.dirty = true;
             if let Some(window) = &self.window {
@@ -838,7 +887,7 @@ mod tests {
         let mut app = App::new();
         // Isolate from the developer's own ~/.config keybindings.
         app.window_keymap = crate::model::input::WindowKeymap::default();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let pane = Pane::with_command(
             40,
             10,
@@ -936,7 +985,7 @@ mod tests {
         // child, so a single Escape switches modes.
         let mut app = App::new();
         app.window_keymap = crate::model::input::WindowKeymap::default();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let mut pane = Pane::with_command(
             40,
             10,

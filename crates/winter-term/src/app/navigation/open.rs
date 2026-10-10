@@ -1,5 +1,6 @@
-//! Opening what the Normal-mode cursor sits on (`gx`) and reading the pane's
-//! working directory back out (the palette's "Copy: Working Directory").
+//! Opening what the terminal points at (`gx`, `Alt+.`), rooting Find File
+//! there, and reading the pane's working directory back out (the palette's
+//! "Copy: Working Directory").
 //!
 //! Resolution mirrors what a mouse click would act on, so the keyboard and the
 //! pointer can't disagree about what counts as a link: an OSC 8 hyperlink under
@@ -9,12 +10,14 @@
 //! and finally a quoted string taken whole: the only way a path containing
 //! spaces resolves at all.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use winter_render::Grid;
 
 use crate::model::layout::PaneId;
 use crate::model::page;
+use crate::model::palette::Palette;
+use crate::model::path::{clean_path, expand_home};
 use crate::terminal::pane::Pane;
 
 use super::vim::line_chars;
@@ -84,12 +87,8 @@ pub(crate) fn resolve_open_target(
             continue;
         }
         let token: String = line[start..start + len].iter().collect();
-        let (path_str, line_no) = parse_file_ref(&token);
-        if let Some(path) = resolve_existing_path(&path_str, cwd) {
-            return Some(OpenTarget::File {
-                line: line_no,
-                path,
-            });
+        if let Some(target) = resolve_file_token(&token, cwd) {
+            return Some(target);
         }
     }
 
@@ -214,16 +213,63 @@ fn parse_file_ref(token: &str) -> (String, Option<usize>) {
     }
 }
 
-/// Resolve `raw` to an existing path: absolute as-is, else joined onto `cwd`.
-/// `None` when the result doesn't exist: a guess that resolves to nothing is
-/// not openable.
+/// Resolve `raw` to an existing path: `~` expanded, absolute as-is, else
+/// joined onto `cwd`, with `.` and `..` resolved. `None` when the result
+/// doesn't exist: a guess that resolves to nothing is not openable.
 fn resolve_existing_path(raw: &str, cwd: Option<&str>) -> Option<PathBuf> {
-    let path = PathBuf::from(raw);
+    let path = expand_home(raw);
     let resolved = match cwd {
         Some(cwd) if !path.is_absolute() => PathBuf::from(cwd).join(path),
         _ => path,
     };
+    let resolved = clean_path(&resolved);
     resolved.exists().then_some(resolved)
+}
+
+/// The file reference `token` names, resolved against `cwd`: `path`,
+/// `path:line`, or `path:line:col`. `None` when it names nothing on disk.
+fn resolve_file_token(token: &str, cwd: Option<&str>) -> Option<OpenTarget> {
+    let (path_str, line) = parse_file_ref(token);
+    let path = resolve_existing_path(&path_str, cwd)?;
+    Some(OpenTarget::File { line, path })
+}
+
+/// What the shell's own cursor at viewport `(row, col)` rests on, or sits
+/// just past: typing leaves the cursor one cell after the word just typed,
+/// so `vim src/main.rs█` still names `src/main.rs`.
+fn resolve_target_near(
+    grid: &Grid,
+    row: usize,
+    col: usize,
+    cwd: Option<&str>,
+) -> Option<OpenTarget> {
+    resolve_open_target(grid, row, col, cwd).or_else(|| {
+        let before = col.checked_sub(1)?;
+        resolve_open_target(grid, row, before, cwd)
+    })
+}
+
+/// Selected text read as one file reference, trimmed of the whitespace and
+/// quotes a drag tends to catch along with it.
+fn resolve_selected_target(text: &str, cwd: Option<&str>) -> Option<OpenTarget> {
+    let token = text.trim().trim_matches(['"', '\'', '`']);
+    if token.is_empty() || token.contains('\n') {
+        return None;
+    }
+    resolve_file_token(token, cwd)
+}
+
+/// The rightmost file reference on the last non-blank viewport row at or
+/// above `bottom`: the latest thing printed, when nothing points anywhere.
+fn resolve_last_line_target(grid: &Grid, bottom: usize, cwd: Option<&str>) -> Option<OpenTarget> {
+    let line = (0..=bottom)
+        .rev()
+        .map(|row| line_chars(grid, row))
+        .find(|chars| chars.iter().any(|c| !c.is_whitespace()))?;
+    token_spans(&line).into_iter().rev().find_map(|(start, len)| {
+        let token: String = line[start..start + len].iter().collect();
+        resolve_file_token(&token, cwd)
+    })
 }
 
 /// The innermost `[quote, quote)` span containing `idx`, as an inclusive
@@ -258,19 +304,76 @@ fn enclosed_quote_span(line: &[char], idx: usize) -> Option<(usize, usize)> {
 // ========================================================================
 
 impl App {
-    /// `gx`: open what the Normal-mode cursor sits on (see
-    /// [`resolve_open_target`]). A URL goes to the system opener; a file
-    /// opens in the editor, over this pane, at the referenced line.
-    pub(crate) fn open_under_cursor(&mut self, focused: PaneId) {
-        let Some((row, col)) = self.nav_cursor(focused) else {
-            return;
-        };
-        let Some(pane) = self.panes.get(&focused) else {
-            return;
-        };
+    /// What the focused terminal points at, for the commands that act on a
+    /// path in its text (`gx`, `Alt+.`, Find File), tried in order:
+    ///
+    /// 1. The Normal/Visual cursor, when there is one: it is placed on
+    ///    purpose, so nothing else is guessed at when it rests on nothing.
+    /// 2. The mouse selection in this pane, read as one reference.
+    /// 3. The shell's own cursor, on or just past a reference.
+    /// 4. The rightmost reference on the last non-blank line above it.
+    ///
+    /// URLs count wherever a cursor rests; the last-line scan finds files and
+    /// directories only. A pane covered by a tool page points at nothing:
+    /// the terminal text underneath is not what the user is looking at.
+    pub(crate) fn target_at_point(&self, focused: PaneId) -> Option<OpenTarget> {
+        if self.pages.contains_key(&focused) {
+            return None;
+        }
+        let pane = self.panes.get(&focused)?;
         let cwd = pane.cwd();
-        let target = resolve_open_target(pane.grid(), row, col, cwd.as_deref());
-        match target {
+        let cwd = cwd.as_deref();
+        let grid = pane.grid();
+        if let Some((row, col)) = self.nav_cursor(focused) {
+            return resolve_open_target(grid, row, col, cwd);
+        }
+        let selected = self
+            .selection
+            .span
+            .as_ref()
+            .filter(|span| span.pane == focused)
+            .and_then(|_| self.selected_text());
+        if let Some(target) = selected.and_then(|text| resolve_selected_target(&text, cwd)) {
+            return Some(target);
+        }
+        // The shell's cursor is only on screen when the view is not scrolled
+        // back; scrolled back, the last line the user can see stands in.
+        let bottom = match grid.scroll_offset() {
+            0 => {
+                let (row, col) = grid.cursor();
+                if let Some(target) = resolve_target_near(grid, row, col, cwd) {
+                    return Some(target);
+                }
+                row
+            }
+            _ => grid.rows().saturating_sub(1),
+        };
+        resolve_last_line_target(grid, bottom, cwd)
+    }
+
+    /// The file browser Find File opens: rooted where the focused terminal
+    /// points (see [`Self::target_at_point`]), on the file itself when it
+    /// names one, else at the working directory (a tool page's own, when one
+    /// covers the pane).
+    pub(crate) fn files_palette_at_point(&self) -> Palette {
+        match self.target_at_point(self.layout().focused()) {
+            Some(OpenTarget::File { path, .. }) if path.is_dir() => Palette::open_files(path),
+            Some(OpenTarget::File { path, .. }) => {
+                let dir = path.parent().map_or_else(|| self.focused_start_dir(), Path::to_path_buf);
+                let mut palette = Palette::open_files(dir);
+                palette.select_path(&path);
+                palette
+            }
+            Some(OpenTarget::Url(_)) | None => Palette::open_files(self.focused_start_dir()),
+        }
+    }
+
+    /// `gx` and `Alt+.`: open what the focused terminal points at (see
+    /// [`Self::target_at_point`]). A URL goes to the system opener, a
+    /// directory to the dir page, and a file to the editor at the referenced
+    /// line, each over this pane.
+    pub(crate) fn open_under_cursor(&mut self, focused: PaneId) {
+        match self.target_at_point(focused) {
             Some(OpenTarget::Url(url)) => match ::open::that(&url) {
                 Ok(()) => self.set_notice(format!("opened {url}")),
                 Err(e) => self.set_error(format!("could not open {url}: {e}")),
@@ -278,6 +381,7 @@ impl App {
             // Over the pane rather than in a tab of its own: the reference was
             // printed by whatever is running here, and closing the file puts
             // the user back in front of it with their place kept.
+            Some(OpenTarget::File { path, .. }) if path.is_dir() => self.open_dir_page_at(path),
             Some(OpenTarget::File { path, line }) => {
                 let target = match line {
                     Some(line) => page::OpenTarget::at_line(path, line),
@@ -549,6 +653,76 @@ mod tests {
         assert!(
             !span_covers(&prose, 2, 3, 1),
             "a plain letter one out does not count"
+        );
+    }
+
+    #[test]
+    fn test_shell_cursor_just_past_a_typed_path_still_resolves() {
+        // Typing leaves the cursor one cell after the word: on the blank cell
+        // itself nothing is under it, so only the step back finds the file.
+        let tmp = TempDir::new("near");
+        let file = tmp.touch("main.rs");
+        let grid = grid_from_lines(&["$ vim main.rs"]);
+        let past = "$ vim main.rs".chars().count();
+
+        assert_eq!(resolve_open_target(&grid, 0, past, tmp.0.to_str()), None);
+        assert_eq!(
+            resolve_target_near(&grid, 0, past, tmp.0.to_str()),
+            Some(OpenTarget::File {
+                line: None,
+                path: file,
+            })
+        );
+    }
+
+    #[test]
+    fn test_last_line_scan_takes_the_rightmost_existing_path_on_the_last_printed_row() {
+        // The earlier row names a file too, but only the last non-blank row
+        // counts; on it, the rightmost reference that exists wins, past
+        // `gone.txt`, which resolves to nothing.
+        let tmp = TempDir::new("lastline");
+        tmp.touch("old.txt");
+        tmp.touch("first.txt");
+        let second = tmp.touch("second.txt");
+        let grid = grid_from_lines(&["old.txt", "first.txt second.txt:7 gone.txt", ""]);
+
+        assert_eq!(
+            resolve_last_line_target(&grid, 2, tmp.0.to_str()),
+            Some(OpenTarget::File {
+                line: Some(7),
+                path: second,
+            })
+        );
+        assert_eq!(
+            resolve_last_line_target(&grid, 0, tmp.0.to_str()),
+            Some(OpenTarget::File {
+                line: None,
+                path: tmp.0.join("old.txt"),
+            }),
+            "rows below `bottom` are not scanned"
+        );
+    }
+
+    #[test]
+    fn test_selected_text_resolves_through_quotes_and_dot_dot() {
+        // A drag tends to catch the surrounding quotes and whitespace; a
+        // `..` in the reference is resolved, not kept in the path.
+        let tmp = TempDir::new("selected");
+        std::fs::create_dir_all(tmp.0.join("sub")).expect("sub dir");
+        let file = tmp.touch("notes.txt");
+        let cwd = tmp.0.join("sub");
+
+        assert_eq!(
+            resolve_selected_target(" '../notes.txt:3' ", cwd.to_str()),
+            Some(OpenTarget::File {
+                line: Some(3),
+                path: file,
+            })
+        );
+        assert_eq!(
+            resolve_selected_target("notes.txt\nmore", tmp.0.to_str()),
+            None,
+            "a multi-line selection is not one reference"
         );
     }
 }

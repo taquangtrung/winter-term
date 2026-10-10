@@ -27,7 +27,8 @@ pub use renderer::{
 };
 pub use screen::Screen;
 pub use tabbar::{
-    hit_test, tabbar_rows, ContextMenu, ControlsSide, Menu, MenuItem, MenuStyle, TabLabel,
+    hit_test, hit_test_pane_strip, layout_pane_strip, tabbar_rows, ContextMenu, ControlsSide,
+    Menu, MenuItem, MenuStyle, PaneStripEdges, PaneStripHit, PaneStripLayout, PaneTab, Region, TabLabel,
     TabbarHit, TopTabbar,
 };
 pub use theme::{Rgb as ThemeRgb, Theme};
@@ -39,7 +40,7 @@ pub const PANE_H_PAD: f32 = 2.0;
 
 /// Height of the Modern-style tabbar, expressed as a multiple of cell height.
 /// Classic style always uses exactly `tabbar_rows() * ch` (i.e. 2.0).
-pub(crate) const MODERN_TABBAR_HEIGHT: f32 = 1.6;
+pub(crate) const MODERN_TABBAR_HEIGHT: f32 = 1.25;
 
 /// Flat pixel top-up added on top of `MODERN_TABBAR_HEIGHT * cell_height`,
 /// independent of font size (unlike that ratio). `tabbar::tab_top_inset_px`
@@ -55,6 +56,42 @@ pub(crate) const TABBAR_EXTRA_HEIGHT_PX: f32 = 2.0;
 /// never drift apart.
 pub fn modern_tabbar_height_px(cell_height: f32) -> f32 {
     MODERN_TABBAR_HEIGHT * cell_height + TABBAR_EXTRA_HEIGHT_PX
+}
+
+/// Gap between a pane strip's top edge (where its divider lies) and its tab
+/// pills, in pixels.
+pub(crate) const PANE_STRIP_TOP_PAD_PX: f32 = 1.0;
+
+/// Height of the line along a pane strip's bottom edge that separates it from
+/// the pane below, in pixels.
+pub(crate) const PANE_STRIP_SEPARATOR_PX: f32 = 1.0;
+
+/// Space between a pane strip's separator and the pane below it, in pixels,
+/// left in the pane's own color.
+pub(crate) const PANE_STRIP_SEPARATOR_INSET_PX: f32 = 1.0;
+
+/// A pane strip's total pixel height: the pill height
+/// ([`modern_tabbar_height_px`]) plus the gap above the pills and the
+/// separator (with its inset) below them, so the pills stay as tall as the
+/// title bar's.
+pub fn pane_strip_height_px(cell_height: f32) -> f32 {
+    modern_tabbar_height_px(cell_height)
+        + PANE_STRIP_TOP_PAD_PX
+        + PANE_STRIP_SEPARATOR_PX
+        + PANE_STRIP_SEPARATOR_INSET_PX
+}
+
+/// Pixel space the Modern-style title bar adds above its tab pills, beyond
+/// what a pane strip has.
+pub(crate) const TITLEBAR_EXTRA_HEIGHT_PX: f32 = 2.0;
+
+/// The Modern-style title bar's total pixel height: the pill height
+/// ([`modern_tabbar_height_px`]) plus the padding the title bar keeps around
+/// its tab pills, so a title bar pill is exactly as tall as a pane strip's.
+pub fn modern_titlebar_height_px(cell_height: f32) -> f32 {
+    modern_tabbar_height_px(cell_height)
+        + tabbar::tab_top_inset_px(crate::tabbar::MenuStyle::Modern)
+        + tabbar::TAB_BOTTOM_VPAD_PX
 }
 
 /// Height of the status bar, expressed as a multiple of cell height.

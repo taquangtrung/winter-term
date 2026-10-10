@@ -1446,7 +1446,7 @@ mod tests {
     fn app_with_paragraphs(cursor_row: usize) -> (App, PaneId) {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes
             .insert(id, pane_with_lines(&["alpha", "beta", "", "gamma"]));
         app.modes.insert(id, Mode::Normal);
@@ -2243,7 +2243,7 @@ mod tests {
         // pane's last change; `.` re-sends it, so the echo pane shows it twice.
         // A blank fixture row so the echo is the only text to assert on.
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes.insert(id, pane_with_lines(&[""]));
         app.modes.insert(id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
@@ -2300,7 +2300,7 @@ mod tests {
         // (Ctrl+Shift+Space) leaves Insert deterministically, without the
         // bare-Escape foreground-process branch.
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes.insert(id, pane_with_lines(&[""]));
         app.modes.insert(id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
@@ -2541,7 +2541,7 @@ mod tests {
     #[test]
     fn test_mark_set_and_goto_exact_and_first_non_blank() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes
             .insert(id, pane_with_lines(&["alpha", "   beta", "gamma"]));
         app.modes.insert(id, Mode::Normal);
@@ -2607,7 +2607,7 @@ mod tests {
     #[test]
     fn test_select_text_object_word_in_normal_enters_visual() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes.insert(id, pane_with_lines(&["hello world foo"]));
         app.modes.insert(id, Mode::Normal);
         app.set_nav_cursor(id, (0, 7)); // on 'o' in 'world'
@@ -2628,7 +2628,7 @@ mod tests {
     #[test]
     fn test_select_text_object_quotes() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes
             .insert(id, pane_with_lines(&["let s = \"hello world\";"]));
         app.modes.insert(id, Mode::Normal);
@@ -2658,7 +2658,7 @@ mod tests {
     #[test]
     fn test_blockwise_visual_selection_and_yank() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes
             .insert(id, pane_with_lines(&["abcdef", "123456", "ghijkl"]));
         app.modes.insert(id, Mode::Normal);
@@ -2681,7 +2681,7 @@ mod tests {
     #[test]
     fn test_named_register_yank_and_paste_in_app() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes
             .insert(id, pane_with_lines(&["echo \"hello\"", ""]));
         app.modes.insert(id, Mode::Visual);
@@ -2703,7 +2703,7 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes.insert(
             id,
             pane_with_lines(&["alpha line", "beta target", "gamma last"]),
@@ -2745,7 +2745,7 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes.insert(
             id,
             pane_with_lines(&["alpha line", "beta target", "gamma last"]),
@@ -2781,7 +2781,7 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes.insert(
             id,
             pane_with_lines(&["alpha line", "beta target", "gamma last"]),
@@ -2821,7 +2821,7 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes.insert(
             id,
             pane_with_lines(&["alpha line", "beta target", "gamma last"]),
@@ -2852,14 +2852,13 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
-        let id = app.tab().panes()[0];
         let dir = std::env::temp_dir().join("winter_jump_page_test");
         let _ = std::fs::create_dir_all(&dir);
         let _ = std::fs::write(dir.join("a.txt"), "hello");
         let _ = std::fs::write(dir.join("b.txt"), "world");
 
         let page = Box::new(DirPage::new(dir.clone()));
-        app.show_page("dir", page);
+        let id = app.show_page("dir", page);
 
         // Open Jump over the page
         app.open_jump(id);
@@ -2889,7 +2888,7 @@ mod tests {
     #[test]
     fn test_action_jump_toggles_palette() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes
             .insert(id, pane_with_lines(&["alpha line", "beta target"]));
 
@@ -2909,7 +2908,7 @@ mod tests {
     #[test]
     fn test_reveal_position_centered_vertically_centers_in_pane() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
         let str_lines: Vec<&str> = lines.iter().map(String::as_str).collect();
         app.panes.insert(id, pane_with_lines(&str_lines));
@@ -2923,7 +2922,7 @@ mod tests {
     #[test]
     fn test_change_operator_deletes_and_enters_insert() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes
             .insert(id, pane_with_lines(&["echo \"hello world\""]));
         app.modes.insert(id, Mode::Normal);
@@ -2956,7 +2955,7 @@ mod tests {
     #[test]
     fn test_replace_char_and_toggle_case_on_prompt() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes.insert(id, pane_with_lines(&["Hello World"]));
         app.modes.insert(id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0)); // 'H'
@@ -2980,7 +2979,7 @@ mod tests {
         // than mistranslated into readline chords that edit the wrong
         // characters.
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let mut pane = pane_with_lines(&[]);
         pane.feed_program_output(b"\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\ls -l");
         app.panes.insert(id, pane);
@@ -3003,7 +3002,7 @@ mod tests {
     #[test]
     fn test_jump_to_prompt_gp() {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let mut pane = pane_with_lines(&["first line", "second line", "prompt line"]);
         pane.grid_mut().move_to_row(2);
         pane.grid_mut().move_to_column(5);
@@ -3050,7 +3049,7 @@ mod tests {
         // behind the image, and the 1-cell cursor parked inside it was
         // invisible against the block.
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let pane = pane_with_lines(&["above", "more", "", "", "", "below"]);
         app.panes.insert(id, pane);
         app.modes.insert(id, Mode::Normal);

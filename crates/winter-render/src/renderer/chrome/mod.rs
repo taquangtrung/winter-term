@@ -16,16 +16,20 @@ use super::GpuRenderer;
 use super::{NoticeKind, StatusNotice};
 use crate::image::ImagePlacement;
 use crate::tabbar::{
-    self, layout as tabbar_layout, Region, TabbarHit, TabbarLayout, TopTabbar,
-    HOVER_PILL_H_PAD_CELLS, NEW_TAB_BOTTOM_INSET_RATIO, TAB_H_PAD_CELLS, ZOOM_CELLS,
+    self, layout as tabbar_layout, PaneStripEdges, PaneStripHit, PaneStripLayout, PaneTab, Region, TabbarHit,
+    TabbarLayout, TopTabbar, HOVER_PILL_H_PAD_CELLS, NEW_TAB_BOTTOM_INSET_RATIO, TAB_H_PAD_CELLS,
+    ZOOM_CELLS,
 };
 use crate::theme::{Rgb, Theme};
-use glyphon::Color;
+use glyphon::{Color, FontSystem, SwashCache};
 use overlay::{
     context_menu_rgba, dropdown_rgba, input_rgba, palette_rgba, submenu_rgba, toast_rgba,
     url_tooltip_rgba, which_key_rgba,
 };
-use paint::{fill_line_segment, fill_rounded_rect, shape_chrome_line, text_bounds, truncate_label};
+use paint::{
+    composite_buffer, fill_line_segment, fill_rounded_rect, shape_chrome_line, text_bounds,
+    truncate_label,
+};
 
 // ========================================================================
 // Constants
@@ -132,6 +136,10 @@ const TAB_CLOSE_SHIFT_UP_PX: f32 = 1.0;
 /// Flat pixels the tab title label is shifted up from its vertically-
 /// centered position on the tab shape.
 const TAB_LABEL_SHIFT_UP_PX: f32 = 1.0;
+
+/// How much larger the title bar's button icons (tab close, hamburger and
+/// window controls) are drawn than their base size, to suit the taller bar.
+const TITLEBAR_ICON_SCALE: f32 = 1.2;
 
 /// Flat pixels trimmed off the top of the hamburger/minimize/maximize/close
 /// control buttons' shared hover pill, shrinking its height from the top
@@ -645,7 +653,7 @@ impl GpuRenderer {
         // the top-inset math used elsewhere (rows of tabbar chrome × cell height).
         let top_inset = if self.tabbar_enabled {
             if self.modern {
-                crate::modern_tabbar_height_px(self.cell_height)
+                crate::modern_titlebar_height_px(self.cell_height)
             } else {
                 2.0 * self.cell_height
             }
@@ -891,7 +899,7 @@ pub(super) fn tabbar_strip_rgba(
     let ch = cell_h;
     let layout = tabbar_layout(tabbar, surface_w, cw, ch);
     let tabbar_h = if tabbar.menu_style == crate::tabbar::MenuStyle::Modern {
-        crate::modern_tabbar_height_px(ch)
+        crate::modern_titlebar_height_px(ch)
     } else {
         tabbar::tabbar_rows(tabbar.menu_style) as f32 * ch
     };
@@ -1046,7 +1054,7 @@ fn paint_tab_pills(
                 + style.tab_vpad_top
                 + (close.h - style.tab_vpad_top - style.tab_vpad_bottom) / 2.0
                 - TAB_CLOSE_SHIFT_UP_PX;
-            let size = (style.cell_h * 0.35).round();
+            let size = (style.cell_h * 0.35 * TITLEBAR_ICON_SCALE).round();
             let half = size / 2.0;
             let thickness = 1.25;
             fill_line_segment(
@@ -1217,10 +1225,10 @@ fn paint_hamburger(
         let cy =
             hb.y + style.tab_vpad_top + (hb.h - style.tab_vpad_top - style.tab_vpad_bottom) / 2.0
                 - CONTROL_SHIFT_UP_PX;
-        let size = (style.cell_h * 0.40).round();
+        let size = (style.cell_h * 0.40 * TITLEBAR_ICON_SCALE).round();
         let half = size / 2.0;
         let thickness = 1.25;
-        let line_spacing = (style.cell_h * 0.14).round().max(3.0);
+        let line_spacing = (style.cell_h * 0.14 * TITLEBAR_ICON_SCALE).round().max(3.0);
 
         fill_line_segment(
             rgba,
@@ -1289,7 +1297,7 @@ fn paint_window_controls(
             );
         }
 
-        let size = (style.cell_h * 0.45).round();
+        let size = (style.cell_h * 0.45 * TITLEBAR_ICON_SCALE).round();
         let thickness = 1.35;
         let fg_color = style.theme.foreground;
         let muted_alpha = 0.62;
@@ -1410,6 +1418,451 @@ fn paint_window_controls(
     }
 }
 
+/// Active tab pill background color (#2a2f31): the pane's own background, so
+/// the active tab reads as open into its pane.
+const PANE_STRIP_ACTIVE_BG: Rgb = Rgb::new(0x2a, 0x2f, 0x31);
+
+/// Non-occupied band background color (#1f2527).
+const PANE_STRIP_BAND_BG: Rgb = Rgb::new(0x1f, 0x25, 0x27);
+
+/// Corner radius of a pane strip's tab pills, as a fraction of cell height:
+/// much squarer than the title bar's, since a pill sits between two lines.
+const PANE_STRIP_PILL_RADIUS_RATIO: f32 = 0.12;
+
+/// Rasterize a pane-level tab strip into an RGBA buffer.
+#[allow(clippy::too_many_arguments)]
+pub fn rasterize_pane_strip_rgba(
+    tabs: &[PaneTab],
+    layout: &PaneStripLayout,
+    width: u32,
+    height: u32,
+    cw: f32,
+    ch: f32,
+    theme: &Theme,
+    hover: PaneStripHit,
+    separator: Rgb,
+    font_system: &mut FontSystem,
+    swash_cache: &mut SwashCache,
+    ctx: &FontCtx,
+) -> Vec<u8> {
+    let canvas = (width, height);
+    let mut rgba = vec![0u8; (width * height * 4) as usize];
+
+    // 1. Fill recessed non-occupied band with lighter color #282d30.
+    fill_rounded_rect(
+        &mut rgba,
+        canvas,
+        (0.0, 0.0, width as f32, height as f32),
+        0.0,
+        PANE_STRIP_BAND_BG,
+        1.0,
+    );
+
+    let pill_radius = ch * PANE_STRIP_PILL_RADIUS_RATIO;
+    let tab_vpad_top = crate::PANE_STRIP_TOP_PAD_PX;
+    let tab_vpad_bottom = crate::PANE_STRIP_SEPARATOR_PX + crate::PANE_STRIP_SEPARATOR_INSET_PX;
+    let inactive_bg = mix_rgb(PANE_STRIP_BAND_BG, PANE_STRIP_ACTIVE_BG, 0.4);
+
+    let dark_theme = {
+        let bg = theme.tabbar_bg;
+        (bg.r as f32 + bg.g as f32 + bg.b as f32) / (3.0 * 255.0) < 0.5
+    };
+    let bright_target = if dark_theme {
+        Rgb::new(255, 255, 255)
+    } else {
+        theme.foreground
+    };
+    let active_text_color = mix_rgb(theme.tab_active_fg, bright_target, 0.35).to_glyphon();
+    let inactive_text_color = mix_rgb(theme.ansi[8], bright_target, 0.62).to_glyphon();
+
+    // 2. Tab pills and their contents (text + close icon).
+    for (i, tab) in tabs.iter().enumerate() {
+        let tab_reg = layout.tabs[i];
+        if tab_reg.w <= 0.0 {
+            continue;
+        }
+
+        let is_hovered = matches!(hover, PaneStripHit::Tab(id) | PaneStripHit::CloseTab(id) if id == tab.pane_id);
+        let pill_color = if tab.active {
+            PANE_STRIP_ACTIVE_BG
+        } else if is_hovered {
+            mix_rgb(inactive_bg, PANE_STRIP_ACTIVE_BG, 0.55)
+        } else {
+            inactive_bg
+        };
+
+        let pill_bounds = (
+            tab_reg.x + tabbar::TAB_GAP_PX / 2.0,
+            tab_reg.y + tab_vpad_top,
+            tab_reg.w - tabbar::TAB_GAP_PX,
+            tab_reg.h - tab_vpad_top - tab_vpad_bottom,
+        );
+        fill_rounded_rect(&mut rgba, canvas, pill_bounds, pill_radius, pill_color, 1.0);
+
+        // Close button hover highlight
+        let close_reg = layout.closes[i];
+        let is_close_hovered = hover == PaneStripHit::CloseTab(tab.pane_id);
+        if is_close_hovered {
+            let hpad = cw * 0.15;
+            let vpad = ch * 0.2;
+            let close_hover_color = mix_rgb(pill_color, theme.foreground, 0.18);
+            fill_rounded_rect(
+                &mut rgba,
+                canvas,
+                (
+                    close_reg.x + hpad + TAB_CLOSE_SHIFT_RIGHT_PX,
+                    close_reg.y + tab_vpad_top + vpad - TAB_CLOSE_SHIFT_UP_PX,
+                    close_reg.w - hpad * 2.0,
+                    close_reg.h - tab_vpad_top - tab_vpad_bottom - vpad * 2.0,
+                ),
+                pill_radius,
+                close_hover_color,
+                1.0,
+            );
+        }
+
+        // Close button vector 'X'
+        {
+            let close_color = if is_close_hovered || is_hovered || tab.active {
+                theme.foreground
+            } else {
+                theme.ansi[8]
+            };
+            let cx = close_reg.x + close_reg.w / 2.0 + TAB_CLOSE_SHIFT_RIGHT_PX;
+            let cy = close_reg.y
+                + tab_vpad_top
+                + (close_reg.h - tab_vpad_top - tab_vpad_bottom) / 2.0
+                - TAB_CLOSE_SHIFT_UP_PX;
+            let size = (ch * 0.35).round();
+            let half = size / 2.0;
+            let thickness = 1.25;
+            fill_line_segment(
+                &mut rgba,
+                canvas,
+                (cx - half, cy - half),
+                (cx + half, cy + half),
+                thickness,
+                close_color,
+                1.0,
+            );
+            fill_line_segment(
+                &mut rgba,
+                canvas,
+                (cx - half, cy + half),
+                (cx + half, cy - half),
+                thickness,
+                close_color,
+                1.0,
+            );
+        }
+
+        // Tab label
+        let pad = cw * 0.4;
+        let title_x = tab_reg.x + TAB_H_PAD_CELLS * cw;
+        let title_end = close_reg.x;
+        let avail = (title_end - (title_x + pad)).max(cw);
+        let max_chars = (avail / cw).floor() as usize;
+        let labeled = format!("{}: {}", i + 1, tab.title);
+        let title = truncate_label(&labeled, max_chars);
+        let text_color = if tab.active {
+            active_text_color
+        } else {
+            inactive_text_color
+        };
+        let mut buffer = shape_chrome_line(font_system, ctx, &title, text_color, false, true);
+        let vcenter_y = tab_reg.y
+            + tab_vpad_top
+            + (tab_reg.h - tab_vpad_top - tab_vpad_bottom - ctx.line_height) / 2.0
+            - TAB_LABEL_SHIFT_UP_PX;
+        composite_buffer(
+            font_system,
+            swash_cache,
+            &mut rgba,
+            canvas,
+            &mut buffer,
+            ((title_x + pad).round() as i32, vcenter_y.round() as i32),
+            text_color,
+        );
+    }
+
+    // 3. New-tab button (+)
+    if let Some(nt) = layout.new_tab {
+        if hover == PaneStripHit::NewTab {
+            let new_tab_vpad_bottom = tab_vpad_bottom;
+            let new_tab_hpad = HOVER_PILL_H_PAD_CELLS * cw;
+            let new_tab_hover = mix_rgb(PANE_STRIP_BAND_BG, theme.foreground, 0.12);
+            fill_rounded_rect(
+                &mut rgba,
+                canvas,
+                (
+                    nt.x + new_tab_hpad,
+                    nt.y + tab_vpad_top + NEW_TAB_HOVER_PILL_TOP_TRIM_PX,
+                    nt.w - new_tab_hpad * 2.0,
+                    nt.h - tab_vpad_top - new_tab_vpad_bottom - NEW_TAB_HOVER_PILL_TOP_TRIM_PX,
+                ),
+                pill_radius,
+                new_tab_hover,
+                1.0,
+            );
+        }
+
+        // Draw '+' icon vector graphic
+        let cx = nt.x + nt.w / 2.0;
+        let cy = nt.y + tab_vpad_top + (nt.h - tab_vpad_top - tab_vpad_bottom) / 2.0
+            + NEW_TAB_GLYPH_SHIFT_DOWN_PX;
+        let size = (ch * 0.35).round();
+        let half = size / 2.0;
+        let thickness = 1.35;
+        let plus_color = if hover == PaneStripHit::NewTab {
+            theme.foreground
+        } else {
+            theme.ansi[8]
+        };
+        fill_line_segment(
+            &mut rgba,
+            canvas,
+            (cx - half, cy),
+            (cx + half, cy),
+            thickness,
+            plus_color,
+            1.0,
+        );
+        fill_line_segment(
+            &mut rgba,
+            canvas,
+            (cx, cy - half),
+            (cx, cy + half),
+            thickness,
+            plus_color,
+            1.0,
+        );
+    }
+
+    // 4. Scroll chevrons if paginated
+    let tab_count = tabs.len();
+    let active_idx = tabs.iter().position(|t| t.active).unwrap_or(0);
+    for (region, points_left, hit) in [
+        (layout.scroll_left, true, PaneStripHit::ScrollLeft),
+        (layout.scroll_right, false, PaneStripHit::ScrollRight),
+    ] {
+        let Some(r) = region else { continue };
+        let active = if points_left {
+            active_idx > 0
+        } else {
+            active_idx + 1 < tab_count
+        };
+        let hovered = active && hover == hit;
+        if hovered {
+            let hpad = cw * 0.2;
+            let vpad = ch * 0.1;
+            fill_rounded_rect(
+                &mut rgba,
+                canvas,
+                (
+                    r.x + hpad,
+                    r.y + tab_vpad_top,
+                    r.w - hpad * 2.0,
+                    r.h - tab_vpad_top - vpad,
+                ),
+                pill_radius,
+                mix_rgb(PANE_STRIP_BAND_BG, theme.foreground, 0.12),
+                1.0,
+            );
+        }
+        let color = if !active {
+            mix_rgb(PANE_STRIP_BAND_BG, theme.ansi[8], 0.4)
+        } else if hovered {
+            theme.foreground
+        } else {
+            theme.ansi[8]
+        };
+        let cx = r.x + r.w / 2.0;
+        let cy = r.y + r.h / 2.0;
+        let half = (ch * 0.2).round();
+        let reach = half * 0.6;
+        let thickness = 1.5;
+        let tip_x = if points_left { cx - reach } else { cx + reach };
+        let back_x = if points_left { cx + reach } else { cx - reach };
+        fill_line_segment(
+            &mut rgba,
+            canvas,
+            (back_x, cy - half),
+            (tip_x, cy),
+            thickness,
+            color,
+            1.0,
+        );
+        fill_line_segment(
+            &mut rgba,
+            canvas,
+            (tip_x, cy),
+            (back_x, cy + half),
+            thickness,
+            color,
+            1.0,
+        );
+    }
+
+    // 5. The line between the strip and the pane below it, with a row of the
+    // pane's own color under it.
+    let inset = crate::PANE_STRIP_SEPARATOR_INSET_PX;
+    fill_rounded_rect(
+        &mut rgba,
+        canvas,
+        (0.0, height as f32 - inset, width as f32, inset),
+        0.0,
+        theme.background,
+        1.0,
+    );
+    fill_rounded_rect(
+        &mut rgba,
+        canvas,
+        (
+            0.0,
+            height as f32 - inset - crate::PANE_STRIP_SEPARATOR_PX,
+            width as f32,
+            crate::PANE_STRIP_SEPARATOR_PX,
+        ),
+        0.0,
+        separator,
+        1.0,
+    );
+
+    rgba
+}
+
+/// A rasterized pane strip with the split dividers around it, and how far
+/// the result reaches past the strip's own area.
+struct DividedStrip {
+    height: u32,
+    /// Columns added on the left, where the strip's left divider lies.
+    left: u32,
+    rgba: Vec<u8>,
+    /// Rows added on top, where the strip's top divider lies.
+    top: u32,
+    width: u32,
+}
+
+/// Put the dividers `edges` names around the `width` x `height` strip `rgba`.
+///
+/// A divider is centered on the edge a strip shares with its neighbor, so the
+/// part of it before that edge (`ceil(divider_width / 2)` pixels) lies outside
+/// the strip's own area on the left and top. The result grows by that much
+/// there, which puts the divider on the same pixels as the ones drawn between
+/// the panes below. Each divider is drawn whole by one of the two strips that
+/// share it; the caller unsets the side the neighbor draws.
+fn add_strip_dividers(
+    rgba: &[u8],
+    width: u32,
+    height: u32,
+    edges: PaneStripEdges,
+    divider_width: f32,
+    color: Rgb,
+) -> DividedStrip {
+    let before = (divider_width / 2.0).ceil() as u32;
+    let after = (divider_width / 2.0).floor() as u32;
+    let left = if edges.left { before } else { 0 };
+    let top = if edges.top { before } else { 0 };
+    let (out_w, out_h) = (width + left, height + top);
+    let mut out = vec![0u8; (out_w * out_h * 4) as usize];
+    let row_bytes = (width * 4) as usize;
+    for row in 0..height {
+        let src = row as usize * row_bytes;
+        let dst = (((row + top) * out_w + left) * 4) as usize;
+        out[dst..dst + row_bytes].copy_from_slice(&rgba[src..src + row_bytes]);
+    }
+    let canvas = (out_w, out_h);
+    let (w, h) = (out_w as f32, out_h as f32);
+    let mut fill = |bounds: (f32, f32, f32, f32)| {
+        fill_rounded_rect(&mut out, canvas, bounds, 0.0, color, 1.0);
+    };
+    if edges.left {
+        fill((0.0, 0.0, (left + after) as f32, h));
+    }
+    if edges.right {
+        fill((w - before as f32, 0.0, before as f32, h));
+    }
+    if edges.top {
+        fill((0.0, 0.0, w, (top + after) as f32));
+    }
+    DividedStrip {
+        height: out_h,
+        left,
+        rgba: out,
+        top,
+        width: out_w,
+    }
+}
+
+impl GpuRenderer {
+    /// Rasterize a pane tab strip and upload it to the GPU texture with ID `texture_id`.
+    /// Returns the corresponding `ImagePlacement`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rasterize_pane_strip(
+        &mut self,
+        texture_id: u64,
+        tabs: &[PaneTab],
+        layout: &PaneStripLayout,
+        width: u32,
+        height: u32,
+        hover: PaneStripHit,
+        edges: PaneStripEdges,
+        x: f32,
+        y: f32,
+    ) -> ImagePlacement {
+        let ctx = FontCtx {
+            cell_h: self.cell_height,
+            cell_w: self.cell_width,
+            family: self.font_family.as_deref(),
+            font_has_bold: self.font_has_bold,
+            font_size: self.font_size,
+            line_height: self.line_height,
+            normal_weight: self.normal_weight.as_deref(),
+            bold_weight: self.bold_weight.as_deref(),
+        };
+        let rgba = rasterize_pane_strip_rgba(
+            tabs,
+            layout,
+            width,
+            height,
+            self.cell_width,
+            self.cell_height,
+            &self.theme,
+            hover,
+            self.split_divider_color(),
+            &mut self.font_system,
+            &mut self.swash_cache,
+            &ctx,
+        );
+        let strip = add_strip_dividers(
+            &rgba,
+            width,
+            height,
+            edges,
+            self.divider_width,
+            self.split_divider_color(),
+        );
+        self.image_pass.upload(
+            &self.device,
+            &self.queue,
+            texture_id,
+            &strip.rgba,
+            strip.width,
+            strip.height,
+        );
+        ImagePlacement {
+            alpha: 1.0,
+            height: strip.height as f32,
+            id: texture_id,
+            v_max: 1.0,
+            v_min: 0.0,
+            width: strip.width as f32,
+            x: x - strip.left as f32,
+            y: y - strip.top as f32,
+        }
+    }
+}
+
 // ========================================================================
 // Tests
 // ========================================================================
@@ -1422,6 +1875,30 @@ mod tests {
 
     const CELL_W: f32 = 9.0;
     const CELL_H: f32 = 18.0;
+
+    #[test]
+    fn test_a_one_pixel_divider_lies_on_the_pixel_before_the_shared_edge() {
+        // A 4x3 strip of opaque white; the divider red. Its left divider must
+        // sit one column left of the strip, where the pane divider's pixel is,
+        // and its top divider one row above.
+        let base = vec![255u8; 4 * 3 * 4];
+        let red = Rgb::new(255, 0, 0);
+        let edges = PaneStripEdges {
+            left: true,
+            right: false,
+            top: true,
+        };
+        let strip = add_strip_dividers(&base, 4, 3, edges, 1.0, red);
+        assert_eq!((strip.width, strip.height), (5, 4));
+        assert_eq!((strip.left, strip.top), (1, 1));
+        let px = |x: usize, y: usize| {
+            let i = (y * 5 + x) * 4;
+            [strip.rgba[i], strip.rgba[i + 1], strip.rgba[i + 2]]
+        };
+        assert_eq!(px(0, 2), [255, 0, 0], "left divider column");
+        assert_eq!(px(3, 0), [255, 0, 0], "top divider row");
+        assert_eq!(px(1, 1), [255, 255, 255], "strip content starts after both");
+    }
 
     const SURFACE_W: f32 = 1000.0;
 
@@ -1562,7 +2039,7 @@ mod tests {
         classic.menu_style = MenuStyle::Classic;
         assert_eq!(
             strip(&modern).height,
-            crate::modern_tabbar_height_px(CELL_H).ceil() as u32
+            crate::modern_titlebar_height_px(CELL_H).ceil() as u32
         );
         assert_eq!(
             strip(&classic).height,

@@ -157,7 +157,7 @@ impl Theme {
             status_bar_fg: Rgb::parse_hex("#15181a").unwrap(),
             tab_active_bg: Rgb::parse_hex("#2a2f31").unwrap(),
             tab_active_fg: Rgb::parse_hex("#d8d8d8").unwrap(),
-            tabbar_bg: Rgb::parse_hex("#1b1f20").unwrap(),
+            tabbar_bg: Rgb::parse_hex("#161a1c").unwrap(),
             window_border: Rgb::parse_hex("#414248").unwrap(),
             ansi: [
                 Rgb::parse_hex("#000000").unwrap(), // black

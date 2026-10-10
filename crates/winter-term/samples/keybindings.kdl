@@ -111,6 +111,9 @@ window {
     "C+S+v" "paste_from_clipboard"
     "C+S+c" "copy_selection"
     "M+'" "copy_cwd"
+    // Open the path or URL the terminal points at: the Normal-mode cursor,
+    // the selection, the shell's cursor, or else the last line printed.
+    "M+." "open_under_cursor"
 
     // Settings and font size.
     "C+," "open_settings"

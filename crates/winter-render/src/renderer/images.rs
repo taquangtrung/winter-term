@@ -236,6 +236,12 @@ impl GpuRenderer {
         Some((width, height))
     }
 
+    /// Upload pre-rasterized RGBA bytes as a GPU texture under `id`.
+    pub fn upload_rgba(&mut self, id: u64, rgba: &[u8], width: u32, height: u32) {
+        self.image_pass
+            .upload(&self.device, &self.queue, id, rgba, width, height);
+    }
+
     /// Whether an image texture is already cached for `id`.
     pub fn has_image(&self, id: u64) -> bool {
         self.image_pass.has(id)

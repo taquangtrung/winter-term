@@ -23,6 +23,9 @@ use winter_render::{
 
 use super::{page, status_bar, App, ImageBlock, ReflowSource};
 
+/// Base texture ID for rasterized pane tab strips (below chrome overlay IDs).
+const PANE_STRIP_TEXTURE_BASE: u64 = u64::MAX - 200;
+
 // ========================================================================
 // Constants
 // ========================================================================
@@ -89,6 +92,8 @@ const PAGE_HUNK_MIX: f32 = 0.22;
 /// clear of [`PAGE_HUNK_MIX`], so a file's band reads as the louder row where
 /// one sits directly above a hunk's.
 const PAGE_SECTION_MIX: f32 = 0.34;
+
+
 
 /// The ANSI palette slots a diff's colors are drawn from: red and green for
 /// the sides, blue and cyan for the header bands, yellow for a tag's ref.
@@ -408,6 +413,8 @@ fn page_pane_view<'a>(
     }
 }
 
+
+
 /// Re-rasterize width-wrapped blocks (markdown/CSV/JSON) whose pane width
 /// changed since they were last rendered, so wrapping stays correct on resize.
 /// Intrinsic-size blocks (raster/SVG) have `reflow == None` and are skipped.
@@ -707,8 +714,9 @@ impl App {
         let (full_cols, full_rows) = renderer.grid_size();
         let (cw, ch) = renderer.cell_size();
         let viewport = self.content_band(cw, ch, full_cols, full_rows, status_enabled);
-        let rects = self.tabs.all[self.tabs.active].rects(viewport);
-        let focused = self.tabs.all[self.tabs.active].focused();
+        let rects = self.pane_rects_in(viewport);
+        let focused = self.tabs.layout.focused();
+        let strip_frames = self.strip_frames(viewport, (cw, ch));
         let mode = self.modes.get(&focused).copied().unwrap_or_default();
         let overlays = self.build_pane_overlays(&rects, renderer.theme());
         // Pages paint themselves into a grid of their own, so the renderer
@@ -827,6 +835,19 @@ impl App {
         let mut placements =
             image_placements(&self.image_blocks, &self.panes, &rects, ch, &page_paints);
         placements.extend(icon_placements);
+        for (i, frame) in strip_frames.iter().enumerate() {
+            placements.push(renderer.rasterize_pane_strip(
+                PANE_STRIP_TEXTURE_BASE + i as u64,
+                &frame.tabs,
+                &frame.layout,
+                frame.rect.width as u32,
+                frame.rect.height as u32,
+                frame.hover,
+                frame.edges,
+                frame.rect.x,
+                frame.rect.y,
+            ));
+        }
         let views = build_pane_views(PaneViewInput {
             blink_phase: self.blink_phase,
             config: &self.config,
@@ -887,7 +908,7 @@ impl App {
             .unwrap_or(full_cols as f32 * cw);
 
         let top_h_on_screen = if self.config.menu_style == winter_render::MenuStyle::Modern {
-            winter_render::modern_tabbar_height_px(ch)
+            winter_render::modern_titlebar_height_px(ch)
         } else {
             top_rows as f32 * ch
         };
@@ -897,17 +918,9 @@ impl App {
             0.0
         };
 
-        // Floor to whole cell rows and center the leftover sub-row slack above
-        // and below the pane band, whether or not the status bar eats into it,
-        // so a window height that isn't an exact multiple of the cell height
-        // never leaves a dead, un-drawable strip pinned to one edge.
-        let (rows, top_pad) = super::content_band(h - top_h_on_screen - status_h, ch);
-        Rect::new(
-            0.0,
-            top_h_on_screen + top_pad,
-            w,
-            (rows as f32 * ch).max(1.0),
-        )
+        // Every pixel between the title bar and the status bar belongs to the
+        // pane band (see `viewport_rect`).
+        Rect::new(0.0, top_h_on_screen, w, (h - top_h_on_screen - status_h).max(1.0))
     }
 
     /// Precompute the per-pane overlay data the pane views borrow as slices:
@@ -1294,9 +1307,7 @@ impl App {
             Some(r) => r.cell_size().1,
             None => return,
         };
-        let vp = self.viewport_rect();
-        let layout_vp = Rect::new(vp.x, vp.y, vp.width, vp.height);
-        let rects = self.tabs.all[self.tabs.active].rects(layout_vp);
+        let rects = self.pane_rects();
         let font_family = self.config.font_family.clone();
         let font_size = self.config.font_size;
         let remote_assets = self.config.security.block_remote_assets;
@@ -1522,7 +1533,7 @@ impl App {
         // The Visual anchor belongs to the focused pane alone (it is held
         // only while that pane is in Visual mode), so it follows this remap
         // only when that is the pane being remapped.
-        let focused = self.tabs.all[self.tabs.active].focused();
+        let focused = self.tabs.layout.focused();
         if pane_id == focused {
             if let Some((row, _)) = &mut self.selection.visual_anchor {
                 *row = map(*row);
@@ -1615,9 +1626,7 @@ impl App {
             // existing texture and refresh its layout dims. Height changes
             // stay clipped to the reserved band, like resize reflows.
             if let Some(source) = native_image_source(&entry.emit) {
-                let vp = self.viewport_rect();
-                let layout_vp = Rect::new(vp.x, vp.y, vp.width, vp.height);
-                let rects = self.tabs.all[self.tabs.active].rects(layout_vp);
+                let rects = self.pane_rects();
                 let Some((_, rect)) = rects.iter().find(|(id, _)| *id == *pane_id) else {
                     continue;
                 };
@@ -2871,7 +2880,7 @@ mod tests {
         anchors: &[(usize, usize, usize)],
     ) -> (App, PaneId, Vec<(PaneId, Rect)>) {
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let pane = crate::terminal::pane::Pane::with_command(
             40,
             8,
@@ -2957,7 +2966,7 @@ mod tests {
         // the re-wrapped line's last row. The reflow's row remap must carry
         // the anchor down to the band's own first blank row.
         let mut app = App::new();
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let mut pane = crate::terminal::pane::Pane::with_command(
             20,
             8,

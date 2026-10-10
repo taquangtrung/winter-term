@@ -26,6 +26,10 @@ use crate::theme::Rgb;
 use glyphon::{Attrs, BufferLine, Color, Shaping, TextArea, TextBounds};
 use wgpu::{LoadOp, RenderPassColorAttachment, RenderPassDescriptor, StoreOp};
 
+/// How far, from 0 to 1, split dividers are eased from the theme's divider
+/// color toward the background.
+const SPLIT_DIVIDER_DIM: f32 = 0.5;
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -906,6 +910,14 @@ impl GpuRenderer {
     // Chrome around the panes
     // --------------------------------------------------------------------
 
+    /// The color split dividers are drawn in: the theme's divider eased toward
+    /// the background so the lines between panes stay quiet. The pane strips
+    /// draw their share of a divider with this too, so the two always meet in
+    /// one color.
+    pub(super) fn split_divider_color(&self) -> Rgb {
+        mix_rgb(self.theme.divider, self.theme.background, SPLIT_DIVIDER_DIM)
+    }
+
     /// Append the divider quads that separate every adjacent pair of panes.
     fn push_divider_verts(
         &self,
@@ -923,7 +935,7 @@ impl GpuRenderer {
                         b,
                         surface.width,
                         surface.height,
-                        self.theme.divider.as_linear(),
+                        self.split_divider_color().as_linear(),
                         self.divider_width,
                     );
                     if let Some(dv) = divider {

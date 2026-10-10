@@ -2,7 +2,7 @@
 
 use portable_pty::CommandBuilder;
 
-use crate::model::layout::PaneId;
+use crate::model::layout::{Layout, PaneId};
 use crate::model::mode::Mode;
 use crate::session::Session;
 use crate::terminal::pane::{Pane, MUX_COMMAND_PREFIX, MUX_REMOTE_COMMAND_PREFIX};
@@ -15,13 +15,13 @@ use super::{content_rows, App, APPROX_CELL_HEIGHT, APPROX_CELL_WIDTH, DEFAULT_CO
 
 impl App {
     /// If a saved session exists, replace the current layout with the persisted
-    /// split tree (across all tabs) and reopen each pane at its saved cwd.
-    /// Returns `true` when a session was applied.
+    /// split tree and reopen each terminal tab at its saved cwd. Returns `true`
+    /// when a session was applied.
     pub(crate) fn restore_session_if_present(&mut self) -> bool {
         let Some(session) = Session::load() else {
             return false;
         };
-        let (mut restored_tabs, restored_active, pane_map) = session.into_tabs();
+        let (tree, focused, pane_map) = session.into_parts();
 
         let (cols, rows) = if let Some(r) = &self.renderer {
             r.grid_size()
@@ -34,11 +34,6 @@ impl App {
             (APPROX_CELL_WIDTH as f32, APPROX_CELL_HEIGHT as f32)
         };
         let want_rows = content_rows(rows);
-
-        // Remove the bootstrap pane that init_window created.
-        let bootstrap_id = self.tab().focused();
-        self.panes.remove(&bootstrap_id);
-        self.modes.remove(&bootstrap_id);
 
         // Spawn a PTY for every pane in the session. A pane whose saved
         // command and the configured-shell fallback both fail to spawn (e.g.
@@ -122,30 +117,34 @@ impl App {
                 None => failed_ids.push(*id),
             }
         }
-        for id in &failed_ids {
-            for tab in &mut restored_tabs {
-                tab.close(*id);
+        // A terminal that could not be respawned is dropped from the layout,
+        // and a group left with none collapses into its sibling.
+        let spawned = |id: PaneId| pane_map.contains_key(&id) && !failed_ids.contains(&id);
+        let layout = Layout::from_tree(tree.retain(&spawned), focused);
+        // A terminal the layout does not place would run on unseen.
+        for id in pane_map.keys() {
+            if !layout.as_ref().is_some_and(|l| l.contains(*id)) && !failed_ids.contains(id) {
+                self.panes.remove(id);
+                self.modes.remove(id);
             }
         }
+        let Some(layout) = layout else {
+            return false;
+        };
 
-        // Replace all tabs and update pane-id counter so future alloc_pane_id()
-        // calls don't collide with restored pane ids.
-        self.tabs.all = restored_tabs;
-        self.tabs.active = restored_active.min(self.tabs.all.len().saturating_sub(1));
+        // Replace the bootstrap pane that init_window created, and move the
+        // pane-id counter past the restored ids so future alloc_pane_id()
+        // calls don't collide with them.
+        let bootstrap_id = self.layout().focused();
+        if !layout.contains(bootstrap_id) {
+            self.panes.remove(&bootstrap_id);
+            self.modes.remove(&bootstrap_id);
+        }
+        self.tabs.layout = layout;
         let max_id = pane_map.keys().map(|id| id.0).max().unwrap_or(0);
         if max_id >= self.next_pane_id {
             self.next_pane_id = max_id + 1;
         }
-
-        // Focus the restored pane for the active tab (fallback to first pane).
-        let all_panes = self.tabs.all[self.tabs.active].panes();
-        let focused = self.tabs.all[self.tabs.active].focused();
-        let target = if all_panes.contains(&focused) {
-            focused
-        } else {
-            all_panes.into_iter().next().unwrap_or(PaneId(0))
-        };
-        self.tabs.all[self.tabs.active].focus(target);
 
         self.resize_all_panes();
         self.dirty = true;

@@ -145,7 +145,7 @@ The marks named with punctuation are kept for you rather than set by hand, the w
 |---|---|
 | `gt` `gT` | Next tab, previous tab |
 | `g<` `g>` | Move the current tab left, right |
-| `gx` | Open what is under the cursor: a URL goes to the browser, a path to the editor over this pane, at the line a `path:line` reference names |
+| `gx` | Open what is under the cursor: a URL goes to the browser, a directory to the Dir page, a path to the editor over this pane, at the line a `path:line` reference names. `Alt-.` does the same from any mode (see the file browser below for where it looks without a cursor) |
 | `gy` | Yank the block under the cursor |
 | `gs` | Buffer swoop: fuzzy line search over the pane |
 | `gn` `gN` | Select the next, previous search match |
@@ -463,9 +463,12 @@ Saving writes through a temporary file beside the original and renames it over t
 
 **File browser** (`Ctrl-Shift-f`, or `File: Browse Files`) walks the working directory in the command palette rather than in a pane, for the times you know roughly where a file is and want it open rather than listed.
 
+It opens where the terminal points, when it points at a file or directory that exists: the Normal-mode cursor, else the mouse selection, else the shell's cursor (on a path, or just past one you typed), else the rightmost path on the last line printed. A file opens the browser on its directory with that file selected; a directory opens the browser inside it. Paths resolve against the shell's working directory, and `~`, `..`, and `path:line:col` suffixes are understood. With nothing found, or over a tool page, it opens on the working directory as before.
+
 | Key | Action |
 |---|---|
 | Typing | Filter this directory's entries |
+| `/` after a name | Go into that directory and keep typing from there: `src/`, `../`, `~/`, or a filter like `sr/` that selects `src/`. `/` with nothing typed goes to the root |
 | `Up` `Down` or `Ctrl-p` `Ctrl-n` | Move through what is showing |
 | `Enter` / `Right` on a directory | Go into it: the browser stays up, rooted there |
 | `Enter` on a file | Open it in the editor, over the focused pane |

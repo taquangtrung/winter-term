@@ -3,11 +3,11 @@
 use std::collections::HashSet;
 use std::path::PathBuf;
 
-use crate::model::layout::{Direction, PaneId, Tab};
+use crate::model::layout::{Direction, Layout, PaneId};
 use crate::model::mode::Mode;
 use crate::terminal::pane::Pane;
 
-use super::page::{ClosedPane, Closing};
+use super::page::{ClosedPane, ClosedTerminal, Closing};
 use super::App;
 use super::{DEFAULT_COLS, DEFAULT_ROWS, SPLIT_RATIO};
 
@@ -52,17 +52,21 @@ impl App {
             }
         }
     }
-    /// The working directory of the currently focused pane of the active tab, if
-    /// available. Used to spawn a new pane/tab in the same directory.
+    /// The working directory of the focused tab's shell, else of the shell
+    /// shown most recently in the same pane, if available. Used to spawn a new
+    /// pane or tab in the same directory.
     pub(crate) fn focused_cwd(&self) -> Option<String> {
-        let focused = self.tab().focused();
-        self.panes.get(&focused).and_then(|pane| pane.cwd())
+        let focused = self.layout().focused();
+        self.layout()
+            .recent_in_group(focused)
+            .iter()
+            .find_map(|id| self.panes.get(id).and_then(|pane| pane.cwd()))
     }
-    /// Where an action launched from the focused pane starts: the page
-    /// covering it knows what is being looked at and answers first, and only
-    /// with no page there does the shell's own directory decide.
+    /// Where an action launched from the focused tab starts: a tool tab knows
+    /// what is being looked at and answers first, and only without one does
+    /// a shell's own directory decide.
     pub(crate) fn focused_start_dir(&self) -> PathBuf {
-        let focused = self.tab().focused();
+        let focused = self.layout().focused();
         let dir = self.pages
             .get(&focused)
             .and_then(|slot| slot.page.cwd())
@@ -106,11 +110,11 @@ impl App {
         cwd: Option<String>,
     ) -> Option<PaneId> {
         let new_id = self.alloc_pane_id();
-        self.tab_mut().split(direction, SPLIT_RATIO, new_id);
+        self.layout_mut().split(direction, SPLIT_RATIO, new_id);
         // Rebalance every split's ratio so all panes share the viewport equally,
         // without altering the tree shape the user built (mixed split
         // directions stay mixed; only the sizes change). See `Tab::balance`.
-        self.tab_mut().balance();
+        self.layout_mut().balance();
 
         let (pane_cols, pane_rows) = self.spawn_grid_size(new_id, direction);
         let shell = self.config.active_shell().map(String::from);
@@ -127,8 +131,8 @@ impl App {
         ) else {
             // Undo the split: no pane exists for `new_id`, so the tree can't
             // be left referencing it.
-            self.tab_mut().close(new_id);
-            self.tab_mut().balance();
+            self.layout_mut().close(new_id);
+            self.layout_mut().balance();
             self.dirty = true;
             return None;
         };
@@ -165,13 +169,7 @@ impl App {
                 Direction::Horizontal => (cols, rows / 2),
             };
         };
-        let viewport = self.content_viewport();
-        if let Some((_, rect)) = self
-            .tab()
-            .rects(viewport)
-            .into_iter()
-            .find(|(id, _)| *id == pane)
-        {
+        if let Some((_, rect)) = self.pane_rects().into_iter().find(|(id, _)| *id == pane) {
             return renderer.grid_size_for(Self::layout_rect_to_pane(rect));
         }
         // `pane` was just inserted by `split`, so the lookup above always
@@ -183,8 +181,10 @@ impl App {
             Direction::Horizontal => (cols, rows / 2),
         }
     }
+    /// Close the pane holding `pane_id`, every tab in it. The last pane of
+    /// the window is never closed this way.
     pub(crate) fn close_pane(&mut self, pane_id: PaneId) {
-        // Edits nowhere but in a page over this pane are the one thing
+        // Edits nowhere but in a tool tab of this pane are the one thing
         // closing it cannot give back on its own, so they are asked about
         // first. The pane closes on the answer, not here.
         if self.ask_before_closing_pane(pane_id) {
@@ -193,118 +193,89 @@ impl App {
         self.close_pane_now(pane_id);
     }
 
-    /// Close `pane_id` without asking, which is what an answered question
-    /// and a pane with nothing to lose both come down to.
+    /// Close the pane holding `pane_id` without asking, which is what an
+    /// answered question and a pane with nothing to lose both come down to.
+    ///
+    /// The pane is kept, not just its tools: where it sat and what its
+    /// shells were running in are what a split merged back by accident
+    /// costs, and one key puts all of it back.
     pub(crate) fn close_pane_now(&mut self, pane_id: PaneId) {
-        self.close_pane_in_any_tab(pane_id, Closing::Keep);
-    }
-    /// Close `pane_id` in whichever tab holds it, collapsing its split into the
-    /// sibling. When it is the last pane in its tab, the whole tab is closed.
-    /// Drops all per-pane state and re-lays-out if the affected tab is the active one.
-    pub(crate) fn close_pane_in_any_tab(&mut self, pane_id: PaneId, closing: Closing) {
-        let Some(tab_idx) = self
-            .tabs
-            .all
-            .iter()
-            .position(|t| t.panes().contains(&pane_id))
-        else {
+        let tabs = self.layout().group_members(pane_id);
+        if tabs.is_empty() || self.layout().panes().len() <= 1 {
             return;
-        };
-        if self.tabs.all[tab_idx].panes().len() <= 1 {
-            // Closing the last pane of a tab closes that tab, but never the last
-            // pane of the only tab, so the close-pane command always leaves at
-            // least one pane open.
-            if self.tabs.all.len() <= 1 {
-                return;
+        }
+        let snapshot = self.layout().export_tree();
+        let mut pages = Vec::new();
+        let mut terminals = Vec::new();
+        for &tab in &tabs {
+            match self.pages.remove(&tab) {
+                Some(slot) => pages.push(self.stash_closed_page(tab, slot)),
+                None => terminals.push(tab),
             }
-            // Whatever was worth asking about was asked about before this
-            // pane started closing.
-            self.close_tab_now(tab_idx);
-            return;
         }
-        // The pane itself is kept, not just the tools it was holding: where
-        // it sat and what it was running in are what a split merged back by
-        // accident costs, and one key puts all of it back.
-        let pages = self.stash_pane_pages(pane_id, closing);
-        if closing == Closing::Keep {
-            let layout = self.tabs.all[tab_idx].export_tree();
-            self.stash_closed_pane(pane_id, tab_idx, layout, pages);
+        self.stash_closed_pane(&terminals, snapshot, pages, true);
+        for &tab in &tabs {
+            self.drop_tab_state(tab);
+            self.layout_mut().close(tab);
         }
-        // Work the pane asked for would come back to a pane that is gone, and
-        // with its id given back out on a restore, to the wrong one.
-        self.jobs.cancel_for(pane_id);
-        self.panes.remove(&pane_id);
-        self.modes.remove(&pane_id);
-        self.nav_cursors.remove(&pane_id);
-        self.vim.jump_lists.remove(&pane_id);
-        self.vim.change_lists.remove(&pane_id);
-        self.vim.last_changes.remove(&pane_id);
-        self.vim.insert_sessions.remove(&pane_id);
-        self.vim.marks.retain(|(p, _), _| *p != pane_id);
-        self.pane_titles.remove(&pane_id);
-        self.webview_mgr.remove_tiles_for_pane(pane_id);
-        self.retain_image_blocks(|img| img.pane_id != pane_id);
-        self.last_tile_layout = None;
-        self.tabs.all[tab_idx].close(pane_id);
         // Rebalance the remaining panes' ratios so they stay evenly spaced,
         // without reshaping the tree (closing one pane would otherwise leave
         // its sibling oversized).
-        self.tabs.all[tab_idx].balance();
-        if tab_idx == self.tabs.active && self.renderer.is_some() {
-            self.resize_all_panes();
-        }
-        self.dirty = true;
+        self.layout_mut().balance();
+        self.after_tab_change();
     }
-    /// Put a closed pane back: its split, a shell where its own was, and the
-    /// tools it was holding.
+
+    /// Put closed terminals back: shells where their own were, the tool tabs
+    /// that went with them, and the split they sat in.
     ///
-    /// The shell itself cannot come back, since closing the pane dropped the
-    /// pseudo-terminal and killed the child; what comes back is a new one in
-    /// the same directory, the way session restore reopens a pane.
+    /// The shells themselves cannot come back, since closing them dropped
+    /// the pseudo-terminals and killed the children; what comes back is a new
+    /// one in each directory, the way session restore reopens a pane.
     ///
-    /// The tab's whole tree is restored when the rest of it has not moved on
-    /// since, which is what puts the pane back where it was rather than
-    /// wherever the reader now is. A tab that has been split or closed in the
-    /// meantime gets a plain split instead: the snapshot describes panes that
-    /// no longer agree with it.
+    /// The layout snapshot is restored when the rest of the window has not
+    /// moved on since, which puts everything back where it was rather than
+    /// wherever the reader now is. Otherwise a closed pane comes back as a new
+    /// split, and closed tabs join the focused pane.
     pub(crate) fn restore_closed_pane(&mut self, closed: ClosedPane) {
-        let restored = match self.reopen_pane_layout(&closed) {
-            Some(pane_id) => Some(pane_id),
-            None => self.split_pane_at(Direction::Vertical, closed.cwd()),
-        };
-        // No shell could be started, so there is nowhere to put the pages:
+        let before: HashSet<PaneId> = self.layout().members().into_iter().collect();
+        let mut restored: Vec<PaneId> = Vec::new();
+        for terminal in closed.terminals() {
+            if let Some(pane) = self.spawn_closed_terminal(&terminal) {
+                restored.push(pane);
+            }
+        }
+        // No shell could be started, so there is nowhere to put the tools:
         // they stay in the stash rather than going down with the failure,
         // which `spawn_pane_or_notify` has already reported.
-        let Some(pane_id) = restored else {
+        if restored.is_empty() {
             return;
-        };
+        }
         let pages = self.take_closed_pages(&closed.page_ids());
-        self.tab_mut().focus(pane_id);
-        self.restore_pages_into(pane_id, pages);
-        self.dirty = true;
+        let first = restored[0];
+        if closed.is_group() {
+            self.split_layout_for(first);
+        } else {
+            self.layout_mut().add_tab(first);
+        }
+        for &pane in &restored[1..] {
+            self.layout_mut().add_tab(pane);
+        }
+        for page in pages {
+            self.restore_closed_page(page);
+        }
+        self.reapply_snapshot(&closed, &before);
+        self.layout_mut().focus(first);
+        self.after_tab_change();
     }
 
-    /// Put the tab's split tree back as it was and start a shell in the pane
-    /// that was missing from it, or `None` when the snapshot no longer
-    /// describes the tab.
-    fn reopen_pane_layout(&mut self, closed: &ClosedPane) -> Option<PaneId> {
-        let tab_idx = closed.tab();
-        let tab = self.tabs.all.get(tab_idx)?;
-        let held: HashSet<PaneId> = tab.panes().into_iter().collect();
-        let snapshot: HashSet<PaneId> = closed.layout_panes().into_iter().collect();
-        // Every pane the snapshot names is either still there or is the one
-        // that was closed; anything else means the tab has moved on.
-        if snapshot.len() != held.len() + 1 || !held.is_subset(&snapshot) {
-            return None;
-        }
-        let pane_id = closed.pane();
-        if !snapshot.contains(&pane_id) {
-            return None;
-        }
-
-        self.switch_tab(tab_idx);
-        self.tabs.all[tab_idx] = Tab::from_tree(closed.layout(), pane_id);
-        let (cols, rows) = self.spawn_grid_size(pane_id, Direction::Vertical);
+    /// Start a shell in a closed terminal's directory, under its old tab id
+    /// when that is free. Returns the tab it went into.
+    fn spawn_closed_terminal(&mut self, terminal: &ClosedTerminal) -> Option<PaneId> {
+        let pane_id = match self.layout().contains(terminal.pane) {
+            true => self.alloc_pane_id(),
+            false => terminal.pane,
+        };
+        let (cols, rows) = self.spawn_grid_size(self.layout().focused(), Direction::Vertical);
         let shell = self.config.active_shell().map(String::from);
         let scrollback = self
             .config
@@ -315,17 +286,37 @@ impl App {
             rows.max(1),
             shell.as_deref(),
             scrollback,
-            closed.cwd().as_deref(),
+            terminal.cwd.as_deref(),
         )?;
         self.panes.insert(pane_id, pane);
         self.modes.insert(pane_id, Mode::default());
-        if self.renderer.is_some() {
-            self.resize_all_panes();
-        }
         Some(pane_id)
     }
 
-    /// Close every pane in the tab except `focused` (Vim `Ctrl-w o`).
+    /// Give `pane` a group of its own beside the focused one.
+    fn split_layout_for(&mut self, pane: PaneId) {
+        self.layout_mut()
+            .split(Direction::Vertical, SPLIT_RATIO, pane);
+        self.layout_mut().balance();
+    }
+
+    /// Put the window back into the shape `closed` was taken in, when every
+    /// tab open before the restore is one the snapshot names and every tab
+    /// the snapshot names is open now: nothing was opened or closed since.
+    fn reapply_snapshot(&mut self, closed: &ClosedPane, before: &HashSet<PaneId>) {
+        let snapshot = closed.layout();
+        let named: HashSet<PaneId> = snapshot.members().into_iter().collect();
+        let now: HashSet<PaneId> = self.layout().members().into_iter().collect();
+        if !before.is_subset(&named) || named != now {
+            return;
+        }
+        let focused = self.layout().focused();
+        if let Some(layout) = Layout::from_tree(snapshot, focused) {
+            *self.layout_mut() = layout;
+        }
+    }
+
+    /// Close every pane except the one holding `focused` (Vim `Ctrl-w o`).
     pub(crate) fn close_other_panes(&mut self, focused: PaneId) {
         // One question for the lot of them: asking pane by pane would put a
         // dialog up behind the dialog already waiting to be answered.
@@ -337,32 +328,32 @@ impl App {
 
     /// The same, once the question has been answered or there was none.
     pub(crate) fn close_other_panes_now(&mut self, focused: PaneId) {
+        let kept = self.layout().group_members(focused);
         let others: Vec<PaneId> = self
-            .tab()
+            .layout()
             .panes()
             .into_iter()
-            .filter(|&id| id != focused)
+            .filter(|id| !kept.contains(id))
             .collect();
         for id in others {
             self.close_pane_now(id);
         }
     }
+
+    /// Show and focus `pane_id`, wherever it is.
     pub(crate) fn switch_to_pane(&mut self, pane_id: PaneId) {
-        if let Some(tab_index) = self
-            .tabs
-            .all
-            .iter()
-            .position(|tab| tab.panes().contains(&pane_id))
-        {
-            self.switch_tab(tab_index);
-            self.tabs.all[tab_index].focus(pane_id);
-            self.update_window_title();
-            self.dirty = true;
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
+        self.show_tab(pane_id);
+        if let Some(window) = &self.window {
+            window.request_redraw();
         }
     }
+
+    /// Close every terminal tab whose shell has exited. The last tab of the
+    /// window closing asks for the app to exit.
+    ///
+    /// Never asked about: a question raised by a shell exiting on its own
+    /// would put a dialog up over a tab nobody was closing, and refusing it
+    /// would leave the dead tab to ask again on the next frame.
     pub(crate) fn reap_dead_panes(&mut self) {
         let dead: Vec<PaneId> = self
             .panes
@@ -370,21 +361,8 @@ impl App {
             .filter_map(|(id, pane)| if pane.is_alive() { None } else { Some(*id) })
             .collect();
         for id in dead {
-            let Some(tab_idx) = self.tabs.all.iter().position(|t| t.panes().contains(&id)) else {
-                continue;
-            };
-            if self.tabs.all[tab_idx].panes().len() > 1 {
-                // A shell that exited was asked to: the pane is not worth
-                // keeping, though any tool it was holding still is.
-                self.close_pane_in_any_tab(id, Closing::Forget);
-            } else {
-                // The last pane of a tab closes the whole tab (or, if it is
-                // also the last tab, requests app exit). Never asked about: a
-                // question raised by a shell exiting on its own would put a
-                // dialog up over a pane nobody was closing, and refusing it
-                // would leave the dead pane to ask again on the next frame.
-                self.close_tab_now(tab_idx);
-            }
+            // A shell that exited was asked to: the tab is not worth keeping.
+            self.close_tab_now(id, Closing::Forget);
         }
     }
     pub(crate) fn drain_all_panes(&mut self) -> bool {
@@ -504,8 +482,7 @@ impl App {
             (9.0, 20.0)
         };
 
-        let layout_vp = self.content_viewport();
-        let rects = self.tab().rects(layout_vp);
+        let rects = self.pane_rects();
 
         // Size each grid to the renderer's content area (it insets every pane by
         // PANE_H_PAD horizontally). Computing cols from the raw rect width would

@@ -97,7 +97,7 @@ impl App {
         let pane = cursor.pane;
         // Focus moved on while the cursor was up, so it belongs to a pane the
         // keys are no longer going to.
-        if pane != self.tab().focused() {
+        if pane != self.layout().focused() {
             self.stop_page_cursor();
             return false;
         }
@@ -255,13 +255,11 @@ mod tests {
     use crate::tools::keys::KeysPage;
     use winter_render::Grid;
 
-    /// An app whose focused pane is covered by a page already painted with
-    /// `lines`, which is what a real frame would have left on the slot.
+    /// An app whose focused tab is a page already painted with `lines`,
+    /// which is what a real frame would have left on the slot.
     fn app_with_painted_page(lines: &[&str]) -> (App, PaneId) {
         let mut app = App::new();
-        // The default tab lays out a single pane, `PaneId(0)`.
-        let pane = PaneId(0);
-        app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
+        let pane = app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
         let mut grid = Grid::new(40, lines.len().max(1));
         for (row, line) in lines.iter().enumerate() {
             grid.move_to(row, 0);
@@ -285,10 +283,9 @@ mod tests {
     }
 
     #[test]
-    fn test_a_visual_selection_copies_the_page_rows_not_the_terminal_underneath() {
-        // The whole point of the cursor: a page covers a pane whose shell is
-        // still running, and a selection resolved against the pane's own grid
-        // names the output hidden behind the listing.
+    fn test_a_visual_selection_copies_the_rows_the_page_painted() {
+        // The whole point of the cursor: a page has no terminal grid, so a
+        // selection has to resolve against the rows the page painted.
         let (mut app, pane) = app_with_painted_page(&["alpha", "bravo", "charlie"]);
         app.start_page_cursor(pane);
         assert!(

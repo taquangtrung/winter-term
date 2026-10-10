@@ -598,6 +598,22 @@ mod tests {
     }
 
     #[test]
+    fn test_alt_period_opens_what_the_terminal_points_at_from_any_mode() {
+        // A named-command chord: it must parse from the sample keymap and
+        // answer in Insert too, where there is no Normal-mode cursor.
+        let chord = Key {
+            alt: true,
+            code: KeyCode::Char('.'),
+            ctrl: false,
+            shift: false,
+        };
+        let expected = Action::RunCommand("open_under_cursor".to_string());
+        for mode in [Mode::Insert, Mode::Normal, Mode::Visual] {
+            assert_eq!(resolve_simple(mode, &chord), expected, "mode {mode:?}");
+        }
+    }
+
+    #[test]
     fn test_the_reopen_chords_answer_from_any_mode() {
         // The keys that put back a tool closed by accident have to answer from
         // inside whatever is showing instead of it, which after a pane was

@@ -231,7 +231,7 @@ impl App {
         }
         let (cell_w, cell_h) = renderer.cell_size();
         pane.set_cell_size(cell_w, cell_h);
-        let focused = self.tab().focused();
+        let focused = self.layout().focused();
         self.panes.insert(focused, pane);
 
         self.window = Some(window);
@@ -244,8 +244,8 @@ impl App {
         // Winter never sizes its own window once it is up: the size belongs to
         // whoever set it (the window manager, a tiling tool, a drag), and a
         // terminal that rounded it to whole cells would push past a tile's
-        // edge. Space short of a whole row or column is centred as padding
-        // instead (see [`content_band`]). No resize increments are set either:
+        // edge. Space short of a whole row or column is left as padding
+        // inside the panes. No resize increments are set either:
         // a height holding whole rows is the chrome plus a multiple of the
         // cell, which X11 spells as a base size the increment alone cannot
         // carry, so a manager honouring a bare cell increment would floor off

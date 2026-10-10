@@ -5,10 +5,12 @@
 //! [`App::run_command`]), so a menu item and a palette entry that do the same
 //! thing share one dispatch path.
 
-use winter_render::{ContextMenu, Menu, MenuItem, MenuStyle, TabLabel, TabbarHit, TopTabbar};
+use winter_render::{ContextMenu, Menu, MenuItem, MenuStyle, TabbarHit, TopTabbar};
 
+use crate::model::layout::PaneId;
 use crate::model::page::PagePoint;
 
+use super::strip::StripHit;
 use super::{App, ContextAction, PageKeyAction};
 use crate::config::TitleBarStyle;
 
@@ -174,15 +176,12 @@ fn menu_item(item: &ItemDef) -> MenuItem {
 // ========================================================================
 
 impl App {
-    pub(crate) fn tab_title(&self, tab_index: usize) -> String {
-        if let Some(name) = self.tabs.names.get(&tab_index) {
+    /// How a strip names one tab: a name the user gave it, a tool's own
+    /// label, else what the terminal says about itself.
+    pub(crate) fn tab_title(&self, focused: PaneId) -> String {
+        if let Some(name) = self.tabs.names.get(&focused) {
             return name.clone();
         }
-        let focused = self.tabs.all[tab_index].focused();
-        // A tool page covering the pane owns what the tab says — the shell's
-        // own title underneath went stale the moment the page opened, and the
-        // tab is the one place a tool's presence is visible when the status
-        // bar is hidden or the pane is not the one being looked at.
         if let Some(slot) = self.pages.get(&focused) {
             return slot.tab_label();
         }
@@ -206,7 +205,7 @@ impl App {
                 return clean_cwd(&cwd);
             }
         }
-        format!("Terminal {}", tab_index + 1)
+        "Terminal".to_string()
     }
 }
 
@@ -272,20 +271,6 @@ impl App {
 
     /// Build the tabbar model for this frame from the current tab/menu state.
     pub(crate) fn build_top_tabbar(&self) -> TopTabbar {
-        let tabs = (0..self.tabs.all.len())
-            .map(|i| TabLabel {
-                title: if i == self.tabs.active {
-                    if let Some(input) = &self.tabs.rename_input {
-                        format!("{input}\u{2502}")
-                    } else {
-                        self.tab_title(i)
-                    }
-                } else {
-                    self.tab_title(i)
-                },
-                zoomed: self.tabs.all[i].is_zoomed(),
-            })
-            .collect();
         let menus = menu_defs(self.config.menu_style)
             .iter()
             .map(|menu| Menu {
@@ -316,15 +301,14 @@ impl App {
         let url_tooltip = if let Some(url) = &self.pointer.hovered_url {
             let (cx, cy) = self.pointer.cursor_pos;
             Some((url.clone(), cx, cy))
-        } else if let TabbarHit::Tab(idx) = self.tabs.hover {
+        } else if let StripHit::Tab(pane) = self.tabs.strip_hover {
             let (cx, cy) = self.tabs.hover_pos.unwrap_or(self.pointer.cursor_pos);
-            let full_title = self.tab_title(idx);
-            Some((full_title, cx, cy))
+            Some((self.tab_title(pane), cx, cy))
         } else {
             None
         };
         TopTabbar {
-            active_tab: self.tabs.active,
+            active_tab: 0,
             tabbar_hover: self.tabs.hover,
             context_menu,
             controls_side: self.config.window_controls_side,
@@ -334,7 +318,10 @@ impl App {
             open_submenu: self.menus.open_submenu,
             selected_item: self.menus.selected_item,
             selected_subitem: self.menus.selected_subitem,
-            tabs,
+            // Tabs live on each pane's own strip; the title bar keeps the
+            // menus, the window controls, and a button opening a tab in the
+            // focused pane.
+            tabs: Vec::new(),
             url_tooltip,
             window_controls: self.config.title_bar_style == TitleBarStyle::Modern,
         }
@@ -485,33 +472,18 @@ impl App {
         let tabbar = self.build_top_tabbar();
         let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
         let menu_was_open = self.menus.open.is_some();
-        let focused = self.tab().focused();
+        let focused = self.layout().focused();
 
         match hit {
-            TabbarHit::Tab(i) => {
-                self.close_menu();
-                self.switch_tab(i);
-                self.tabs.drag_start = Some((i, x));
-            }
-            TabbarHit::CloseTab(i) => {
-                self.close_menu();
-                self.close_tab(i);
-            }
             TabbarHit::NewTab => {
                 self.close_menu();
                 self.new_tab();
             }
-            TabbarHit::ScrollTabsLeft => {
-                self.close_menu();
-                if self.tabs.active > 0 {
-                    self.switch_tab(self.tabs.active - 1);
-                }
-            }
-            TabbarHit::ScrollTabsRight => {
-                self.close_menu();
-                if self.tabs.active + 1 < self.tabs.all.len() {
-                    self.switch_tab(self.tabs.active + 1);
-                }
+            TabbarHit::Tab(_)
+            | TabbarHit::CloseTab(_)
+            | TabbarHit::ScrollTabsLeft
+            | TabbarHit::ScrollTabsRight => {
+                // The title bar draws no tabs, so nothing lands here.
             }
             TabbarHit::Hamburger => {
                 if self.menus.open.is_some() {
@@ -668,30 +640,6 @@ impl App {
             self.dirty = true;
         }
     }
-
-    /// On mouse release, check whether the pointer moved far enough from the
-    /// drag start to count as a reorder (>= 10 px). If so, hit-test the release
-    /// position and swap the source tab with the target tab.
-    pub(crate) fn finalize_tab_drag(&mut self) {
-        let Some((src, start_x)) = self.tabs.drag_start.take() else {
-            return;
-        };
-        let (x, y) = self.pointer.cursor_pos;
-        if (x - start_x).abs() < 10.0 {
-            return;
-        }
-        let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) else {
-            return;
-        };
-        let surface_w = self.viewport_rect().width;
-        let tabbar = self.build_top_tabbar();
-        let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
-        if let TabbarHit::Tab(dst) = hit {
-            if dst != src {
-                self.swap_tabs(src, dst);
-            }
-        }
-    }
 }
 
 // ========================================================================
@@ -778,42 +726,36 @@ mod tests {
     }
 
     #[test]
-    fn test_tab_title_falls_back_to_terminal_number() {
+    fn test_tab_title_falls_back_to_terminal() {
         let app = App::new();
-        assert_eq!(app.tab_title(0), "Terminal 1");
+        assert_eq!(app.tab_title(app.layout().focused()), "Terminal");
     }
 
     #[test]
     fn test_osc_title_is_used_before_process_and_cwd_fallbacks() {
         let mut app = App::new();
-        let focused = app.tabs.all[0].focused();
+        let focused = app.layout().focused();
         // An app-set title (e.g. butterfly naming the open file) shows as-is,
         // even though a foreground process may also be running in the pane.
         app.pane_titles
             .insert(focused, "butterfly — Winter Term.md".into());
-        assert_eq!(app.tab_title(0), "butterfly — Winter Term.md");
+        assert_eq!(app.tab_title(focused), "butterfly — Winter Term.md");
 
         // A shell-style "user@host: cwd" title is cleaned to its cwd part.
         app.pane_titles.insert(focused, "user@host:~/notes".into());
-        assert_eq!(app.tab_title(0), "~/notes");
+        assert_eq!(app.tab_title(focused), "~/notes");
 
         // An empty title falls through to the remaining fallbacks.
         app.pane_titles.insert(focused, String::new());
-        assert_eq!(app.tab_title(0), "Terminal 1");
+        assert_eq!(app.tab_title(focused), "Terminal");
     }
 
     #[test]
-    fn test_a_tool_page_owns_the_tab_label_while_it_covers_the_pane() {
-        // The shell's title went stale the moment the page opened, so the
-        // tool's own name takes the tab until the page closes.
+    fn test_a_tool_tab_is_named_after_its_tool() {
         let mut app = App::new();
-        let focused = app.tabs.all[0].focused();
-        app.pane_titles.insert(focused, "user@host:~/notes".into());
-        assert_eq!(app.tab_title(0), "~/notes");
-
-        app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
+        let keys = app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
         assert_eq!(
-            app.tab_title(0),
+            app.tab_title(keys),
             "Keys",
             "a title restating the tool is not doubled up"
         );
@@ -832,30 +774,26 @@ mod tests {
                 PageOutcome::Consumed
             }
         }
-        app.show_page("dir", Box::new(Titled("winter-term")));
-        assert_eq!(app.tab_title(0), "dir: winter-term");
-
-        app.close_page(focused);
-        assert_eq!(app.tab_title(0), "~/notes", "the shell's title comes back");
+        let dir = app.show_page("dir", Box::new(Titled("winter-term")));
+        assert_eq!(app.tab_title(dir), "dir: winter-term");
     }
 
     #[test]
-    fn test_a_renamed_tab_keeps_its_name_over_a_tool_page() {
-        // An explicit name is the user's own act; a tool opening in the pane
-        // must not overwrite it.
+    fn test_a_renamed_tab_keeps_its_name_over_a_tool_label() {
+        // An explicit name is the user's own act; the tool's label must not
+        // overwrite it.
         let mut app = App::new();
-        app.tabs.names.insert(0, "work".to_string());
-        app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
-        assert_eq!(app.tab_title(0), "work");
+        let keys = app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
+        app.tabs.names.insert(keys, "work".to_string());
+        assert_eq!(app.tab_title(keys), "work");
     }
 
     #[test]
-    fn test_build_top_tabbar_reflects_active_tab_and_menu_state() {
+    fn test_build_top_tabbar_carries_menus_and_no_tabs() {
         let mut app = App::new();
         app.menus.open = Some(0);
         let tabbar = app.build_top_tabbar();
-        assert_eq!(tabbar.tabs.len(), 1);
-        assert_eq!(tabbar.active_tab, 0);
+        assert!(tabbar.tabs.is_empty(), "tabs live on each pane's strip");
         assert_eq!(tabbar.open_menu, Some(0));
         assert_eq!(tabbar.menu_style, MenuStyle::Modern);
     }

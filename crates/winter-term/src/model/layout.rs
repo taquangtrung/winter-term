@@ -1,5 +1,6 @@
-//! The split-tree pane layout (§2.1): a tab holds a binary tree of splits whose
-//! leaves are panes. Pure geometry and tree surgery, independent of any renderer.
+//! The split-tree pane layout (§2.1): the window holds a binary tree of splits
+//! whose leaves are tab groups, each a strip of tabs with one of them shown.
+//! Pure geometry and tree surgery, independent of any renderer.
 
 // ========================================================================
 // Constants
@@ -17,23 +18,39 @@ const RATIO_MAX: f32 = 0.9;
 // Data Structures
 // ========================================================================
 
-/// One tab's pane layout: a binary split tree plus which leaf has focus.
-/// `PaneId`s are allocated by the owner (so they stay unique across tabs) and
-/// passed into [`Tab::with_root`] and [`Tab::split`].
+/// The window's pane layout: a binary split tree of tab groups plus which tab
+/// has focus.
+///
+/// Every tab is a `PaneId`, a terminal or a tool alike, allocated by the owner
+/// so ids stay unique for the life of the window. Only the shown tab of each
+/// group is laid out; the rest wait in their group's strip.
 #[derive(Clone, Debug)]
-pub struct Tab {
+pub struct Layout {
+    /// The shown tab of the focused group.
     focused: PaneId,
     root: Node,
-    /// When true, `rects()` returns only the focused pane at the full viewport;
+    /// When true, `rects()` returns only the focused group at the full viewport;
     /// cleared when the user calls `toggle_zoom()` again.
     zoomed: bool,
 }
 
-/// A node in the split tree: a pane leaf or a binary split.
+/// A node in the split tree: a tab group leaf or a binary split.
 #[derive(Clone, Debug)]
 enum Node {
-    Leaf(PaneId),
+    Leaf(Group),
     Split(SplitNode),
+}
+
+/// One leaf of the split tree: its tabs in strip order and the one shown.
+#[derive(Clone, Debug)]
+struct Group {
+    /// The shown tab.
+    active: PaneId,
+    /// Every tab, in the order the strip draws them.
+    members: Vec<PaneId>,
+    /// Every tab, most recently shown first, so closing the shown tab goes
+    /// back to the one the reader came from rather than to a neighbor.
+    recent: Vec<PaneId>,
 }
 
 /// An internal split dividing its area between two child nodes.
@@ -43,6 +60,17 @@ struct SplitNode {
     first: Box<Node>,
     ratio: f32,
     second: Box<Node>,
+}
+
+/// A tab group as laid out: where it sits and what its strip holds.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupArea {
+    /// The shown tab.
+    pub active: PaneId,
+    /// Every tab, in strip order.
+    pub members: Vec<PaneId>,
+    /// The whole group, strip included.
+    pub rect: Rect,
 }
 
 /// A rectangular area, in the renderer's coordinate space (origin top-left).
@@ -80,16 +108,17 @@ pub enum FocusDir {
     Up,
 }
 
-/// Identifies a pane within a tab.
+/// Identifies one tab: a terminal or a tool page.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct PaneId(pub u64);
 
-/// A serializable snapshot of a `Tab`'s split tree. Used by the session module
-/// to persist and restore the pane layout across restarts.
+/// A serializable snapshot of a [`Layout`]'s split tree. Used by the session
+/// module to persist and restore the layout across restarts, and by the
+/// closed-pane stash to put a merged-away split back.
 #[derive(Clone, Debug)]
 pub enum LayoutTree {
-    /// A leaf holding one pane.
-    Pane(PaneId),
+    /// A leaf holding one tab group.
+    Group(GroupTree),
     /// A split of two child trees.
     Split {
         /// Whether the children sit side by side or stacked.
@@ -103,32 +132,111 @@ pub enum LayoutTree {
     },
 }
 
+/// A snapshot of one tab group.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupTree {
+    /// The shown tab; the first member when it names none of them.
+    pub active: PaneId,
+    /// Every tab, in strip order.
+    pub members: Vec<PaneId>,
+}
+
 // ========================================================================
-// Tab
+// Group
 // ========================================================================
 
-impl Tab {
-    /// A tab whose single full-area pane is `PaneId(0)`, focused.
+impl Group {
+    /// A group holding only `pane`.
+    fn new(pane: PaneId) -> Self {
+        Self {
+            active: pane,
+            members: vec![pane],
+            recent: vec![pane],
+        }
+    }
+
+    /// A group rebuilt from a snapshot, or `None` for one with no tabs.
+    fn from_tree(tree: GroupTree) -> Option<Self> {
+        let first = *tree.members.first()?;
+        let active = match tree.members.contains(&tree.active) {
+            true => tree.active,
+            false => first,
+        };
+        let mut recent = tree.members.clone();
+        recent.retain(|&p| p != active);
+        recent.insert(0, active);
+        Some(Self {
+            active,
+            members: tree.members,
+            recent,
+        })
+    }
+
+    /// Where `pane` sits in the strip; the end when it is not there.
+    fn position(&self, pane: PaneId) -> usize {
+        self.members
+            .iter()
+            .position(|&p| p == pane)
+            .unwrap_or(self.members.len())
+    }
+
+    /// Show `pane`, marking it the most recently shown.
+    fn show(&mut self, pane: PaneId) {
+        self.active = pane;
+        self.recent.retain(|&p| p != pane);
+        self.recent.insert(0, pane);
+    }
+
+    /// Drop `pane`, showing the most recently shown tab left when it was the
+    /// one shown. Never leaves the group empty.
+    fn remove(&mut self, pane: PaneId) {
+        self.members.retain(|&p| p != pane);
+        self.recent.retain(|&p| p != pane);
+        if self.active == pane {
+            if let Some(&next) = self.recent.first() {
+                self.active = next;
+            }
+        }
+    }
+}
+
+// ========================================================================
+// Layout
+// ========================================================================
+
+impl Layout {
+    // --------------------------------------------------------------------
+    // Construction and snapshots
+    // --------------------------------------------------------------------
+
+    /// A layout whose single full-area group holds `PaneId(0)`, focused.
     pub fn new() -> Self {
         Self::with_root(PaneId(0))
     }
 
-    /// A tab with a single full-area pane `root`, focused.
+    /// A layout with a single full-area group holding `root`, focused.
     pub fn with_root(root: PaneId) -> Self {
         Self {
             focused: root,
-            root: Node::Leaf(root),
+            root: Node::Leaf(Group::new(root)),
             zoomed: false,
         }
     }
 
-    /// Rebuild a `Tab` from a [`LayoutTree`] snapshot, e.g. on session restore.
-    pub fn from_tree(tree: LayoutTree, focused: PaneId) -> Self {
-        Self {
+    /// Rebuild a `Layout` from a [`LayoutTree`] snapshot, e.g. on session
+    /// restore. Groups the snapshot left empty are dropped; `None` when that
+    /// leaves nothing at all.
+    pub fn from_tree(tree: LayoutTree, focused: PaneId) -> Option<Self> {
+        let root = layout_tree_to_node(tree)?;
+        let mut layout = Self {
             focused,
-            root: layout_tree_to_node(tree),
+            root,
             zoomed: false,
+        };
+        if !layout.focus(focused) {
+            layout.focused = layout.panes()[0];
         }
+        Some(layout)
     }
 
     /// Export the split tree as a [`LayoutTree`] for session persistence.
@@ -136,26 +244,69 @@ impl Tab {
         node_to_layout_tree(&self.root)
     }
 
-    /// The currently focused pane.
+    // --------------------------------------------------------------------
+    // Queries
+    // --------------------------------------------------------------------
+
+    /// The shown tab of the focused group.
     pub fn focused(&self) -> PaneId {
         self.focused
     }
 
-    /// Every pane, left-to-right / top-to-bottom in tree order.
+    /// The shown tab of every group, left-to-right / top-to-bottom in tree
+    /// order: the tabs a frame draws.
     pub fn panes(&self) -> Vec<PaneId> {
-        let mut out = Vec::new();
-        collect_panes(&self.root, &mut out);
-        out
+        self.group_list().iter().map(|group| group.active).collect()
     }
 
-    /// Each pane paired with its area within `viewport`. When zoomed, only the
-    /// focused pane is returned and it occupies the entire viewport.
+    /// Every tab of every group, shown or not, in tree then strip order.
+    pub fn members(&self) -> Vec<PaneId> {
+        self.group_list()
+            .iter()
+            .flat_map(|group| group.members.iter().copied())
+            .collect()
+    }
+
+    /// Whether any group holds `pane`.
+    pub fn contains(&self, pane: PaneId) -> bool {
+        find_group(&self.root, pane).is_some()
+    }
+
+    /// Every tab of the group holding `pane`, in strip order.
+    pub fn group_members(&self, pane: PaneId) -> Vec<PaneId> {
+        find_group(&self.root, pane)
+            .map(|group| group.members.clone())
+            .unwrap_or_default()
+    }
+
+    /// The group holding `pane`'s tabs, most recently shown first.
+    pub fn recent_in_group(&self, pane: PaneId) -> Vec<PaneId> {
+        find_group(&self.root, pane)
+            .map(|group| group.recent.clone())
+            .unwrap_or_default()
+    }
+
+    /// Each group's shown tab paired with the group's whole area within
+    /// `viewport`. When zoomed, only the focused group is returned, and it
+    /// occupies the entire viewport.
     pub fn rects(&self, viewport: Rect) -> Vec<(PaneId, Rect)> {
-        if self.zoomed {
-            return vec![(self.focused, viewport)];
-        }
+        self.groups(viewport)
+            .into_iter()
+            .map(|area| (area.active, area.rect))
+            .collect()
+    }
+
+    /// Every group laid out within `viewport`, in tree order. When zoomed,
+    /// only the focused group, at the full viewport.
+    pub fn groups(&self, viewport: Rect) -> Vec<GroupArea> {
         let mut out = Vec::new();
-        collect_rects(&self.root, viewport, &mut out);
+        collect_groups(&self.root, viewport, &mut out);
+        if self.zoomed {
+            out.retain(|area| area.active == self.focused);
+            for area in &mut out {
+                area.rect = viewport;
+            }
+        }
         out
     }
 
@@ -168,6 +319,15 @@ impl Tab {
         }
         divider_hit_in(&self.root, viewport, px, py)
     }
+
+    /// Whether the focused group is currently expanded to fill the full viewport.
+    pub fn is_zoomed(&self) -> bool {
+        self.zoomed
+    }
+
+    // --------------------------------------------------------------------
+    // Splits
+    // --------------------------------------------------------------------
 
     /// Find the split divider that contains `(start_x, start_y)` and shift its
     /// ratio by `(dx, dy)`. Call once per mouse-move event with the delta from
@@ -187,18 +347,13 @@ impl Tab {
         drag_in(&mut self.root, viewport, start_x, start_y, dx, dy)
     }
 
-    /// Toggle the focused pane between full-viewport zoom and normal split layout.
+    /// Toggle the focused group between full-viewport zoom and normal split layout.
     pub fn toggle_zoom(&mut self) {
         self.zoomed = !self.zoomed;
     }
 
-    /// Whether the focused pane is currently expanded to fill the full viewport.
-    pub fn is_zoomed(&self) -> bool {
-        self.zoomed
-    }
-
-    /// Split the focused pane in two, placing the caller-allocated `new_id` as
-    /// the new leaf and focusing it.
+    /// Split the focused group in two, placing a new group holding only the
+    /// caller-allocated `new_id` beside it and focusing it.
     pub fn split(&mut self, direction: Direction, ratio: f32, new_id: PaneId) {
         split_at(
             &mut self.root,
@@ -210,18 +365,6 @@ impl Tab {
         self.focused = new_id;
     }
 
-    /// Close a pane, collapsing its parent split into its sibling. The last pane
-    /// cannot be closed. Returns whether anything changed.
-    pub fn close(&mut self, pane: PaneId) -> bool {
-        if !close_in(&mut self.root, pane) {
-            return false;
-        }
-        if self.focused == pane {
-            self.focused = self.panes().first().copied().unwrap_or(PaneId(0));
-        }
-        true
-    }
-
     /// Recompute every split's ratio so its two children evenly share that
     /// split's own axis.
     ///
@@ -231,26 +374,121 @@ impl Tab {
     /// splits give thirds, four give quarters, ...), matching the staircase of
     /// halves a fixed 0.5 ratio would otherwise produce. Splits are only
     /// weighed against siblings on their own axis, so splitting or closing a
-    /// pane inside one row/column never resizes a sibling row/column on a
-    /// different axis elsewhere in the tree. No-op for a single pane.
+    /// group inside one row/column never resizes a sibling row/column on a
+    /// different axis elsewhere in the tree. No-op for a single group.
     pub fn balance(&mut self) {
         balance_node(&mut self.root);
     }
 
-    /// Focus a specific pane if it exists.
-    pub fn focus(&mut self, pane: PaneId) -> bool {
-        if self.panes().contains(&pane) {
-            self.focused = pane;
-            return true;
+    // --------------------------------------------------------------------
+    // Tabs
+    // --------------------------------------------------------------------
+
+    /// Add `new_id` to the focused group, right after the tab it is showing,
+    /// and show and focus it.
+    pub fn add_tab(&mut self, new_id: PaneId) {
+        if let Some(group) = find_group_mut(&mut self.root, self.focused) {
+            let at = group.position(group.active) + 1;
+            group.members.insert(at, new_id);
+            group.show(new_id);
         }
-        false
+        self.focused = new_id;
     }
 
-    /// Focus the pane at position `index` in tree order (0-based). Returns
+    /// Remove one tab. A group left empty collapses its parent split into the
+    /// sibling; the last tab of the last group cannot be closed. Returns
+    /// whether anything changed.
+    ///
+    /// A group that loses its shown tab shows the one shown before it, and
+    /// focus follows when the closed tab had it.
+    pub fn close(&mut self, pane: PaneId) -> bool {
+        let Some(group) = find_group_mut(&mut self.root, pane) else {
+            return false;
+        };
+        if group.members.len() > 1 {
+            group.remove(pane);
+            let active = group.active;
+            if self.focused == pane {
+                self.focused = active;
+            }
+            return true;
+        }
+        if !close_in(&mut self.root, pane) {
+            return false;
+        }
+        if self.focused == pane {
+            self.focused = self.panes()[0];
+        }
+        true
+    }
+
+    /// Show and focus `pane`, wherever it is. Returns whether it exists.
+    pub fn focus(&mut self, pane: PaneId) -> bool {
+        let Some(group) = find_group_mut(&mut self.root, pane) else {
+            return false;
+        };
+        group.show(pane);
+        self.focused = pane;
+        true
+    }
+
+    /// Show the next (`forward`) or previous tab of the focused group by strip
+    /// position, wrapping around. Returns whether the shown tab changed.
+    pub fn cycle_tab(&mut self, forward: bool) -> bool {
+        let members = self.group_members(self.focused);
+        let count = members.len();
+        if count <= 1 {
+            return false;
+        }
+        let index = members.iter().position(|&p| p == self.focused).unwrap_or(0);
+        let next = match forward {
+            true => (index + 1) % count,
+            false => (index + count - 1) % count,
+        };
+        self.focus(members[next])
+    }
+
+    /// Move the focused tab one place along its strip, toward the end when
+    /// `forward`. Returns whether it moved.
+    pub fn move_tab(&mut self, forward: bool) -> bool {
+        let focused = self.focused;
+        let Some(group) = find_group_mut(&mut self.root, focused) else {
+            return false;
+        };
+        let at = group.position(focused);
+        let to = match forward {
+            true if at + 1 < group.members.len() => at + 1,
+            false if at > 0 => at - 1,
+            _ => return false,
+        };
+        group.members.swap(at, to);
+        true
+    }
+
+    /// Move `pane` to where `target` sits in their shared strip. Returns
+    /// whether it moved; tabs of different groups are left alone.
+    pub fn move_tab_to(&mut self, pane: PaneId, target: PaneId) -> bool {
+        let Some(group) = find_group_mut(&mut self.root, pane) else {
+            return false;
+        };
+        if pane == target || !group.members.contains(&target) {
+            return false;
+        }
+        let from = group.position(pane);
+        let to = group.position(target);
+        let moved = group.members.remove(from);
+        group.members.insert(to, moved);
+        true
+    }
+
+    // --------------------------------------------------------------------
+    // Focus between groups
+    // --------------------------------------------------------------------
+
+    /// Focus the group at position `index` in tree order (0-based). Returns
     /// whether the index was in range.
     pub fn focus_by_index(&mut self, index: usize) -> bool {
-        let panes = self.panes();
-        match panes.get(index) {
+        match self.panes().get(index) {
             Some(&id) => {
                 self.focused = id;
                 true
@@ -259,7 +497,7 @@ impl Tab {
         }
     }
 
-    /// Focus the next pane in tree order, wrapping around.
+    /// Focus the next group in tree order, wrapping around.
     pub fn focus_next(&mut self) {
         let panes = self.panes();
         if let Some(index) = panes.iter().position(|&p| p == self.focused) {
@@ -267,8 +505,8 @@ impl Tab {
         }
     }
 
-    /// Focus the nearest pane in the given direction within `viewport`, by the
-    /// distance between pane centers. Returns whether focus moved.
+    /// Focus the nearest group in the given direction within `viewport`, by the
+    /// distance between group centers. Returns whether focus moved.
     pub fn focus_in_direction(&mut self, direction: FocusDir, viewport: Rect) -> bool {
         let rects = self.rects(viewport);
         let Some(current) = rects.iter().find(|(id, _)| *id == self.focused) else {
@@ -290,11 +528,65 @@ impl Tab {
             None => false,
         }
     }
+
+    /// Every group in tree order.
+    fn group_list(&self) -> Vec<&Group> {
+        let mut out = Vec::new();
+        collect_group_refs(&self.root, &mut out);
+        out
+    }
 }
 
-impl Default for Tab {
+impl Default for Layout {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+// ========================================================================
+// LayoutTree
+// ========================================================================
+
+impl LayoutTree {
+    /// A leaf holding one group of a single tab.
+    pub fn single(pane: PaneId) -> Self {
+        LayoutTree::Group(GroupTree {
+            active: pane,
+            members: vec![pane],
+        })
+    }
+
+    /// Every tab the snapshot names, in tree then strip order.
+    pub fn members(&self) -> Vec<PaneId> {
+        match self {
+            LayoutTree::Group(group) => group.members.clone(),
+            LayoutTree::Split { first, second, .. } => {
+                let mut out = first.members();
+                out.extend(second.members());
+                out
+            }
+        }
+    }
+
+    /// The same tree holding only the tabs `keep` accepts.
+    pub fn retain(self, keep: &impl Fn(PaneId) -> bool) -> Self {
+        match self {
+            LayoutTree::Group(mut group) => {
+                group.members.retain(|&p| keep(p));
+                LayoutTree::Group(group)
+            }
+            LayoutTree::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => LayoutTree::Split {
+                direction,
+                ratio,
+                first: Box::new(first.retain(keep)),
+                second: Box::new(second.retain(keep)),
+            },
+        }
     }
 }
 
@@ -341,24 +633,47 @@ impl Rect {
 // Tree helpers
 // ========================================================================
 
-fn collect_panes(node: &Node, out: &mut Vec<PaneId>) {
+fn collect_group_refs<'a>(node: &'a Node, out: &mut Vec<&'a Group>) {
     match node {
-        Node::Leaf(id) => out.push(*id),
+        Node::Leaf(group) => out.push(group),
         Node::Split(split) => {
-            collect_panes(&split.first, out);
-            collect_panes(&split.second, out);
+            collect_group_refs(&split.first, out);
+            collect_group_refs(&split.second, out);
         }
     }
 }
 
-fn collect_rects(node: &Node, area: Rect, out: &mut Vec<(PaneId, Rect)>) {
+fn collect_groups(node: &Node, area: Rect, out: &mut Vec<GroupArea>) {
     match node {
-        Node::Leaf(id) => out.push((*id, area)),
+        Node::Leaf(group) => out.push(GroupArea {
+            active: group.active,
+            members: group.members.clone(),
+            rect: area,
+        }),
         Node::Split(split) => {
             let (first, second) = area.split(split.direction, split.ratio);
-            collect_rects(&split.first, first, out);
-            collect_rects(&split.second, second, out);
+            collect_groups(&split.first, first, out);
+            collect_groups(&split.second, second, out);
         }
+    }
+}
+
+fn find_group(node: &Node, pane: PaneId) -> Option<&Group> {
+    match node {
+        Node::Leaf(group) => group.members.contains(&pane).then_some(group),
+        Node::Split(split) => {
+            find_group(&split.first, pane).or_else(|| find_group(&split.second, pane))
+        }
+    }
+}
+
+fn find_group_mut(node: &mut Node, pane: PaneId) -> Option<&mut Group> {
+    match node {
+        Node::Leaf(group) => group.members.contains(&pane).then_some(group),
+        Node::Split(split) => match find_group(&split.first, pane) {
+            Some(_) => find_group_mut(&mut split.first, pane),
+            None => find_group_mut(&mut split.second, pane),
+        },
     }
 }
 
@@ -370,12 +685,13 @@ fn split_at(
     new_id: PaneId,
 ) -> bool {
     match node {
-        Node::Leaf(id) if *id == target => {
+        Node::Leaf(group) if group.members.contains(&target) => {
+            let existing = std::mem::replace(group, Group::new(target));
             *node = Node::Split(SplitNode {
                 direction,
-                first: Box::new(Node::Leaf(target)),
+                first: Box::new(Node::Leaf(existing)),
                 ratio,
-                second: Box::new(Node::Leaf(new_id)),
+                second: Box::new(Node::Leaf(Group::new(new_id))),
             });
             true
         }
@@ -387,14 +703,16 @@ fn split_at(
     }
 }
 
+/// Remove the group holding `target`, collapsing its parent split into the
+/// sibling. Returns `false` for the root group, which has no sibling.
 fn close_in(node: &mut Node, target: PaneId) -> bool {
     let replacement = match node {
         Node::Leaf(_) => return false,
-        Node::Split(split) if leaf_is(&split.first, target) => {
-            std::mem::replace(split.second.as_mut(), Node::Leaf(target))
+        Node::Split(split) if leaf_holds(&split.first, target) => {
+            std::mem::replace(split.second.as_mut(), Node::Leaf(Group::new(target)))
         }
-        Node::Split(split) if leaf_is(&split.second, target) => {
-            std::mem::replace(split.first.as_mut(), Node::Leaf(target))
+        Node::Split(split) if leaf_holds(&split.second, target) => {
+            std::mem::replace(split.first.as_mut(), Node::Leaf(Group::new(target)))
         }
         Node::Split(split) => {
             return close_in(&mut split.first, target) || close_in(&mut split.second, target);
@@ -481,12 +799,12 @@ fn drag_in(node: &mut Node, area: Rect, start_x: f32, start_y: f32, dx: f32, dy:
         || drag_in(&mut split.second, second_area, start_x, start_y, dx, dy)
 }
 
-fn leaf_is(node: &Node, target: PaneId) -> bool {
-    matches!(node, Node::Leaf(id) if *id == target)
+fn leaf_holds(node: &Node, target: PaneId) -> bool {
+    matches!(node, Node::Leaf(group) if group.members.contains(&target))
 }
 
 /// Weight of `node` along `axis`: how many equal-sized slots it should claim
-/// when splits on that axis are balanced (see [`Tab::balance`]).
+/// when splits on that axis are balanced (see [`Layout::balance`]).
 ///
 /// A split whose own direction matches `axis` lays its children out *along*
 /// `axis`, so each child is a separate slot and their weights add. A split
@@ -505,7 +823,7 @@ fn axis_weight(node: &Node, axis: Direction) -> usize {
 }
 
 /// Set every split's ratio so its first child gets a share of the split's own
-/// axis proportional to [`axis_weight`] (see [`Tab::balance`]). Descend first
+/// axis proportional to [`axis_weight`] (see [`Layout::balance`]). Descend first
 /// so a subtree's ratios are final before its parent's ratio is set, though
 /// `axis_weight` itself only reads leaf/direction shape and is unaffected by
 /// ratios.
@@ -534,30 +852,39 @@ fn distance(a: (f32, f32), b: (f32, f32)) -> f32 {
     dx * dx + dy * dy
 }
 
-fn layout_tree_to_node(tree: LayoutTree) -> Node {
+/// Rebuild a node from a snapshot, dropping empty groups and collapsing any
+/// split left with one side. `None` when nothing is left.
+fn layout_tree_to_node(tree: LayoutTree) -> Option<Node> {
     match tree {
-        LayoutTree::Pane(id) => Node::Leaf(id),
+        LayoutTree::Group(group) => Group::from_tree(group).map(Node::Leaf),
         LayoutTree::Split {
             direction,
             ratio,
             first,
             second,
-        } => Node::Split(SplitNode {
-            direction,
-            // In-app mutators (e.g. `Tab::split`) always clamp to [0, 1]; a
-            // deserialized `session.json` isn't guaranteed to, and an
-            // out-of-range ratio produces a negative-width/height rect that
-            // silently misrenders instead of erroring.
-            ratio: ratio.clamp(0.0, 1.0),
-            first: Box::new(layout_tree_to_node(*first)),
-            second: Box::new(layout_tree_to_node(*second)),
-        }),
+        } => match (layout_tree_to_node(*first), layout_tree_to_node(*second)) {
+            (Some(first), Some(second)) => Some(Node::Split(SplitNode {
+                direction,
+                // In-app mutators (e.g. `Layout::split`) always clamp to
+                // [0, 1]; a deserialized `session.json` isn't guaranteed to,
+                // and an out-of-range ratio produces a negative-width/height
+                // rect that silently misrenders instead of erroring.
+                ratio: ratio.clamp(0.0, 1.0),
+                first: Box::new(first),
+                second: Box::new(second),
+            })),
+            (Some(only), None) | (None, Some(only)) => Some(only),
+            (None, None) => None,
+        },
     }
 }
 
 fn node_to_layout_tree(node: &Node) -> LayoutTree {
     match node {
-        Node::Leaf(id) => LayoutTree::Pane(*id),
+        Node::Leaf(group) => LayoutTree::Group(GroupTree {
+            active: group.active,
+            members: group.members.clone(),
+        }),
         Node::Split(s) => LayoutTree::Split {
             direction: s.direction,
             ratio: s.ratio,
@@ -584,7 +911,7 @@ mod tests {
 
     #[test]
     fn test_new_tab_has_one_focused_pane() {
-        let tab = Tab::new();
+        let tab = Layout::new();
         assert_eq!(tab.panes(), vec![PaneId(0)]);
         assert_eq!(tab.focused(), PaneId(0));
     }
@@ -598,29 +925,32 @@ mod tests {
         let too_big = LayoutTree::Split {
             direction: Direction::Vertical,
             ratio: 5.0,
-            first: Box::new(LayoutTree::Pane(PaneId(0))),
-            second: Box::new(LayoutTree::Pane(PaneId(1))),
+            first: Box::new(LayoutTree::single(PaneId(0))),
+            second: Box::new(LayoutTree::single(PaneId(1))),
         };
-        match Tab::from_tree(too_big, PaneId(0)).export_tree() {
+        match Layout::from_tree(too_big, PaneId(0)).unwrap().export_tree() {
             LayoutTree::Split { ratio, .. } => assert_eq!(ratio, 1.0),
-            LayoutTree::Pane(_) => panic!("expected a split"),
+            LayoutTree::Group(_) => panic!("expected a split"),
         }
 
         let too_small = LayoutTree::Split {
             direction: Direction::Vertical,
             ratio: -3.0,
-            first: Box::new(LayoutTree::Pane(PaneId(0))),
-            second: Box::new(LayoutTree::Pane(PaneId(1))),
+            first: Box::new(LayoutTree::single(PaneId(0))),
+            second: Box::new(LayoutTree::single(PaneId(1))),
         };
-        match Tab::from_tree(too_small, PaneId(0)).export_tree() {
+        match Layout::from_tree(too_small, PaneId(0))
+            .unwrap()
+            .export_tree()
+        {
             LayoutTree::Split { ratio, .. } => assert_eq!(ratio, 0.0),
-            LayoutTree::Pane(_) => panic!("expected a split"),
+            LayoutTree::Group(_) => panic!("expected a split"),
         }
     }
 
     #[test]
     fn test_split_adds_a_focused_pane_and_divides_the_area() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         let right = PaneId(1);
         tab.split(Direction::Vertical, 0.5, right);
         assert_eq!(tab.focused(), right);
@@ -633,7 +963,7 @@ mod tests {
 
     #[test]
     fn test_close_collapses_split_into_sibling() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         let right = PaneId(1);
         tab.split(Direction::Vertical, 0.5, right);
         assert!(tab.close(right));
@@ -644,14 +974,14 @@ mod tests {
 
     #[test]
     fn test_last_pane_cannot_be_closed() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         assert!(!tab.close(PaneId(0)));
         assert_eq!(tab.panes(), vec![PaneId(0)]);
     }
 
     #[test]
     fn test_focus_next_wraps_around() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         let right = PaneId(1);
         tab.split(Direction::Vertical, 0.5, right);
         tab.focus(PaneId(0));
@@ -663,7 +993,7 @@ mod tests {
 
     #[test]
     fn test_zoom_returns_full_viewport_for_focused_pane() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         let right = PaneId(1);
         tab.split(Direction::Vertical, 0.5, right);
         tab.focus(PaneId(0));
@@ -681,7 +1011,7 @@ mod tests {
 
     #[test]
     fn test_focus_in_direction_moves_to_the_adjacent_pane() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         let right = PaneId(1);
         tab.split(Direction::Vertical, 0.5, right);
         tab.focus(PaneId(0));
@@ -702,14 +1032,14 @@ mod tests {
 
     #[test]
     fn test_balance_is_noop_for_a_single_pane() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         tab.balance();
         assert_eq!(tab.rects(VIEWPORT), vec![(PaneId(0), VIEWPORT)]);
     }
 
     #[test]
     fn test_balance_equalizes_three_same_direction_splits() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         // Two successive vertical splits of the focused pane build a staircase
         // (50% / 25% / 25%) without balancing.
         tab.split(Direction::Vertical, 0.5, PaneId(1));
@@ -728,7 +1058,7 @@ mod tests {
 
     #[test]
     fn test_balance_keeps_mixed_directions_local_to_their_own_axis() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         tab.split(Direction::Vertical, 0.5, PaneId(1)); // 0 | 1
         tab.split(Direction::Horizontal, 0.5, PaneId(2)); // 0 | (1 over 2)
         tab.balance();
@@ -745,7 +1075,7 @@ mod tests {
 
     #[test]
     fn test_balance_equalizes_four_panes() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         tab.split(Direction::Vertical, 0.5, PaneId(1));
         tab.split(Direction::Vertical, 0.5, PaneId(2));
         tab.split(Direction::Vertical, 0.5, PaneId(3));
@@ -763,7 +1093,7 @@ mod tests {
 
     #[test]
     fn test_balance_restores_equality_after_closing_a_pane() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         tab.split(Direction::Vertical, 0.5, PaneId(1));
         tab.split(Direction::Vertical, 0.5, PaneId(2));
         tab.balance();
@@ -802,7 +1132,7 @@ mod tests {
 
     #[test]
     fn test_balance_preserves_mixed_split_directions() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         // Build a mixed tree: V(0, H(1, 2)).
         tab.split(Direction::Vertical, 0.5, PaneId(1));
         tab.split(Direction::Horizontal, 0.5, PaneId(2));
@@ -820,7 +1150,7 @@ mod tests {
 
     #[test]
     fn test_balance_leaves_unrelated_columns_untouched_by_a_cross_axis_split() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         // Three equal vertical columns: 0 | 1 | 2.
         tab.split(Direction::Vertical, 0.5, PaneId(1));
         tab.split(Direction::Vertical, 0.5, PaneId(2));
@@ -848,7 +1178,7 @@ mod tests {
 
     #[test]
     fn test_balance_equalizes_a_same_axis_split_into_an_existing_column() {
-        let mut tab = Tab::new();
+        let mut tab = Layout::new();
         // Three equal vertical columns: 0 | 1 | 2.
         tab.split(Direction::Vertical, 0.5, PaneId(1));
         tab.split(Direction::Vertical, 0.5, PaneId(2));
@@ -866,5 +1196,133 @@ mod tests {
                 "pane {id:?} should occupy a quarter width: a same-axis split still equalizes the whole row"
             );
         }
+    }
+
+    #[test]
+    fn test_a_tab_added_to_a_group_shows_in_its_place_without_a_new_split() {
+        let mut layout = Layout::new();
+        layout.add_tab(PaneId(1));
+        assert_eq!(layout.focused(), PaneId(1));
+        assert_eq!(
+            layout.panes(),
+            vec![PaneId(1)],
+            "one group, showing the new tab"
+        );
+        assert_eq!(layout.members(), vec![PaneId(0), PaneId(1)]);
+        assert_eq!(layout.rects(VIEWPORT), vec![(PaneId(1), VIEWPORT)]);
+    }
+
+    #[test]
+    fn test_a_new_tab_goes_right_after_the_one_shown() {
+        let mut layout = Layout::new();
+        layout.add_tab(PaneId(1));
+        layout.focus(PaneId(0));
+        layout.add_tab(PaneId(2));
+        assert_eq!(
+            layout.group_members(PaneId(0)),
+            vec![PaneId(0), PaneId(2), PaneId(1)]
+        );
+    }
+
+    #[test]
+    fn test_closing_the_shown_tab_goes_back_to_the_one_shown_before_it() {
+        let mut layout = Layout::new();
+        layout.add_tab(PaneId(1));
+        layout.add_tab(PaneId(2));
+        layout.focus(PaneId(0));
+        layout.focus(PaneId(2));
+        assert!(layout.close(PaneId(2)));
+        assert_eq!(
+            layout.focused(),
+            PaneId(0),
+            "not the strip neighbor, PaneId(1)"
+        );
+    }
+
+    #[test]
+    fn test_closing_a_hidden_tab_leaves_the_shown_one_alone() {
+        let mut layout = Layout::new();
+        layout.add_tab(PaneId(1));
+        assert!(layout.close(PaneId(0)));
+        assert_eq!(layout.focused(), PaneId(1));
+        assert_eq!(layout.members(), vec![PaneId(1)]);
+    }
+
+    #[test]
+    fn test_closing_the_last_tab_of_a_group_collapses_its_split() {
+        let mut layout = Layout::new();
+        layout.split(Direction::Vertical, 0.5, PaneId(1));
+        layout.add_tab(PaneId(2));
+        assert!(layout.close(PaneId(2)));
+        assert_eq!(
+            layout.panes(),
+            vec![PaneId(0), PaneId(1)],
+            "the group stays"
+        );
+        assert!(layout.close(PaneId(1)));
+        assert_eq!(layout.rects(VIEWPORT), vec![(PaneId(0), VIEWPORT)]);
+        assert_eq!(layout.focused(), PaneId(0));
+    }
+
+    #[test]
+    fn test_focusing_a_hidden_tab_shows_it_in_its_own_group() {
+        let mut layout = Layout::new();
+        layout.add_tab(PaneId(1));
+        layout.split(Direction::Vertical, 0.5, PaneId(2));
+        assert!(layout.focus(PaneId(0)));
+        assert_eq!(layout.panes(), vec![PaneId(0), PaneId(2)]);
+        assert_eq!(layout.focused(), PaneId(0));
+    }
+
+    #[test]
+    fn test_cycling_tabs_stays_inside_the_focused_group() {
+        let mut layout = Layout::new();
+        layout.add_tab(PaneId(1));
+        layout.split(Direction::Vertical, 0.5, PaneId(2));
+        layout.focus(PaneId(1));
+        assert!(layout.cycle_tab(true));
+        assert_eq!(layout.focused(), PaneId(0), "wraps within the group");
+        layout.focus(PaneId(2));
+        assert!(!layout.cycle_tab(true), "a lone tab has nowhere to go");
+    }
+
+    #[test]
+    fn test_moving_a_tab_reorders_only_its_own_strip() {
+        let mut layout = Layout::new();
+        layout.add_tab(PaneId(1));
+        layout.add_tab(PaneId(2));
+        assert!(layout.move_tab_to(PaneId(2), PaneId(0)));
+        assert_eq!(layout.members(), vec![PaneId(2), PaneId(0), PaneId(1)]);
+        assert!(!layout.move_tab(false), "already first");
+        assert!(layout.move_tab(true));
+        assert_eq!(layout.members(), vec![PaneId(0), PaneId(2), PaneId(1)]);
+    }
+
+    #[test]
+    fn test_a_snapshot_round_trips_groups_and_their_shown_tabs() {
+        let mut layout = Layout::new();
+        layout.add_tab(PaneId(1));
+        layout.split(Direction::Horizontal, 0.5, PaneId(2));
+        layout.focus(PaneId(0));
+        let restored = Layout::from_tree(layout.export_tree(), PaneId(2)).unwrap();
+        assert_eq!(restored.members(), vec![PaneId(0), PaneId(1), PaneId(2)]);
+        assert_eq!(restored.panes(), vec![PaneId(0), PaneId(2)]);
+        assert_eq!(restored.focused(), PaneId(2));
+    }
+
+    #[test]
+    fn test_a_snapshot_with_an_emptied_group_collapses_its_split() {
+        let mut layout = Layout::new();
+        layout.split(Direction::Vertical, 0.5, PaneId(1));
+        let tree = layout.export_tree().retain(&|p| p != PaneId(1));
+        let restored = Layout::from_tree(tree, PaneId(1)).unwrap();
+        assert_eq!(restored.rects(VIEWPORT), vec![(PaneId(0), VIEWPORT)]);
+        assert_eq!(
+            restored.focused(),
+            PaneId(0),
+            "a focus naming nothing falls back"
+        );
+        let nothing = LayoutTree::single(PaneId(0)).retain(&|_| false);
+        assert!(Layout::from_tree(nothing, PaneId(0)).is_none());
     }
 }

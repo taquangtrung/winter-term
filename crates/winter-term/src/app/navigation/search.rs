@@ -560,7 +560,7 @@ mod tests {
         // resize; headless (no window) that resize collapses the pane to a
         // single row and shoves the fixture into scrollback.
         app.config.status_bar.enabled = true;
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         app.panes.insert(id, pane_with_lines(lines));
         app.set_nav_cursor(id, (0, 0));
         app.search.query = Some(query.to_string());
@@ -696,7 +696,7 @@ mod tests {
     fn test_search_scrolls_a_match_in_scrollback_into_view() {
         let mut app = crate::app::App::new();
         app.config.status_bar.enabled = true;
-        let id = app.tab().panes()[0];
+        let id = app.layout().panes()[0];
         let mut pane = pane_with_lines(&["ink here"]);
         // Push the match off the top of the screen into scrollback.
         let rows = pane.grid().rows();

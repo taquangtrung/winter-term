@@ -1,6 +1,7 @@
 //! Tool pages over panes: opening one in place, closing it, and offering it
 //! keys before the modal keymap sees them.
 
+use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use crate::model::input::{self, Key, KeyCode};
@@ -76,6 +77,16 @@ const CLOSED_ROW: &str = "closed:";
 /// it. The host answers this one itself: no page asked it.
 const ASK_CLOSE_UNSAVED: &str = "close-unsaved";
 
+/// How a row of the tool list says where an open tool is: the tab showing
+/// in its pane, or one waiting on that pane's strip.
+const SHOWING_HINT: &str = "showing";
+const OPEN_HINT: &str = "open";
+
+/// How the list of closed things names a whole pane, and terminal tabs
+/// closed out of a pane that stayed.
+const CLOSED_PANE_NOUN: &str = "pane";
+const CLOSED_TERMINAL_NOUN: &str = "terminal";
+
 /// Said when there is nothing to put back, rather than the key doing nothing
 /// at all.
 const NOTHING_CLOSED: &str = "no tool has been closed to reopen";
@@ -109,7 +120,8 @@ const TOOL_ICONS: [(&str, char); 8] = [
 /// A question a page asked, and the answer being typed for it.
 pub(crate) struct ActivePrompt {
     input: String,
-    pane: PaneId,
+    /// The tab that asked.
+    pub(crate) pane: PaneId,
     request: PromptRequest,
 }
 
@@ -127,12 +139,12 @@ pub(crate) struct ActivePick {
 /// What the host is waiting to close once its question is answered.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum PendingClose {
-    /// Every pane of the focused tab but this one.
+    /// Every pane but the one holding this tab.
     OtherPanes(PaneId),
-    /// This pane.
+    /// The pane holding this tab, and every tab in it.
     Pane(PaneId),
-    /// This tab, and every pane in it.
-    Tab(usize),
+    /// This one tab.
+    Tab(PaneId),
 }
 
 /// Whether what is being closed is worth keeping for reopening.
@@ -142,9 +154,8 @@ pub(crate) enum Closing {
     /// away, a tab closed. These are the closes that turn out to be
     /// accidents.
     Keep,
-    /// Nothing to keep: a tool toggled off by the chord that toggles it back
-    /// on, or a pane whose shell exited on its own. Keeping these would bury
-    /// the closes a reader actually wants back.
+    /// Nothing to keep: a terminal whose shell exited on its own. Keeping
+    /// these would bury the closes a reader actually wants back.
     Forget,
 }
 
@@ -152,33 +163,40 @@ pub(crate) enum Closing {
 pub(crate) enum Closed {
     /// One tool page.
     Page(ClosedPage),
-    /// A whole pane: where it sat, what it was running in, and the pages it
-    /// was holding.
+    /// Terminal tabs, or a whole pane: where they sat, what they were
+    /// running in, and the tool tabs that went with them.
     Pane(ClosedPane),
 }
 
-/// A pane that was closed, as much of it as can come back.
+/// Terminal tabs that were closed, as much of them as can come back: one
+/// terminal tab, or a whole pane with every tab it held.
 ///
-/// The shell itself cannot: closing the pane dropped its pseudo-terminal and
-/// the child with it. What is kept is where the pane sat, so the split comes
-/// back rather than a fresh one wherever the reader now is, the directory the
-/// shell was in, so its replacement starts there, and the pages it was
-/// holding, which are kept whole beside it.
+/// The shells themselves cannot come back: closing a terminal dropped its
+/// pseudo-terminal and the child with it. What is kept is where they sat, so
+/// a merged-away split comes back rather than a fresh one wherever the reader
+/// now is, the directory each shell was in, so its replacement starts there,
+/// and the tool tabs that went with them, which are kept whole beside them.
 pub(crate) struct ClosedPane {
     closed_at: i64,
-    /// The shell's working directory, for the shell that takes its place.
-    cwd: Option<String>,
+    /// Whether the whole pane went, rather than tabs inside one that stayed.
+    group: bool,
     id: u64,
-    /// The whole tab's split tree as it was, the snapshot the pane is put
-    /// back into when the rest of the tab has not moved on since.
+    /// The window's split tree as it was, the snapshot the tabs are put back
+    /// into when the rest of the layout has not moved on since.
     layout: LayoutTree,
-    /// Which pane of that tree this was.
-    pane: PaneId,
-    /// The pages it was holding, innermost first, by the id they are kept
-    /// under in the same stash.
+    /// The tool tabs that went with them, by the id they are kept under in
+    /// the same stash.
     pages: Vec<u64>,
-    /// Which tab it was in, to find the tab again while it is still there.
-    tab: usize,
+    /// The terminal tabs, in strip order.
+    terminals: Vec<ClosedTerminal>,
+}
+
+/// One closed terminal tab: which tab it was, and where its shell was.
+#[derive(Clone, Debug)]
+pub(crate) struct ClosedTerminal {
+    /// The shell's working directory, for the shell that takes its place.
+    pub(crate) cwd: Option<String>,
+    pub(crate) pane: PaneId,
 }
 
 /// A page that was closed, kept whole rather than described.
@@ -197,6 +215,8 @@ pub(crate) struct ClosedPage {
     /// however the list has changed since it was drawn.
     id: u64,
     page: Box<dyn Page>,
+    /// The tab it was, so a layout snapshot naming it still finds it.
+    pane: PaneId,
     tool: &'static str,
 }
 
@@ -238,37 +258,24 @@ impl Closed {
 // ========================================================================
 
 impl ClosedPane {
-    /// The shell's directory, for the shell that takes its place.
-    pub(super) fn cwd(&self) -> Option<String> {
-        self.cwd.clone()
+    /// Whether the whole pane went, rather than tabs inside one that stayed.
+    pub(super) fn is_group(&self) -> bool {
+        self.group
     }
 
-    /// The tab's split tree as it was.
+    /// The window's split tree as it was.
     pub(super) fn layout(&self) -> LayoutTree {
         self.layout.clone()
     }
 
-    /// Every pane the snapshot names, which is what says whether the tab it
-    /// came from still agrees with it.
-    pub(super) fn layout_panes(&self) -> Vec<PaneId> {
-        let mut panes = Vec::new();
-        collect_layout_panes(&self.layout, &mut panes);
-        panes
-    }
-
-    /// Which pane of that tree this was.
-    pub(super) fn pane(&self) -> PaneId {
-        self.pane
-    }
-
-    /// The pages it was holding, innermost first.
+    /// The tool tabs that went with them.
     pub(super) fn page_ids(&self) -> Vec<u64> {
         self.pages.clone()
     }
 
-    /// Which tab it was in.
-    pub(super) fn tab(&self) -> usize {
-        self.tab
+    /// The terminal tabs, in strip order.
+    pub(super) fn terminals(&self) -> Vec<ClosedTerminal> {
+        self.terminals.clone()
     }
 }
 
@@ -291,14 +298,9 @@ pub(crate) struct PageSlot {
     /// starts where the user was already looking.
     pub(crate) cursor_line: Option<usize>,
     /// The grid the page was last painted into, retained so that selecting
-    /// over the pane reads what is on screen.
-    ///
-    /// A page draws over a pane whose terminal is still running underneath.
-    /// Without this, a selection resolved against `panes[..].grid()` names the
-    /// shell output hidden behind the page, and copying a listing silently
-    /// yields whatever scrolled past before the tool opened.
+    /// over the tab reads what is on screen: a page has no terminal grid of
+    /// its own to resolve a selection against.
     pub(crate) painted: Option<Grid>,
-    prior_mode: Mode,
     tool: &'static str,
 }
 
@@ -317,12 +319,12 @@ impl PageSlot {
         }
     }
 
-    /// How the tab bar names the pane while the page covers it: the tool's
-    /// name rather than the status bar's glyph, so the tab reads in any font
-    /// and names the tool even where the page's title alone would not — a dir
-    /// page titled "winter-term" says a directory, not that `dir` is the one
-    /// listing it. A title that merely restates the tool's name ("Keys") is
-    /// dropped rather than doubled up.
+    /// How a pane strip names the tab: the tool's name rather than the status
+    /// bar's glyph, so the tab reads in any font and names the tool even
+    /// where the page's title alone would not: a dir page titled
+    /// "winter-term" says a directory, not that `dir` is the one listing it.
+    /// A title that merely restates the tool's name ("Keys") is dropped
+    /// rather than doubled up.
     pub(crate) fn tab_label(&self) -> String {
         page_label(self.tool, &self.page.title())
     }
@@ -349,17 +351,6 @@ fn named(unsaved: &[String]) -> String {
         Some((first, [])) => first.clone(),
         Some((first, rest)) => format!("{first} and {} more", rest.len()),
         None => String::new(),
-    }
-}
-
-/// Every pane a layout snapshot names, in tree order.
-fn collect_layout_panes(tree: &LayoutTree, into: &mut Vec<PaneId>) {
-    match tree {
-        LayoutTree::Pane(pane) => into.push(*pane),
-        LayoutTree::Split { first, second, .. } => {
-            collect_layout_panes(first, into);
-            collect_layout_panes(second, into);
-        }
     }
 }
 
@@ -413,63 +404,65 @@ pub(crate) fn input_dialog(label: &str, input: &str, mode: PromptMode) -> InputV
 // ========================================================================
 
 impl App {
-    /// Show the keys page over the focused pane, or close it if it is already
-    /// the page showing there.
+    /// Open the keys page in a tab beside the focused one, or step away from
+    /// it when it is already the tab showing (see [`Self::toggle_tool`]).
     pub(crate) fn open_keys_page(&mut self) {
-        if self.close_page_if_showing(KEYS_TOOL) {
+        if self.toggle_tool(KEYS_TOOL) {
             return;
         }
         let page = KeysPage::new(&self.window_keymap);
         self.show_page(KEYS_TOOL, Box::new(page));
     }
 
-    /// Show a directory listing over the focused pane, rooted at that pane's
-    /// working directory, or close it if a listing is already showing there.
+    /// Open a directory listing in a tab beside the focused one, rooted where
+    /// that tab is looking, or go to the listing the pane already has.
     pub(crate) fn open_dir_page(&mut self) {
-        if self.close_page_if_showing(DIR_TOOL) {
+        if self.toggle_tool(DIR_TOOL) {
             return;
         }
         self.show_page(DIR_TOOL, Box::new(DirPage::new(self.focused_start_dir())));
     }
 
-    /// Show the working tree's state over the focused pane, for the repository
-    /// containing that pane's working directory.
+    /// List `dir` in a new tab beside the focused one, as a directory opened
+    /// from the terminal's text is.
+    pub(crate) fn open_dir_page_at(&mut self, dir: PathBuf) {
+        self.show_page(DIR_TOOL, Box::new(DirPage::new(dir)));
+    }
+
+    /// Open the working tree's state in a tab beside the focused one, for the
+    /// repository containing where that tab is looking.
     pub(crate) fn open_git_page(&mut self) {
-        if self.close_page_if_showing(GIT_TOOL) {
+        if self.toggle_tool(GIT_TOOL) {
             return;
         }
         let page = GitPage::new(self.focused_start_dir());
         // The view knows nothing until git answers, so its first request goes
         // out with it rather than waiting for a keystroke.
         let first = page.initial_request();
-        self.show_page(GIT_TOOL, Box::new(page));
-        let pane_id = self.tab().focused();
+        let pane_id = self.show_page(GIT_TOOL, Box::new(page));
         self.jobs.spawn(pane_id, first);
     }
 
-    /// Search the pane's working directory for text, or close the search if one
-    /// is already showing there.
+    /// Search where the focused tab is looking for text, in a tab of its own.
     pub(crate) fn open_grep_page(&mut self) {
-        if self.close_page_if_showing(GREP_TOOL) {
+        if self.toggle_tool(GREP_TOOL) {
             return;
         }
         self.show_page(GREP_TOOL, Box::new(GrepPage::new(self.focused_start_dir())));
     }
 
-    /// Show the machine's processes over the focused pane, or close the
-    /// monitor if it is already showing there. It asks for its own first
-    /// snapshot on the next tick.
+    /// Show the machine's processes in a tab of their own. The monitor asks
+    /// for its own first snapshot on the next tick.
     pub(crate) fn open_proc_page(&mut self) {
-        if self.close_page_if_showing(PROC_TOOL) {
+        if self.toggle_tool(PROC_TOOL) {
             return;
         }
         self.show_page(PROC_TOOL, Box::new(ProcPage::new()));
     }
 
-    /// Show the machine's CPU, memory, disks, and GPUs over the focused pane,
-    /// or close the monitor if it is already showing there.
+    /// Show the machine's CPU, memory, disks, and GPUs in a tab of their own.
     pub(crate) fn open_sys_page(&mut self) {
-        if self.close_page_if_showing(SYS_TOOL) {
+        if self.toggle_tool(SYS_TOOL) {
             return;
         }
         self.show_page(SYS_TOOL, Box::new(SysPage::new()));
@@ -497,28 +490,28 @@ impl App {
             .min()
     }
 
-    /// Show `target`'s file over whatever the focused pane is showing, in
-    /// whichever tool can show it.
+    /// Open `target`'s file in a tab beside the focused one, in whichever
+    /// tool can show it.
     ///
     /// A PDF is not text and the editor refuses it as binary, so it goes to
     /// the viewer instead. Everything else is the editor's.
     pub(crate) fn open_path_page(&mut self, target: OpenTarget) {
         if PdfPage::handles(&target.path) {
-            self.stack_page(PDF_TOOL, Box::new(PdfPage::new(target.path)));
+            self.show_page(PDF_TOOL, Box::new(PdfPage::new(target.path)));
             return;
         }
         self.open_editor_page(target);
     }
 
-    /// Show `target`'s file as editable text over whatever the focused pane is
-    /// showing, so closing it returns to the tool the file was opened from.
+    /// Open `target`'s file as editable text in a tab beside the focused one,
+    /// so closing it returns to the tab the file was opened from.
     ///
     /// A file the editor will not open (binary, not UTF-8, too large to
     /// repaint) says so and stays closed; `Ctrl-O` hands those to `$EDITOR`.
     pub(crate) fn open_editor_page(&mut self, target: OpenTarget) {
-        // An editor already covering the pane takes the file as another
-        // buffer of its own, rather than being covered by a second editor.
-        let pane_id = self.tab().focused();
+        // A file opened from inside the editor joins it as another buffer of
+        // its own, rather than opening a second editor beside it.
+        let pane_id = self.layout().focused();
         if let Some(slot) = self.pages.get_mut(&pane_id) {
             if slot.tool == EDITOR_TOOL && slot.page.open_file(target.clone()) {
                 self.dirty = true;
@@ -526,14 +519,17 @@ impl App {
             }
         }
         match EditorPage::new(target.path, target.line) {
-            Ok(page) => self.stack_page(EDITOR_TOOL, Box::new(page)),
+            Ok(page) => {
+                self.show_page(EDITOR_TOOL, Box::new(page));
+            }
             Err(e) => self.set_error(format!("{e}")),
         }
     }
 
-    /// Open the file browser over the focused pane's working directory: the
-    /// palette, listing a directory a row at a time. The chord that opened it
-    /// closes it again, as a tool's own chord does.
+    /// Open the file browser where the focused terminal points, else over its
+    /// working directory (see [`Self::files_palette_at_point`]): the palette,
+    /// listing a directory a row at a time. The chord that opened it closes
+    /// it again, as a tool's own chord does.
     pub(crate) fn open_file_browser(&mut self) {
         let showing = self
             .palette
@@ -541,122 +537,66 @@ impl App {
             .is_some_and(|palette| palette.mode == PaletteMode::Files);
         self.palette = match showing {
             true => None,
-            false => Some(Palette::open_files(self.focused_start_dir())),
+            false => Some(self.files_palette_at_point()),
         };
         self.dirty = true;
     }
 
-    /// Cover the focused pane with `page`, keeping any page already there
-    /// underneath it: closing the new one puts the old one back, rather than
-    /// dropping the listing a file was opened from.
-    pub(crate) fn stack_page(&mut self, tool: &'static str, page: Box<dyn Page>) {
-        let pane_id = self.tab().focused();
-        if let Some(slot) = self.pages.remove(&pane_id) {
-            // Work the covered page asked for would come back to whichever
-            // page is on top, which is not the one that asked for it.
-            self.jobs.cancel_for(pane_id);
-            // A pane holds one surface, and it belongs to the page on top.
-            // The covered page builds itself a fresh one when it comes back.
-            self.webview_mgr.remove_surface(pane_id);
-            self.covered.entry(pane_id).or_default().push(slot);
-        }
-        self.show_page(tool, page);
+    /// Open `page` in a new tab beside the focused one and show it. Returns
+    /// the tab it went into.
+    pub(crate) fn show_page(&mut self, tool: &'static str, page: Box<dyn Page>) -> PaneId {
+        let pane_id = self.alloc_pane_id();
+        self.insert_page_tab(pane_id, tool, page);
+        pane_id
     }
 
-    /// Cover the focused pane with `page`. The pane keeps its process, which
-    /// goes on running underneath, and gets it back when the page closes.
-    pub(crate) fn show_page(&mut self, tool: &'static str, page: Box<dyn Page>) {
-        let pane_id = self.tab().focused();
-        let prior_mode = self.modes.get(&pane_id).copied().unwrap_or_default();
+    /// Put `page` into the layout as tab `pane_id`, beside the focused tab.
+    fn insert_page_tab(&mut self, pane_id: PaneId, tool: &'static str, page: Box<dyn Page>) {
         self.pages.insert(
             pane_id,
             PageSlot {
                 page,
                 cursor_line: None,
                 painted: None,
-                prior_mode,
                 tool,
             },
         );
         self.modes.insert(pane_id, Mode::Page);
-        // Rich blocks are anchored to the terminal grid the page now covers,
-        // so their tiles would otherwise float on top of the listing.
-        self.webview_mgr.hide_all();
-        self.last_tile_layout = None;
-        self.dirty = true;
+        self.layout_mut().add_tab(pane_id);
+        self.after_tab_change();
     }
 
-    /// Uncover `pane_id`, restoring the mode it was in before the page opened.
+    /// Close the tool tab `pane_id`, keeping its page for reopening.
     pub(crate) fn close_page(&mut self, pane_id: PaneId) {
-        self.uncover_page(pane_id, Closing::Keep);
+        self.close_tab_now(pane_id, Closing::Keep);
     }
 
-    /// Uncover `pane_id`, keeping the page for reopening or not.
-    fn uncover_page(&mut self, pane_id: PaneId, closing: Closing) {
-        let Some(slot) = self.pages.remove(&pane_id) else {
-            return;
-        };
-        let prior_mode = slot.prior_mode;
-        match closing {
-            Closing::Keep => {
-                self.stash_closed_page(slot);
-            }
-            Closing::Forget => drop(slot),
-        }
-        // A question, a text cursor, and any work in flight all belong to the
-        // page that opened them: a cursor outliving its page would go on
-        // swallowing keys for rows that are no longer painted.
-        if self.page_prompt.as_ref().is_some_and(|p| p.pane == pane_id) {
-            self.page_prompt = None;
-        }
-        if self.page_cursor.as_ref().is_some_and(|c| c.pane == pane_id) {
-            self.stop_page_cursor();
-        }
-        self.jobs.cancel_for(pane_id);
-        self.webview_mgr.remove_surface(pane_id);
-        self.last_tile_layout = None;
-        self.dirty = true;
-        // A page opened over another one uncovers it rather than the terminal,
-        // and the page coming back re-reads whatever it was showing: the file
-        // just edited is the likeliest thing to have changed underneath it.
-        if let Some(mut covered) = self.covered.get_mut(&pane_id).and_then(Vec::pop) {
-            let outcome = covered.page.on_resume();
-            self.pages.insert(pane_id, covered);
-            self.modes.insert(pane_id, Mode::Page);
-            self.act_on_page_outcome(pane_id, outcome);
-            return;
-        }
-        self.modes.insert(pane_id, prior_mode);
-    }
-
-    /// Ask before closing a pane that is holding edits on no disk.
+    /// Ask before closing a pane whose tool tabs hold edits on no disk.
     ///
     /// Returns whether the question was asked, which is the caller's cue to
-    /// wait for the answer rather than close now. A pane's own tools are the
-    /// only thing it can lose: the shell underneath is a process, and closing
-    /// a pane has always ended one.
+    /// wait for the answer rather than close now. A pane's tool tabs are the
+    /// only thing it can lose: a shell is a process, and closing a pane has
+    /// always ended one.
     pub(crate) fn ask_before_closing_pane(&mut self, pane_id: PaneId) -> bool {
-        self.ask_before_closing(&[pane_id], "pane", PendingClose::Pane(pane_id))
+        let tabs = self.layout().group_members(pane_id);
+        self.ask_before_closing(&tabs, "pane", PendingClose::Pane(pane_id))
     }
 
-    /// The same, for every pane of the focused tab but one.
+    /// The same, for every pane but the one holding `keep`.
     pub(crate) fn ask_before_closing_others(&mut self, keep: PaneId) -> bool {
+        let kept = self.layout().group_members(keep);
         let others: Vec<PaneId> = self
-            .tab()
-            .panes()
+            .layout()
+            .members()
             .into_iter()
-            .filter(|pane| *pane != keep)
+            .filter(|pane| !kept.contains(pane))
             .collect();
         self.ask_before_closing(&others, "other panes", PendingClose::OtherPanes(keep))
     }
 
-    /// The same, for a whole tab.
-    pub(crate) fn ask_before_closing_tab(&mut self, index: usize) -> bool {
-        let Some(tab) = self.tabs.all.get(index) else {
-            return false;
-        };
-        let panes = tab.panes();
-        self.ask_before_closing(&panes, "tab", PendingClose::Tab(index))
+    /// The same, for one tab.
+    pub(crate) fn ask_before_closing_tab(&mut self, pane_id: PaneId) -> bool {
+        self.ask_before_closing(&[pane_id], "tab", PendingClose::Tab(pane_id))
     }
 
     /// Put the question, if there is anything to ask about.
@@ -670,7 +610,7 @@ impl App {
         let asked_of = panes
             .first()
             .copied()
-            .unwrap_or_else(|| self.tab().focused());
+            .unwrap_or_else(|| self.layout().focused());
         self.pending_close = Some(pending);
         self.page_prompt = Some(ActivePrompt {
             input: String::new(),
@@ -689,20 +629,15 @@ impl App {
         true
     }
 
-    /// What every page over `panes` is holding that is on no disk, named as
-    /// the pages name themselves.
+    /// What every tool tab among `panes` is holding that is on no disk,
+    /// named as the pages name themselves.
     fn unsaved_in(&self, panes: &[PaneId]) -> Vec<String> {
-        let mut unsaved = Vec::new();
-        for pane in panes {
-            let covered = self.covered.get(pane).into_iter().flatten();
-            let showing = self.pages.get(pane).into_iter();
-            for slot in covered.chain(showing) {
-                if slot.page.is_dirty() {
-                    unsaved.push(slot.page.title());
-                }
-            }
-        }
-        unsaved
+        panes
+            .iter()
+            .filter_map(|pane| self.pages.get(pane))
+            .filter(|slot| slot.page.is_dirty())
+            .map(|slot| slot.page.title())
+            .collect()
     }
 
     /// Close what the question was about, or nothing when the answer was not
@@ -715,7 +650,7 @@ impl App {
         match pending {
             PendingClose::OtherPanes(keep) => self.close_other_panes_now(keep),
             PendingClose::Pane(pane) => self.close_pane_now(pane),
-            PendingClose::Tab(index) => self.close_tab_now(index),
+            PendingClose::Tab(pane) => self.close_tab_now(pane, Closing::Keep),
         }
     }
 
@@ -726,11 +661,12 @@ impl App {
     /// closed over and over would otherwise fill the list with rows that are
     /// all the same page as far as a reader can tell. One holding unwritten
     /// edits is never the one dropped, however old it is.
-    pub(crate) fn stash_closed_page(&mut self, slot: PageSlot) -> u64 {
+    pub(crate) fn stash_closed_page(&mut self, pane: PaneId, slot: PageSlot) -> u64 {
         let closed = ClosedPage {
             closed_at: now_seconds(),
             id: self.take_closed_id(),
             page: slot.page,
+            pane,
             tool: slot.tool,
         };
         let label = closed.label();
@@ -745,47 +681,32 @@ impl App {
         id
     }
 
-    /// Keep a closed pane: where it sat, what it was running in, and which
-    /// pages went with it.
+    /// Keep closed terminal tabs: where they sat, what they were running in,
+    /// and which tool tabs went with them. `group` says the whole pane went.
     pub(crate) fn stash_closed_pane(
         &mut self,
-        pane_id: PaneId,
-        tab: usize,
+        terminals: &[PaneId],
         layout: LayoutTree,
         pages: Vec<u64>,
+        group: bool,
     ) {
-        let cwd = self.panes.get(&pane_id).and_then(|pane| pane.cwd());
+        let terminals = terminals
+            .iter()
+            .map(|&pane| ClosedTerminal {
+                cwd: self.panes.get(&pane).and_then(|p| p.cwd()),
+                pane,
+            })
+            .collect();
         let id = self.take_closed_id();
         self.closed.push(Closed::Pane(ClosedPane {
             closed_at: now_seconds(),
-            cwd,
+            group,
             id,
             layout,
-            pane: pane_id,
             pages,
-            tab,
+            terminals,
         }));
         self.trim_closed();
-    }
-
-    /// Keep every page `pane_id` was holding, for a pane or a tab being
-    /// closed out from under them, and say which ids they went in under.
-    ///
-    /// The stack goes in bottom first, so reopening walks back up it the way
-    /// closing each page would have: the file that was on top comes back
-    /// before the listing it was opened from.
-    pub(crate) fn stash_pane_pages(&mut self, pane_id: PaneId, closing: Closing) -> Vec<u64> {
-        let covered = self.covered.remove(&pane_id).unwrap_or_default();
-        let showing = self.pages.remove(&pane_id);
-        if closing == Closing::Forget {
-            return Vec::new();
-        }
-        let mut ids: Vec<u64> = covered
-            .into_iter()
-            .map(|slot| self.stash_closed_page(slot))
-            .collect();
-        ids.extend(showing.map(|slot| self.stash_closed_page(slot)));
-        ids
     }
 
     /// The id the next closed thing goes in under.
@@ -824,12 +745,8 @@ impl App {
         self.set_notice(format!("{tool} closed. {chord} puts it back"));
     }
 
-    /// Put the last closed page back over the focused pane.
-    ///
-    /// It goes back wherever the reader is now rather than into the pane it
-    /// was closed in, which for a pane or a tab that was closed with it no
-    /// longer exists. It covers what is showing there rather than replacing
-    /// it, so reopening cannot cost a second page.
+    /// Put the last closed thing back: a tool tab beside the focused one, or
+    /// terminal tabs where they sat when the layout still has room for them.
     pub(crate) fn reopen_last_closed(&mut self) {
         let Some(closed) = self.closed.pop() else {
             self.set_notice(NOTHING_CLOSED);
@@ -889,17 +806,20 @@ impl App {
     /// Every row of the tool list, as `(action, label, hint)`.
     fn tool_rows(&self) -> Vec<(String, String, String)> {
         let mut rows: Vec<(String, String, String)> = Vec::new();
-        for (index, tab) in self.tabs.all.iter().enumerate() {
-            for pane in tab.panes() {
-                let Some(slot) = self.pages.get(&pane) else {
-                    continue;
-                };
-                rows.push((
-                    format!("{OPEN_ROW}{}", pane.0),
-                    tool_row_label(slot.tool, slot.page.as_ref()),
-                    self.tab_title(index),
-                ));
-            }
+        let shown = self.layout().panes();
+        for pane in self.layout().members() {
+            let Some(slot) = self.pages.get(&pane) else {
+                continue;
+            };
+            let hint = match shown.contains(&pane) {
+                true => SHOWING_HINT,
+                false => OPEN_HINT,
+            };
+            rows.push((
+                format!("{OPEN_ROW}{}", pane.0),
+                tool_row_label(slot.tool, slot.page.as_ref()),
+                hint.to_string(),
+            ));
         }
 
         let now = now_seconds();
@@ -914,12 +834,21 @@ impl App {
         rows
     }
 
-    /// How the list names a closed pane: where its shell was, and the tools
-    /// that went with it, so it reads as more than "a pane".
+    /// How the list names closed terminals: where their shells were, and the
+    /// tools that went with them, so a row reads as more than "a pane".
     fn closed_pane_label(&self, pane: &ClosedPane) -> String {
-        let named = match &pane.cwd {
-            Some(cwd) => format!("pane: {cwd}"),
-            None => "pane".to_string(),
+        let what = match pane.group {
+            true => CLOSED_PANE_NOUN,
+            false => CLOSED_TERMINAL_NOUN,
+        };
+        let cwds: Vec<&str> = pane
+            .terminals
+            .iter()
+            .filter_map(|terminal| terminal.cwd.as_deref())
+            .collect();
+        let named = match cwds.is_empty() {
+            true => what.to_string(),
+            false => format!("{what}: {}", cwds.join(", ")),
         };
         let tools: Vec<&str> = pane
             .pages
@@ -963,42 +892,46 @@ impl App {
         taken
     }
 
-    /// Cover `pane_id` with a page that was closed, innermost first, so a
-    /// pane that was holding a file over a listing gets both back in order.
-    pub(super) fn restore_pages_into(&mut self, pane_id: PaneId, pages: Vec<ClosedPage>) {
-        for closed in pages {
-            self.tab_mut().focus(pane_id);
-            self.restore_closed_page(closed);
-        }
-    }
-
-    /// Cover the focused pane with a page that was closed, re-reading what it
-    /// was showing on the way back.
+    /// Put a closed page back as a tab beside the focused one, re-reading
+    /// what it was showing on the way back. It keeps the tab id it had when
+    /// that id is free, so a layout snapshot naming it still finds it.
     pub(super) fn restore_closed_page(&mut self, mut closed: ClosedPage) {
-        // What it was showing may have changed while it was gone, which is
-        // the same reason a covered page re-reads the world when it comes
-        // back up.
+        // What it was showing may have changed while it was gone.
         let outcome = closed.page.on_resume();
-        self.stack_page(closed.tool, closed.page);
-        let pane_id = self.tab().focused();
+        let pane_id = match self.layout().contains(closed.pane) {
+            true => self.alloc_pane_id(),
+            false => closed.pane,
+        };
+        self.insert_page_tab(pane_id, closed.tool, closed.page);
         self.act_on_page_outcome(pane_id, outcome);
     }
 
-    /// Close the focused pane's page when `tool` is what opened it, so a tool's
-    /// own chord toggles rather than reopening it. Returns whether it closed.
-    fn close_page_if_showing(&mut self, tool: &'static str) -> bool {
-        let pane_id = self.tab().focused();
-        if self
-            .pages
-            .get(&pane_id)
-            .is_some_and(|slot| slot.tool == tool)
-        {
-            // Toggled off, not closed: the chord that did it opens it again,
-            // so there is nothing here worth keeping for reopening.
-            self.uncover_page(pane_id, Closing::Forget);
+    /// Step between a tool and where the reader came from with the tool's own
+    /// chord: on the tool's tab, go back to the tab shown before it; with the
+    /// tool open elsewhere in the focused pane, go to it. Returns whether the
+    /// chord was spent that way, else the caller opens the tool.
+    fn toggle_tool(&mut self, tool: &'static str) -> bool {
+        let focused = self.layout().focused();
+        let is_tool =
+            |app: &App, pane: &PaneId| app.pages.get(pane).is_some_and(|slot| slot.tool == tool);
+        if is_tool(self, &focused) {
+            if let Some(&back) = self.layout().recent_in_group(focused).get(1) {
+                self.show_tab(back);
+            }
             return true;
         }
-        false
+        let open = self
+            .layout()
+            .recent_in_group(focused)
+            .into_iter()
+            .find(|pane| is_tool(self, pane));
+        match open {
+            Some(pane) => {
+                self.show_tab(pane);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Offer `key` to the page covering `pane_id`. Returns whether the key was
@@ -1224,10 +1157,11 @@ impl App {
                 true
             }
             PageOutcome::RunAction(action) => {
-                // The pane goes back before the command runs, so a command that
-                // opens a page of its own has an uncovered pane to open in.
+                // The page is done once it has named the command, and the
+                // command runs against the tab shown in its place.
                 self.close_page(pane_id);
-                self.run_command(&action, pane_id);
+                let focused = self.layout().focused();
+                self.run_command(&action, focused);
                 true
             }
         }
@@ -1271,6 +1205,12 @@ mod tests {
         fn on_key(&mut self, key: &Key) -> PageOutcome {
             match key.code {
                 KeyCode::Char('x') => {
+                    self.claimed += 1;
+                    PageOutcome::Consumed
+                }
+                // The chord the Git page commits on, which the window also
+                // binds to copy.
+                KeyCode::Char('C') | KeyCode::Char('c') if key.ctrl && key.shift => {
                     self.claimed += 1;
                     PageOutcome::Consumed
                 }
@@ -1328,7 +1268,7 @@ mod tests {
     fn test_a_tool_opens_where_the_page_is_looking_not_where_the_shell_is() {
         // Opening the file browser while reading a file used to start at the
         // shell's directory, which for a file opened from elsewhere is not
-        // even the same tree. The page covering the pane answers first.
+        // even the same tree. The tool tab being looked at answers first.
         let mut app = App::new();
         let looking_at = PathBuf::from("/tmp/winter-test-somewhere-else");
         app.show_page("located", Box::new(LocatedPage(looking_at.clone())));
@@ -1336,16 +1276,14 @@ mod tests {
     }
 
     #[test]
-    fn test_a_pane_with_no_page_still_starts_where_its_shell_is() {
-        // The fallback has to stay intact: a bare terminal pane has no page
-        // to ask, and the shell's own directory is the right answer there.
+    fn test_a_tool_tab_with_no_place_of_its_own_starts_where_its_shell_is() {
+        // A tool that says nothing about where it is looking defers to the
+        // terminal it was opened from, so a tab opened from it does not land
+        // in the process's own directory.
         let mut app = App::new();
+        let from_shell = app.focused_start_dir();
         app.show_page("counting", Box::new(CountingPage::default()));
-        let with_page = app.focused_start_dir();
-        app.close_page_if_showing("counting");
-        assert!(app.pages.is_empty(), "the page is gone");
-        // A page reporting nowhere leaves the resolution exactly as it was.
-        assert_eq!(app.focused_start_dir(), with_page);
+        assert_eq!(app.focused_start_dir(), from_shell);
     }
 
     fn press(code: KeyCode) -> Key {
@@ -1359,24 +1297,26 @@ mod tests {
 
     fn app_with_open_page() -> (App, PaneId) {
         let mut app = App::new();
-        app.show_page("counting", Box::new(CountingPage::default()));
-        let pane = app.tab().focused();
+        let pane = app.show_page("counting", Box::new(CountingPage::default()));
         (app, pane)
     }
 
     #[test]
-    fn test_a_page_covers_the_focused_pane_without_splitting_it() {
-        let (app, pane) = app_with_open_page();
-        assert_eq!(app.tab().panes().len(), 1, "no new pane is created");
-        assert!(app.pages.contains_key(&pane));
+    fn test_a_page_opens_as_a_tab_beside_the_terminal_without_splitting() {
+        let mut app = App::new();
+        let terminal = app.layout().focused();
+        let pane = app.show_page("counting", Box::new(CountingPage::default()));
+        assert_ne!(pane, terminal, "a tab of its own");
+        assert_eq!(app.layout().panes(), vec![pane], "showing in the same pane");
+        assert_eq!(app.layout().members(), vec![terminal, pane]);
         assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Page));
     }
 
     #[test]
-    fn test_opening_a_file_stacks_the_editor_and_a_refused_one_opens_nothing() {
+    fn test_opening_a_file_opens_an_editor_tab_and_a_refused_one_opens_nothing() {
         // The host side of every `Enter` on a file: the editor has to end up
-        // covering the pane, and a file it will not open has to leave the pane
-        // showing whatever it was showing rather than an empty editor.
+        // in a tab, and a file it will not open has to leave the pane showing
+        // whatever it was showing rather than an empty editor.
         let dir = std::env::temp_dir().join(format!("winter-open-editor-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
@@ -1386,60 +1326,61 @@ mod tests {
         std::fs::write(&binary, [0x00, 0x01]).expect("temp file");
 
         let mut app = App::new();
-        let pane = app.tab().focused();
+        let terminal = app.layout().focused();
         app.open_editor_page(OpenTarget::at_line(text, 2));
-        assert_eq!(app.pages.get(&pane).map(|slot| slot.tool), Some("editor"));
+        let editor = app.layout().focused();
+        assert_eq!(app.pages.get(&editor).map(|slot| slot.tool), Some("editor"));
 
-        app.close_page(pane);
+        app.close_page(editor);
+        assert_eq!(app.layout().focused(), terminal);
         app.open_editor_page(OpenTarget::file(binary));
         assert!(app.pages.is_empty(), "nothing was opened");
+        assert_eq!(app.layout().focused(), terminal);
 
         let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
-    fn test_a_page_opened_over_another_uncovers_it_rather_than_the_terminal() {
+    fn test_closing_a_tab_opened_from_another_goes_back_to_it() {
         // Opening a file from a listing and closing it again has to land back
-        // on the listing: dropping it would throw away where the user was in
-        // a tree they may have spent a while walking into.
+        // on the listing, not on whichever tab sits next to it on the strip.
         let mut app = App::new();
-        let pane = app.tab().focused();
-        app.modes.insert(pane, Mode::Normal);
-        app.show_page("counting", Box::new(CountingPage::default()));
-        app.stack_page("stacked", Box::new(CountingPage::default()));
-
+        let listing = app.show_page("counting", Box::new(CountingPage::default()));
+        app.layout_mut().focus(PaneId(0));
+        let other = app.show_page("other", Box::new(CountingPage::default()));
+        app.show_tab(listing);
+        let file = app.show_page("stacked", Box::new(CountingPage::default()));
         assert_eq!(
-            app.pages.get(&pane).map(|slot| slot.tool),
-            Some("stacked"),
-            "the new page is the one showing"
+            app.layout().members(),
+            vec![PaneId(0), other, listing, file],
+            "the file opens right beside the listing"
         );
 
-        app.close_page(pane);
-        assert_eq!(
-            app.pages.get(&pane).map(|slot| slot.tool),
-            Some("counting"),
-            "and closing it puts the covered one back"
+        app.close_page(file);
+        assert_eq!(app.layout().focused(), listing);
+        assert!(
+            app.pages.contains_key(&listing),
+            "and the listing is as it was"
         );
-        assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Page));
-
-        app.close_page(pane);
-        assert!(app.pages.is_empty(), "the last one uncovers the terminal");
-        assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Normal));
     }
 
     #[test]
-    fn test_closing_a_page_gives_the_pane_back_as_it_was() {
-        // The terminal underneath kept running, so the pane has to return to
-        // the mode it was in rather than being closed or left in Page mode.
+    fn test_closing_a_page_leaves_the_terminal_as_it_was() {
+        // The terminal tab kept running beside the page, so it has to come
+        // back in the mode it was in.
         let mut app = App::new();
-        let pane = app.tab().focused();
-        app.modes.insert(pane, Mode::Normal);
-        app.show_page("counting", Box::new(CountingPage::default()));
+        let terminal = app.layout().focused();
+        app.modes.insert(terminal, Mode::Normal);
+        let pane = app.show_page("counting", Box::new(CountingPage::default()));
 
         app.close_page(pane);
         assert!(app.pages.is_empty());
-        assert_eq!(app.tab().panes().len(), 1);
-        assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Normal));
+        assert_eq!(app.layout().members(), vec![terminal]);
+        assert_eq!(app.modes.get(&terminal).copied(), Some(Mode::Normal));
+        assert!(
+            !app.modes.contains_key(&pane),
+            "the page's tab is forgotten"
+        );
     }
 
     /// Put `claimed` keys into the page covering `pane`, which is what makes
@@ -1456,7 +1397,7 @@ mod tests {
     /// covers it.
     fn showing(app: &App) -> Option<String> {
         app.pages
-            .get(&app.tab().focused())
+            .get(&app.layout().focused())
             .map(|slot| slot.page.title())
     }
 
@@ -1471,6 +1412,7 @@ mod tests {
         assert!(app.pages.is_empty(), "closed first");
 
         app.reopen_last_closed();
+        assert_eq!(app.layout().focused(), pane, "under the tab id it had");
         assert_eq!(
             app.pages.get(&pane).map(|slot| slot.tool),
             Some("counting"),
@@ -1483,52 +1425,58 @@ mod tests {
 
     #[test]
     fn test_a_closed_pane_comes_back_with_the_tools_it_was_holding() {
-        // Merging a split away used to drop the pane and its pages both. One
-        // reopen puts the split back and every page it was holding into it,
-        // stacked the way they were: the file over the listing it was opened
-        // from, not the listing over the file.
+        // Merging a split away used to drop the pane and its tools both. One
+        // reopen puts the split back, in its place, with every tab it held.
         let mut app = App::new();
-        let pane = app.tab().focused();
-        app.show_page("counting", Box::new(CountingPage::default()));
-        tally(&mut app, pane, 1);
-        app.stack_page("stacked", Box::new(CountingPage::default()));
-        tally(&mut app, pane, 2);
+        let terminal = app.layout().focused();
+        let listing = app.show_page("counting", Box::new(CountingPage::default()));
+        tally(&mut app, listing, 1);
+        let file = app.show_page("stacked", Box::new(CountingPage::default()));
+        tally(&mut app, file, 2);
 
-        // A tab's last pane closes the tab instead, so the split has to be
-        // there for this to be the pane-closing path at all.
         let sibling = app.alloc_pane_id();
-        app.tab_mut()
+        app.layout_mut()
             .split(Direction::Vertical, SPLIT_RATIO, sibling);
-        app.close_pane(pane);
-        assert!(app.pages.is_empty() && app.covered.is_empty());
+        app.close_pane(file);
+        assert!(app.pages.is_empty());
         assert_eq!(
-            app.tab().panes(),
+            app.layout().members(),
             vec![sibling],
             "the split was merged away"
         );
 
         app.reopen_last_closed();
-        assert_eq!(app.tab().panes().len(), 2, "the split is back");
-        let back = app.tab().focused();
-        assert_eq!(back, pane, "in the place it was, not as a fresh split");
-        assert_eq!(showing(&app).as_deref(), Some("Counting 2"), "the top page");
+        assert_eq!(app.layout().panes().len(), 2, "the split is back");
         assert_eq!(
-            app.covered.get(&back).map(|under| under.len()),
-            Some(1),
-            "with the one it was covering still under it"
+            app.layout().members(),
+            vec![terminal, listing, file, sibling],
+            "in the place it was, with its tabs in their order"
         );
+        assert_eq!(app.pages[&file].page.title(), "Counting 2");
+        assert_eq!(app.pages[&listing].page.title(), "Counting 1");
         assert!(app.closed.is_empty(), "and nothing left over to reopen");
     }
 
     #[test]
-    fn test_a_tool_toggled_off_by_its_own_chord_is_not_kept() {
-        // The chord that closed it opens it again, so keeping these would
-        // only bury the closes a reader cannot undo any other way.
+    fn test_a_tool_chord_steps_between_the_tool_and_the_tab_before_it() {
+        // The chord that opened a tool takes the reader back to where they
+        // were, and then to the tool again, which keeps what it was showing
+        // rather than starting over.
         let mut app = App::new();
-        app.open_dir_page();
-        app.open_dir_page();
-        assert!(app.pages.is_empty(), "the second press closed it");
-        assert!(app.closed.is_empty(), "and left nothing in the stash");
+        let terminal = app.layout().focused();
+        app.open_keys_page();
+        let keys = app.layout().focused();
+        assert_ne!(keys, terminal);
+        app.open_keys_page();
+        assert_eq!(
+            app.layout().focused(),
+            terminal,
+            "back where it was opened from"
+        );
+        app.open_keys_page();
+        assert_eq!(app.layout().focused(), keys, "and to the same tab again");
+        assert_eq!(app.pages.len(), 1, "never a second one");
+        assert!(app.closed.is_empty(), "nothing was closed");
     }
 
     #[test]
@@ -1537,9 +1485,8 @@ mod tests {
         // the list with rows a reader cannot tell apart, and push the tool
         // they actually lost off the end of it.
         let mut app = App::new();
-        let pane = app.tab().focused();
         for _ in 0..3 {
-            app.show_page("counting", Box::new(CountingPage::default()));
+            let pane = app.show_page("counting", Box::new(CountingPage::default()));
             app.close_page(pane);
         }
         assert_eq!(app.closed.len(), 1);
@@ -1551,11 +1498,10 @@ mod tests {
         // page holding the only copy of an edit is the one entry dropping
         // which would make it one.
         let mut app = App::new();
-        let pane = app.tab().focused();
-        app.show_page("editor", Box::new(UnsavedPage("main.rs")));
+        let pane = app.show_page("editor", Box::new(UnsavedPage("main.rs")));
         app.close_page(pane);
         for claimed in 1..=MAX_CLOSED + 2 {
-            app.show_page("counting", Box::new(CountingPage::default()));
+            let pane = app.show_page("counting", Box::new(CountingPage::default()));
             tally(&mut app, pane, claimed);
             app.close_page(pane);
         }
@@ -1571,14 +1517,13 @@ mod tests {
         // Closing a pane never went near the page's own close, so an editor
         // holding unwritten edits was merged away without a word.
         let mut app = App::new();
-        let pane = app.tab().focused();
-        app.show_page("editor", Box::new(UnsavedPage("main.rs")));
+        let pane = app.show_page("editor", Box::new(UnsavedPage("main.rs")));
         let sibling = app.alloc_pane_id();
-        app.tab_mut()
+        app.layout_mut()
             .split(Direction::Vertical, SPLIT_RATIO, sibling);
 
         app.close_pane(pane);
-        assert_eq!(app.tab().panes().len(), 2, "nothing closed yet");
+        assert_eq!(app.layout().panes().len(), 2, "nothing closed yet");
         let asked = app.input_view().expect("the question is up");
         assert!(
             asked.label.contains("main.rs"),
@@ -1588,12 +1533,12 @@ mod tests {
 
         // Anything but yes leaves the pane exactly as it was.
         app.handle_prompt_key(&press(KeyCode::Char('n')));
-        assert_eq!(app.tab().panes().len(), 2);
+        assert_eq!(app.layout().panes().len(), 2);
         assert!(app.pages.contains_key(&pane), "the editor is still there");
 
         app.close_pane(pane);
         app.handle_prompt_key(&press(KeyCode::Char('y')));
-        assert_eq!(app.tab().panes(), vec![sibling], "and yes closes it");
+        assert_eq!(app.layout().panes(), vec![sibling], "and yes closes it");
         assert!(
             app.closed.iter().any(|closed| closed.is_dirty()),
             "with the edits kept for reopening even so"
@@ -1604,8 +1549,7 @@ mod tests {
     fn test_the_first_close_of_a_session_says_how_to_undo_it() {
         // A way back nobody is told about is a way back nobody takes.
         let mut app = App::new();
-        let pane = app.tab().focused();
-        app.show_page("counting", Box::new(CountingPage::default()));
+        let pane = app.show_page("counting", Box::new(CountingPage::default()));
         app.close_page(pane);
         let said = app
             .notice
@@ -1615,7 +1559,7 @@ mod tests {
         assert!(said.contains("Ctrl-Shift-u"), "naming the key: {said}");
 
         app.notice = None;
-        app.show_page("counting", Box::new(CountingPage::default()));
+        let pane = app.show_page("counting", Box::new(CountingPage::default()));
         app.close_page(pane);
         assert!(app.notice.is_none(), "and only says it once");
     }
@@ -1625,12 +1569,11 @@ mod tests {
         // Half the point of one list: a tool already up in another pane is
         // gone to rather than opened a second time.
         let mut app = App::new();
-        let here = app.tab().focused();
-        app.show_page("counting", Box::new(CountingPage::default()));
+        let here = app.show_page("counting", Box::new(CountingPage::default()));
         let sibling = app.alloc_pane_id();
-        app.tab_mut()
+        app.layout_mut()
             .split(Direction::Vertical, SPLIT_RATIO, sibling);
-        app.tab_mut().focus(sibling);
+        app.layout_mut().focus(sibling);
 
         app.open_tool_palette();
         let palette = app.palette.clone().expect("the list opens");
@@ -1641,7 +1584,7 @@ mod tests {
             .expect("the open tool is listed");
         assert_eq!(row.action, format!("open:{}", here.0));
         app.choose_tool_row(&row.action);
-        assert_eq!(app.tab().focused(), here, "focus moved to it");
+        assert_eq!(app.layout().focused(), here, "focus moved to it");
         assert!(app.closed.is_empty(), "and nothing was reopened");
     }
 
@@ -1650,9 +1593,8 @@ mod tests {
         // Each entry is a whole page, so the stash is a way back from an
         // accident rather than a log of every tool ever closed.
         let mut app = App::new();
-        let pane = app.tab().focused();
         for claimed in 0..MAX_CLOSED + 2 {
-            app.show_page("counting", Box::new(CountingPage::default()));
+            let pane = app.show_page("counting", Box::new(CountingPage::default()));
             tally(&mut app, pane, claimed);
             app.close_page(pane);
         }
@@ -1680,9 +1622,8 @@ mod tests {
         // which tool and what it was showing: "counting" twice over would be
         // two rows a reader cannot choose between.
         let mut app = App::new();
-        let pane = app.tab().focused();
         for claimed in 1..=2 {
-            app.show_page("counting", Box::new(CountingPage::default()));
+            let pane = app.show_page("counting", Box::new(CountingPage::default()));
             tally(&mut app, pane, claimed);
             app.close_page(pane);
         }
@@ -1711,18 +1652,18 @@ mod tests {
         // Reopening the newest whatever was picked would make the list a
         // decoration over `Ctrl-Shift-u`.
         let mut app = App::new();
-        let pane = app.tab().focused();
         for claimed in 1..=3 {
-            app.show_page("counting", Box::new(CountingPage::default()));
+            let pane = app.show_page("counting", Box::new(CountingPage::default()));
             tally(&mut app, pane, claimed);
             app.close_page(pane);
         }
+        let terminal = app.layout().focused();
 
         app.open_tool_palette();
         let mut palette = app.palette.clone().expect("the list opens");
         // The oldest row, which is the last one in a newest-first list.
         palette.selected = palette.filtered.len() - 1;
-        app.confirm_palette_selection(&palette, pane);
+        app.confirm_palette_selection(&palette, terminal);
 
         assert_eq!(showing(&app).as_deref(), Some("Counting 1"));
         assert_eq!(app.closed.len(), 2, "the other two are still closed");
@@ -1734,12 +1675,13 @@ mod tests {
         // onto, which for a full stash drops the oldest. That row must not
         // reopen whichever page took its place.
         let mut app = App::new();
-        let pane = app.tab().focused();
-        app.show_page("counting", Box::new(CountingPage::default()));
+        let pane = app.show_page("counting", Box::new(CountingPage::default()));
         app.close_page(pane);
         let gone = app.closed[0].id();
-        for _ in 0..MAX_CLOSED {
-            app.show_page("counting", Box::new(CountingPage::default()));
+        for claimed in 0..MAX_CLOSED {
+            // Each told apart from the rest, so none replaces another's row.
+            let pane = app.show_page("counting", Box::new(CountingPage::default()));
+            tally(&mut app, pane, claimed + 1);
             app.close_page(pane);
         }
 
@@ -1805,7 +1747,7 @@ mod tests {
     fn browse_key(app: &mut App, named: winit::keyboard::NamedKey) {
         use winit::keyboard::{Key, PhysicalKey};
 
-        let pane = app.tab().focused();
+        let pane = app.layout().focused();
         let phys = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
         let mut palette = app.palette.take().expect("the browser is up");
         app.handle_palette_input(&mut palette, &Key::Named(named), &phys, pane);
@@ -1853,24 +1795,31 @@ mod tests {
     }
 
     #[test]
-    fn test_a_second_file_joins_the_editor_rather_than_covering_it() {
-        // Two files opened from a listing used to be two editors stacked on
-        // one another, with no way back to the first but closing the second.
+    fn test_each_file_opened_from_a_listing_gets_a_tab_of_its_own() {
         let tree = TempTree::new("two-files", &["one.txt", "two.txt"]);
         let mut app = App::new();
-        let pane = app.tab().focused();
+        let listing = app.show_page("counting", Box::new(CountingPage::default()));
 
         app.open_editor_page(OpenTarget::file(tree.0.join("one.txt")));
+        let one = app.layout().focused();
+        app.show_tab(listing);
         app.open_editor_page(OpenTarget::file(tree.0.join("two.txt")));
+        let two = app.layout().focused();
 
-        assert_eq!(
-            app.pages.get(&pane).map(|slot| slot.tool),
-            Some(EDITOR_TOOL)
-        );
-        assert!(
-            app.covered.get(&pane).is_none_or(Vec::is_empty),
-            "one editor, not two"
-        );
+        assert_ne!(one, two, "two editor tabs");
+        assert_eq!(app.pages.get(&one).map(|slot| slot.tool), Some(EDITOR_TOOL));
+        assert_eq!(app.pages.get(&two).map(|slot| slot.tool), Some(EDITOR_TOOL));
+    }
+
+    #[test]
+    fn test_a_file_opened_from_inside_the_editor_joins_it() {
+        // The editor keeps buffers of its own; opening a file from in there
+        // adds one rather than a second editor tab.
+        let tree = TempTree::new("join", &["one.txt", "two.txt"]);
+        let mut app = App::new();
+        app.open_editor_page(OpenTarget::file(tree.0.join("one.txt")));
+        app.open_editor_page(OpenTarget::file(tree.0.join("two.txt")));
+        assert_eq!(app.pages.len(), 1, "one editor, not two");
     }
 
     #[test]
@@ -1883,43 +1832,50 @@ mod tests {
     }
 
     #[test]
-    fn test_browsing_onto_a_file_opens_it_in_the_editor_over_the_pane() {
+    fn test_browsing_onto_a_file_opens_it_in_an_editor_tab() {
         use winit::keyboard::NamedKey;
 
         let tree = TempTree::new("open", &["README.md"]);
         let mut app = App::new();
-        let pane = app.tab().focused();
         app.palette = Some(crate::model::palette::Palette::open_files(tree.0.clone()));
 
         browse_to(&mut app, "README.md");
         browse_key(&mut app, NamedKey::Enter);
 
         assert!(app.palette.is_none(), "the browser is done");
+        let pane = app.layout().focused();
         assert_eq!(
             app.pages.get(&pane).map(|slot| slot.tool),
             Some(EDITOR_TOOL),
-            "and the file is open over the pane"
+            "and the file is open in a tab of the pane"
         );
     }
 
     #[test]
-    fn test_a_tool_chord_pressed_twice_closes_its_own_page() {
+    fn test_another_tool_opens_beside_the_first_instead_of_toggling() {
         let mut app = App::new();
-        let pane = app.tab().focused();
         app.open_keys_page();
-        assert!(app.pages.contains_key(&pane));
-        app.open_keys_page();
-        assert!(app.pages.is_empty(), "the same tool toggles off");
+        app.open_dir_page();
+        assert_eq!(app.pages.len(), 2, "each tool has a tab of its own");
+        assert_eq!(app.layout().members().len(), 3);
     }
 
     #[test]
-    fn test_another_tool_replaces_the_page_instead_of_toggling() {
-        let mut app = App::new();
-        let pane = app.tab().focused();
-        app.open_keys_page();
-        app.open_dir_page();
-        assert!(app.pages.contains_key(&pane), "the pane still shows a page");
-        assert_eq!(app.pages.len(), 1);
+    fn test_ctrl_shift_c_with_nothing_selected_reaches_the_page() {
+        // Copy is a global chord, checked ahead of every page. With nothing
+        // selected it copies nothing, so a page binding the same chord (the
+        // Git page commits on it) has to be the one that gets it.
+        let (mut app, pane) = app_with_open_page();
+        app.window_keymap = crate::model::input::WindowKeymap::default();
+        app.modifiers = winit::event::Modifiers::from(
+            winit::keyboard::ModifiersState::CONTROL | winit::keyboard::ModifiersState::SHIFT,
+        );
+        app.handle_key(
+            winit::event::ElementState::Pressed,
+            winit::keyboard::Key::Character("C".into()),
+            winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyC),
+        );
+        assert_eq!(app.pages[&pane].page.title(), "Counting 1");
     }
 
     #[test]
@@ -1930,23 +1886,27 @@ mod tests {
     }
 
     #[test]
-    fn test_a_page_closing_itself_uncovers_the_pane() {
+    fn test_a_page_closing_itself_closes_its_tab() {
         let (mut app, pane) = app_with_open_page();
         assert!(app.offer_key_to_page(pane, &press(KeyCode::Char('q'))));
         assert!(app.pages.is_empty(), "the page is gone");
-        assert_eq!(app.tab().panes().len(), 1, "the pane is not");
+        assert_eq!(app.layout().members().len(), 1, "the terminal tab is not");
     }
 
     #[test]
-    fn test_a_page_running_a_command_uncovers_the_pane_first() {
-        // A command that opens a page of its own needs a pane with none on it,
-        // so the running and the uncovering cannot be the other way around.
+    fn test_a_page_running_a_command_closes_first() {
+        // The page is done once it has named the command, so the command
+        // runs against the tab shown in its place.
         let (mut app, pane) = app_with_open_page();
-        let tabs_before = app.tabs.all.len();
+        let tabs_before = app.layout().members().len();
 
         assert!(app.offer_key_to_page(pane, &press(KeyCode::Char('r'))));
-        assert!(app.pages.is_empty(), "the page handed the pane back");
-        assert_eq!(app.tabs.all.len(), tabs_before + 1, "and the command ran");
+        assert!(app.pages.is_empty(), "the page closed");
+        assert_eq!(
+            app.layout().members().len(),
+            tabs_before,
+            "and the command opened a tab in its place"
+        );
     }
 
     #[test]
@@ -2005,13 +1965,12 @@ mod tests {
     fn app_asking() -> (App, PaneId, Rc<RefCell<Vec<Option<String>>>>) {
         let mut app = App::new();
         let heard: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
-        app.show_page(
+        let pane = app.show_page(
             "asking",
             Box::new(AskingPage {
                 heard: Rc::clone(&heard),
             }),
         );
-        let pane = app.tab().focused();
         app.offer_key_to_page(pane, &press(KeyCode::Char('x')));
         (app, pane, heard)
     }
@@ -2120,9 +2079,9 @@ mod tests {
     }
 
     #[test]
-    fn test_resize_leaves_a_covered_pane_showing_its_page() {
-        // Resizing walks every laid-out pane and reflows the grid underneath;
-        // the page covering it must survive the pass.
+    fn test_resize_leaves_a_tool_tab_showing_its_page() {
+        // Resizing walks every laid-out pane and reflows the grids of the
+        // terminals; a tool tab, which has none, must survive the pass.
         let (mut app, pane) = app_with_open_page();
         app.resize_all_panes();
         assert!(app.pages.contains_key(&pane));

@@ -6,6 +6,7 @@ use crate::config::{expand_window_title_template, WindowTitleVars};
 use crate::model::input::PendingPrefix;
 use winter_render::NoticeKind;
 
+use super::strip::StripHit;
 use super::tabbar;
 use super::App;
 use super::{MODE_FLASH_DURATION, NOTICE_DURATION};
@@ -16,17 +17,16 @@ use super::YANK_FLASH_DURATION;
 // ========================================================================
 
 impl App {
-    /// Render the `window-title-template` config against the active tab: the
-    /// app running in the focused pane feeds the `{{ title }}`,
+    /// Render the `window-title-template` config against the focused tab: the
+    /// app running in it feeds the `{{ title }}`,
     /// `{{ app_name }}`, `{{ pane_title }}`, and `{{ cwd }}` placeholders.
     pub(crate) fn render_window_title(&self) -> String {
-        let idx = self.tabs.active;
-        let focused = self.tabs.all[idx].focused();
+        let focused = self.layout().focused();
         let pane = self.panes.get(&focused);
         expand_window_title_template(
             &self.config.window_title_template,
             &WindowTitleVars {
-                title: self.tab_title(idx),
+                title: self.tab_title(focused),
                 app_name: pane
                     .and_then(|p| p.foreground_process_name())
                     .unwrap_or_default(),
@@ -57,8 +57,8 @@ impl App {
             format!("Winter - search: {prefix}{query}")
         } else if self.quick_select.is_some() {
             "Winter - quick select".to_string()
-        } else if let winter_render::TabbarHit::Tab(idx) = self.tabs.hover {
-            let t = self.tab_title(idx);
+        } else if let StripHit::Tab(pane) = self.tabs.strip_hover {
+            let t = self.tab_title(pane);
             format!("Winter - {t}")
         } else {
             self.render_window_title()

@@ -7,7 +7,7 @@
 //! - Preserves line/column suffix references (e.g. `:10` or `:10-20`).
 //! - Preserves URLs and multi-line strings.
 
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 
 // ========================================================================
 // Functions
@@ -30,6 +30,52 @@ pub fn home_dir() -> Option<PathBuf> {
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(PathBuf::from)
     }
+}
+
+/// Expand a leading `~` in `raw` to the user's home directory, the inverse of
+/// [`abbreviate_home`]. Returned unchanged when there is no home to expand to.
+pub fn expand_home(raw: &str) -> PathBuf {
+    match home_dir() {
+        Some(home) => expand_home_with(raw, &home),
+        None => PathBuf::from(raw),
+    }
+}
+
+/// Expand a leading `~` in `raw` to `home`: `~` alone or `~/rest`. A `~`
+/// anywhere else (`a~/b`, `~user`) is an ordinary character.
+pub fn expand_home_with(raw: &str, home: &Path) -> PathBuf {
+    if raw == "~" {
+        return home.to_path_buf();
+    }
+    match raw.strip_prefix("~/").or_else(|| raw.strip_prefix("~\\")) {
+        Some(rest) => home.join(rest),
+        None => PathBuf::from(raw),
+    }
+}
+
+/// Resolve `.` and `..` in `path` lexically, without touching the disk: the
+/// way a typed `../src` should read, whatever symlinks sit along it. A `..`
+/// at the root stays at the root.
+pub fn clean_path(path: &Path) -> PathBuf {
+    let mut cleaned = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match cleaned.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    cleaned.pop();
+                }
+                Some(Component::Prefix(_) | Component::RootDir) => {}
+                Some(Component::CurDir | Component::ParentDir) | None => {
+                    cleaned.push(component);
+                }
+            },
+            Component::Normal(_) | Component::Prefix(_) | Component::RootDir => {
+                cleaned.push(component);
+            }
+        }
+    }
+    cleaned
 }
 
 /// Abbreviate `path` with `~` if it sits within the user's home directory.
@@ -327,5 +373,31 @@ mod tests {
             assert_eq!(format_full_path(p2), "/home/user/workspace");
             assert_eq!(normalize_path(p2), PathBuf::from("/home/user/workspace"));
         }
+    }
+
+    #[test]
+    fn test_expand_home_only_expands_a_leading_tilde() {
+        let home = Path::new("/home/user");
+        assert_eq!(expand_home_with("~", home), PathBuf::from("/home/user"));
+        assert_eq!(
+            expand_home_with("~/notes.txt", home),
+            PathBuf::from("/home/user/notes.txt")
+        );
+        // `~user` names another user's home, and a mid-path `~` is a plain
+        // character: neither is this user's home.
+        assert_eq!(expand_home_with("~bob/x", home), PathBuf::from("~bob/x"));
+        assert_eq!(expand_home_with("a~/b", home), PathBuf::from("a~/b"));
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_clean_path_resolves_dots_lexically() {
+        assert_eq!(
+            clean_path(Path::new("/a/b/../c/./d")),
+            PathBuf::from("/a/c/d")
+        );
+        // `..` above the root stays at the root rather than vanishing.
+        assert_eq!(clean_path(Path::new("/..")), PathBuf::from("/"));
+        assert_eq!(clean_path(Path::new("/a/..")), PathBuf::from("/"));
     }
 }

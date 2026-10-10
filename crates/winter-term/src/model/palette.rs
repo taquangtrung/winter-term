@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 
 use super::history::EditHistory;
 use super::input::WindowKeymap;
+use super::path::{clean_path, expand_home};
 use super::units::format_size;
 
 // ========================================================================
@@ -499,12 +500,52 @@ impl Palette {
         self.selected = 0;
     }
 
+    /// Move the selection to the row for `path`, when the listing shows it.
+    pub fn select_path(&mut self, path: &Path) {
+        let position = self
+            .filtered
+            .iter()
+            .position(|&index| Path::new(&self.entries[index].action) == path);
+        if let Some(position) = position {
+            self.selected = position;
+        }
+    }
+
     /// Append a character to the query and refilter the entries.
+    ///
+    /// In the browser a path separator ends a directory name rather than
+    /// filtering by it: the listing re-roots at the directory typed so far
+    /// (see [`Self::typed_dir`]) with a fresh query, so completion goes on
+    /// from there.
     pub fn push_char(&mut self, c: char) {
+        if self.mode == PaletteMode::Files && std::path::is_separator(c) {
+            if let Some(dir) = self.typed_dir() {
+                let query_history = std::mem::take(&mut self.query_history);
+                *self = Palette::open_files(dir).with_query_history(query_history);
+                return;
+            }
+        }
         self.history_index = None;
         self.query.push(c);
         self.history.record(self.query.clone());
         self.update_filter();
+    }
+
+    /// The directory a separator typed after the current query names, for
+    /// the browser to re-root at: the root for an empty query (`/` alone),
+    /// home for `~`, the query as a path (`src`, `..`, `~/notes`, `/etc`)
+    /// against the listed directory when that is a directory, else the
+    /// selected row when it is one (`sr` + `/` enters `src/`). `None` when
+    /// none of these is a directory, which leaves the separator to filter.
+    fn typed_dir(&self) -> Option<PathBuf> {
+        let dir = self.dir.as_ref()?;
+        let candidate = match self.query.as_str() {
+            "" => dir.ancestors().last().map(Path::to_path_buf),
+            query => Some(clean_path(&dir.join(expand_home(query))))
+                .filter(|path| path.is_dir())
+                .or_else(|| self.selected_action().map(PathBuf::from)),
+        };
+        candidate.filter(|path| path.is_dir())
     }
 
     /// Delete the query's last character and refilter the entries.
@@ -879,6 +920,7 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ("new_tab", "New Tab", ""),
         ("next_block", "Next Block", ""),
         ("next_tab", "Next Tab", ""),
+        ("open_under_cursor", "Open: Path or URL at Point", ""),
         ("open_settings", "Settings", ""),
         ("paste_from_clipboard", "Paste from Clipboard", ""),
         ("prev_block", "Previous Block", ""),
@@ -1373,5 +1415,63 @@ mod tests {
         }
         assert_eq!(p.filtered.len(), 1);
         assert_eq!(p.selected_action(), Some("50"));
+    }
+
+    #[test]
+    fn test_a_separator_typed_in_the_browser_reroots_at_the_named_directory() {
+        // `src` + `/` names a directory, so the listing moves into it with a
+        // fresh query instead of filtering for a literal `src/`.
+        let tree = TempTree::new("reroot", &["src/", "src/main.rs", "readme.md"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        for ch in "src/".chars() {
+            palette.push_char(ch);
+        }
+        assert_eq!(palette.dir.as_deref(), Some(tree.0.join("src").as_path()));
+        assert_eq!(palette.query, "");
+
+        // `..` + `/` goes back up, resolved rather than kept as `src/..`.
+        for ch in "../".chars() {
+            palette.push_char(ch);
+        }
+        assert_eq!(palette.dir.as_deref(), Some(tree.0.as_path()));
+    }
+
+    #[test]
+    fn test_a_separator_after_a_fuzzy_query_enters_the_selected_directory() {
+        // `sr` names nothing on disk, but it selects `src/`: the separator
+        // completes into it, as the selection says.
+        let tree = TempTree::new("fuzzy", &["src/", "readme.md"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        palette.push_char('s');
+        palette.push_char('r');
+        palette.push_char('/');
+        assert_eq!(palette.dir.as_deref(), Some(tree.0.join("src").as_path()));
+    }
+
+    #[test]
+    fn test_a_separator_naming_no_directory_filters_as_typed() {
+        // `readme.md` is a file and `zz` matches nothing: neither is
+        // somewhere to go, so the separator stays in the query.
+        let tree = TempTree::new("nodir", &["readme.md"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        for ch in "zz/".chars() {
+            palette.push_char(ch);
+        }
+        assert_eq!(palette.dir.as_deref(), Some(tree.0.as_path()));
+        assert_eq!(palette.query, "zz/");
+
+        // An empty query plus a separator is the filesystem root.
+        let mut palette = Palette::open_files(tree.0.clone());
+        palette.push_char('/');
+        assert_eq!(palette.dir.as_deref(), tree.0.ancestors().last());
+    }
+
+    #[test]
+    fn test_select_path_lands_on_the_named_file() {
+        // Find File opens on the file the terminal named, not on `../`.
+        let tree = TempTree::new("select", &["alpha.rs", "beta.rs"]);
+        let mut palette = Palette::open_files(tree.0.clone());
+        palette.select_path(&tree.0.join("beta.rs"));
+        assert_eq!(palette.selected_action(), tree.0.join("beta.rs").to_str());
     }
 }

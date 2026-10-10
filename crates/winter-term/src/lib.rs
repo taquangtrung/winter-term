@@ -27,5 +27,5 @@ pub mod terminal;
 pub mod tools;
 
 pub use model::input::{resolve, Action, BlockNav, Key, KeyCode};
-pub use model::layout::{Direction, FocusDir, PaneId, Rect, Tab};
+pub use model::layout::{Direction, FocusDir, Layout, PaneId, Rect};
 pub use model::mode::{Mode, ModeEvent};

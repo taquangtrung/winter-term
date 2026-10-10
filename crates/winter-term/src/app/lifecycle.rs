@@ -73,7 +73,6 @@ impl App {
             page_cursor: None,
             page_wrap: false,
             pages: HashMap::new(),
-            covered: HashMap::new(),
             closed: Vec::new(),
             next_closed_id: 0,
             reopen_hint_shown: false,
@@ -125,16 +124,12 @@ impl App {
                 self.new_tab();
             }
             "close_tab" => {
-                self.close_tab(self.tabs.active);
+                self.close_tab(focused);
             }
             "rename_tab" => {
-                self.tabs.rename_input = Some(
-                    self.tabs
-                        .names
-                        .get(&self.tabs.active)
-                        .cloned()
-                        .unwrap_or_default(),
-                );
+                self.tabs.rename_input =
+                    Some(self.tabs.names.get(&focused).cloned().unwrap_or_default());
+                self.dirty = true;
             }
             "next_tab" => {
                 self.cycle_tab(true);
@@ -200,6 +195,9 @@ impl App {
             "copy_cwd" => {
                 self.copy_pane_cwd(focused);
             }
+            "open_under_cursor" => {
+                self.open_under_cursor(focused);
+            }
             "focus_down" | "focus_up" | "focus_left" | "focus_right" => {
                 let dir = match action {
                     "focus_down" => FocusDir::Down,
@@ -209,7 +207,7 @@ impl App {
                 };
                 let viewport = self.viewport_rect();
                 let layout_vp = Rect::new(viewport.x, viewport.y, viewport.width, viewport.height);
-                self.tab_mut().focus_in_direction(dir, layout_vp);
+                self.layout_mut().focus_in_direction(dir, layout_vp);
             }
             "search" => {
                 self.search.query = Some(String::new());
@@ -254,7 +252,7 @@ impl App {
                 self.open_settings();
             }
             "toggle_pane_zoom" => {
-                self.tab_mut().toggle_zoom();
+                self.layout_mut().toggle_zoom();
                 if self.renderer.is_some() {
                     self.resize_all_panes();
                 }
@@ -287,13 +285,15 @@ impl App {
             }
             "select_pane" => {
                 let mut panes_list = Vec::new();
-                for (tab_index, tab) in self.tabs.all.iter().enumerate() {
-                    // Mirror the tab-bar format on the left ("<tab number>:
-                    // <title>"); the pane number goes on the right.
-                    let label = format!("{}: {}", tab_index + 1, self.tab_title(tab_index));
-                    for (pane_index, &pane_id) in tab.panes().iter().enumerate() {
-                        let shortcut = (pane_index + 1).to_string();
-                        panes_list.push((pane_id, label.clone(), shortcut));
+                for (pane_index, &shown) in self.layout().panes().iter().enumerate() {
+                    // Name each tab after the pane holding it ("<pane
+                    // number>: <title>"); its place on that pane's strip goes
+                    // on the right.
+                    for (tab_index, pane_id) in
+                        self.layout().group_members(shown).into_iter().enumerate()
+                    {
+                        let label = format!("{}: {}", pane_index + 1, self.tab_title(pane_id));
+                        panes_list.push((pane_id, label, (tab_index + 1).to_string()));
                     }
                 }
                 self.palette = Some(
@@ -366,15 +366,15 @@ impl App {
                     .and_then(|pane| pane.mux_session().map(str::to_string));
                 match session {
                     Some(name) => {
-                        if self.tabs.all.len() <= 1 && self.tabs.all[0].panes().len() <= 1 {
+                        if self.layout().members().len() <= 1 {
                             self.set_notice(
-                                "cannot detach the only pane: close the window or open another tab",
+                                "cannot detach the only tab: close the window or open another tab",
                             );
                         } else {
                             self.set_notice(format!("detached from mux session '{name}'"));
-                            // Closing the pane drops the mux client, which
+                            // Closing the tab drops the mux client, which
                             // detaches server-side; the session keeps running.
-                            self.close_pane(focused);
+                            self.close_tab(focused);
                         }
                     }
                     None => self.set_notice("this pane is not attached to a mux session"),
@@ -395,7 +395,7 @@ impl App {
     /// request and the custom window-close control.
     pub(crate) fn quit(&mut self, event_loop: &ActiveEventLoop) {
         if self.config.restore_session {
-            Session::save(&self.tabs.all, self.tabs.active, &self.panes);
+            Session::save(&self.tabs.layout, &self.panes);
         }
         self.panes.clear();
         event_loop.exit();
@@ -407,7 +407,7 @@ impl App {
     /// `restore_session`, since reloading is an explicit request to carry
     /// state across the restart.
     pub(crate) fn reload(&mut self, event_loop: &ActiveEventLoop) {
-        Session::save(&self.tabs.all, self.tabs.active, &self.panes);
+        Session::save(&self.tabs.layout, &self.panes);
         if let Ok(exe) = std::env::current_exe() {
             let _ = std::process::Command::new(exe).spawn();
         }

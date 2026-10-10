@@ -34,7 +34,7 @@ pub(crate) const TAB_H_PAD_CELLS: f32 = 0.8;
 /// sitting flush against the strip's bottom edge.
 pub(crate) const TAB_TOP_VPAD_PX: f32 = 1.0;
 /// Vertical padding below a tab pill, in pixels. See `TAB_TOP_VPAD_PX`.
-pub(crate) const TAB_BOTTOM_VPAD_PX: f32 = 1.0;
+pub(crate) const TAB_BOTTOM_VPAD_PX: f32 = 0.0;
 /// Flat horizontal gap between adjacent tab pills, in pixels, split evenly
 /// (half on each side) so neighbors each contribute half the gap. Purely a
 /// rendering inset on the pill's own background (`renderer::rasterize_tabbar_strip`)
@@ -206,11 +206,69 @@ pub struct TopTabbar {
 
 /// A pixel rectangle in surface coordinates (origin top-left).
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct Region {
+pub struct Region {
+    /// Height in pixels.
     pub h: f32,
+    /// Width in pixels.
     pub w: f32,
+    /// X origin in pixels.
     pub x: f32,
+    /// Y origin in pixels.
     pub y: f32,
+}
+
+/// One tab's data for pane-level tab strip layout.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaneTab {
+    /// The pane's identifier.
+    pub pane_id: u64,
+    /// The tab's title as drawn.
+    pub title: String,
+    /// Whether this tab is currently the active tab in its pane group.
+    pub active: bool,
+}
+
+/// What a point on a pane tab strip lands on.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PaneStripHit {
+    /// Nothing hit: blank tab strip space or outside.
+    None,
+    /// A tab's body, by pane ID.
+    Tab(u64),
+    /// A tab's close (`×`) button, by pane ID.
+    CloseTab(u64),
+    /// The new-tab (`+`) button.
+    NewTab,
+    /// Left scroll arrow (`‹`).
+    ScrollLeft,
+    /// Right scroll arrow (`›`).
+    ScrollRight,
+}
+
+/// Which sides of a pane tab strip carry a split divider across it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub struct PaneStripEdges {
+    /// Another group sits against the strip's left edge.
+    pub left: bool,
+    /// Another group sits against the strip's right edge.
+    pub right: bool,
+    /// Another group sits against the strip's top edge.
+    pub top: bool,
+}
+
+/// Pixel layout of a pane-level tab strip.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PaneStripLayout {
+    /// Per-tab hit/draw regions, parallel to the input `tabs`.
+    pub tabs: Vec<Region>,
+    /// Per-tab close (`×`) button regions, parallel to the input `tabs`.
+    pub closes: Vec<Region>,
+    /// The new-tab (`+`) button region.
+    pub new_tab: Option<Region>,
+    /// Left scroll arrow (`‹`), present when paginated.
+    pub scroll_left: Option<Region>,
+    /// Right scroll arrow (`›`), present when paginated.
+    pub scroll_right: Option<Region>,
 }
 
 /// Geometry of an open dropdown panel and its item rows.
@@ -294,7 +352,8 @@ pub enum TabbarHit {
 // ========================================================================
 
 impl Region {
-    fn contains(&self, px: f32, py: f32) -> bool {
+    /// Whether the point `(px, py)` is inside this region.
+    pub fn contains(&self, px: f32, py: f32) -> bool {
         px >= self.x && px < self.x + self.w && py >= self.y && py < self.y + self.h
     }
 }
@@ -395,6 +454,140 @@ pub fn hit_test(
     TabbarHit::None
 }
 
+/// Compute the pixel geometry of a pane tab strip.
+pub fn layout_pane_strip(
+    tabs: &[PaneTab],
+    width: f32,
+    height: f32,
+    cw: f32,
+    ch: f32,
+    active_idx: usize,
+) -> PaneStripLayout {
+    let _ = ch;
+    let n = tabs.len();
+    let min_tab_w = MIN_TAB_CELLS * cw;
+    let max_tab_w = MAX_TAB_CELLS * cw;
+    let close_w = CLOSE_CELLS * cw;
+    let right_pad = TAB_H_PAD_CELLS * cw;
+    let new_tab_w = NEW_TAB_CELLS * cw;
+    let scroll_w = TAB_SCROLL_CELLS * cw;
+
+    let avail_no_nav = (width - new_tab_w).max(0.0);
+    let paginated = n > 1 && (n as f32) * min_tab_w > avail_no_nav;
+
+    let off = Region {
+        h: height,
+        w: 0.0,
+        x: 0.0,
+        y: 0.0,
+    };
+    let mut out_tabs = vec![off; n];
+    let mut out_closes = vec![off; n];
+    let mut scroll_left = None;
+    let mut scroll_right = None;
+
+    let (tabs_origin, tab_w, visible_start, visible_count) = if !paginated {
+        let tab_w = if n == 0 {
+            min_tab_w
+        } else {
+            (avail_no_nav / n as f32).clamp(min_tab_w, max_tab_w)
+        };
+        (0.0, tab_w, 0, n)
+    } else {
+        let avail = (width - 2.0 * scroll_w - new_tab_w).max(min_tab_w);
+        let count = ((avail / min_tab_w).floor() as usize).clamp(1, n);
+        let tab_w = (avail / count as f32).clamp(min_tab_w, max_tab_w);
+        let start = (active_idx / count * count).min(n - count);
+        scroll_left = Some(Region {
+            h: height,
+            w: scroll_w,
+            x: 0.0,
+            y: 0.0,
+        });
+        let origin = scroll_w;
+        scroll_right = Some(Region {
+            h: height,
+            w: scroll_w,
+            x: origin + count as f32 * tab_w,
+            y: 0.0,
+        });
+        (origin, tab_w, start, count)
+    };
+
+    for slot in 0..visible_count {
+        let i = visible_start + slot;
+        if i >= n {
+            break;
+        }
+        let x = tabs_origin + slot as f32 * tab_w;
+        out_tabs[i] = Region {
+            h: height,
+            w: tab_w,
+            x,
+            y: 0.0,
+        };
+        out_closes[i] = Region {
+            h: height,
+            w: close_w,
+            x: x + tab_w - close_w - right_pad,
+            y: 0.0,
+        };
+    }
+
+    let new_tab_x = if paginated {
+        scroll_right.as_ref().map_or(0.0, |r| r.x + r.w)
+    } else {
+        n as f32 * tab_w
+    };
+    let new_tab = if new_tab_x + new_tab_w <= width || n == 0 {
+        Some(Region {
+            h: height,
+            w: new_tab_w,
+            x: new_tab_x,
+            y: 0.0,
+        })
+    } else {
+        None
+    };
+
+    PaneStripLayout {
+        tabs: out_tabs,
+        closes: out_closes,
+        new_tab,
+        scroll_left,
+        scroll_right,
+    }
+}
+
+/// Map a relative click at `(x, y)` to the pane tab strip element under it.
+pub fn hit_test_pane_strip(
+    layout: &PaneStripLayout,
+    x: f32,
+    y: f32,
+    tabs: &[PaneTab],
+) -> PaneStripHit {
+    if layout.scroll_left.is_some_and(|r| r.contains(x, y)) {
+        return PaneStripHit::ScrollLeft;
+    }
+    if layout.scroll_right.is_some_and(|r| r.contains(x, y)) {
+        return PaneStripHit::ScrollRight;
+    }
+    for (i, region) in layout.closes.iter().enumerate() {
+        if region.contains(x, y) {
+            return PaneStripHit::CloseTab(tabs[i].pane_id);
+        }
+    }
+    for (i, region) in layout.tabs.iter().enumerate() {
+        if region.contains(x, y) {
+            return PaneStripHit::Tab(tabs[i].pane_id);
+        }
+    }
+    if layout.new_tab.is_some_and(|r| r.contains(x, y)) {
+        return PaneStripHit::NewTab;
+    }
+    PaneStripHit::None
+}
+
 // ========================================================================
 // Layout
 // ========================================================================
@@ -409,7 +602,7 @@ pub fn hit_test(
 /// out of the pill's own height.
 pub(crate) fn tab_top_inset_px(menu_style: MenuStyle) -> f32 {
     let extra = if menu_style == MenuStyle::Modern {
-        crate::TABBAR_EXTRA_HEIGHT_PX
+        crate::TABBAR_EXTRA_HEIGHT_PX + crate::TITLEBAR_EXTRA_HEIGHT_PX
     } else {
         0.0
     };
@@ -419,7 +612,7 @@ pub(crate) fn tab_top_inset_px(menu_style: MenuStyle) -> f32 {
 pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> TabbarLayout {
     let classic = tabbar.menu_style == MenuStyle::Classic;
     let tabbar_h = if tabbar.menu_style == MenuStyle::Modern {
-        crate::modern_tabbar_height_px(ch)
+        crate::modern_titlebar_height_px(ch)
     } else {
         tabbar_rows(tabbar.menu_style) as f32 * ch
     };
@@ -876,16 +1069,11 @@ mod tests {
         // not, on its own, grow the pill/active-highlight height.
         let modern = layout(&tabbar(MenuStyle::Modern, 2, None), SURFACE_W, CW, CH);
         let band_h = modern.tabs[0].h;
-        assert_eq!(
-            band_h,
-            crate::MODERN_TABBAR_HEIGHT * CH + crate::TABBAR_EXTRA_HEIGHT_PX
-        );
+        assert_eq!(band_h, crate::modern_titlebar_height_px(CH));
 
+        // The title bar pill is as tall as a pane strip's, which fills its bar.
         let pill_h = band_h - tab_top_inset_px(MenuStyle::Modern) - TAB_BOTTOM_VPAD_PX;
-        assert_eq!(
-            pill_h,
-            crate::MODERN_TABBAR_HEIGHT * CH - TAB_TOP_VPAD_PX - TAB_BOTTOM_VPAD_PX
-        );
+        assert_eq!(pill_h, crate::modern_tabbar_height_px(CH));
 
         // Classic style has no flat band top-up (only Modern's ratio-based
         // height gets one), so its top inset is exactly `TAB_TOP_VPAD_PX`.
