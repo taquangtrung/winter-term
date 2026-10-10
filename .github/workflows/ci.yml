@@ -26,7 +26,7 @@ jobs:
     name: rustfmt + clippy
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
@@ -44,7 +44,7 @@ jobs:
     name: test (Linux)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux GUI dependencies
@@ -69,7 +69,7 @@ jobs:
       matrix:
         os: [windows-latest, macos-latest]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - name: Install test shells (macOS)
@@ -84,7 +84,7 @@ jobs:
     name: MSRV (1.96)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@1.96
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux GUI dependencies
@@ -99,7 +99,7 @@ jobs:
     name: python client
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v5
       - working-directory: clients/client-py
         run: uv run --with pytest python -m pytest -q
@@ -119,7 +119,7 @@ jobs:
     name: security advisories
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # A prebuilt binary; building cargo-audit from source on every run costs
       # more minutes than the check itself.
       - uses: taiki-e/install-action@cargo-audit
@@ -139,7 +139,7 @@ jobs:
     name: publish dry-run
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # The dry runs below cannot reach winter-term until its dependencies
       # are on the index, and this failure is silent locally: an embedded
       # path above the crate root resolves in the workspace and breaks only
