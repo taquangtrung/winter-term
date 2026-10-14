@@ -31,9 +31,15 @@ const DARK_LUMINANCE: f32 = 0.5;
 // Data Structures
 // ========================================================================
 
-/// A 24-bit RGB color stored as three `u8` values.
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+/// A 24-bit RGB color stored as three `u8` values, plus an opacity.
+///
+/// A color a [`Theme`] holds is always opaque: translucent colors written in
+/// the config are blended over the surface beneath them with [`Rgb::over`] when
+/// the overrides are applied, so no renderer has to know about alpha.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Rgb {
+    /// Opacity, 0 (invisible) to 255 (solid).
+    pub a: u8,
     /// Blue channel, 0-255.
     pub b: u8,
     /// Green channel, 0-255.
@@ -49,6 +55,10 @@ pub struct Theme {
     pub ansi: [Rgb; 16],
     /// Terminal background, and the window's clear color.
     pub background: Rgb,
+    /// How opaque the terminal background is, 0 (see-through) to 255 (solid).
+    /// Below 255 the window is translucent: the background and the cells that
+    /// leave it showing let the desktop through, while the chrome stays solid.
+    pub background_alpha: u8,
     /// Color used to tint the tab bar briefly on a bell event and for the
     /// bell-dot indicator. Falls back to `cursor_bg` for the dot when `None`.
     pub bell: Option<Rgb>,
@@ -98,19 +108,207 @@ pub struct Theme {
     pub tab_active_fg: Rgb,
     /// Background of the tabbar / menubar bands.
     pub tabbar_bg: Rgb,
+    /// The colors of the git views.
+    pub git: GitColors,
+    /// The colors source is read in.
+    pub syntax: SyntaxColors,
     /// Color of the 1px outline drawn around the window's outer edge when it
     /// has no OS-drawn frame (the "Modern", undecorated title bar style).
     pub window_border: Rgb,
 }
 
 // ========================================================================
+// GitColors
+// ========================================================================
+
+/// Declares a set of optional theme colors and the config names of its colors
+/// from one list, so a color is added in one place. A color left `None` is
+/// derived from the theme's own palette by whatever draws it, so a theme that
+/// sets none still gets hues that belong to it. A color may be translucent;
+/// the drawing code lays it over the background.
+macro_rules! color_set {
+    ($(#[$sdoc:meta])* $set:ident { $($(#[$doc:meta])* $field:ident = $name:literal,)* }) => {
+        $(#[$sdoc])*
+        #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+        pub struct $set {
+            $($(#[$doc])* pub $field: Option<Rgb>,)*
+        }
+
+        impl $set {
+            /// The config name of every color, in declaration order.
+            pub const NAMES: &'static [&'static str] = &[$($name),*];
+
+            /// The color called `name` in the config.
+            pub fn get(&self, name: &str) -> Option<Rgb> {
+                match name {
+                    $($name => self.$field,)*
+                    _ => None,
+                }
+            }
+
+            /// Set the color called `name`; a name nothing has is ignored.
+            pub fn set(&mut self, name: &str, color: Option<Rgb>) {
+                match name {
+                    $($name => self.$field = color,)*
+                    _ => {}
+                }
+            }
+        }
+    };
+}
+
+color_set! {
+    /// The colors of the git views.
+    GitColors {
+    /// A file that arrived.
+    added = "added",
+    /// A file that left.
+    deleted = "deleted",
+    /// The words a diff's added line gained.
+    inserted_text = "inserted-text",
+    /// A diff's added line.
+    inserted_line = "inserted-line",
+    /// A file edited where it stands.
+    modified = "modified",
+    /// A file that moved.
+    renamed = "renamed",
+    /// A file a merge left contested.
+    unmerged = "unmerged",
+    /// The path of a file with a conflict, on its row.
+    file_conflict = "file-conflict",
+    /// The path of a staged file, on its row.
+    file_staged = "file-staged",
+    /// The path of an unstaged file, on its row.
+    file_unstaged = "file-unstaged",
+    /// The path of an untracked file, on its row.
+    file_untracked = "file-untracked",
+    /// The band behind a file's row, folded or not: the change's name sits on
+    /// it beside the fold mark, so a band that changed with the fold would
+    /// split the row into two tones.
+    file_band = "file-band",
+    /// The band behind a hunk's header.
+    hunk_band = "hunk-band",
+    /// The staged section's heading.
+    header_staged = "header-staged",
+    /// The unstaged section's heading.
+    header_unstaged = "header-unstaged",
+    /// The untracked section's heading.
+    header_untracked = "header-untracked",
+    /// Every other heading.
+    header = "header",
+    /// The checked-out branch.
+    ref_head = "ref-head",
+    /// A local branch.
+    ref_local = "ref-local",
+    /// A branch on a remote.
+    ref_remote = "ref-remote",
+    /// A tag.
+    ref_tag = "ref-tag",
+    /// The words a diff's removed line lost.
+    removed_text = "removed-text",
+    /// A diff's removed line.
+    removed_line = "removed-line",
+    /// A commit the upstream has not seen, as magic-vscode paints it.
+    unpushed = "unpushed",
+    }
+}
+
+color_set! {
+    /// The colors source is read in, for the five kinds of token the editor
+    /// tells apart.
+    SyntaxColors {
+    /// Prose about the code.
+    comment = "comment",
+    /// A word of the language.
+    keyword = "keyword",
+    /// A literal number.
+    number = "number",
+    /// A literal string.
+    string = "string",
+    /// The name of a type.
+    type_name = "type",
+    }
+}
+
+impl GitColors {
+    /// The palette of magic-vscode's One Color theme, which the dark preset
+    /// shares so the two editors' git views read alike.
+    pub fn magic() -> Self {
+        let hex = |s: &str| Rgb::parse_hex(s);
+        Self {
+            added: hex("#91af22"),
+            deleted: hex("#da5f59"),
+            file_band: hex("#14708acc"),
+            file_conflict: hex("#f14c4c"),
+            file_staged: hex("#1bb1b1"),
+            file_unstaged: hex("#da8548"),
+            file_untracked: hex("#63b417"),
+            header: hex("#51afef"),
+            header_staged: hex("#1bb1b1"),
+            header_unstaged: hex("#da8548"),
+            header_untracked: hex("#63b417"),
+            hunk_band: hex("#1f3e4e"),
+            inserted_line: hex("#23372dfb"),
+            inserted_text: hex("#215714df"),
+            modified: hex("#8fb1f5"),
+            ref_head: hex("#cf81f5"),
+            ref_local: hex("#cf81f5"),
+            ref_remote: hex("#6ab123"),
+            ref_tag: hex("#2d9574"),
+            removed_line: hex("#512b3299"),
+            removed_text: hex("#8f3f3fdf"),
+            renamed: hex("#d1b32f"),
+            unmerged: hex("#a75abe"),
+            unpushed: hex("#7bdd0b"),
+        }
+    }
+}
+
+impl SyntaxColors {
+    /// magic-vscode's One Color token colors, for the dark preset.
+    pub fn magic() -> Self {
+        let hex = |s: &str| Rgb::parse_hex(s);
+        Self {
+            comment: hex("#718b9f"),
+            keyword: hex("#51afef"),
+            number: hex("#da8548"),
+            string: hex("#2d9574"),
+            type_name: hex("#cf517a"),
+        }
+    }
+}
+
+// ========================================================================
 // Rgb
 // ========================================================================
 
+impl Default for Rgb {
+    fn default() -> Self {
+        Self::new(0, 0, 0)
+    }
+}
+
 impl Rgb {
-    /// A color from its three channels.
+    /// A solid color from its three channels.
     pub const fn new(r: u8, g: u8, b: u8) -> Self {
-        Self { b, g, r }
+        Self { a: 255, b, g, r }
+    }
+
+    /// The same color at opacity `a`.
+    pub const fn with_alpha(self, a: u8) -> Self {
+        Self { a, ..self }
+    }
+
+    /// Whether the color hides nothing beneath it.
+    pub const fn is_opaque(self) -> bool {
+        self.a == 255
+    }
+
+    /// The solid color this one makes when laid over `under`, whose own opacity
+    /// is not looked at: what a translucent color on a surface comes to.
+    pub fn over(self, under: Rgb) -> Rgb {
+        let t = self.a as f32 / 255.0;
+        under.with_alpha(255).mix(self.with_alpha(255), t)
     }
 
     /// The channels as `0.0..=1.0` floats, the form wgpu wants. Despite the
@@ -129,17 +327,21 @@ impl Rgb {
         glyphon::Color::rgba(self.r, self.g, self.b, 255)
     }
 
-    /// Parse `#rrggbb`, returning `None` for any other shape. The leading
-    /// `#` is required and three-digit shorthand is not accepted.
+    /// Parse `#rrggbb` or `#rrggbbaa`, returning `None` for any other shape.
+    /// The leading `#` is required and three-digit shorthand is not accepted.
     pub fn parse_hex(s: &str) -> Option<Self> {
         let s = s.strip_prefix('#')?;
-        if s.len() != 6 {
+        if !s.is_ascii() || !matches!(s.len(), 6 | 8) {
             return None;
         }
         let r = u8::from_str_radix(&s[0..2], 16).ok()?;
         let g = u8::from_str_radix(&s[2..4], 16).ok()?;
         let b = u8::from_str_radix(&s[4..6], 16).ok()?;
-        Some(Self { b, g, r })
+        let a = match s.len() {
+            8 => u8::from_str_radix(&s[6..8], 16).ok()?,
+            _ => 255,
+        };
+        Some(Self { a, b, g, r })
     }
 
     /// `self` moved `t` of the way toward `other`, channel by channel.
@@ -157,9 +359,13 @@ impl Rgb {
         (0.2126 * self.r as f32 + 0.7152 * self.g as f32 + 0.0722 * self.b as f32) / 255.0
     }
 
-    /// Format as a `#rrggbb` hex string, the inverse of [`Self::parse_hex`].
+    /// Format as `#rrggbb`, or `#rrggbbaa` when translucent: the inverse of
+    /// [`Self::parse_hex`].
     pub fn to_hex(self) -> String {
-        format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b)
+        match self.is_opaque() {
+            true => format!("#{:02x}{:02x}{:02x}", self.r, self.g, self.b),
+            false => format!("#{:02x}{:02x}{:02x}{:02x}", self.r, self.g, self.b, self.a),
+        }
     }
 }
 
@@ -174,40 +380,51 @@ impl Default for Theme {
 }
 
 impl Theme {
-    /// The built-in dark preset (WezTerm-inspired).
+    /// The built-in dark preset: magic-vscode's One Color theme, from its
+    /// editor and terminal colors, with the window chrome derived from the
+    /// background as for any theme.
     pub fn dark() -> Self {
+        let mut theme = Self::dark_base();
+        theme.fit_chrome_to_background();
+        theme
+    }
+
+    fn dark_base() -> Self {
         Self {
-            background: Rgb::parse_hex("#2a2f31").unwrap(),
-            foreground: Rgb::parse_hex("#d8d8d8").unwrap(),
-            cursor_bg: Rgb::parse_hex("#4fa2fa").unwrap(),
+            background: Rgb::parse_hex("#262a32").unwrap(),
+            background_alpha: 255,
+            foreground: Rgb::parse_hex("#bbc2cf").unwrap(),
+            cursor_bg: Rgb::parse_hex("#51afef").unwrap(),
             cursor_fg: Rgb::parse_hex("#000000").unwrap(),
             cursor_line_bg: Rgb::parse_hex("#343b3d").unwrap(),
-            scrollbar: Rgb::parse_hex("#2f6099").unwrap(),
-            search_current_bg: Rgb::parse_hex("#2257a0").unwrap(),
+            scrollbar: Rgb::parse_hex("#135581").unwrap(),
+            search_current_bg: Rgb::parse_hex("#275bad").unwrap(),
             search_match_bg: Rgb::parse_hex("#e6b422").unwrap(),
             selection_bg: Rgb::parse_hex("#2257a0").unwrap(),
             selection_fg: Rgb::parse_hex("#000000").unwrap(),
             divider: Rgb::parse_hex("#51554f").unwrap(),
             find_label_bg: Rgb::parse_hex("#a8d5ff").unwrap(),
             find_label_fg: Rgb::parse_hex("#0b4fa8").unwrap(),
-            status_bar_border: Rgb::parse_hex("#3b414f").unwrap(),
+            status_bar_border: Rgb::parse_hex("#3a3f45").unwrap(),
             bell: Some(Rgb::parse_hex("#e08020").unwrap()),
-            menu_bg: Rgb::parse_hex("#313841").unwrap(),
-            menu_hover_bg: Rgb::parse_hex("#3b4a63").unwrap(),
+            menu_bg: Rgb::parse_hex("#353a3c").unwrap(),
+            menu_hover_bg: Rgb::parse_hex("#3e4548").unwrap(),
             status_bar_fg: Rgb::parse_hex("#15181a").unwrap(),
             tab_active_bg: Rgb::parse_hex("#2a2f31").unwrap(),
             tab_active_fg: Rgb::parse_hex("#d8d8d8").unwrap(),
             tabbar_bg: Rgb::parse_hex("#222627").unwrap(),
             window_border: Rgb::parse_hex("#414248").unwrap(),
+            git: GitColors::magic(),
+            syntax: SyntaxColors::magic(),
             ansi: [
-                Rgb::parse_hex("#000000").unwrap(), // black
+                Rgb::parse_hex("#1b2229").unwrap(), // black
                 Rgb::parse_hex("#c22727").unwrap(), // red
                 Rgb::parse_hex("#71b312").unwrap(), // green
                 Rgb::parse_hex("#faa213").unwrap(), // yellow
                 Rgb::parse_hex("#4fa2fa").unwrap(), // blue
                 Rgb::parse_hex("#bb67b2").unwrap(), // magenta
                 Rgb::parse_hex("#21afbf").unwrap(), // cyan
-                Rgb::parse_hex("#c0c0c0").unwrap(), // white
+                Rgb::parse_hex("#bbc2cf").unwrap(), // white
                 Rgb::parse_hex("#7a7a7a").unwrap(), // bright black
                 Rgb::parse_hex("#d43f30").unwrap(), // bright red
                 Rgb::parse_hex("#71b312").unwrap(), // bright green
@@ -238,6 +455,10 @@ impl Theme {
             tab_active_bg: Rgb::parse_hex("#f2f2f2").unwrap(),
             tab_active_fg: Rgb::parse_hex("#1e1e1e").unwrap(),
             tabbar_bg: Rgb::parse_hex("#dfdfdf").unwrap(),
+            // The git palette is tuned to the dark preset; against a light
+            // background the views derive their colors from the theme instead.
+            git: GitColors::default(),
+            syntax: SyntaxColors::default(),
             ..Self::dark()
         }
     }
@@ -319,7 +540,7 @@ mod tests {
         assert_ne!(theme.background, theme.foreground);
         assert_eq!(theme.ansi.len(), 16);
         let (r, g, b) = theme.ansi_color(0);
-        assert_eq!((r, g, b), (0, 0, 0));
+        assert_eq!((r, g, b), (0x1b, 0x22, 0x29), "magic-one black");
     }
 
     #[test]
@@ -336,6 +557,38 @@ mod tests {
         assert_eq!(Rgb::parse_hex("ff0000"), None);
         assert_eq!(Rgb::parse_hex("#fff"), None);
         assert_eq!(Rgb::parse_hex("#gggggg"), None);
+    }
+
+    #[test]
+    fn test_parse_hex_alpha_and_laying_it_over_a_surface() {
+        let teal = Rgb::parse_hex("#14708acc").unwrap();
+        assert_eq!((teal.r, teal.g, teal.b, teal.a), (0x14, 0x70, 0x8a, 0xcc));
+        assert_eq!(teal.to_hex(), "#14708acc");
+        assert_eq!(Rgb::parse_hex("#14708aff").unwrap().to_hex(), "#14708a");
+        assert_eq!(Rgb::parse_hex("#14708a0"), None);
+        assert_eq!(Rgb::parse_hex("#é4708a"), None, "multi-byte text must not panic");
+
+        let black = Rgb::new(0, 0, 0);
+        let white = Rgb::new(255, 255, 255);
+        assert_eq!(white.with_alpha(0).over(black), black);
+        assert_eq!(white.over(black), white);
+        assert_eq!(white.with_alpha(128).over(black), Rgb::new(128, 128, 128));
+    }
+
+    #[test]
+    fn test_git_color_names_reach_their_fields_and_the_presets_differ() {
+        let mut colors = GitColors::default();
+        for (n, name) in GitColors::NAMES.iter().enumerate() {
+            colors.set(name, Some(Rgb::new(n as u8, 0, 0)));
+        }
+        for (n, name) in GitColors::NAMES.iter().enumerate() {
+            assert_eq!(colors.get(name), Some(Rgb::new(n as u8, 0, 0)), "{name}");
+        }
+        assert_eq!(colors.get("nonsense"), None);
+        assert!(Theme::dark().git.file_band.is_some());
+        assert_eq!(Theme::light().git, GitColors::default());
+        assert_eq!(Theme::light().syntax, SyntaxColors::default());
+        assert_eq!(Theme::dark().syntax.get("type"), Rgb::parse_hex("#cf517a"));
     }
 
     #[test]

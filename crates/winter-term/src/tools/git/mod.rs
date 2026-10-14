@@ -1469,6 +1469,9 @@ impl GitPage {
     /// What a finished command means for the view.
     fn on_command(&mut self, output: CommandOutput) -> PageOutcome {
         if !output.succeeded() {
+            // Whichever read failed, nothing is coming to fill the view in, and
+            // the placeholder would hide the failure it is waiting out.
+            self.loaded = true;
             self.watching = false;
             self.watch.on_answer(Instant::now());
             self.message = Some(format!("failed: {}", output.failure()));
@@ -1756,7 +1759,11 @@ impl Page for GitPage {
             // A loaded view with no rows means git answered and had nothing
             // to report, which only happens outside a repository: a clean tree
             // still has a header row.
-            let note = if self.loaded { NOT_A_REPO } else { LOADING };
+            let note = if self.loaded {
+                self.message.as_deref().unwrap_or(NOT_A_REPO)
+            } else {
+                LOADING
+            };
             return PageContent::new(vec![vec![PageSpan::new(PageStyle::Dim, note)]]);
         }
         let indents: Vec<usize> = self.rows.iter().map(|row| row.wrap_indent).collect();
@@ -2099,6 +2106,10 @@ impl Page for GitPage {
         self.file_at_point()
             .and_then(|target| target.path.parent().map(PathBuf::from))
             .or_else(|| self.root.clone())
+    }
+
+    fn root_dir(&self) -> Option<PathBuf> {
+        self.root.clone().or_else(|| Some(self.start.clone()))
     }
 
     fn file_reference(&self) -> Option<String> {
@@ -2480,6 +2491,40 @@ mod tests {
         let mut page = loaded_page();
         cursor_on(&mut page, "staged.rs");
         assert_eq!(page.address().as_deref(), Some("/repo"));
+    }
+
+    #[test]
+    fn test_tag_root_failure_shows_error_instead_of_loading() {
+        let mut page = GitPage::new(PathBuf::from("/not-a-repo"));
+        page.on_job(JobReply::Command(CommandOutput {
+            code: Some(128),
+            stderr: "fatal: not a git repository (or any of the parent directories): .git".to_string(),
+            stdout: String::new(),
+            tag: exec::TAG_ROOT,
+        }));
+        let content = page.content(24, 80, false);
+        assert!(page.loaded);
+        let found = content.rows.iter().any(|r| {
+            let row_str: String = r.iter().map(|s| s.text.as_str()).collect();
+            row_str.contains("failed: fatal: not a git repository")
+        });
+        assert!(found, "expected failure message rendered in page content");
+    }
+
+    #[test]
+    fn test_a_status_that_times_out_shows_the_failure_not_the_loading_note() {
+        let mut page = GitPage::new(PathBuf::from("/repo"));
+        page.on_job(reply(exec::TAG_ROOT, "/repo\n/repo/.git\n"));
+        page.on_job(JobReply::Command(CommandOutput {
+            code: None,
+            stderr: "command timed out after 15s".to_string(),
+            stdout: String::new(),
+            tag: exec::TAG_STATUS,
+        }));
+        let content = page.content(24, 80, false);
+        let text: String = content.rows.iter().flatten().map(|s| s.text.as_str()).collect();
+        assert!(text.contains("command timed out after 15s"), "{text}");
+        assert!(!text.contains(LOADING));
     }
 
     #[test]

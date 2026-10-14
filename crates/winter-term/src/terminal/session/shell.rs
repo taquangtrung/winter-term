@@ -62,7 +62,7 @@ pub(crate) fn osc52_read_response(text: &str) -> Vec<u8> {
 /// anything else that could invoke an unexpected OS handler on Ctrl+click.
 pub(super) fn is_safe_url_scheme(url: &str) -> bool {
     let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
-    matches!(scheme.as_str(), "http" | "https" | "mailto")
+    matches!(scheme.as_str(), "http" | "https" | "mailto" | "file")
 }
 #[cfg(target_os = "linux")]
 pub(super) fn parse_foreground_process(stat_content: &str) -> Option<i32> {

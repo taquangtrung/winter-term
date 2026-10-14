@@ -2,7 +2,7 @@
 //! quick-select block jumping.
 
 pub(crate) mod export;
-mod open;
+pub(crate) mod open;
 mod quick_select;
 pub(crate) mod reading;
 pub(crate) mod search;

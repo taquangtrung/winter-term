@@ -188,7 +188,7 @@ impl App {
         let (tab_id, pane_rect) = self.pane_at_pixel(x, y)?;
         let terminal = self.terminals.get(&tab_id)?;
         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
-        terminal.grid().cell_link(row, col).map(str::to_string)
+        crate::app::navigation::open::find_url_at(terminal.grid(), row, col)
     }
 }
 

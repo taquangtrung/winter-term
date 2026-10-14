@@ -46,7 +46,7 @@ const SYNC_OUTPUT_END: &[u8] = b"\x1b[?2026l";
 
 /// The longest a frame is held for before it is shown regardless: a program
 /// that began one and never ended it must not freeze the pane.
-const SYNC_OUTPUT_TIMEOUT: Duration = Duration::from_millis(1000);
+const SYNC_OUTPUT_TIMEOUT: Duration = Duration::from_millis(35);
 
 /// The most bytes held for one frame, for the same reason.
 const SYNC_OUTPUT_MAX_BYTES: usize = 8 * 1024 * 1024;
@@ -464,8 +464,8 @@ impl Terminal {
                 }
             }
         }
-        let got_any = !chunks.is_empty() || session_geometry.is_some();
-        self.release_stale_sync_hold();
+        let stale_released = self.release_stale_sync_hold();
+        let got_any = !chunks.is_empty() || session_geometry.is_some() || stale_released;
         for chunk in &chunks {
             for &byte in chunk {
                 self.feed_byte(byte);
@@ -582,14 +582,24 @@ impl Terminal {
     }
 
     /// Show a frame that has been held longer than a frame should take.
-    fn release_stale_sync_hold(&mut self) {
+    /// Returns `true` if a stale held frame was released.
+    fn release_stale_sync_hold(&mut self) -> bool {
         let stale = self
             .sync_hold
             .as_ref()
             .is_some_and(|hold| hold.since.elapsed() >= SYNC_OUTPUT_TIMEOUT);
         if stale {
             self.release_sync_hold();
+            true
+        } else {
+            false
         }
+    }
+
+    /// The deadline when any currently held synchronized output frame will
+    /// expire and be forcibly shown, if a frame is currently being held.
+    pub fn sync_hold_deadline(&self) -> Option<Instant> {
+        self.sync_hold.as_ref().map(|hold| hold.since + SYNC_OUTPUT_TIMEOUT)
     }
 
     /// Current Kitty keyboard protocol flags active in this pane (0 = legacy).
@@ -1193,10 +1203,12 @@ mod tests {
         assert!(!terminal.grid().to_text().contains("stuck"));
 
         terminal.sync_hold.as_mut().expect("held").since -= SYNC_OUTPUT_TIMEOUT;
-        terminal.drain_output();
+        let drained = terminal.drain_output();
 
+        assert!(drained, "draining a timed-out frame must report new output");
         assert!(terminal.grid().to_text().contains("stuck"));
         assert!(terminal.sync_hold.is_none());
+        assert_eq!(terminal.sync_hold_deadline(), None);
     }
 
     #[test]

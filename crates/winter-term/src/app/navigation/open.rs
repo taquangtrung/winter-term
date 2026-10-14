@@ -26,7 +26,7 @@ use super::App;
 /// The URL pattern, deliberately narrower than a full URL grammar: it only has
 /// to find what a terminal actually prints. Trailing sentence punctuation is
 /// trimmed separately (see [`strip_trailing_url_punct`]).
-const URL_REGEX: &str = r#"\bhttps?://[^\s<>"'`|(){}\[\]]+"#;
+const URL_REGEX: &str = r#"\b(?:https?|file)://[^\s<>"'`|(){}\[\]]+"#;
 
 // ========================================================================
 // Data Structures
@@ -61,6 +61,9 @@ pub(crate) fn resolve_open_target(
     cwd: Option<&str>,
 ) -> Option<OpenTarget> {
     if let Some(url) = grid.cell_link(row, col) {
+        if let Some(target) = resolve_file_url(url, cwd) {
+            return Some(target);
+        }
         return Some(OpenTarget::Url(url.to_string()));
     }
 
@@ -78,6 +81,9 @@ pub(crate) fn resolve_open_target(
 
     for (start, len, url) in find_urls(&line) {
         if span_covers(&line, start, len, idx) {
+            if let Some(target) = resolve_file_url(&url, cwd) {
+                return Some(target);
+            }
             return Some(OpenTarget::Url(url));
         }
     }
@@ -104,10 +110,76 @@ pub(crate) fn resolve_open_target(
     None
 }
 
+/// Find a URL under viewport `(row, col)`: an OSC 8 hyperlink or a printed URL.
+pub(crate) fn find_url_at(grid: &Grid, row: usize, col: usize) -> Option<String> {
+    if let Some(link) = grid.cell_link(row, col) {
+        return Some(link.to_string());
+    }
+    let (first, last) = grid.wrapped_row_span(row);
+    let mut line: Vec<char> = Vec::new();
+    for r in first..=last {
+        line.extend(line_chars(grid, r));
+    }
+    let idx = (first..row)
+        .map(|r| line_chars(grid, r).len())
+        .sum::<usize>()
+        + col;
+    for (start, len, url) in find_urls(&line) {
+        if span_covers(&line, start, len, idx) {
+            return Some(url);
+        }
+    }
+    None
+}
+
 /// Trim the sentence punctuation that surrounds a printed URL far more often
 /// than it belongs to one (`https://x.com/a,`: the comma is the sentence's).
 fn strip_trailing_url_punct(url: &str) -> &str {
     url.trim_end_matches(['.', ',', ';', ':', '!', '?'])
+}
+
+/// Parse a `file://` URL into an [`OpenTarget::File`] if the referenced path
+/// exists on disk, extracting any `#L<line>` fragment.
+fn resolve_file_url(url: &str, cwd: Option<&str>) -> Option<OpenTarget> {
+    let stripped = url.strip_prefix("file://")?;
+    let path_and_frag = stripped.strip_prefix("localhost").unwrap_or(stripped);
+    let (raw_path, frag) = match path_and_frag.split_once('#') {
+        Some((p, f)) => (p, Some(f)),
+        None => (path_and_frag, None),
+    };
+    let line = frag.and_then(|f| {
+        let f = f.strip_prefix('L').unwrap_or(f);
+        let num_str = f.split('-').next().unwrap_or(f);
+        num_str.parse::<usize>().ok()
+    });
+    let decoded = percent_decode(raw_path);
+    #[cfg(windows)]
+    let decoded = if decoded.starts_with('/') && decoded.chars().nth(2) == Some(':') {
+        decoded[1..].to_string()
+    } else {
+        decoded
+    };
+    let path = resolve_existing_path(&decoded, cwd)?;
+    Some(OpenTarget::File { line, path })
+}
+
+fn percent_decode(s: &str) -> String {
+    let mut bytes = Vec::new();
+    let mut chars = s.as_bytes().iter();
+    while let Some(&b) = chars.next() {
+        if b == b'%' {
+            let h1 = chars.next().copied();
+            let h2 = chars.next().copied();
+            if let (Some(h1), Some(h2)) = (h1, h2) {
+                if let Ok(byte) = u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16) {
+                    bytes.push(byte);
+                    continue;
+                }
+            }
+        }
+        bytes.push(b);
+    }
+    String::from_utf8_lossy(&bytes).to_string()
 }
 
 /// Every URL in `line` as a `(start, len, url)` char-index span, trailing
@@ -401,9 +473,8 @@ impl App {
         }
     }
 
-    /// Ctrl+click: open the file or directory printed under the pointer at
-    /// `(x, y)`, returning whether there was one. Only files count: a URL in
-    /// plain text is left to the hyperlink path, which checks its scheme.
+    /// Ctrl+click: open the file, directory, or URL printed under the pointer at
+    /// `(x, y)`, returning whether an openable target was found.
     pub(crate) fn open_file_at_pixel(&mut self, x: f32, y: f32) -> bool {
         let Some((tab_id, rect)) = self.pane_at_pixel(x, y) else {
             return false;
@@ -418,14 +489,14 @@ impl App {
         let (row, col) = self.pixel_to_cell(x, y, rect);
         let cwd = terminal.cwd();
         match resolve_open_target(terminal.grid(), row, col, cwd.as_deref()) {
-            Some(target @ OpenTarget::File { .. }) => {
+            Some(target) => {
                 // The page opens over the focused pane, which the click makes
                 // the one it landed in.
                 self.layout_mut().focus(tab_id);
                 self.open_target(target);
                 true
             }
-            _ => false,
+            None => false,
         }
     }
 
@@ -760,5 +831,36 @@ mod tests {
             None,
             "a multi-line selection is not one reference"
         );
+    }
+
+    #[test]
+    fn test_resolves_file_url_with_line_number() {
+        let tmp = TempDir::new("fileurl");
+        let file = tmp.touch("source.rs");
+        let url = format!("file://{}#L42-L50", file.display());
+        assert_eq!(
+            resolve_file_url(&url, None),
+            Some(OpenTarget::File {
+                line: Some(42),
+                path: file,
+            })
+        );
+    }
+
+    #[test]
+    fn test_find_url_at_identifies_plain_and_file_urls() {
+        let grid = grid_from_lines(&[
+            "visit https://example.com/page now",
+            "open file:///tmp/test.rs#L10 here",
+        ]);
+        assert_eq!(
+            find_url_at(&grid, 0, 10),
+            Some("https://example.com/page".to_string())
+        );
+        assert_eq!(
+            find_url_at(&grid, 1, 10),
+            Some("file:///tmp/test.rs#L10".to_string())
+        );
+        assert_eq!(find_url_at(&grid, 0, 0), None);
     }
 }

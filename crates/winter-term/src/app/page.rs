@@ -108,7 +108,7 @@ const GONE_FROM_LIST: &str = "that tool is no longer there to reopen";
 const HINT_CONFIRM: &str = "y to confirm, any other key to cancel";
 const HINT_TEXT: &str = "Enter to accept, Esc to cancel";
 
-/// The glyph each tool shows in the status bar, in place of a mode icon. One
+/// The glyph each tool shows at the status bar's right edge. One
 /// line per tool, from the Font Awesome range every Nerd Font carries.
 const TOOL_ICONS: [(&str, char); 8] = [
     (DIR_TOOL, '\u{f07b}'),
@@ -338,14 +338,13 @@ impl PageSlot {
         }
     }
 
-    /// How the status bar names what owns the keyboard: the tool's glyph, when
-    /// it has one, then the page's own title.
-    pub(crate) fn status_label(&self) -> String {
-        let title = self.page.title();
-        match TOOL_ICONS.iter().find(|(tool, _)| *tool == self.tool) {
-            Some((_, icon)) => format!("{icon} {title}"),
-            None => title,
-        }
+    /// The glyph the status bar draws on its right edge for this tool, or
+    /// `None` for a tool with no entry in [`TOOL_ICONS`].
+    pub(crate) fn status_icon(&self) -> Option<char> {
+        TOOL_ICONS
+            .iter()
+            .find(|(tool, _)| *tool == self.tool)
+            .map(|(_, icon)| *icon)
     }
 
     /// How a pane strip names the tab. A tool whose icon already names it (an
@@ -472,16 +471,21 @@ impl App {
     }
 
     /// Open the working tree's state in a tab beside the focused one, for the
-    /// repository containing where that tab is looking.
+    /// repository containing where that tab is looking. If a view for this
+    /// repository is already open, it is reused or toggled.
     pub(crate) fn open_git_page(&mut self) {
-        if self.toggle_tool(GIT_TOOL) {
+        let start = self.focused_start_dir();
+        let matches_repo = |page: &dyn Page| {
+            page.root_dir()
+                .is_some_and(|root| start == root || start.starts_with(&root) || root.starts_with(&start))
+        };
+        if self.toggle_tool_matching(GIT_TOOL, &matches_repo) {
             return;
         }
         // Where the view looks is decided by the pane it was asked from, before
         // focus moves to the one it opens in.
-        let start = self.focused_start_dir();
         self.prefer_other_pane();
-        if self.show_open_tool(GIT_TOOL) {
+        if self.show_open_tool_matching(GIT_TOOL, &matches_repo) {
             return;
         }
         let page = GitPage::new(start);
@@ -539,15 +543,24 @@ impl App {
         tab_id
     }
 
-    /// Show `tool`'s tab in the focused pane when it already has one, whether
-    /// or not it is the one showing. Returns whether there was one.
-    fn show_open_tool(&mut self, tool: &'static str) -> bool {
+    /// Show `tool`'s tab matching `predicate` in the focused pane when it
+    /// already has one, whether or not it is the one showing. Returns whether
+    /// there was one.
+    fn show_open_tool_matching(
+        &mut self,
+        tool: &'static str,
+        predicate: &dyn Fn(&dyn Page) -> bool,
+    ) -> bool {
         let focused = self.layout().focused();
         let open = self
             .layout()
             .recent_in_group(focused)
             .into_iter()
-            .find(|pane| self.pages.get(pane).is_some_and(|slot| slot.tool == tool));
+            .find(|pane| {
+                self.pages
+                    .get(pane)
+                    .is_some_and(|slot| slot.tool == tool && predicate(&*slot.page))
+            });
         match open {
             Some(pane) => {
                 self.show_tab(pane);
@@ -712,9 +725,16 @@ impl App {
     /// opened there any more (a file since deleted, a kind no longer known).
     pub(crate) fn restore_tool(&mut self, id: TabId, tool: &ToolSession) -> bool {
         let path = PathBuf::from(&tool.path);
+        // A view that knows nothing until git answers has to ask, as it does
+        // when opened; restored without the request it would wait for ever.
+        let mut first = None;
         let (key, page): (&'static str, Box<dyn Page>) = match tool.kind.as_str() {
             DIR_TOOL if path.is_dir() => (DIR_TOOL, Box::new(DirPage::new(path))),
-            GIT_TOOL if path.is_dir() => (GIT_TOOL, Box::new(GitPage::new(path))),
+            GIT_TOOL if path.is_dir() => {
+                let page = GitPage::new(path);
+                first = Some(page.initial_request());
+                (GIT_TOOL, Box::new(page))
+            }
             GREP_TOOL if path.is_dir() => (GREP_TOOL, Box::new(GrepPage::new(path))),
             EDITOR_TOOL => match EditorPage::new(path, tool.line) {
                 Ok(page) => (EDITOR_TOOL, Box::new(page)),
@@ -732,6 +752,9 @@ impl App {
             },
         );
         self.modes.insert(id, Mode::Page);
+        if let Some(first) = first {
+            self.jobs.spawn(id, first);
+        }
         true
     }
 
@@ -1148,10 +1171,24 @@ impl App {
     /// tool open elsewhere in the focused pane, go to it. Returns whether the
     /// chord was spent that way, else the caller opens the tool.
     fn toggle_tool(&mut self, tool: &'static str) -> bool {
+        self.toggle_tool_matching(tool, &|_| true)
+    }
+
+    /// Step between a tool matching `predicate` and where the reader came from:
+    /// on that tool's tab, go back to the tab shown before it; with that tool open
+    /// elsewhere in the focused pane, go to it. Returns whether the chord was spent.
+    fn toggle_tool_matching(
+        &mut self,
+        tool: &'static str,
+        predicate: &dyn Fn(&dyn Page) -> bool,
+    ) -> bool {
         let focused = self.layout().focused();
-        let is_tool =
-            |app: &App, pane: &TabId| app.pages.get(pane).is_some_and(|slot| slot.tool == tool);
-        if is_tool(self, &focused) {
+        let matches = |app: &App, pane: &TabId| {
+            app.pages
+                .get(pane)
+                .is_some_and(|slot| slot.tool == tool && predicate(&*slot.page))
+        };
+        if matches(self, &focused) {
             if let Some(&back) = self.layout().recent_in_group(focused).get(1) {
                 self.show_tab(back);
             }
@@ -1161,7 +1198,7 @@ impl App {
             .layout()
             .recent_in_group(focused)
             .into_iter()
-            .find(|pane| is_tool(self, pane));
+            .find(|pane| matches(self, pane));
         match open {
             Some(pane) => {
                 self.show_tab(pane);
@@ -1192,7 +1229,7 @@ impl App {
             return false;
         };
         slot.page.set_neighbors(neighbors);
-        let outcome = slot.page.on_key(key);
+        let outcome = slot.page.on_key(&key.chorded());
         self.act_on_page_outcome(tab_id, outcome)
     }
 
@@ -1475,7 +1512,9 @@ mod tests {
                 }
                 // The chord the Git page commits on, which the window also
                 // binds to copy.
-                KeyCode::Char('C') | KeyCode::Char('c') if key.ctrl && key.shift => {
+                // Matched on the lowercase letter alone: the window hands over
+                // the capital, and the page must not have to know.
+                KeyCode::Char('c') if key.ctrl && key.shift => {
                     self.claimed += 1;
                     PageOutcome::Consumed
                 }
@@ -2267,6 +2306,65 @@ mod tests {
     }
 
     #[test]
+    fn test_the_git_view_opens_new_view_for_different_project() {
+        let (mut app, first, second) = two_panes();
+
+        // Project A in first pane
+        let term_a = crate::terminal::session::Terminal::with_command(
+            20,
+            4,
+            portable_pty::CommandBuilder::new("cat"),
+            winter_render::MAX_SCROLLBACK,
+        )
+        .expect("term a");
+        app.terminals.insert(first, term_a);
+        app.terminals
+            .get_mut(&first)
+            .unwrap()
+            .feed_program_output(b"\x1b]7;file://localhost/path/to/project_a\x1b\\");
+
+        // Open git page for project A
+        app.open_git_page();
+        let git_a = app.layout().focused();
+        assert_eq!(app.pages.get(&git_a).map(|slot| slot.tool), Some(GIT_TOOL));
+        assert_eq!(
+            app.pages.get(&git_a).unwrap().page.root_dir(),
+            Some(PathBuf::from("/path/to/project_a"))
+        );
+
+        // Project B in second pane
+        app.layout_mut().focus(second);
+        let term_b = crate::terminal::session::Terminal::with_command(
+            20,
+            4,
+            portable_pty::CommandBuilder::new("cat"),
+            winter_render::MAX_SCROLLBACK,
+        )
+        .expect("term b");
+        app.terminals.insert(second, term_b);
+        app.terminals
+            .get_mut(&second)
+            .unwrap()
+            .feed_program_output(b"\x1b]7;file://localhost/path/to/project_b\x1b\\");
+
+        // Open git page for project B: should NOT reuse project A's view
+        app.open_git_page();
+        let git_b = app.layout().focused();
+        assert_ne!(git_a, git_b, "opens a new git view for project B");
+        assert_eq!(
+            app.pages.get(&git_b).unwrap().page.root_dir(),
+            Some(PathBuf::from("/path/to/project_b"))
+        );
+
+        let views = app
+            .pages
+            .values()
+            .filter(|slot| slot.tool == GIT_TOOL)
+            .count();
+        assert_eq!(views, 2, "two distinct git views open for two projects");
+    }
+
+    #[test]
     fn test_the_git_view_splits_a_pane_off_when_there_is_just_one() {
         let mut app = App::new();
         let only = app.layout().focused();
@@ -2620,6 +2718,31 @@ mod tests {
         }
         let editor = saved.iter().find(|tool| tool.kind == EDITOR_TOOL).expect("the editor");
         assert_eq!(editor.line, Some(3), "at the line it was on");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_a_restored_git_tab_asks_git_for_its_repository() {
+        let dir = std::env::temp_dir().join(format!("winter-restore-git-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("temp dir");
+        let tool = ToolSession {
+            id: 7,
+            kind: GIT_TOOL.to_string(),
+            line: None,
+            path: dir.to_string_lossy().to_string(),
+        };
+        let mut app = App::new();
+        assert!(!app.jobs.is_busy());
+        assert!(app.restore_tool(TabId(7), &tool));
+        assert!(app.jobs.is_busy(), "its first read is under way, not awaited");
+
+        let dir_tool = ToolSession {
+            kind: DIR_TOOL.to_string(),
+            ..tool
+        };
+        let mut app = App::new();
+        assert!(app.restore_tool(TabId(8), &dir_tool));
+        assert!(!app.jobs.is_busy(), "a listing reads on its own");
         let _ = std::fs::remove_dir_all(&dir);
     }
 

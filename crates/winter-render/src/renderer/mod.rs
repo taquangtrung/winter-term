@@ -102,6 +102,12 @@ pub struct GpuRenderer {
     /// glyph's line layout (see [`GpuRenderer::ensure_fallback_glyph_quad`]).
     glyph_quad_pass: GlyphQuadPass,
     theme: Theme,
+    /// Which ways the surface can combine its alpha with the desktop, as the
+    /// platform listed them; the first is the one an opaque window uses.
+    alpha_modes: Vec<wgpu::CompositeAlphaMode>,
+    /// The window's opacity from the config, 0.0 to 1.0, which the theme's own
+    /// [`Theme::background_alpha`] multiplies.
+    window_opacity: f32,
     /// Persistent per-pane text buffers, reused across frames so cosmic-text
     /// only re-shapes lines whose content changed (one line per keystroke
     /// instead of the whole screen).

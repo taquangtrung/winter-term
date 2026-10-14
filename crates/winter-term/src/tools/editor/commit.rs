@@ -65,18 +65,24 @@ pub(super) fn is_commit_message(path: &Path) -> bool {
     path.file_name().and_then(|name| name.to_str()) == Some(COMMIT_FILE)
 }
 
+/// Whether `line` is one git left as instructions, which it drops from the
+/// message.
+pub(super) fn is_comment_line(line: &str) -> bool {
+    line.starts_with(COMMENT_PREFIX)
+}
+
 /// How many rows at the top are the message: those above the first comment.
 pub(super) fn message_rows(lines: &[String]) -> usize {
     lines
         .iter()
-        .position(|line| line.starts_with(COMMENT_PREFIX))
+        .position(|line| is_comment_line(line))
         .unwrap_or(lines.len())
 }
 
 /// `text` without its comment lines, trimmed.
 fn strip_comments(text: &str) -> String {
     text.lines()
-        .filter(|line| !line.starts_with(COMMENT_PREFIX))
+        .filter(|line| !is_comment_line(line))
         .collect::<Vec<_>>()
         .join("\n")
         .trim()

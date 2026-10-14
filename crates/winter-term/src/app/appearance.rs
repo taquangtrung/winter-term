@@ -118,7 +118,19 @@ impl App {
         };
         self.config.colors.apply(&mut theme);
         renderer.set_theme(theme);
+        self.sync_translucency();
         self.dirty = true;
+    }
+    /// Hand the configured opacity to the renderer and make the window
+    /// transparent exactly when the background is see-through, since a
+    /// transparent window is recomposited by many compositors even when
+    /// nothing shows through it.
+    pub(crate) fn sync_translucency(&mut self) {
+        let (Some(renderer), Some(window)) = (&mut self.renderer, &self.window) else {
+            return;
+        };
+        renderer.set_window_opacity(self.config.opacity);
+        window.set_transparent(renderer.is_translucent());
     }
     /// Validate `name`, save the currently active (resolved) theme's colors as
     /// `themes/<name>.kdl`, and switch to it. Reports success or failure as a

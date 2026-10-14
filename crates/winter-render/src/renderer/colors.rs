@@ -35,21 +35,44 @@ pub(super) const FAINT_FACTOR: f32 = 0.5;
 pub(super) fn mix_rgb(a: Rgb, b: Rgb, t: f32) -> Rgb {
     let t = t.clamp(0.0, 1.0);
     let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
-    Rgb {
-        r: lerp(a.r, b.r),
-        g: lerp(a.g, b.g),
-        b: lerp(a.b, b.b),
-    }
+    Rgb::new(lerp(a.r, b.r), lerp(a.g, b.g), lerp(a.b, b.b))
 }
 
-/// Decode one 8-bit sRGB channel to a linear `0.0..=1.0` value. Used for the
+/// Decode one sRGB channel, `0.0..=1.0`, to a linear value. Used for the
 /// surface clear, which an sRGB target interprets as linear.
-pub(super) fn srgb_to_linear_f64(channel: u8) -> f64 {
-    let c = channel as f64 / 255.0;
+fn srgb_to_linear_f64(c: f64) -> f64 {
     if c <= 0.04045 {
         c / 12.92
     } else {
         ((c + 0.055) / 1.055).powf(2.4)
+    }
+}
+
+/// What to clear the surface to so the background shows as `color` at
+/// `opacity`. The target is sRGB, which encodes what is written, and a
+/// compositor expecting premultiplied color wants the encoded channels already
+/// scaled by the alpha, so the scaling happens before the decode rather than
+/// after it.
+pub(super) fn clear_color(
+    color: Rgb,
+    opacity: f32,
+    alpha_mode: wgpu::CompositeAlphaMode,
+) -> wgpu::Color {
+    let a = opacity.clamp(0.0, 1.0) as f64;
+    let scale = match alpha_mode {
+        wgpu::CompositeAlphaMode::PreMultiplied => a,
+        _ => 1.0,
+    };
+    let channel = |c: u8| srgb_to_linear_f64(c as f64 / 255.0 * scale);
+    let alpha = match alpha_mode {
+        wgpu::CompositeAlphaMode::PreMultiplied | wgpu::CompositeAlphaMode::PostMultiplied => a,
+        _ => 1.0,
+    };
+    wgpu::Color {
+        r: channel(color.r),
+        g: channel(color.g),
+        b: channel(color.b),
+        a: alpha,
     }
 }
 
@@ -225,6 +248,8 @@ const ANSI_COLORS: [(u8, u8, u8); 16] = [
 
 #[cfg(test)]
 mod tests {
+    use wgpu::CompositeAlphaMode::{Opaque, PostMultiplied, PreMultiplied};
+
     use super::*;
     use crate::grid::Style;
 
@@ -423,5 +448,26 @@ mod tests {
             block_cursor_cell(CursorShape::Block, true, None, true, (0, 0), 0),
             None
         );
+    }
+
+    #[test]
+    fn test_clear_color_premultiplies_before_the_srgb_decode() {
+        let white = Rgb::new(255, 255, 255);
+        let solid = clear_color(white, 1.0, Opaque);
+        assert_eq!((solid.r, solid.a), (1.0, 1.0));
+
+        // Opaque and inherited surfaces ignore the alpha: it is written as 1.
+        let ignored = clear_color(white, 0.5, Opaque);
+        assert_eq!((ignored.r, ignored.a), (1.0, 1.0));
+
+        // Half-transparent white, premultiplied: encoded 0.5, which decodes to
+        // about 0.214, not the 0.5 that scaling the linear value would give.
+        let pre = clear_color(white, 0.5, PreMultiplied);
+        assert!((pre.r - 0.214).abs() < 0.001, "{}", pre.r);
+        assert_eq!(pre.a, 0.5);
+
+        // Straight alpha keeps the color whole and carries the alpha beside it.
+        let post = clear_color(white, 0.5, PostMultiplied);
+        assert_eq!((post.r, post.a), (1.0, 0.5));
     }
 }

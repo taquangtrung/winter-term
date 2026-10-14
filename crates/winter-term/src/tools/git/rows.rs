@@ -87,11 +87,8 @@ const MARKER_WIDTH: usize = 1;
 /// edge, so the columns go to the text rather than to nesting.
 const MESSAGE_INDENT: &str = "    ";
 
-/// Column the change code is drawn in, before the path.
-const CODE_WIDTH: usize = 2;
-
-/// Width a commit's change name is padded to, before the icon and the path,
-/// so every path of a commit starts at the same column whatever happened to
+/// Width a change's name is padded to, before the icon and the path, so every
+/// path of a status or a commit starts at the same column whatever happened to
 /// its file. Twelve, the width the same listing uses in magic-vscode.
 const STATUS_WIDTH: usize = 12;
 
@@ -506,7 +503,7 @@ fn heading_style(section: Section) -> PageStyle {
 
 /// A file's row: a band the file's changes sit under, bright while they show
 /// beneath it and receded once folded shut. Its fold mark opens the row, then
-/// the status letter — which says what changed, where the icon says what kind
+/// the change's name, which says what changed, where the icon says what kind
 /// of file it is — and the icon's columns follow it, blank, with one more
 /// keeping the name off the artwork.
 fn file_row(file: &FileStatus, expanded: bool) -> ViewRow {
@@ -515,15 +512,18 @@ fn file_row(file: &FileStatus, expanded: bool) -> ViewRow {
         None => file.path.clone(),
     };
     let reserved = " ".repeat(PageIcon::WIDTH + 1);
-    let band = if expanded {
-        PageStyle::Section
-    } else {
-        PageStyle::SectionFolded
+    // The path wears its section's hue whether the row is folded or not, as
+    // magic-vscode's does, so the fold changes the mark and nothing else.
+    let band = match file.section {
+        Section::Staged => PageStyle::FileStaged,
+        Section::Unmerged => PageStyle::FileConflict,
+        Section::Unstaged => PageStyle::FileUnstaged,
+        Section::Untracked => PageStyle::FileUntracked,
     };
     let mark = fold_glyph(!expanded);
     ViewRow {
         icon: Some(PageIcon {
-            col: fold_width() + CODE_WIDTH,
+            col: fold_width() + STATUS_WIDTH,
             glyph: FILE_GLYPH,
             kind: PageIconKind::File {
                 name: leaf_name(&file.path).to_string(),
@@ -537,7 +537,7 @@ fn file_row(file: &FileStatus, expanded: bool) -> ViewRow {
         spans: vec![
             PageSpan::new(
                 change_style(file.code),
-                format!("{mark}{:<CODE_WIDTH$}", file.code),
+                format!("{mark}{:<STATUS_WIDTH$}", status_label(file.code)),
             ),
             PageSpan::new(band, format!("{reserved}{name}")),
         ],
@@ -942,10 +942,14 @@ fn change_style(code: char) -> PageStyle {
 
 fn status_label(code: char) -> &'static str {
     match code {
+        '?' => "untracked",
         'A' => "new file",
+        'C' => "copied",
         'D' => "deleted",
         'M' => "modified",
         'R' => "renamed",
+        'T' => "type changed",
+        'U' => "unmerged",
         _ => "changed",
     }
 }

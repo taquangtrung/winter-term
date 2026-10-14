@@ -262,52 +262,98 @@ fn read_files(paths: &[PathBuf]) -> Vec<(PathBuf, String)> {
         .collect()
 }
 
-/// Run a program to completion and collect what it wrote. Not interruptible:
-/// these are short commands, and killing one mid-write is how a repository ends
-/// up with a half-applied change.
+/// How long a child command is allowed to run before timing out.
+const COMMAND_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// How often a running command is checked for having finished.
+const COMMAND_POLL: Duration = Duration::from_millis(5);
+
+/// Run a program to completion and collect what it wrote. A command still
+/// running at [`COMMAND_TIMEOUT`] is killed and reported as timed out, so a
+/// hanging one neither blocks the runner nor lingers as a process.
 fn run_command(request: CommandRequest) -> CommandOutput {
-    let output = match &request.stdin {
-        Some(input) => piped_output(&request, input),
-        None => std::process::Command::new(&request.program)
-            .args(&request.args)
-            .current_dir(&request.cwd)
-            .envs(request.env.iter().map(|(name, value)| (name, value)))
-            .output(),
+    let tag = request.tag;
+    let (code, stdout, stderr) = match run_with_timeout(&request, COMMAND_TIMEOUT) {
+        Ok(Some(output)) => (
+            output.status.code(),
+            String::from_utf8_lossy(&output.stdout).to_string(),
+            String::from_utf8_lossy(&output.stderr).to_string(),
+        ),
+        Ok(None) => (
+            None,
+            String::new(),
+            format!("command timed out after {}s", COMMAND_TIMEOUT.as_secs()),
+        ),
+        Err(e) => (None, String::new(), e.to_string()),
     };
-    match output {
-        Ok(output) => CommandOutput {
-            code: output.status.code(),
-            stderr: String::from_utf8_lossy(&output.stderr).to_string(),
-            stdout: String::from_utf8_lossy(&output.stdout).to_string(),
-            tag: request.tag,
-        },
-        Err(e) => CommandOutput {
-            code: None,
-            stderr: e.to_string(),
-            stdout: String::new(),
-            tag: request.tag,
-        },
+    CommandOutput {
+        code,
+        stderr,
+        stdout,
+        tag,
     }
 }
 
-/// Run a program that reads its payload from standard input. The handle is
-/// dropped before waiting, since a program reading to end-of-input would
-/// otherwise never see one.
-fn piped_output(request: &CommandRequest, input: &str) -> std::io::Result<std::process::Output> {
-    use std::io::Write;
+/// Run `request`, feeding it its standard input if it has any, and give up on
+/// it after `limit`: `None` once it has been killed for running over.
+fn run_with_timeout(
+    request: &CommandRequest,
+    limit: Duration,
+) -> std::io::Result<Option<std::process::Output>> {
+    use std::io::{Read, Write};
 
-    let mut child = std::process::Command::new(&request.program)
+    let mut child = Command::new(&request.program)
         .args(&request.args)
         .current_dir(&request.cwd)
         .envs(request.env.iter().map(|(name, value)| (name, value)))
-        .stdin(Stdio::piped())
+        .stdin(match request.stdin {
+            Some(_) => Stdio::piped(),
+            None => Stdio::null(),
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()?;
-    if let Some(mut handle) = child.stdin.take() {
-        handle.write_all(input.as_bytes())?;
+
+    // The pipes are filled and drained on threads of their own: a payload or
+    // an answer bigger than a pipe holds would otherwise stall the command
+    // against a runner that is not reading yet. The handle is dropped once
+    // written, since a program reading to end-of-input would never see one
+    // otherwise.
+    if let (Some(mut handle), Some(input)) = (child.stdin.take(), request.stdin.clone()) {
+        thread::spawn(move || {
+            let _ = handle.write_all(input.as_bytes());
+        });
     }
-    child.wait_with_output()
+    let drain = |pipe: Option<Box<dyn Read + Send>>| {
+        thread::spawn(move || {
+            let mut bytes = Vec::new();
+            if let Some(mut pipe) = pipe {
+                let _ = pipe.read_to_end(&mut bytes);
+            }
+            bytes
+        })
+    };
+    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+
+    let started = Instant::now();
+    loop {
+        if let Some(status) = child.try_wait()? {
+            return Ok(Some(std::process::Output {
+                status,
+                stdout: stdout.join().unwrap_or_default(),
+                stderr: stderr.join().unwrap_or_default(),
+            }));
+        }
+        if started.elapsed() >= limit {
+            // The readers are left to end by themselves: a grandchild holding
+            // the pipes open would keep a join waiting past the timeout.
+            let _ = child.kill();
+            let _ = child.wait();
+            return Ok(None);
+        }
+        thread::sleep(COMMAND_POLL);
+    }
 }
 
 /// Total bytes under `dir`, skipping what cannot be read and links rather than
@@ -563,6 +609,31 @@ mod tests {
             None,
             "a cancelled job is no longer reported"
         );
+    }
+
+    #[test]
+    fn test_a_command_over_its_limit_is_killed_and_one_in_time_is_collected() {
+        let started = Instant::now();
+        let slow = match command("sleep", &["30"]) {
+            JobRequest::Command(request) => request,
+            other => panic!("expected a command, got {other:?}"),
+        };
+        let out = run_with_timeout(&slow, Duration::from_millis(100)).expect("runs");
+        assert!(out.is_none(), "over the limit: no answer");
+        assert!(started.elapsed() < Duration::from_secs(5), "killed, not waited out");
+
+        let echo = match command("sh", &["-c", "cat; echo err >&2"]) {
+            JobRequest::Command(request) => CommandRequest {
+                stdin: Some("in".to_string()),
+                ..request
+            },
+            other => panic!("expected a command, got {other:?}"),
+        };
+        let out = run_with_timeout(&echo, Duration::from_secs(10))
+            .expect("runs")
+            .expect("in time");
+        assert_eq!(out.stdout, b"in");
+        assert_eq!(out.stderr, b"err\n");
     }
 
     /// How long to sleep between polls, so waiting does not spin a core.

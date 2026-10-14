@@ -125,9 +125,15 @@ impl App {
             .as_ref()
             .map(|w| w.inner_size())
             .map(|s| (s.width, s.height));
+        let window_position = self
+            .window
+            .as_ref()
+            .and_then(|w| w.outer_position().ok())
+            .map(|p| (p.x, p.y));
         crate::config::save_state(&crate::config::AppState {
             palette_history: self.palette_history.clone(),
             window_size,
+            window_position,
         });
     }
     /// Run a named command, shared by the command palette and the menus.
@@ -424,6 +430,7 @@ impl App {
         if self.config.restore_session {
             Session::save(&self.tabs.layout, &self.terminals, self.tool_sessions());
         }
+        self.save_app_state();
         self.terminals.clear();
         event_loop.exit();
     }
@@ -437,6 +444,7 @@ impl App {
     /// and this one exits, so the programs end and are started again.
     #[cfg_attr(unix, allow(unused_variables))]
     pub(crate) fn reload(&mut self, event_loop: &ActiveEventLoop) {
+        self.save_app_state();
         #[cfg(unix)]
         {
             self.exec_into_new_binary();

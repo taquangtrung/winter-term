@@ -134,14 +134,8 @@ status-bar {
     // Default: shown.
     show #true
 
-    // Show the current mode label (NORMAL / INSERT / VISUAL …).
+    // Show the current mode label (N / I / V / B).
     show-mode #true
-
-    // Nerd Font icons used for each mode. Replace with plain ASCII if you do
-    // not have a Nerd Font installed ("N", "I", "B" are common fallbacks).
-    normal-icon ""
-    insert-icon "󰏫"
-    block-icon "󰒅"
 }
 
 // Which line-editor bindings your shell answers to, for Vim operators on the
@@ -186,29 +180,73 @@ security {
 // Override individual colors from the active theme preset.
 // All keys are optional; remove the block entirely to use unmodified preset colors.
 //
-// Values shown are the "dark" preset defaults.
+// Values shown are the "dark" preset defaults, which are magic-vscode's One Color theme.
 //
 // colors {
-//     background       "#2a2f31"
-//     foreground       "#d8d8d8"
-//     cursor-bg        "#52ad70"
+//     background       "#262a32"
+//     foreground       "#bbc2cf"
+//     cursor-bg        "#51afef"
 //     cursor-fg        "#000000"
 //     selection-bg     "#2257a0"
 //     selection-fg     "#ffffff"
 //     split            "#51554f"   // pane separator line color (see also pane-border-width)
-//     status-bar-border "#3b414f"  // 1px line above the status bar
+//     status-bar-border "#3a3f45"  // 1px line above the status bar
 //     visual-bell      "#e08020"   // tab-bar flash color on bell (uses built-in default when unset)
+//
+//     // The git views, defaulting (on the dark preset) to magic-vscode's palette. Any name
+//     // can be omitted; one the theme sets none for is derived from its ANSI colors.
+//     git {
+//         modified "#8fb1f5"
+//         added "#91af22"
+//         deleted "#da5f59"
+//         renamed "#d1b32f"
+//         unmerged "#a75abe"
+//         header-staged "#1bb1b1"
+//         header-unstaged "#da8548"
+//         header-untracked "#63b417"
+//         header "#51afef"
+//         ref-head "#cf81f5"
+//         ref-local "#cf81f5"
+//         ref-remote "#6ab123"
+//         ref-tag "#2d9574"
+//         unpushed "#7bdd0b"
+//         file-staged "#1bb1b1"
+//         file-unstaged "#da8548"
+//         file-untracked "#63b417"
+//         file-conflict "#f14c4c"
+//         file-band "#14708acc"
+//         hunk-band "#1f3e4e"
+//         inserted-line "#23372dfb"
+//         inserted-text "#215714df"
+//         removed-line "#512b3299"
+//         removed-text "#8f3f3fdf"
+//     }
+//
+//     // Any color may end in an alpha byte ("#rrggbbaa"). A color is blended over the
+//     // background once, when the config loads. The background's own alpha makes the
+//     // window see-through (multiplied with the top-level `opacity`); the tab bar,
+//     // menus and status bar stay solid.
+//
+//     // Source in the built-in editor, defaulting (on the dark preset) to magic-vscode's
+//     // palette. Any name can be omitted; one the theme sets none for uses its ANSI colors.
+//     syntax {
+//         comment "#718b9f"
+//         keyword "#51afef"
+//         number "#da8548"
+//         string "#2d9574"
+//         type "#cf517a"
+//     }
 //
 //     // 8 normal ANSI colors, by name. Any name can be omitted.
 //     ansi {
-//         black "#000000"
+//         black "#1b2229"
 //         red "#c22727"
 //         green "#71b312"
 //         yellow "#faa213"
 //         blue "#4fa2fa"
 //         magenta "#bb67b2"
 //         cyan "#21afbf"
-//         white "#c0c0c0"
+//         white "#bbc2cf"
 //     }
 //
 //     // 8 bright ANSI colors, same names as above.

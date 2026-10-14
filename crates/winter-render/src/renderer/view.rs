@@ -114,6 +114,9 @@ pub struct StatusBar {
     /// A transient notice (an error or an info confirmation), shown after the
     /// mode label until it expires.
     pub notice: Option<StatusNotice>,
+    /// A glyph for the tool that owns the keyboard, drawn at the bar's right
+    /// edge.
+    pub tool_icon: Option<char>,
 }
 /// The live `/`/`?` search state shown in the status bar: the query text as
 /// typed, plus the current match position out of the total found (both zero

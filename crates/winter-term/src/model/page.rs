@@ -371,6 +371,14 @@ pub enum PageStyle {
     ChangeRenamed,
     /// De-emphasized: metadata, hints, and inactive detail.
     Dim,
+    /// A conflicted file's path on its band.
+    FileConflict,
+    /// A staged file's path on its band.
+    FileStaged,
+    /// An unstaged file's path on its band.
+    FileUnstaged,
+    /// An untracked file's path on its band.
+    FileUntracked,
     /// A title or a column header.
     Header,
     /// A header or title emphasized in the theme's accent color, in bold.

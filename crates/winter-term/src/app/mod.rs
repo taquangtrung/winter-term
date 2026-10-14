@@ -212,38 +212,26 @@ fn status_bar(
     search: Option<StatusSearch>,
     notice: Option<StatusNotice>,
     config: &StatusBarConfig,
-    page: Option<&str>,
+    tool_icon: Option<char>,
 ) -> StatusBar {
-    let icons = &config.icons;
     let (mode_name, accent) = match mode {
-        Mode::Insert => ("Insert", theme.ansi[12]),
-        Mode::Normal => ("Normal", theme.ansi[4]),
-        Mode::Visual => ("Visual", theme.ansi[6]),
-        Mode::BlockFocus => ("Block", theme.ansi[5]),
-        Mode::Page => ("Page", theme.ansi[2]),
+        Mode::Insert => ("I", theme.ansi[12]),
+        Mode::Normal => ("N", theme.ansi[4]),
+        Mode::Visual => ("V", theme.ansi[6]),
+        Mode::BlockFocus => ("B", theme.ansi[5]),
+        Mode::Page => ("P", theme.ansi[2]),
     };
-    // Visual and Page share the Normal icon: both are keyboard-driven
-    // navigation, not a separate configurable glyph.
-    let mode_icon = match mode {
-        Mode::Insert => &icons.insert,
-        Mode::Normal | Mode::Page | Mode::Visual => &icons.normal,
-        Mode::BlockFocus => &icons.block,
-    };
-    // A page names itself in place of the mode: "Dir" says more than "Page"
-    // when the tool is what owns the keyboard.
-    let mode_name = page.filter(|_| mode == Mode::Page).unwrap_or(mode_name);
-    let mode_label = if !config.show_mode {
-        String::new()
-    } else if mode_icon.is_empty() {
-        mode_name.to_string()
+    let mode_label = if config.show_mode {
+        format!(" {mode_name}")
     } else {
-        format!("{} {}", mode_icon, mode_name)
+        String::new()
     };
     StatusBar {
         accent,
         mode: mode_label,
         search,
         notice,
+        tool_icon,
     }
 }
 
@@ -977,6 +965,17 @@ impl ApplicationHandler for App {
                 }
             }
 
+            WindowEvent::Moved(_) => {
+                let minimized = self
+                    .window
+                    .as_ref()
+                    .and_then(|w| w.is_minimized())
+                    .unwrap_or(false);
+                if !minimized {
+                    self.save_app_state();
+                }
+            }
+
             WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
                 let size = self.window.as_ref().map(|w| w.inner_size());
                 if let Some(size) = size {
@@ -1081,6 +1080,7 @@ impl ApplicationHandler for App {
                         };
                         self.config.colors.apply(&mut colors);
                         renderer.set_theme(colors);
+                        self.sync_translucency();
                         self.dirty = true;
                         if let Some(window) = &self.window {
                             window.request_redraw();
@@ -1246,6 +1246,13 @@ impl ApplicationHandler for App {
         // for it rather than leaving it lit until the next PTY poll.
         if let Some(deadline) = self.expire_yank_flash() {
             wakeup = wakeup.min(deadline);
+        }
+        // If any terminal is holding back synchronized output, wake up promptly
+        // when its hold deadline expires so the frame is released without lag.
+        for terminal in self.terminals.values() {
+            if let Some(deadline) = terminal.sync_hold_deadline() {
+                wakeup = wakeup.min(deadline);
+            }
         }
         if let Some(since) = self.pending_since {
             if self.pending.hint().is_some() {
@@ -1598,18 +1605,6 @@ mod tests {
     }
 
     #[test]
-    fn test_a_page_names_itself_in_the_status_bar() {
-        // "Page" says nothing about which tool owns the keyboard, and the name
-        // must not leak into the label for an ordinary terminal pane.
-        let theme = Theme::dark();
-        let cfg = StatusBarConfig::default();
-        let page = status_bar(Mode::Page, &theme, None, None, &cfg, Some("Dir"));
-        assert!(page.mode.ends_with("Dir"), "got {:?}", page.mode);
-        let terminal = status_bar(Mode::Insert, &theme, None, None, &cfg, Some("Dir"));
-        assert!(terminal.mode.ends_with("Insert"), "got {:?}", terminal.mode);
-    }
-
-    #[test]
     fn test_leaving_normal_mode_ends_a_search_and_hides_the_forced_status_bar() {
         let mut app = app_with_tabs(1);
         app.config.status_bar.enabled = false;
@@ -1638,15 +1633,15 @@ mod tests {
         let cfg = StatusBarConfig::default();
         assert_eq!(
             status_bar(Mode::Insert, &theme, None, None, &cfg, None).mode,
-            "\u{f03eb} Insert"
+            " I"
         );
         assert_eq!(
             status_bar(Mode::Normal, &theme, None, None, &cfg, None).mode,
-            "\u{e795} Normal"
+            " N"
         );
         assert_eq!(
             status_bar(Mode::BlockFocus, &theme, None, None, &cfg, None).mode,
-            "\u{f0485} Block"
+            " B"
         );
         assert_ne!(
             status_bar(Mode::Insert, &theme, None, None, &cfg, None).accent,

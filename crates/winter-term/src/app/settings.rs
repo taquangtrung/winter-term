@@ -429,7 +429,11 @@ impl App {
                 Err(_) => return false,
             },
             "opacity" => match value.parse::<f32>() {
-                Ok(opacity) => self.config.opacity = opacity.clamp(0.1, 1.0),
+                Ok(opacity) => {
+                    self.config.opacity = opacity.clamp(0.1, 1.0);
+                    self.sync_translucency();
+                    self.dirty = true;
+                }
                 Err(_) => return false,
             },
             "status.enabled" => {
@@ -669,9 +673,8 @@ mod tests {
     #[test]
     fn test_every_setting_in_a_nested_block_has_a_row_too() {
         // Cursor and security rows are named for their fields. The status bar's
-        // are named `status.enabled` and `status.show_mode`, and its mode glyphs
-        // are Nerd Font characters nobody types into a text field, so that block
-        // is checked by name instead of read from the schema.
+        // are named `status.enabled` and `status.show_mode`, so that block is
+        // checked by name instead of read from the schema.
         let keys = row_keys();
         for (block, prefix) in [("KdlCursor", "cursor."), ("KdlSecurity", "security.")] {
             for field in schema_fields(block) {

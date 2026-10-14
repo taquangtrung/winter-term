@@ -192,6 +192,8 @@ impl GpuRenderer {
             fallback_glyph_cache: std::collections::HashMap::new(),
             glyph_quad_pass,
             theme: Theme::default(),
+            alpha_modes: caps.alpha_modes.clone(),
+            window_opacity: 1.0,
             text_buffers: Vec::new(),
             status_buffer: None,
             image_pass,
@@ -208,6 +210,40 @@ impl GpuRenderer {
     /// Apply a new color theme.
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
+        self.sync_alpha_mode();
+    }
+    /// Set the window's opacity, `0.0` to `1.0`, on top of the theme's own
+    /// background alpha.
+    pub fn set_window_opacity(&mut self, opacity: f32) {
+        self.window_opacity = opacity.clamp(0.0, 1.0);
+        self.sync_alpha_mode();
+    }
+    /// How opaque the terminal background is drawn: the window's opacity times
+    /// the theme's background alpha.
+    pub fn background_opacity(&self) -> f32 {
+        self.window_opacity * self.theme.background_alpha as f32 / 255.0
+    }
+    /// Whether the window has to be transparent for the background to show
+    /// the desktop through it.
+    pub fn is_translucent(&self) -> bool {
+        self.background_opacity() < 1.0
+    }
+    /// Pick how the surface combines with the desktop: a mode that honors the
+    /// alpha written to it while the background is translucent, and the
+    /// platform's first, which every window can use, while it is solid.
+    fn sync_alpha_mode(&mut self) {
+        use wgpu::CompositeAlphaMode::{Inherit, PostMultiplied, PreMultiplied};
+        let wanted = match self.is_translucent() {
+            true => [PreMultiplied, PostMultiplied, Inherit]
+                .into_iter()
+                .find(|mode| self.alpha_modes.contains(mode)),
+            false => None,
+        };
+        let mode = wanted.unwrap_or(self.alpha_modes[0]);
+        if self.config.alpha_mode != mode {
+            self.config.alpha_mode = mode;
+            self.surface.configure(&self.device, &self.config);
+        }
     }
     /// Set the thickness (in logical pixels) of the line drawn between adjacent panes.
     pub fn set_divider_width(&mut self, width: f32) {

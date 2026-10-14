@@ -31,7 +31,7 @@ pub use tabbar::{
     Menu, MenuItem, MenuStyle, PaneStripEdges, PaneStripHit, PaneStripLayout, PaneTab, Region, TabLabel,
     TabbarHit, TopTabbar,
 };
-pub use theme::{Rgb as ThemeRgb, Theme};
+pub use theme::{GitColors, Rgb as ThemeRgb, SyntaxColors, Theme};
 
 /// Horizontal inset from each edge of a pane's rect to where its cell grid
 /// actually starts/ends, in pixels. The single source of truth for this

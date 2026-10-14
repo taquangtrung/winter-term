@@ -111,32 +111,11 @@ pub(crate) use title::{
 use std::collections::HashMap;
 
 use winter_core::winter_proto::TrustTier;
-use winter_render::{ControlsSide, CursorShape, MenuStyle, Theme, ThemeRgb};
+use winter_render::{ControlsSide, CursorShape, GitColors, MenuStyle, SyntaxColors, Theme, ThemeRgb};
 
 // ========================================================================
 // Data Structures
 // ========================================================================
-
-/// Which glyphs the status bar draws for each indicator.
-#[derive(Clone, Debug)]
-pub struct StatusBarIconsConfig {
-    /// Glyph shown while the pane is in Normal mode.
-    pub normal: String,
-    /// Glyph shown while the pane is in Insert mode.
-    pub insert: String,
-    /// Glyph shown while the pane is in Block-Focus mode.
-    pub block: String,
-}
-
-impl Default for StatusBarIconsConfig {
-    fn default() -> Self {
-        Self {
-            normal: "\u{e795}".to_string(),  // 
-            insert: "\u{f03eb}".to_string(), // 󰏫
-            block: "\u{f0485}".to_string(),  // 󰒅
-        }
-    }
-}
 
 /// Status bar visibility and content. `enabled` toggles the whole bar (which
 /// also frees its reserved row); `show_mode` toggles the mode indicator.
@@ -144,8 +123,6 @@ impl Default for StatusBarIconsConfig {
 pub struct StatusBarConfig {
     /// Whether the status bar is drawn at all.
     pub enabled: bool,
-    /// Glyphs used for each mode indicator.
-    pub icons: StatusBarIconsConfig,
     /// Whether the current mode is named in the bar.
     pub show_mode: bool,
 }
@@ -154,7 +131,6 @@ impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            icons: StatusBarIconsConfig::default(),
             show_mode: true,
         }
     }
@@ -364,6 +340,10 @@ pub struct ColorOverrides {
     pub divider: Option<ThemeRgb>,
     /// Default text color.
     pub foreground: Option<ThemeRgb>,
+    /// Colors of the git views; any left unset keeps the preset's.
+    pub git: GitColors,
+    /// Colors source is read in; any left unset keeps the preset's.
+    pub syntax: SyntaxColors,
     /// Scrollbar thumb color.
     pub scrollbar: Option<ThemeRgb>,
     /// Border drawn along the status bar.
@@ -380,58 +360,81 @@ pub struct ColorOverrides {
 
 impl ColorOverrides {
     /// Overwrite the matching fields of `theme` with any colors set here.
+    ///
+    /// Every color may be translucent (`#rrggbbaa`). The terminal background's
+    /// alpha makes the window see-through; every other color is laid over the
+    /// background in effect here, once, so the theme holds them solid.
     pub fn apply(&self, theme: &mut Theme) {
         let surface = (theme.background, theme.foreground);
         if let Some(c) = self.background {
-            theme.background = c;
+            // Its alpha is how see-through the window is, not a blend: there is
+            // nothing of the preset's to lay it over once the desktop shows.
+            theme.background = c.with_alpha(255);
+            theme.background_alpha = c.a;
         }
+        let under = theme.background;
+        let solid = |c: ThemeRgb| c.over(under);
         if let Some(c) = self.foreground {
-            theme.foreground = c;
+            theme.foreground = solid(c);
         }
         if let Some(c) = self.cursor_bg {
-            theme.cursor_bg = c;
+            theme.cursor_bg = solid(c);
         }
         if let Some(c) = self.cursor_fg {
-            theme.cursor_fg = c;
+            theme.cursor_fg = solid(c);
         }
         if let Some(c) = self.selection_bg {
-            theme.selection_bg = c;
+            theme.selection_bg = solid(c);
         }
         if let Some(c) = self.selection_fg {
-            theme.selection_fg = c;
+            theme.selection_fg = solid(c);
         }
         if let Some(c) = self.divider {
-            theme.divider = c;
+            theme.divider = solid(c);
         }
         if let Some(c) = self.scrollbar {
-            theme.scrollbar = c;
+            theme.scrollbar = solid(c);
         }
         if let Some(c) = self.status_bar_border {
-            theme.status_bar_border = c;
+            theme.status_bar_border = solid(c);
         }
         if let Some(c) = self.window_border {
-            theme.window_border = c;
+            theme.window_border = solid(c);
         }
         if let Some(c) = self.bell {
-            theme.bell = Some(c);
+            theme.bell = Some(solid(c));
+        }
+        // Kept translucent: the views lay these over whatever they are drawn
+        // on, which is the background today but need not stay so.
+        for name in GitColors::NAMES {
+            if let Some(c) = self.git.get(name) {
+                theme.git.set(name, Some(c));
+            }
+        }
+        for name in SyntaxColors::NAMES {
+            if let Some(c) = self.syntax.get(name) {
+                theme.syntax.set(name, Some(c));
+            }
         }
         for (i, c) in self.ansi.iter().enumerate() {
             if let Some(c) = c {
-                theme.ansi[i] = *c;
+                theme.ansi[i] = solid(*c);
             }
         }
         for (i, c) in self.brights.iter().enumerate() {
             if let Some(c) = c {
-                theme.ansi[8 + i] = *c;
+                theme.ansi[8 + i] = solid(*c);
             }
         }
         for (idx, c) in &self.indexed {
+            let c = solid(*c);
             if let Some(slot) = theme.indexed.iter_mut().find(|(i, _)| i == idx) {
-                slot.1 = *c;
+                slot.1 = c;
             } else {
-                theme.indexed.push((*idx, *c));
+                theme.indexed.push((*idx, c));
             }
-        }        // The window chrome has no colors of its own to set, so it follows
+        }
+        // The window chrome has no colors of its own to set, so it follows
         // the terminal's: a theme with its own background gets a title bar,
         // tabs, and menus that belong with it. One that keeps the preset's
         // keeps the preset's own chrome too.
@@ -633,14 +636,8 @@ impl Config {
         let status_bar = kdl
             .status_bar
             .map(|sb| {
-                let defaults = StatusBarIconsConfig::default();
                 StatusBarConfig {
                     enabled: sb.show.unwrap_or(true),
-                    icons: StatusBarIconsConfig {
-                        normal: sb.normal_icon.unwrap_or(defaults.normal),
-                        insert: sb.insert_icon.unwrap_or(defaults.insert),
-                        block: sb.block_icon.unwrap_or(defaults.block),
-                    },
                     show_mode: sb.show_mode.unwrap_or(true),
                 }
             })
@@ -859,21 +856,12 @@ impl Config {
         out
     }
 
-    /// The `status-bar` block, always emitted so every flag and icon round-trips.
+    /// The `status-bar` block, always emitted so every flag round-trips.
     fn status_bar_kdl(&self) -> String {
         let sb = &self.status_bar;
         let mut out = String::from("status-bar {\n");
         out.push_str(&format!("    show {}\n", kdl_bool(sb.enabled)));
         out.push_str(&format!("    show-mode {}\n", kdl_bool(sb.show_mode)));
-        out.push_str(&format!(
-            "    normal-icon {}\n",
-            kdl_string(&sb.icons.normal)
-        ));
-        out.push_str(&format!(
-            "    insert-icon {}\n",
-            kdl_string(&sb.icons.insert)
-        ));
-        out.push_str(&format!("    block-icon {}\n", kdl_string(&sb.icons.block)));
         out.push_str("}\n");
         out
     }
@@ -898,6 +886,8 @@ impl Config {
         let any = scalars.iter().any(|(_, v)| v.is_some())
             || c.ansi.iter().any(Option::is_some)
             || c.brights.iter().any(Option::is_some)
+            || GitColors::NAMES.iter().any(|name| c.git.get(name).is_some())
+            || SyntaxColors::NAMES.iter().any(|name| c.syntax.get(name).is_some())
             || !c.indexed.is_empty();
         if !any {
             return None;
@@ -908,6 +898,24 @@ impl Config {
             if let Some(rgb) = value {
                 out.push_str(&format!("    {name} {}\n", kdl_string(&rgb.to_hex())));
             }
+        }
+        let git: Vec<(&str, ThemeRgb)> = GitColors::NAMES
+            .iter()
+            .filter_map(|&name| Some((name, c.git.get(name)?)))
+            .collect();
+        let syntax: Vec<(&str, ThemeRgb)> = SyntaxColors::NAMES
+            .iter()
+            .filter_map(|&name| Some((name, c.syntax.get(name)?)))
+            .collect();
+        for (block, entries) in [("git", git), ("syntax", syntax)] {
+            if entries.is_empty() {
+                continue;
+            }
+            out.push_str(&format!("    {block} {{\n"));
+            for (name, rgb) in entries {
+                out.push_str(&format!("        {name} {}\n", kdl_string(&rgb.to_hex())));
+            }
+            out.push_str("    }\n");
         }
         if let Some(line) = color_named_block_kdl("ansi", &c.ansi) {
             out.push_str(&line);
@@ -1303,22 +1311,6 @@ window {
     }
 
     #[test]
-    fn test_parse_status_bar_icons() {
-        let config = Config::parse(
-            r#"
-status-bar {
-    normal-icon "N"
-    insert-icon "I"
-    block-icon "B"
-}
-"#,
-        );
-        assert_eq!(config.status_bar.icons.normal, "N");
-        assert_eq!(config.status_bar.icons.insert, "I");
-        assert_eq!(config.status_bar.icons.block, "B");
-    }
-
-    #[test]
     fn test_parse_cursor_block_and_synonyms() {
         let config = Config::parse(
             r#"
@@ -1517,6 +1509,31 @@ cursor {
         assert_eq!(config.theme, ThemeSetting::Named("dracula".to_string()));
         let parsed = Config::parse(&config.to_kdl());
         assert_eq!(parsed.theme, ThemeSetting::Named("dracula".to_string()));
+    }
+
+    #[test]
+    fn test_translucent_colors_are_laid_over_the_background_and_saved_as_written() {
+        let mut config = Config::default();
+        config.colors.background = ThemeRgb::parse_hex("#00000080");
+        config.colors.selection_bg = ThemeRgb::parse_hex("#ffffff80");
+        config.colors.git.set("file-band", ThemeRgb::parse_hex("#ff000000"));
+        config.colors.syntax.set("comment", ThemeRgb::parse_hex("#11223380"));
+
+        let mut theme = Theme::dark();
+        config.colors.apply(&mut theme);
+        assert_eq!(theme.background_alpha, 0x80, "the window shows through");
+        assert_eq!(theme.background, ThemeRgb::new(0, 0, 0));
+        assert_eq!(theme.selection_bg, ThemeRgb::new(128, 128, 128));
+        assert_eq!(theme.git.file_band, ThemeRgb::parse_hex("#ff000000"), "kept as written");
+        assert!(theme.selection_bg.is_opaque());
+        assert_eq!(theme.git.hunk_band, Theme::dark().git.hunk_band, "unset keeps the preset's");
+
+        let parsed = Config::parse(&config.to_kdl());
+        assert_eq!(parsed.colors.selection_bg, ThemeRgb::parse_hex("#ffffff80"));
+        assert_eq!(parsed.colors.git.get("file-band"), ThemeRgb::parse_hex("#ff000000"));
+        assert_eq!(parsed.colors.syntax.get("comment"), ThemeRgb::parse_hex("#11223380"));
+        assert_eq!(theme.syntax.comment, ThemeRgb::parse_hex("#11223380"), "kept as written");
+        assert_eq!(theme.syntax.string, Theme::dark().syntax.string, "unset keeps the preset's");
     }
 
     #[test]

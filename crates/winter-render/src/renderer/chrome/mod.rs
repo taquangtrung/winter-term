@@ -103,27 +103,23 @@ pub(super) const PALETTE_ITEM_PAD_X: f32 = 5.0;
 pub(super) const PALETTE_ITEM_PAD_Y: f32 = 4.0;
 
 /// Corner radius of the dropdown menu panel and its hover highlight, in pixels.
-pub(super) const DROPDOWN_RADIUS: f32 = 12.0;
+pub(super) const DROPDOWN_RADIUS: f32 = 4.0;
 
 /// Corner radius of every pill on the tabbar, title bar and pane strips: none,
 /// so their tabs and button highlights are square.
 const SQUARE_CORNER: f32 = 0.0;
 
 /// Width of the soft drop shadow cast around the dropdown panel, in pixels.
-pub(super) const DROPDOWN_SHADOW: f32 = 22.0;
+pub(super) const DROPDOWN_SHADOW: f32 = 8.0;
 
 /// How far non-focused pane colors are lerped toward the background (0 = full, 1 = fully dimmed).
 pub(super) const DIM_FACTOR: f32 = 0.4;
 
 /// Peak opacity of the dropdown drop shadow, fading to zero at its outer edge.
-pub(super) const DROPDOWN_SHADOW_ALPHA: f32 = 0.3;
+pub(super) const DROPDOWN_SHADOW_ALPHA: f32 = 0.28;
 
 /// Inset of the hover-highlight pill from the dropdown item-row edges, in pixels.
-pub(super) const MENU_HOVER_INSET: f32 = 6.0;
-
-/// Strength of the dropdown panel's hairline border, mixed from the surface
-/// toward white for a crisp, elevated edge against the content behind it.
-pub(super) const MENU_BORDER_MIX: f32 = 0.14;
+pub(super) const MENU_HOVER_INSET: f32 = 4.0;
 
 /// Flat pixels the close button (× glyph and its hover pill) is shifted
 /// right of its horizontally-centered position within its close slot.
@@ -1359,6 +1355,12 @@ const TAB_ICON_HEIGHT_RATIO: f32 = 0.85;
 /// Gap between a tab's icon and its title, in cells.
 const TAB_ICON_GAP_CELLS: f32 = 0.5;
 
+/// Height of the top accent indicator bar on selected tab pills, in pixels.
+const PANE_STRIP_ACTIVE_INDICATOR_PX: f32 = 2.0;
+
+/// Border color mix strength for unfocused active tab outline.
+const UNFOCUSED_ACTIVE_BORDER_MIX: f32 = 0.15;
+
 /// Rasterize a pane-level tab strip into an RGBA buffer.
 #[allow(clippy::too_many_arguments)]
 pub fn rasterize_pane_strip_rgba(
@@ -1449,6 +1451,71 @@ pub fn rasterize_pane_strip_rgba(
             pill_color,
             1.0,
         );
+
+        // Decorate selected tab: an accent bar along the top edge of the active tab.
+        // In the focused pane, it uses the full cursor/accent color.
+        // In the non-focused pane, it uses a dimmed accent color and a subtle hairline border
+        // so the selected tab remains immediately recognizable without competing for focus.
+        if tab.active {
+            if tab.focused {
+                fill_rounded_rect(
+                    &mut rgba,
+                    canvas,
+                    (
+                        pill_bounds.0,
+                        pill_bounds.1,
+                        pill_bounds.2,
+                        PANE_STRIP_ACTIVE_INDICATOR_PX,
+                    ),
+                    SQUARE_CORNER,
+                    theme.cursor_bg,
+                    1.0,
+                );
+            } else {
+                let unfocused_border = mix_rgb(unfocused_active_bg, bright_target, UNFOCUSED_ACTIVE_BORDER_MIX);
+                let unfocused_indicator = mix_rgb(theme.cursor_bg, PANE_STRIP_BAND_BG, DIM_FACTOR);
+                fill_rounded_rect(
+                    &mut rgba,
+                    canvas,
+                    (
+                        pill_bounds.0,
+                        pill_bounds.1,
+                        pill_bounds.2,
+                        PANE_STRIP_ACTIVE_INDICATOR_PX,
+                    ),
+                    SQUARE_CORNER,
+                    unfocused_indicator,
+                    1.0,
+                );
+                // 1px left and right borders to crisply delineate the unfocused active tab from neighbors
+                fill_rounded_rect(
+                    &mut rgba,
+                    canvas,
+                    (
+                        pill_bounds.0,
+                        pill_bounds.1 + PANE_STRIP_ACTIVE_INDICATOR_PX,
+                        1.0,
+                        pill_bounds.3 - PANE_STRIP_ACTIVE_INDICATOR_PX,
+                    ),
+                    SQUARE_CORNER,
+                    unfocused_border,
+                    1.0,
+                );
+                fill_rounded_rect(
+                    &mut rgba,
+                    canvas,
+                    (
+                        pill_bounds.0 + pill_bounds.2 - 1.0,
+                        pill_bounds.1 + PANE_STRIP_ACTIVE_INDICATOR_PX,
+                        1.0,
+                        pill_bounds.3 - PANE_STRIP_ACTIVE_INDICATOR_PX,
+                    ),
+                    SQUARE_CORNER,
+                    unfocused_border,
+                    1.0,
+                );
+            }
+        }
 
         // Close button hover highlight
         let close_reg = layout.closes[i];
@@ -2150,9 +2217,9 @@ mod tests {
             let i = ((y * w + x) * 4) as usize;
             rgba[i..i + 3].to_vec()
         };
-        // The pill's top-left pixel is as filled as its interior; a rounded
-        // corner would leave it partly band-colored.
-        assert_eq!(at(1, 1), at(150, 12));
+        // An unadorned tab pill's top-left pixel is as filled as its interior;
+        // a rounded corner would leave it partly band-colored.
+        assert_eq!(at(1, 3), at(150, 12));
     }
 
     /// The center, in edge coordinates, of the icon drawn inside `pill` of a
@@ -2412,6 +2479,62 @@ mod tests {
         assert_ne!(
             focused_pixel, unfocused_pixel,
             "unfocused tab pill should have distinct dimmer color"
+        );
+    }
+
+    #[test]
+    fn test_unfocused_active_tab_has_indicator_and_border_distinct_from_inactive_tab() {
+        use crate::renderer::test_support::sample_font_ctx;
+        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let mut fonts = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let w = 400;
+        let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
+        let tabs = vec![
+            PaneTab {
+                active: true,
+                focused: false,
+                icon: None,
+                tab_id: 1,
+                title: "zsh".into(),
+            },
+            PaneTab {
+                active: false,
+                focused: false,
+                icon: None,
+                tab_id: 2,
+                title: "vim".into(),
+            },
+        ];
+        let layout = layout_pane_strip(&tabs, w as f32, h as f32, CELL_W, CELL_H, 0);
+        let rgba = rasterize_pane_strip_rgba(
+            &tabs,
+            &layout,
+            w,
+            h,
+            CELL_W,
+            CELL_H,
+            &theme,
+            PaneStripHit::None,
+            Rgb::new(60, 60, 60),
+            &mut fonts,
+            &mut swash,
+            &ctx,
+        );
+
+        let active_top_x = (layout.tabs[0].x + layout.tabs[0].w / 2.0) as usize;
+        let active_top_y = (crate::PANE_STRIP_TOP_PAD_PX + 0.5) as usize;
+        let inactive_top_x = (layout.tabs[1].x + layout.tabs[1].w / 2.0) as usize;
+        let inactive_top_y = active_top_y;
+
+        let active_top_pixel = &rgba[((active_top_y * w as usize + active_top_x) * 4)..][..3];
+        let inactive_top_pixel = &rgba[((inactive_top_y * w as usize + inactive_top_x) * 4)..][..3];
+
+        assert_ne!(
+            active_top_pixel, inactive_top_pixel,
+            "unfocused active tab should have distinct accent indicator at the top"
         );
     }
 }

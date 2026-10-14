@@ -58,12 +58,21 @@ impl EditorPage {
         self.carry_out(outcome)
     }
 
-    /// `C-c C-c` and `C-c C-k` in a commit message: save and close to commit,
-    /// or empty it and close to cancel. `None` for every other key, which is
-    /// left to the mode, and a `Ctrl-C` not followed by either is forgotten.
+    /// `Ctrl-Shift-C`, or `C-c C-c`, and `C-c C-k` in a commit message: save
+    /// and close to commit, or empty it and close to cancel. `None` for every
+    /// other key, which is left to the mode, and a `Ctrl-C` not followed by
+    /// either is forgotten.
     fn message_chord(&mut self, key: &Key) -> Option<PageOutcome> {
         if !commit::is_message_file(&self.doc().path) {
             return None;
+        }
+        // Shift turns the letter into the capital, as it does for the Git
+        // page's own `Ctrl-Shift-C`.
+        let commit_chord = matches!(key.code, KeyCode::Char('C' | 'c'));
+        if key.ctrl && key.shift && !key.alt && commit_chord {
+            self.message_chord = false;
+            self.write();
+            return Some(PageOutcome::Close);
         }
         let started = std::mem::take(&mut self.message_chord);
         match (started, key.ctrl, key.code) {

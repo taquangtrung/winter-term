@@ -79,7 +79,12 @@ impl App {
         // Only request a transparent (alpha-channel) window when the user actually
         // wants translucency. A needlessly transparent window is recomposited (and
         // often blurred) by many compositors even when its content is fully opaque.
-        let want_transparency = self.config.opacity < 1.0;
+        let want_transparency = self.config.opacity < 1.0
+            || self
+                .config
+                .colors
+                .background
+                .is_some_and(|background| !background.is_opaque());
         // Modern style is borderless: the tab strip is the title bar and carries
         // its own window controls. System style keeps the native OS decorations.
         let decorated = self.config.title_bar_style == TitleBarStyle::System;
@@ -107,7 +112,8 @@ impl App {
             use winit::platform::windows::WindowAttributesExtWindows;
             base_attrs.with_undecorated_shadow(!decorated)
         };
-        let window_attrs = match load_state().window_size {
+        let state = load_state();
+        let mut window_attrs = match state.window_size {
             Some((w, h)) => base_attrs.with_inner_size(winit::dpi::PhysicalSize::new(
                 w.max(min_width),
                 h.max(min_height),
@@ -117,6 +123,9 @@ impl App {
                 DEFAULT_ROWS * APPROX_CELL_HEIGHT,
             )),
         };
+        if let Some((x, y)) = state.window_position {
+            window_attrs = window_attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
+        }
         let window = Arc::new(
             event_loop
                 .create_window(window_attrs)
@@ -191,6 +200,7 @@ impl App {
             }
         };
         self.config.colors.apply(&mut initial_theme);
+        renderer.set_window_opacity(self.config.opacity);
         renderer.set_theme(initial_theme);
         renderer.set_ligatures(self.config.ligatures);
         renderer.set_divider_width(self.config.pane_border_width);

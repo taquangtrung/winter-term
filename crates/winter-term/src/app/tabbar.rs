@@ -490,7 +490,7 @@ impl App {
             super::ContextAction::Paste => self.paste_from_clipboard(),
             super::ContextAction::OpenLink(url) => {
                 let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
-                if matches!(scheme.as_str(), "http" | "https" | "mailto") {
+                if matches!(scheme.as_str(), "http" | "https" | "mailto" | "file") {
                     let _ = open::that(&url);
                 }
             }

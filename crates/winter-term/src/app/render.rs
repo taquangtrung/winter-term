@@ -204,6 +204,7 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                     *id == focused,
                     window_focused,
                     config,
+                    blink_phase,
                     selection.filter(|s| s.tab == *id),
                     page_cursors.get(id).copied(),
                 ));
@@ -362,6 +363,7 @@ fn page_pane_view<'a>(
     focused: bool,
     window_focused: bool,
     config: &crate::config::Config,
+    blink_phase: bool,
     selection: Option<&'a super::Selection>,
     text_cursor: Option<PaneCaret>,
 ) -> PaneView<'a> {
@@ -405,7 +407,10 @@ fn page_pane_view<'a>(
                 .unwrap_or((grid.rows(), grid.cols())),
         ),
         cursor_line_row: paint.cursor_line,
-        nav_cursor_visible: text_cursor.is_some(),
+        // The caret blinks with the global `cursor.blink` setting, on the same
+        // timer as a terminal's, and holds steady when it is drawn hollow.
+        nav_cursor_visible: text_cursor.is_some()
+            && (caret_unfocused || !config.cursor.blink || blink_phase),
         rect: App::layout_rect_to_pane(rect),
         scroll_offset: 0,
         scrollback_len: 0,
@@ -764,14 +769,14 @@ impl App {
             match_total: self.search.match_total,
             reverse: self.search.reverse,
         });
-        let page_name = self.pages.get(&focused).map(|slot| slot.status_label());
+        let tool_icon = self.pages.get(&focused).and_then(|slot| slot.status_icon());
         let status = status_bar(
             mode,
             renderer.theme(),
             search,
             notice,
             &self.config.status_bar,
-            page_name.as_deref(),
+            tool_icon,
         );
         let status = status_enabled.then_some(&status);
         let palette_view = self.palette.as_ref().map(|p| {
@@ -1982,12 +1987,12 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
             ..Style::default()
         },
         PageStyle::Added => Style {
-            background: mix_rgb(theme.background, theme.ansi[ANSI_GREEN], PAGE_DIFF_LINE_MIX),
+            background: git_band(theme, theme.git.inserted_line, ANSI_GREEN, PAGE_DIFF_LINE_MIX),
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
         PageStyle::AddedEdit => Style {
-            background: mix_rgb(theme.background, theme.ansi[ANSI_GREEN], PAGE_DIFF_EDIT_MIX),
+            background: git_band(theme, theme.git.inserted_text, ANSI_GREEN, PAGE_DIFF_EDIT_MIX),
             bold: true,
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
@@ -1997,15 +2002,23 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // own palette rather than pinned to its hex: green for what arrived,
         // red for what left, blue for what was edited where it stands, yellow
         // for what moved, magenta for what is still contested.
-        PageStyle::ChangeAdded => change_style(theme, ANSI_GREEN),
-        PageStyle::ChangeConflict => change_style(theme, ANSI_MAGENTA),
-        PageStyle::ChangeDeleted => change_style(theme, ANSI_RED),
-        PageStyle::ChangeModified => change_style(theme, ANSI_BLUE),
-        PageStyle::ChangeRenamed => change_style(theme, ANSI_YELLOW),
+        PageStyle::ChangeAdded => change_style(theme, theme.git.added, ANSI_GREEN),
+        PageStyle::ChangeConflict => change_style(theme, theme.git.unmerged, ANSI_MAGENTA),
+        PageStyle::ChangeDeleted => change_style(theme, theme.git.deleted, ANSI_RED),
+        PageStyle::ChangeModified => change_style(theme, theme.git.modified, ANSI_BLUE),
+        PageStyle::ChangeRenamed => change_style(theme, theme.git.renamed, ANSI_YELLOW),
         PageStyle::Dim => Style {
             foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
             ..Style::default()
         },
+        // A file's path on its band wears its section's hue, the colors
+        // magic-vscode's semantic tokens give staged, unstaged, untracked and
+        // conflicted files, with the theme's own cyan, yellow, green and red
+        // where it sets none.
+        PageStyle::FileConflict => file_path_style(theme, theme.git.file_conflict, ANSI_RED),
+        PageStyle::FileStaged => file_path_style(theme, theme.git.file_staged, ANSI_CYAN),
+        PageStyle::FileUnstaged => file_path_style(theme, theme.git.file_unstaged, ANSI_YELLOW),
+        PageStyle::FileUntracked => file_path_style(theme, theme.git.file_untracked, ANSI_GREEN),
         PageStyle::Header => Style {
             bold: true,
             foreground: theme_rgb(theme.foreground),
@@ -2021,17 +2034,21 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // what is not, green for what is untracked, red for what a merge left
         // contested. The count beside it stays receded, so the color says
         // which section without the row shouting.
-        PageStyle::HeadingConflict => heading_style(theme, ANSI_RED),
-        PageStyle::HeadingStaged => heading_style(theme, ANSI_CYAN),
-        PageStyle::HeadingUnstaged => heading_style(theme, ANSI_YELLOW),
-        PageStyle::HeadingUntracked => heading_style(theme, ANSI_GREEN),
+        PageStyle::HeadingConflict => heading_style(theme, None, ANSI_RED),
+        PageStyle::HeadingStaged => heading_style(theme, theme.git.header_staged, ANSI_CYAN),
+        PageStyle::HeadingUnstaged => {
+            heading_style(theme, theme.git.header_unstaged, ANSI_YELLOW)
+        }
+        PageStyle::HeadingUntracked => {
+            heading_style(theme, theme.git.header_untracked, ANSI_GREEN)
+        }
         // Everything else a git view heads a block with — the recent commits,
         // a log's title, and the labels the header block is read down — is
         // blue, which is where magic-vscode's grammar sends every heading it
         // has no change color for.
-        PageStyle::HeadingPlain => heading_style(theme, ANSI_BLUE),
+        PageStyle::HeadingPlain => heading_style(theme, theme.git.header, ANSI_BLUE),
         PageStyle::Hunk => Style {
-            background: mix_rgb(theme.background, theme.ansi[ANSI_BLUE], PAGE_HUNK_MIX),
+            background: git_band(theme, theme.git.hunk_band, ANSI_BLUE, PAGE_HUNK_MIX),
             foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
             ..Style::default()
         },
@@ -2046,12 +2063,12 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
             ..Style::default()
         },
         PageStyle::Removed => Style {
-            background: mix_rgb(theme.background, theme.ansi[ANSI_RED], PAGE_DIFF_LINE_MIX),
+            background: git_band(theme, theme.git.removed_line, ANSI_RED, PAGE_DIFF_LINE_MIX),
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
         PageStyle::RemovedEdit => Style {
-            background: mix_rgb(theme.background, theme.ansi[ANSI_RED], PAGE_DIFF_EDIT_MIX),
+            background: git_band(theme, theme.git.removed_text, ANSI_RED, PAGE_DIFF_EDIT_MIX),
             bold: true,
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
@@ -2063,19 +2080,19 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // the remote one beside it from reading as the same thing.
         PageStyle::RefHead => Style {
             bold: true,
-            foreground: theme_rgb(theme.ansi[ANSI_MAGENTA]),
+            foreground: color_or(theme, theme.git.ref_head, theme.ansi[ANSI_MAGENTA]),
             ..Style::default()
         },
         PageStyle::RefLocal => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_MAGENTA]),
+            foreground: color_or(theme, theme.git.ref_local, theme.ansi[ANSI_MAGENTA]),
             ..Style::default()
         },
         PageStyle::RefRemote => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_GREEN]),
+            foreground: color_or(theme, theme.git.ref_remote, theme.ansi[ANSI_GREEN]),
             ..Style::default()
         },
         PageStyle::RefTag => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_CYAN]),
+            foreground: color_or(theme, theme.git.ref_tag, theme.ansi[ANSI_CYAN]),
             ..Style::default()
         },
         PageStyle::Section => Style {
@@ -2088,27 +2105,28 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // the comment hue the shells and the pagers already use, and one hue
         // per kind of thing after that.
         PageStyle::SyntaxComment => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_BRIGHT_BLACK]),
+            foreground: color_or(theme, theme.syntax.comment, theme.ansi[ANSI_BRIGHT_BLACK]),
             ..Style::default()
         },
         PageStyle::SyntaxKeyword => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_MAGENTA]),
+            foreground: color_or(theme, theme.syntax.keyword, theme.ansi[ANSI_MAGENTA]),
             ..Style::default()
         },
         PageStyle::SyntaxNumber => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_YELLOW]),
+            foreground: color_or(theme, theme.syntax.number, theme.ansi[ANSI_YELLOW]),
             ..Style::default()
         },
         PageStyle::SyntaxString => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_GREEN]),
+            foreground: color_or(theme, theme.syntax.string, theme.ansi[ANSI_GREEN]),
             ..Style::default()
         },
         PageStyle::SyntaxType => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_CYAN]),
+            foreground: color_or(theme, theme.syntax.type_name, theme.ansi[ANSI_CYAN]),
             ..Style::default()
         },
         PageStyle::Unpushed => Style {
-            foreground: theme_rgb(theme.ansi[ANSI_RED]),
+            bold: true,
+            foreground: color_or(theme, theme.git.unpushed, theme.ansi[ANSI_RED]),
             ..Style::default()
         },
         PageStyle::SectionFolded => Style {
@@ -2124,15 +2142,15 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
 /// color with it would break the row into two tones, since the change's name
 /// beside the triangle carries a hue of its own.
 fn section_band(theme: &Theme) -> Color {
-    mix_rgb(theme.background, theme.ansi[ANSI_CYAN], PAGE_SECTION_MIX)
+    git_band(theme, theme.git.file_band, ANSI_CYAN, PAGE_SECTION_MIX)
 }
 
 /// How a section's heading is painted: its own hue, in bold, since a heading
 /// is the loudest row of the block it opens.
-fn heading_style(theme: &Theme, ansi: usize) -> Style {
+fn heading_style(theme: &Theme, hue: Option<ThemeRgb>, ansi: usize) -> Style {
     Style {
         bold: true,
-        foreground: theme_rgb(theme.ansi[ansi]),
+        foreground: color_or(theme, hue, theme.ansi[ansi]),
         ..Style::default()
     }
 }
@@ -2140,12 +2158,37 @@ fn heading_style(theme: &Theme, ansi: usize) -> Style {
 /// How a change's name is painted where it heads a file's band: its own hue,
 /// in bold, over the band the rest of the row sits on, so the row reads as one
 /// bar with the change called out on it.
-fn change_style(theme: &Theme, ansi: usize) -> Style {
+fn change_style(theme: &Theme, hue: Option<ThemeRgb>, ansi: usize) -> Style {
     Style {
         background: section_band(theme),
         bold: true,
-        foreground: theme_rgb(theme.ansi[ansi]),
+        foreground: color_or(theme, hue, theme.ansi[ansi]),
         ..Style::default()
+    }
+}
+
+/// A file's path on its band: the section's hue over the same band the change's
+/// name sits on, so the row reads as one bar.
+fn file_path_style(theme: &Theme, hue: Option<ThemeRgb>, ansi: usize) -> Style {
+    Style {
+        background: section_band(theme),
+        foreground: color_or(theme, hue, theme.ansi[ansi]),
+        ..Style::default()
+    }
+}
+
+/// A themed color: the theme's own, laid over the background when it is
+/// translucent, or `fallback` out of the theme's palette when it sets none.
+fn color_or(theme: &Theme, color: Option<ThemeRgb>, fallback: ThemeRgb) -> Color {
+    theme_rgb(color.map_or(fallback, |c| c.over(theme.background)))
+}
+
+/// A git view's background band, or a mix of the background toward `ansi` when
+/// the theme sets none.
+fn git_band(theme: &Theme, band: Option<ThemeRgb>, ansi: usize, mix: f32) -> Color {
+    match band {
+        Some(band) => theme_rgb(band.over(theme.background)),
+        None => mix_rgb(theme.background, theme.ansi[ansi], mix),
     }
 }
 
@@ -2768,6 +2811,7 @@ mod tests {
                 focused,
                 window_focused,
                 &config,
+                true,
                 None,
                 caret,
             );
@@ -2793,6 +2837,32 @@ mod tests {
             !view(false, true, None).0,
             "a page with no caret draws none"
         );
+    }
+
+    #[test]
+    fn test_a_page_caret_blinks_with_the_global_setting() {
+        let grid = Grid::new(10, 3);
+        let paint = PagePaint {
+            cursor_line: Some(0),
+            icons: Vec::new(),
+            tab: TabId(1),
+        };
+        let rect = Rect::new(0.0, 0.0, 100.0, 60.0);
+        let caret = Some(PaneCaret::at(0, 1));
+        let mut config = crate::config::Config::default();
+        let shown = |config: &crate::config::Config, focused, phase, caret| {
+            page_pane_view(&paint, &grid, rect, focused, true, config, phase, None, caret)
+                .nav_cursor_visible
+        };
+
+        assert!(config.cursor.blink, "blinking is the default");
+        assert!(shown(&config, true, true, caret), "on phase");
+        assert!(!shown(&config, true, false, caret), "off phase");
+        assert!(shown(&config, false, false, caret), "hollow outline holds steady");
+        assert!(!shown(&config, true, true, None), "no caret, nothing to show");
+
+        config.cursor.blink = false;
+        assert!(shown(&config, true, false, caret), "steady when blink is off");
     }
 
     #[test]

@@ -671,7 +671,11 @@ fn piped_request(
     JobRequest::Command(CommandRequest {
         args,
         cwd: PathBuf::from(cwd),
-        env: Vec::new(),
+        env: vec![
+            ("GIT_TERMINAL_PROMPT".to_string(), "0".to_string()),
+            ("GIT_OPTIONAL_LOCKS".to_string(), "0".to_string()),
+            ("LC_ALL".to_string(), "C".to_string()),
+        ],
         program: GIT.to_string(),
         stdin,
         tag,

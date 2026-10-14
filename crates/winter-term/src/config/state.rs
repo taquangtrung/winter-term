@@ -14,6 +14,9 @@ pub struct AppState {
     pub palette_history: Vec<String>,
     /// Last known window dimensions in physical pixels.
     pub window_size: Option<(u32, u32)>,
+    /// Last known window top-left position in screen coordinates.
+    #[serde(default)]
+    pub window_position: Option<(i32, i32)>,
 }
 /// Load state from `<state_dir>/state.json`, returning a default on any error.
 pub fn load_state() -> AppState {

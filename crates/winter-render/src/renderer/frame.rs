@@ -11,7 +11,7 @@ use super::background::{
 use super::chrome::{InputView, PaletteView, TabbarText, WhichKeyView, DIM_FACTOR};
 use super::colors::{
     block_cursor_cell, cell_text_fg, cursor_contrast_fg, mix_rgb, needs_dark_on_light_bold,
-    srgb_to_linear_f64, theme_indexed_color, FAINT_FACTOR,
+    clear_color, theme_indexed_color, FAINT_FACTOR,
 };
 use super::glyphs::{
     base_family, effective_bold_weight, glyph_key, is_braille, needs_complex_shaping, parse_weight,
@@ -212,7 +212,7 @@ impl GpuRenderer {
         let status_top = crate::status_bar_top_px(surface.height, self.cell_height);
         if let Some(status) = status {
             self.push_status_bar_quads(status_top, surface, &mut layers);
-            self.shape_status_bar(status, &style, &mut status_buffer);
+            self.shape_status_bar(status, &style, surface.width, &mut status_buffer);
         }
 
         // Top tabbar (tabbar/menubar) bands and text. The dropdown overlay is
@@ -819,16 +819,8 @@ impl GpuRenderer {
         let text_fg = if cell.style.faint {
             let behind = if cell.style.reversed { fg_rgb } else { bg_rgb };
             let faded = mix_rgb(
-                Rgb {
-                    r: text_fg.0,
-                    g: text_fg.1,
-                    b: text_fg.2,
-                },
-                Rgb {
-                    r: behind.0,
-                    g: behind.1,
-                    b: behind.2,
-                },
+                Rgb::new(text_fg.0, text_fg.1, text_fg.2),
+                Rgb::new(behind.0, behind.1, behind.2),
                 FAINT_FACTOR,
             );
             (faded.r, faded.g, faded.b)
@@ -980,6 +972,7 @@ impl GpuRenderer {
         &mut self,
         status: &StatusBar,
         style: &FrameTextStyle,
+        surface_width: f32,
         buffer: &mut glyphon::Buffer,
     ) {
         // Build status bar text segments dynamically
@@ -1067,6 +1060,19 @@ impl GpuRenderer {
             status_text.push_str(&notice.text);
             let notice_end = status_text.len();
             spans.push((notice_start..notice_end, notice_attrs));
+        }
+
+        // The tool's glyph sits one cell in from the right edge: the line is
+        // monospace, so padding with spaces to the column count lands it there.
+        if let Some(icon) = status.tool_icon {
+            let columns = (surface_width / self.cell_width).floor() as usize;
+            let used = status_text.chars().count();
+            let padding = columns.saturating_sub(used + 2);
+            status_text.extend(std::iter::repeat_n(' ', padding));
+            let icon_start = status_text.len();
+            status_text.push(icon);
+            let icon_end = status_text.len();
+            spans.push((icon_start..icon_end, muted_attrs.clone()));
         }
 
         // Apply attributes to the text buffer line
@@ -1224,12 +1230,11 @@ impl GpuRenderer {
                     ops: wgpu::Operations {
                         // The sRGB surface expects a linear clear value, so decode
                         // the (sRGB) background to keep the displayed color exact.
-                        load: LoadOp::Clear(wgpu::Color {
-                            r: srgb_to_linear_f64(self.theme.background.r),
-                            g: srgb_to_linear_f64(self.theme.background.g),
-                            b: srgb_to_linear_f64(self.theme.background.b),
-                            a: 1.0,
-                        }),
+                        load: LoadOp::Clear(clear_color(
+                            self.theme.background,
+                            self.background_opacity(),
+                            self.config.alpha_mode,
+                        )),
                         store: StoreOp::Store,
                     },
                 })],

@@ -450,27 +450,24 @@ impl App {
             }
         }
 
-        // Ctrl+click on a hyperlinked cell opens the URL in the browser.
-        // Double-check the scheme even though `osc_dispatch` already
-        // filtered it, as defense in depth.
+        // Ctrl+click on a hyperlinked cell or printed URL/file opens it.
         if state == ElementState::Pressed
             && button == MouseButton::Left
             && self.modifiers.state().control_key()
         {
-            if let Some(url) = &self.pointer.hovered_url {
-                let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
-                if matches!(scheme.as_str(), "http" | "https" | "mailto") {
-                    let _ = open::that(url);
-                    return;
-                }
-            }
-            // Otherwise a file path printed in the output opens in the editor.
             let (x, y) = self.pointer.cursor_pos;
             if self.open_file_at_pixel(x, y) {
                 if let Some(window) = &self.window {
                     window.request_redraw();
                 }
                 return;
+            }
+            if let Some(url) = &self.pointer.hovered_url {
+                let scheme = url.split(':').next().unwrap_or("").to_ascii_lowercase();
+                if matches!(scheme.as_str(), "http" | "https" | "mailto" | "file") {
+                    let _ = open::that(url);
+                    return;
+                }
             }
         }
 

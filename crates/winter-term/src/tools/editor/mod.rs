@@ -555,8 +555,12 @@ impl EditorPage {
     }
 
     /// What each character of a line is, for the language the file is in.
-    /// A file in no language this knows is one long run of plain text.
+    /// A file in no language this knows is one long run of plain text, except
+    /// that git's own `#` lines in a message are comments.
     fn colors_of(&self, index: usize, line: &str) -> Vec<Token> {
+        if commit::is_message_file(&self.doc().path) && commit::is_comment_line(line) {
+            return vec![Token::Comment; line.chars().count()];
+        }
         let Some(syntax) = self.doc().syntax else {
             return Vec::new();
         };
@@ -1950,6 +1954,32 @@ mod tests {
             std::fs::read_to_string(path).expect("reads"),
             "fix\n# Please enter\n"
         );
+    }
+
+    #[test]
+    fn test_ctrl_shift_c_saves_and_closes_a_commit_message() {
+        let tmp = TempDir::new("ctrl-shift-c");
+        let (mut page, path) = message_page(&tmp);
+        press(&mut page, "fix");
+        // The window reports the capital with Shift held, which is what a
+        // real key press looks like.
+        let chord = Key {
+            code: KeyCode::Char('C'),
+            shift: true,
+            ..ctrl('c')
+        };
+        assert_eq!(page.on_key(&chord), PageOutcome::Close);
+        assert_eq!(
+            std::fs::read_to_string(&path).expect("reads"),
+            "fix\n# Please enter\n"
+        );
+
+        let (mut page, _) = message_page(&tmp);
+        let lower = Key {
+            shift: true,
+            ..ctrl('c')
+        };
+        assert_eq!(page.on_key(&lower), PageOutcome::Close);
     }
 
     #[test]

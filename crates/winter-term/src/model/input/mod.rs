@@ -391,6 +391,24 @@ impl Key {
         }
     }
 
+    /// This key as a shortcut is matched: a letter pressed with Ctrl or Alt is
+    /// the lowercase letter, with Shift reported by the `shift` flag alone.
+    ///
+    /// The window reports the character Shift produces, so `Ctrl-Shift-C`
+    /// arrives as `Char('C')`. A binding written against `Char('c')` would
+    /// never fire, and neither would one written against `Char('C')` when a
+    /// layout reports the other. Without Ctrl or Alt the key is typing, and a
+    /// capital stays the capital typed.
+    pub fn chorded(&self) -> Self {
+        match (self.ctrl || self.alt, self.code) {
+            (true, KeyCode::Char(c)) if c.is_ascii_uppercase() => Self {
+                code: KeyCode::Char(c.to_ascii_lowercase()),
+                ..self.clone()
+            },
+            _ => self.clone(),
+        }
+    }
+
     /// `code` with no modifier held, which for a letter is the letter as
     /// typed: `Key::plain(KeyCode::Char('S'))` is what Shift-s arrives as.
     pub fn plain(code: KeyCode) -> Self {
@@ -604,6 +622,30 @@ mod tests {
         assert_eq!(KeyCode::from_web_name("Unidentified"), None);
     }
     use super::test_support::resolve_simple;
+
+    #[test]
+    fn test_a_chord_reads_as_the_lowercase_letter_but_typing_keeps_its_capital() {
+        let ctrl_shift_c = Key {
+            code: KeyCode::Char('C'),
+            ..Key::with_ctrl_shift(KeyCode::Char('c'))
+        };
+        assert_eq!(ctrl_shift_c.chorded(), Key::with_ctrl_shift(KeyCode::Char('c')));
+        let alt_shift_q = Key {
+            shift: true,
+            ..Key::with_alt(KeyCode::Char('Q'))
+        };
+        assert_eq!(alt_shift_q.chorded().code, KeyCode::Char('q'));
+        assert_eq!(
+            Key::plain(KeyCode::Char('S')).chorded(),
+            Key::plain(KeyCode::Char('S')),
+            "Shift-s typed is the capital"
+        );
+        assert_eq!(
+            Key::with_ctrl(KeyCode::Char('+')).chorded(),
+            Key::with_ctrl(KeyCode::Char('+')),
+            "not a letter"
+        );
+    }
 
     #[test]
     fn test_page_mode_still_honors_the_window_layout_chords() {

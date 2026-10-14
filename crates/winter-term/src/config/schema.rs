@@ -4,7 +4,7 @@ use super::{ColorOverrides, CursorConfig, SecurityConfig};
 use std::collections::HashMap;
 
 use super::theme::ANSI_COLOR_NAMES;
-use winter_render::{ControlsSide, CursorShape, ThemeRgb};
+use winter_render::{ControlsSide, CursorShape, GitColors, SyntaxColors, ThemeRgb};
 
 // ========================================================================
 // KDL schema
@@ -67,9 +67,6 @@ pub(super) struct KdlSecurity {
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) struct KdlStatusBar {
-    pub(crate) normal_icon: Option<String>,
-    pub(crate) insert_icon: Option<String>,
-    pub(crate) block_icon: Option<String>,
     pub(crate) show: Option<bool>,
     pub(crate) show_mode: Option<bool>,
 }
@@ -90,6 +87,10 @@ pub(super) struct KdlColors {
     // Nested blocks: ansi { red "#c22727" }, brights { red "#d43f30" }
     pub(crate) ansi: Option<HashMap<String, String>>,
     pub(crate) brights: Option<HashMap<String, String>>,
+    // Nested block: git { modified "#8fb1f5" }
+    pub(crate) git: Option<HashMap<String, String>>,
+    // Nested block: syntax { comment "#718b9f" }
+    pub(crate) syntax: Option<HashMap<String, String>>,
     // Nested block: indexed { "136" "#af8700" }
     pub(crate) indexed: Option<HashMap<String, String>>,
 }
@@ -132,6 +133,23 @@ pub(super) fn color_named_block_kdl(name: &str, colors: &[Option<ThemeRgb>; 8]) 
     out.push_str("    }\n");
     Some(out)
 }
+/// The `git` block's colors by name; a name nothing has, or a value that is not
+/// a hex color, is left unset.
+fn git_from_map(map: Option<HashMap<String, String>>) -> GitColors {
+    let mut git = GitColors::default();
+    for (name, value) in map.unwrap_or_default() {
+        git.set(&name, ThemeRgb::parse_hex(&value));
+    }
+    git
+}
+/// The `syntax` block's colors by name, read like the `git` block's.
+fn syntax_from_map(map: Option<HashMap<String, String>>) -> SyntaxColors {
+    let mut syntax = SyntaxColors::default();
+    for (name, value) in map.unwrap_or_default() {
+        syntax.set(&name, ThemeRgb::parse_hex(&value));
+    }
+    syntax
+}
 pub(super) fn color_overrides_from_kdl(kdl: KdlColors) -> ColorOverrides {
     fn hex(s: Option<String>) -> Option<ThemeRgb> {
         s.and_then(|v| ThemeRgb::parse_hex(&v))
@@ -153,6 +171,8 @@ pub(super) fn color_overrides_from_kdl(kdl: KdlColors) -> ColorOverrides {
         foreground: hex(kdl.foreground),
         cursor_bg: hex(kdl.cursor_bg),
         cursor_fg: hex(kdl.cursor_fg),
+        git: git_from_map(kdl.git),
+        syntax: syntax_from_map(kdl.syntax),
         scrollbar: hex(kdl.scrollbar),
         selection_bg: hex(kdl.selection_bg),
         selection_fg: hex(kdl.selection_fg),

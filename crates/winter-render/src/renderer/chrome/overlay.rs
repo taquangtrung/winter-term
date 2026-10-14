@@ -6,12 +6,10 @@ use super::paint::{
 };
 use super::view::{DropdownImage, InputView, PaletteView, WhichKeyView};
 use super::{
-    DROPDOWN_RADIUS, DROPDOWN_SHADOW, DROPDOWN_SHADOW_ALPHA, INPUT_WIDTH_RATIO, MENU_BORDER_MIX,
-    MENU_HOVER_INSET, PALETTE_HEIGHT_RATIO, PALETTE_ITEM_PAD_X, PALETTE_ITEM_PAD_Y,
-    PALETTE_JUMP_HEIGHT_RATIO, PALETTE_WIDTH_RATIO, SHADOW_COLOR, WHICH_KEY_HEIGHT_RATIO,
-    WHICH_KEY_WIDTH_RATIO,
+    DROPDOWN_RADIUS, DROPDOWN_SHADOW, DROPDOWN_SHADOW_ALPHA, INPUT_WIDTH_RATIO, MENU_HOVER_INSET,
+    PALETTE_HEIGHT_RATIO, PALETTE_ITEM_PAD_X, PALETTE_ITEM_PAD_Y, PALETTE_JUMP_HEIGHT_RATIO,
+    PALETTE_WIDTH_RATIO, SHADOW_COLOR, WHICH_KEY_HEIGHT_RATIO, WHICH_KEY_WIDTH_RATIO,
 };
-use crate::renderer::colors::mix_rgb;
 use crate::renderer::glyphs::FontCtx;
 use crate::tabbar::{
     layout as tabbar_layout, DropdownLayout, MenuItem, Region, TabbarLayout, TopTabbar,
@@ -40,7 +38,7 @@ pub(super) fn toast_rgba(
 ) -> DropdownImage {
     const PAD_X: f32 = 14.0;
     const PAD_Y: f32 = 7.0;
-    const RADIUS: f32 = 8.0;
+    const RADIUS: f32 = 4.0;
     const SHADOW_MARGIN: f32 = 8.0;
     /// Gap from the right edge and from the bottom of the tab bar, in pixels.
     const EDGE_GAP: f32 = 16.0;
@@ -88,7 +86,7 @@ pub(super) fn toast_rgba(
     }
 
     // Panel background with a hairline border.
-    let border = mix_rgb(theme.menu_bg, Rgb::new(255, 255, 255), MENU_BORDER_MIX);
+    let border = theme.divider;
     fill_rounded_rect(
         &mut rgba,
         canvas,
@@ -225,7 +223,7 @@ pub(super) fn url_tooltip_rgba(
         }
     }
 
-    let border = mix_rgb(theme.menu_bg, Rgb::new(255, 255, 255), MENU_BORDER_MIX);
+    let border = theme.divider;
     fill_rounded_rect(
         &mut rgba,
         canvas,
@@ -396,7 +394,7 @@ fn panel_rgba(
     // Elevated rounded panel: a subtle hairline border, then the surface inset
     // one pixel within it, then the rounded hover pill for the selected row. The
     // first row begins below the panel's top padding.
-    let border = mix_rgb(theme.menu_bg, Rgb::new(255, 255, 255), MENU_BORDER_MIX);
+    let border = theme.divider;
     fill_rounded_rect(&mut rgba, canvas, panel_rect, DROPDOWN_RADIUS, border, 1.0);
     fill_rounded_rect(
         &mut rgba,
@@ -414,7 +412,7 @@ fn panel_rgba(
             panel_w - 2.0 * MENU_HOVER_INSET,
             layout.item_h - 2.0 * MENU_HOVER_INSET,
         );
-        let radius = (DROPDOWN_RADIUS - MENU_HOVER_INSET).max(0.0);
+        let radius = 2.0;
         fill_rounded_rect(
             &mut rgba,
             canvas,
@@ -571,7 +569,7 @@ pub(super) fn palette_rgba(
     }
 
     // Elevated rounded panel with hairline border.
-    let border = mix_rgb(theme.menu_bg, Rgb::new(255, 255, 255), MENU_BORDER_MIX);
+    let border = theme.divider;
     fill_rounded_rect(&mut rgba, canvas, panel_rect, DROPDOWN_RADIUS, border, 1.0);
     fill_rounded_rect(
         &mut rgba,
@@ -599,7 +597,7 @@ pub(super) fn palette_rgba(
             panel_w - 2.0 * MENU_HOVER_INSET,
             item_h - 2.0 * hover_v_inset,
         );
-        let radius = (DROPDOWN_RADIUS - MENU_HOVER_INSET).max(0.0);
+        let radius = 2.0;
         fill_rounded_rect(
             &mut rgba,
             canvas,
@@ -850,7 +848,7 @@ pub(super) fn which_key_rgba(
     }
 
     // Elevated rounded panel with hairline border.
-    let border = mix_rgb(theme.menu_bg, Rgb::new(255, 255, 255), MENU_BORDER_MIX);
+    let border = theme.divider;
     fill_rounded_rect(&mut rgba, canvas, panel_rect, DROPDOWN_RADIUS, border, 1.0);
     fill_rounded_rect(
         &mut rgba,
@@ -998,7 +996,7 @@ pub(super) fn input_rgba(
     }
 
     // Elevated rounded panel with hairline border.
-    let border = mix_rgb(theme.menu_bg, Rgb::new(255, 255, 255), MENU_BORDER_MIX);
+    let border = theme.divider;
     fill_rounded_rect(&mut rgba, canvas, panel_rect, DROPDOWN_RADIUS, border, 1.0);
     fill_rounded_rect(
         &mut rgba,
