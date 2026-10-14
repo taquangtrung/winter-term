@@ -71,7 +71,8 @@ window {
     "C+PageDown" "next_tab"
     "C+[" "prev_tab"
     "C+]" "next_tab"
-    "C+S+t" "new_tab"
+    "C+S+n" "new_tab"
+    "C+S+M+n" "new_window"
     "C+S+w" "close_tab"
     "C+S+q" "close_tab"
 

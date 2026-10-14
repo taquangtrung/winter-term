@@ -281,26 +281,13 @@ impl App {
             return false;
         }
 
-        // Escape belongs to Winter's own features before it belongs to the
-        // program underneath, whatever that program is.
-        //
-        // In Insert mode the first bare Escape switches to Normal mode, even
-        // with a program running. In Normal mode, a bare Escape first goes to
-        // whatever Winter is holding open (a half-typed command, a search, a
-        // quick-select); only when there is none, and a program is running
-        // (or the shell is mid tab-completion), is it written to the PTY.
+        // In Normal mode, a bare Escape first goes to whatever Winter is
+        // holding open (a half-typed command, a search, a quick-select);
+        // only when there is none, and a program is running (or the shell is
+        // mid tab-completion), is it written to the PTY.
+        // In Insert mode, bare Escape is not intercepted here and passes
+        // through to the PTY. Normal mode is entered via Alt-Escape or Ctrl-Shift-Space.
         let bare_esc = key.code == KeyCode::Escape && !key.alt && !key.ctrl && !key.shift;
-        if bare_esc && mode == Mode::Insert {
-            let switch = input::Action::SwitchMode(
-                Mode::Insert.apply(crate::model::mode::ModeEvent::EnterNormal),
-            );
-            self.handle_action(switch, focused);
-            self.update_window_title();
-            if let Some(window) = &self.window {
-                window.request_redraw();
-            }
-            return false;
-        }
         if bare_esc && mode == Mode::Normal && !self.escape_has_winter_target() {
             let pending_tab_completion = self.pending_tab_completion.remove(&focused);
             let has_foreground_process = self
@@ -610,6 +597,10 @@ impl App {
                 self.finalize_tab_drag();
                 self.copy_selection();
                 self.copy_selection_to_primary();
+                if let Some(window) = &self.window {
+                    window.set_cursor(CursorIcon::Default);
+                    window.request_redraw();
+                }
             }
             (ElementState::Pressed, MouseButton::Middle) => {
                 self.paste_from_primary();
@@ -719,7 +710,17 @@ impl App {
             return;
         }
 
-        if self.pointer.mouse_down {
+        let is_tab_dragging = self.tabs.drag_start.is_some_and(|(_, sx, sy)| {
+            ((x - sx).powi(2) + (y - sy).powi(2)).sqrt() >= super::strip::DRAG_THRESHOLD_PX
+        });
+        if self.tabs.drag_start.is_some() {
+            self.dirty = true;
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+
+        if self.pointer.mouse_down && self.tabs.drag_start.is_none() {
             // Resolved against the pane the drag started in, not just the one
             // under the pointer, so running off an edge keeps selecting.
             if let Some((tab_id, row, col)) = self.drag_cell_at(x, y) {
@@ -768,18 +769,27 @@ impl App {
             }
         }
 
-        // Update hovered hyperlink and cursor icon (divider resize or pointer).
+        // Update hovered hyperlink and cursor icon (divider resize, tab drag, or pointer).
         let new_url = self.hovered_link_at(x, y);
         self.pointer.hovered_url = new_url;
         let vp = self.content_viewport();
         let icon = if let Some(direction) = self.edge_resize_direction(x, y) {
             CursorIcon::from(direction)
+        } else if is_tab_dragging {
+            CursorIcon::Grabbing
         } else {
             match self.layout().divider_at(x, y, vp) {
                 Some(crate::model::layout::Direction::Vertical) => CursorIcon::EwResize,
                 Some(crate::model::layout::Direction::Horizontal) => CursorIcon::NsResize,
                 None => {
-                    if self.pointer.hovered_url.is_some() {
+                    if self.pointer.hovered_url.is_some()
+                        || matches!(
+                            self.tabs.strip_hover,
+                            super::strip::StripHit::Tab(_)
+                                | super::strip::StripHit::Close(_)
+                                | super::strip::StripHit::NewTab(_)
+                        )
+                    {
                         CursorIcon::Pointer
                     } else {
                         CursorIcon::Default
@@ -950,7 +960,7 @@ mod tests {
     }
 
     #[test]
-    fn test_first_escape_switches_to_normal_even_inside_a_full_screen_app() {
+    fn test_bare_escape_in_insert_mode_reaches_program_in_full_screen_app() {
         let (mut app, id) = app_pane_and_id();
         app.config.status_bar.enabled = false;
         app.terminals
@@ -964,14 +974,30 @@ mod tests {
 
         assert_eq!(
             app.modes[&id],
-            Mode::Normal,
-            "Winter takes the first Escape"
+            Mode::Insert,
+            "bare Escape belongs to the program, so Winter stays in Insert"
         );
         assert!(app.notice.is_none());
         assert!(
-            !echoed_escape(&mut app, id, Duration::from_millis(300)),
-            "the program was sent nothing"
+            echoed_escape(&mut app, id, Duration::from_secs(3)),
+            "the program received the Escape"
         );
+    }
+
+    #[test]
+    fn test_alt_escape_switches_to_normal_mode() {
+        let (mut app, id) = app_pane_and_id();
+        app.terminals
+            .get_mut(&id)
+            .unwrap()
+            .grid_mut()
+            .enter_alt_screen();
+        app.modifiers = winit::keyboard::ModifiersState::ALT.into();
+
+        let (logical, physical) = esc();
+        assert!(!app.handle_key(ElementState::Pressed, logical, physical));
+
+        assert_eq!(app.modes[&id], Mode::Normal);
     }
 
     #[test]
@@ -1054,9 +1080,9 @@ mod tests {
     }
 
     #[test]
-    fn test_single_escape_switches_to_normal_at_a_bare_prompt() {
+    fn test_alt_escape_switches_to_normal_at_a_bare_prompt() {
         // A real shell sitting at its prompt: primary screen, no foreground
-        // child, so a single Escape switches modes.
+        // child, Alt-Escape switches modes.
         let mut app = App::new();
         app.window_keymap = crate::model::input::WindowKeymap::default();
         let id = app.layout().panes()[0];
@@ -1076,6 +1102,7 @@ mod tests {
         }
         app.terminals.insert(id, terminal);
         app.modes.insert(id, Mode::Insert);
+        app.modifiers = winit::keyboard::ModifiersState::ALT.into();
         let (logical, physical) = esc();
         assert!(!app.handle_key(ElementState::Pressed, logical, physical));
         assert_eq!(app.modes[&id], Mode::Normal);

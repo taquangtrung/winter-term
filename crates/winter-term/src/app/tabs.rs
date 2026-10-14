@@ -20,10 +20,10 @@ use winter_render::TabbarHit;
 /// The window's layout of tab groups and the state of the strips drawn over
 /// them: hover, an in-progress drag, the rename prompt, and a recency walk.
 pub(crate) struct TabsState {
-    /// The tab being dragged along its strip and the pointer x position when
+    /// The tab being dragged along its strip and the pointer (x, y) position when
     /// the drag began. `None` when no drag is in progress. Cleared on mouse
     /// release.
-    pub(crate) drag_start: Option<(TabId, f32)>,
+    pub(crate) drag_start: Option<(TabId, f32, f32)>,
     /// Title-bar element currently under the cursor; drives hover highlights.
     pub(crate) hover: TabbarHit,
     pub(crate) hover_pos: Option<(f32, f32)>,
@@ -110,6 +110,22 @@ impl App {
             return;
         };
         self.push_new_tab(id, terminal);
+    }
+
+    /// Open a new window running the binary in a new process.
+    pub(crate) fn new_window(&mut self) {
+        let Some(exe) = crate::terminal::session::runnable_current_exe() else {
+            self.set_error("new_window: could not determine binary path".to_string());
+            return;
+        };
+        let mut cmd = std::process::Command::new(exe);
+        if let Some(cwd) = self.focused_start_cwd() {
+            cmd.env("WINTER_CWD", &cwd);
+            cmd.current_dir(&cwd);
+        }
+        if let Err(e) = cmd.spawn() {
+            self.set_error(format!("failed to spawn new window: {e}"));
+        }
     }
 
     /// Open a new tab whose terminal is attached to a running mux session;
@@ -266,10 +282,17 @@ impl App {
         }
     }
 
-    /// Move `pane` to where `target` sits on their shared strip.
+    /// Move `pane` to where `target` sits on its strip or across panes.
     pub(crate) fn move_tab_to(&mut self, tab: TabId, target: TabId) {
         if self.layout_mut().move_tab_to(tab, target) {
-            self.dirty = true;
+            self.after_tab_change();
+        }
+    }
+
+    /// Move `tab` into the group holding `target_group_tab`, at the end of that group.
+    pub(crate) fn move_tab_to_group(&mut self, tab: TabId, target_group_tab: TabId) {
+        if self.layout_mut().move_tab_to_group(tab, target_group_tab) {
+            self.after_tab_change();
         }
     }
 

@@ -218,6 +218,8 @@ pub enum Action {
     MoveTabRight,
     /// Open a new tab.
     NewTab,
+    /// Open a new window.
+    NewWindow,
     /// Activate the next tab.
     NextTab,
     /// Paste the clipboard into the PTY.

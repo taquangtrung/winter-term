@@ -193,6 +193,83 @@ pub(super) fn buffer_width(buffer: &glyphon::Buffer) -> f32 {
         .map(|run| run.line_w)
         .fold(0.0, f32::max)
 }
+/// Query the desktop environment's configured interface font name.
+fn system_desktop_font_name() -> Option<&'static str> {
+    static FONT_NAME: std::sync::OnceLock<Option<String>> = std::sync::OnceLock::new();
+    FONT_NAME
+        .get_or_init(|| {
+            #[cfg(target_os = "linux")]
+            {
+                let output = std::process::Command::new("gsettings")
+                    .args(["get", "org.gnome.desktop.interface", "font-name"])
+                    .output()
+                    .ok()?;
+                if output.status.success() {
+                    let raw = String::from_utf8_lossy(&output.stdout);
+                    return parse_system_font_name(&raw);
+                }
+            }
+            #[cfg(target_os = "macos")]
+            {
+                return Some("SF Pro".to_string());
+            }
+            #[cfg(target_os = "windows")]
+            {
+                return Some("Segoe UI".to_string());
+            }
+            #[allow(unreachable_code)]
+            None
+        })
+        .as_deref()
+}
+
+/// Parse a raw font name string from desktop settings (e.g. `'Noto Sans 10'` -> `"Noto Sans"`).
+fn parse_system_font_name(raw: &str) -> Option<String> {
+    let trimmed = raw.trim().trim_matches('\'').trim_matches('"').trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let font_name = if let Some(last_space) = trimmed.rfind(' ') {
+        let suffix = &trimmed[last_space + 1..];
+        if suffix.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            trimmed[..last_space].trim()
+        } else {
+            trimmed
+        }
+    } else {
+        trimmed
+    };
+    if font_name.is_empty() {
+        None
+    } else {
+        Some(font_name.to_string())
+    }
+}
+
+/// Resolve the best available proportional UI family, preferring the desktop
+/// environment's configured interface font, then clean modern sans-serif fallbacks.
+pub(super) fn ui_family(font_system: &FontSystem) -> Family<'static> {
+    if let Some(sys_name) = system_desktop_font_name() {
+        if font_system.db().faces().any(|face| {
+            face.families
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(sys_name))
+        }) {
+            return Family::Name(sys_name);
+        }
+    }
+    for candidate in ["Inter", "SF Pro"] {
+        if font_system.db().faces().any(|face| {
+            face.families
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(candidate))
+        }) {
+            return Family::Name(candidate);
+        }
+    }
+    Family::SansSerif
+}
+
 /// Shape one line of chrome text into a buffer without touching the GPU. With
 /// `proportional`, it uses a sans-serif UI font instead of the terminal family.
 pub(super) fn shape_chrome_line(
@@ -209,7 +286,7 @@ pub(super) fn shape_chrome_line(
     );
     buffer.set_size(Some(f32::MAX), Some(ctx.line_height));
     let family = if proportional {
-        Family::SansSerif
+        ui_family(font_system)
     } else {
         base_family(ctx.family)
     };
@@ -288,15 +365,16 @@ pub(super) fn draw_highlighted_label(
     let weight = if bold {
         parse_weight(ctx.bold_weight, DEFAULT_BOLD_WEIGHT)
     } else {
-        parse_weight(ctx.normal_weight, glyphon::cosmic_text::Weight::NORMAL)
+        glyphon::cosmic_text::Weight::MEDIUM
     };
 
     // Shape the whole label in one buffer so every glyph shares the same font
     // and size; color the matched characters with attribute spans. Shaping the
     // label in per-match fragments lets cosmic-text resolve different fallback
     // fonts per segment, which makes the matched glyphs render unevenly.
+    let family = ui_family(font_system);
     let base_attrs = Attrs::new()
-        .family(Family::SansSerif)
+        .family(family)
         .color(base_color)
         .weight(weight);
     let mut attrs_list = glyphon::AttrsList::new(&base_attrs);
@@ -306,7 +384,7 @@ pub(super) fn draw_highlighted_label(
         let len = ch.len_utf8();
         if match_positions.binary_search(&i).is_ok() {
             let span = Attrs::new()
-                .family(Family::SansSerif)
+                .family(family)
                 .color(accent_color)
                 .weight(weight);
             attrs_list.add_span(byte..byte + len, &span);
@@ -381,5 +459,33 @@ mod tests {
         assert!(rounded_rect_sdf(1.0, 1.0, rect, radius) > 0.0);
         // ...while the middle of an edge, the same depth in, is inside.
         assert!(rounded_rect_sdf(1.0, 50.0, rect, radius) < 0.0);
+    }
+
+    #[test]
+    fn test_parse_system_font_name() {
+        assert_eq!(
+            parse_system_font_name("'Noto Sans 10'"),
+            Some("Noto Sans".to_string())
+        );
+        assert_eq!(
+            parse_system_font_name("\"Cantarell 11\""),
+            Some("Cantarell".to_string())
+        );
+        assert_eq!(
+            parse_system_font_name("Inter Medium 10.5"),
+            Some("Inter Medium".to_string())
+        );
+        assert_eq!(
+            parse_system_font_name("SF Pro"),
+            Some("SF Pro".to_string())
+        );
+        assert_eq!(parse_system_font_name(""), None);
+    }
+
+    #[test]
+    fn test_ui_family_resolves_clean_sans_serif() {
+        let font_system = FontSystem::new();
+        let family = ui_family(&font_system);
+        assert!(matches!(family, Family::Name(_) | Family::SansSerif));
     }
 }

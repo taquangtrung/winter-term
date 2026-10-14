@@ -131,7 +131,7 @@ impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
             enabled: true,
-            show_mode: true,
+            show_mode: false,
         }
     }
 }
@@ -638,7 +638,7 @@ impl Config {
             .map(|sb| {
                 StatusBarConfig {
                     enabled: sb.show.unwrap_or(true),
-                    show_mode: sb.show_mode.unwrap_or(true),
+                    show_mode: sb.show_mode.unwrap_or(false),
                 }
             })
             .unwrap_or_default();
@@ -1388,7 +1388,7 @@ cursor {
         assert_eq!(parsed.font_size, 18.0);
         assert_eq!(parsed.opacity, 0.8);
         assert!(!parsed.status_bar.enabled);
-        assert!(parsed.status_bar.show_mode);
+        assert!(!parsed.status_bar.show_mode);
     }
 
     #[test]
@@ -1571,7 +1571,7 @@ cursor {
     #[test]
     fn test_status_bar_visibility_defaults_off_and_parses_on() {
         let default = Config::default().status_bar;
-        assert!(default.enabled && default.show_mode);
+        assert!(default.enabled && !default.show_mode);
 
         let config = Config::parse(
             r#"
@@ -1581,16 +1581,18 @@ status-bar {
 "#,
         );
         assert!(!config.status_bar.enabled);
-        assert!(config.status_bar.show_mode);
+        assert!(!config.status_bar.show_mode);
 
         let config = Config::parse(
             r#"
 status-bar {
     show #true
+    show-mode #true
 }
 "#,
         );
         assert!(config.status_bar.enabled);
+        assert!(config.status_bar.show_mode);
     }
 
     #[test]

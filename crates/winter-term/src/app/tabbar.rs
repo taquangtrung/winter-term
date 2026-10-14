@@ -97,7 +97,8 @@ const SEARCH_ITEMS: &[ItemDef] = &[
 ];
 
 const MODERN_ITEMS: &[ItemDef] = &[
-    leaf("new_tab", "New Tab", "Ctrl-Shift-T"),
+    leaf("new_tab", "New Tab", "Ctrl-Shift-N"),
+    leaf("new_window", "New Window", "Ctrl-Shift-Alt-N"),
     leaf("close_tab", "Close Tab", "Ctrl-Shift-W"),
     leaf("close_other_tabs", "Close Other Tabs", "Shift-Alt-Q"),
     leaf("rename_tab", "Rename Tab", ""),
@@ -117,7 +118,8 @@ const CLASSIC_MENUS: &[MenuDef] = &[
     MenuDef {
         title: "File",
         items: &[
-            leaf("new_tab", "New Tab", "Ctrl-Shift-T"),
+            leaf("new_tab", "New Tab", "Ctrl-Shift-N"),
+            leaf("new_window", "New Window", "Ctrl-Shift-Alt-N"),
             leaf("close_tab", "Close Tab", "Ctrl-Shift-W"),
             leaf("close_other_tabs", "Close Other Tabs", "Shift-Alt-Q"),
             leaf("rename_tab", "Rename Tab", ""),

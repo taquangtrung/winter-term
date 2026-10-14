@@ -921,6 +921,7 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ),
         ("mux_new_session", "Mux: New Session...", ""),
         ("new_tab", "New Tab", ""),
+        ("new_window", "New Window", ""),
         ("next_block", "Next Block", ""),
         ("next_tab", "Next Tab", ""),
         ("open_under_cursor", "Open: Path or URL at Point", ""),

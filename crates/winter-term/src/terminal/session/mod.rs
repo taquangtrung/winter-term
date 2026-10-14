@@ -55,6 +55,12 @@ const LINE_FEED: u8 = b'\n';
 const CARRIAGE_RETURN: u8 = b'\r';
 const BACKSPACE: u8 = 0x08;
 const HORIZONTAL_TAB: u8 = b'\t';
+/// Maximum time to wait for trailing line-rewrite bytes (e.g. text following
+/// `\r`, `\x1b[2K`, or `\x1b[G`) before rendering an intermediate frame,
+/// preventing cursor tearing and horizontal jumping during CLI progress
+/// updates and spinners.
+const PTY_COALESCE_TIMEOUT: Duration = Duration::from_millis(4);
+const COALESCE_TAIL_MAX: usize = 16;
 /// Final byte of the RIS escape sequence (`ESC c`, "Reset to Initial State").
 /// `reset` sends it; a full reset must restore legacy xterm keyboard encoding.
 const RIS: u8 = b'c';
@@ -443,6 +449,24 @@ impl Terminal {
             PaneTransport::Local { rx, .. } => {
                 while let Ok(chunk) = rx.try_recv() {
                     chunks.push(chunk);
+                }
+                if chunks_need_coalescing(&chunks) {
+                    let deadline = Instant::now() + PTY_COALESCE_TIMEOUT;
+                    while chunks_need_coalescing(&chunks) {
+                        let now = Instant::now();
+                        if now >= deadline {
+                            break;
+                        }
+                        match rx.recv_timeout(deadline - now) {
+                            Ok(next) => {
+                                chunks.push(next);
+                                while let Ok(chunk) = rx.try_recv() {
+                                    chunks.push(chunk);
+                                }
+                            }
+                            Err(_) => break,
+                        }
+                    }
                 }
             }
             PaneTransport::Mux { client, exited, .. } => {
@@ -1040,6 +1064,56 @@ fn shell_quote(text: &str) -> String {
 }
 
 // ========================================================================
+// Line Rewrite Coalescing
+// ========================================================================
+
+/// Whether `slice` ends with a line-rewrite or cursor-reset control sequence
+/// (such as `\r`, `\x1b[2K`, `\x1b[G`, or a cut-off escape sequence) that is
+/// typically followed immediately by the replacement text of a progress bar
+/// or spinner.
+fn is_line_rewrite_pending(slice: &[u8]) -> bool {
+    if slice.is_empty() || slice.ends_with(b"\n") {
+        return false;
+    }
+    slice.ends_with(b"\r")
+        || slice.ends_with(b"\x1b[K")
+        || slice.ends_with(b"\x1b[0K")
+        || slice.ends_with(b"\x1b[2K")
+        || slice.ends_with(b"\x1b[G")
+        || slice.ends_with(b"\x1b[0G")
+        || slice.ends_with(b"\x1b[1G")
+        || slice.ends_with(b"\x1b[?25l")
+        || slice.ends_with(b"\x1b")
+        || slice.ends_with(b"\x1b[")
+        || slice.ends_with(b"\x1b[?")
+}
+
+/// Inspect the trailing bytes across `chunks` to determine if a line rewrite
+/// or cursor reset is in progress and more bytes should be coalesced before
+/// rendering a frame.
+fn chunks_need_coalescing(chunks: &[Vec<u8>]) -> bool {
+    let mut tail = [0u8; COALESCE_TAIL_MAX];
+    let mut count = 0;
+    for chunk in chunks.iter().rev() {
+        for &b in chunk.iter().rev() {
+            if count < COALESCE_TAIL_MAX {
+                tail[COALESCE_TAIL_MAX - 1 - count] = b;
+                count += 1;
+            } else {
+                break;
+            }
+        }
+        if count >= COALESCE_TAIL_MAX {
+            break;
+        }
+    }
+    if count == 0 {
+        return false;
+    }
+    is_line_rewrite_pending(&tail[COALESCE_TAIL_MAX - count..])
+}
+
+// ========================================================================
 // Tests
 // ========================================================================
 
@@ -1537,4 +1611,42 @@ mod tests {
             "a running `sleep` should count as a foreground process"
         );
     }
+
+    #[test]
+    fn test_is_line_rewrite_pending_detects_carriage_return_and_erasure() {
+        assert!(is_line_rewrite_pending(b"line\r"));
+        assert!(!is_line_rewrite_pending(b"line\r\n"));
+        assert!(!is_line_rewrite_pending(b"line\n"));
+        assert!(is_line_rewrite_pending(b"line\x1b[2K"));
+        assert!(is_line_rewrite_pending(b"line\x1b[K"));
+        assert!(is_line_rewrite_pending(b"line\x1b[0K"));
+        assert!(is_line_rewrite_pending(b"line\x1b[G"));
+        assert!(is_line_rewrite_pending(b"line\x1b[1G"));
+        assert!(is_line_rewrite_pending(b"line\x1b[0G"));
+        assert!(is_line_rewrite_pending(b"line\x1b[?25l"));
+        assert!(is_line_rewrite_pending(b"line\x1b"));
+        assert!(is_line_rewrite_pending(b"line\x1b["));
+        assert!(is_line_rewrite_pending(b"line\x1b[?"));
+        assert!(!is_line_rewrite_pending(b"regular line text"));
+        assert!(!is_line_rewrite_pending(b""));
+    }
+
+    #[test]
+    fn test_chunks_need_coalescing_inspects_across_chunk_boundaries() {
+        let single_cr = vec![b"Running command...\r".to_vec()];
+        assert!(chunks_need_coalescing(&single_cr));
+
+        let completed_line = vec![b"Running command...\r\n".to_vec()];
+        assert!(!chunks_need_coalescing(&completed_line));
+
+        let split_erase = vec![b"old progress \r\x1b[".to_vec(), b"2K".to_vec()];
+        assert!(chunks_need_coalescing(&split_erase));
+
+        let text_after_cr = vec![
+            b"old progress\r\x1b[2K".to_vec(),
+            b"new progress text".to_vec(),
+        ];
+        assert!(!chunks_need_coalescing(&text_after_cr));
+    }
 }
+

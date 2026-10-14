@@ -854,6 +854,7 @@ impl App {
                 frame.rect.height as u32,
                 frame.hover,
                 frame.edges,
+                frame.drop_target,
                 frame.rect.x,
                 frame.rect.y,
             ));

@@ -465,20 +465,100 @@ impl Layout {
         true
     }
 
-    /// Move `pane` to where `target` sits in their shared strip. Returns
-    /// whether it moved; tabs of different groups are left alone.
+    /// Whether `a` and `b` belong to the same tab group.
+    pub fn same_group(&self, a: TabId, b: TabId) -> bool {
+        find_group(&self.root, a)
+            .map(|g| g.members.contains(&b))
+            .unwrap_or(false)
+    }
+
+    /// Move `tab` to where `target` sits in its strip. If `target` is in the
+    /// same group, reorders within the strip. If `target` is in another group,
+    /// moves `tab` across groups to `target`'s position. If `tab` was the sole
+    /// member of its group, that group's split collapses.
     pub fn move_tab_to(&mut self, tab: TabId, target: TabId) -> bool {
-        let Some(group) = find_group_mut(&mut self.root, tab) else {
-            return false;
-        };
-        if tab == target || !group.members.contains(&target) {
+        if tab == target {
             return false;
         }
-        let from = group.position(tab);
-        let to = group.position(target);
-        let moved = group.members.remove(from);
-        group.members.insert(to, moved);
-        true
+        let from_group = match find_group(&self.root, tab) {
+            Some(g) => g,
+            None => return false,
+        };
+        let to_group = match find_group(&self.root, target) {
+            Some(g) => g,
+            None => return false,
+        };
+        if from_group.members.contains(&target) {
+            let group = find_group_mut(&mut self.root, tab).unwrap();
+            let from = group.position(tab);
+            let to = group.position(target);
+            let moved = group.members.remove(from);
+            group.members.insert(to, moved);
+            return true;
+        }
+        let to = to_group.position(target);
+        self.transfer_tab_to_group(tab, target, Some(to))
+    }
+
+    /// Move `tab` into the group holding `target_group_tab`, placing it at the
+    /// end of that group's strip.
+    pub fn move_tab_to_group(&mut self, tab: TabId, target_group_tab: TabId) -> bool {
+        let from_group = match find_group(&self.root, tab) {
+            Some(g) => g,
+            None => return false,
+        };
+        if !self.contains(target_group_tab) {
+            return false;
+        }
+        if from_group.members.contains(&target_group_tab) {
+            let group = find_group_mut(&mut self.root, tab).unwrap();
+            let from = group.position(tab);
+            let to = group.members.len().saturating_sub(1);
+            if from == to {
+                return false;
+            }
+            let moved = group.members.remove(from);
+            group.members.push(moved);
+            return true;
+        }
+        self.transfer_tab_to_group(tab, target_group_tab, None)
+    }
+
+    fn transfer_tab_to_group(
+        &mut self,
+        tab: TabId,
+        target_tab: TabId,
+        insert_at: Option<usize>,
+    ) -> bool {
+        let from_len = match find_group(&self.root, tab) {
+            Some(g) => g.members.len(),
+            None => return false,
+        };
+        if from_len > 1 {
+            let from_group = find_group_mut(&mut self.root, tab).unwrap();
+            from_group.remove(tab);
+            let to_group = find_group_mut(&mut self.root, target_tab).unwrap();
+            let pos = insert_at.unwrap_or(to_group.members.len()).min(to_group.members.len());
+            to_group.members.insert(pos, tab);
+            to_group.show(tab);
+            self.focused = tab;
+            true
+        } else {
+            let to_group_len = match find_group(&self.root, target_tab) {
+                Some(g) => g.members.len(),
+                None => return false,
+            };
+            let pos = insert_at.unwrap_or(to_group_len).min(to_group_len);
+            if !close_in(&mut self.root, tab) {
+                return false;
+            }
+            let to_group = find_group_mut(&mut self.root, target_tab).unwrap();
+            to_group.members.insert(pos.min(to_group.members.len()), tab);
+            to_group.show(tab);
+            self.focused = tab;
+            self.balance();
+            true
+        }
     }
 
     // --------------------------------------------------------------------
@@ -1364,6 +1444,58 @@ mod tests {
         assert!(!layout.move_tab(false), "already first");
         assert!(layout.move_tab(true));
         assert_eq!(layout.members(), vec![TabId(0), TabId(2), TabId(1)]);
+    }
+
+    #[test]
+    fn test_moving_a_tab_across_panes_when_source_has_multiple_tabs() {
+        let mut layout = Layout::new();
+        layout.add_tab(TabId(1));
+        layout.split(Direction::Horizontal, 0.5, TabId(2));
+        assert_eq!(layout.panes().len(), 2);
+        assert_eq!(layout.group_members(TabId(0)), vec![TabId(0), TabId(1)]);
+        assert_eq!(layout.group_members(TabId(2)), vec![TabId(2)]);
+
+        // Move TabId(1) from first pane to TabId(2)'s pane
+        assert!(layout.move_tab_to(TabId(1), TabId(2)));
+        assert_eq!(layout.panes().len(), 2, "both panes still exist");
+        assert_eq!(layout.group_members(TabId(0)), vec![TabId(0)]);
+        assert_eq!(layout.group_members(TabId(2)), vec![TabId(1), TabId(2)]);
+        assert_eq!(layout.focused(), TabId(1));
+    }
+
+    #[test]
+    fn test_moving_a_tab_across_panes_when_source_is_lone_tab_collapses_split() {
+        let mut layout = Layout::new();
+        layout.split(Direction::Horizontal, 0.5, TabId(1));
+        assert_eq!(layout.panes().len(), 2);
+        assert_eq!(layout.group_members(TabId(0)), vec![TabId(0)]);
+        assert_eq!(layout.group_members(TabId(1)), vec![TabId(1)]);
+
+        // Move TabId(0) (the sole tab in group 0) into TabId(1)'s group
+        assert!(layout.move_tab_to(TabId(0), TabId(1)));
+        assert_eq!(layout.panes().len(), 1, "empty group collapsed the split");
+        assert_eq!(layout.group_members(TabId(1)), vec![TabId(0), TabId(1)]);
+        assert_eq!(layout.focused(), TabId(0));
+    }
+
+    #[test]
+    fn test_moving_a_tab_to_end_of_group_same_and_different_panes() {
+        let mut layout = Layout::new();
+        layout.add_tab(TabId(1));
+        layout.add_tab(TabId(2));
+        // Members: [TabId(0), TabId(1), TabId(2)]
+        // Move TabId(0) to the end of its own group
+        assert!(layout.move_tab_to_group(TabId(0), TabId(1)));
+        assert_eq!(layout.members(), vec![TabId(1), TabId(2), TabId(0)]);
+
+        // Split into another pane
+        layout.split(Direction::Vertical, 0.5, TabId(3));
+        assert_eq!(layout.panes().len(), 2);
+        // Move TabId(1) from first group to the end of the second group (holding TabId(3))
+        assert!(layout.move_tab_to_group(TabId(1), TabId(3)));
+        assert_eq!(layout.group_members(TabId(0)), vec![TabId(2), TabId(0)]);
+        assert_eq!(layout.group_members(TabId(3)), vec![TabId(3), TabId(1)]);
+        assert_eq!(layout.focused(), TabId(1));
     }
 
     #[test]

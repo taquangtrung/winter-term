@@ -220,6 +220,17 @@ pub struct PaneTab {
     pub focused: bool,
     /// SVG document of the icon drawn before the title, or `None` for no icon.
     pub icon: Option<Vec<u8>>,
+    /// Whether this tab is currently being dragged.
+    pub dragging: bool,
+}
+
+/// Drop target feedback for a pane strip during tab drag and drop.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct PaneStripDropTarget {
+    /// Pixel x position within the strip where the vertical insertion line is drawn.
+    pub indicator_x: Option<f32>,
+    /// Whether this pane's content area below the strip is the drop target.
+    pub is_target_pane: bool,
 }
 
 /// What a point on a pane tab strip lands on.
@@ -982,7 +993,7 @@ mod tests {
             MenuStyle::Modern => vec![Menu {
                 title: "Menu".into(),
                 items: vec![
-                    leaf("New Tab", "Ctrl-Shift-T"),
+                    leaf("New Tab", "Ctrl-Shift-N"),
                     // A submenu parent: hovering it opens its children.
                     MenuItem {
                         children: vec![leaf("Vertical", ""), leaf("Horizontal", "")],

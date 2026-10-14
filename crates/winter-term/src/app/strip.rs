@@ -11,7 +11,7 @@ use super::App;
 
 /// How far, in pixels, a tab has to be dragged before letting go of it moves
 /// it rather than counting as a click.
-const DRAG_THRESHOLD_PX: f32 = 10.0;
+pub(crate) const DRAG_THRESHOLD_PX: f32 = 10.0;
 
 /// How far apart, in pixels, two group edges can sit and still count as
 /// shared, covering a rounding gap between neighbors.
@@ -38,6 +38,7 @@ pub(crate) enum StripHit {
 /// One pane strip, ready to rasterize: its tabs, their pixel layout, the
 /// area it covers, and what the pointer is over on it.
 pub(crate) struct StripFrame {
+    pub(crate) drop_target: winter_render::PaneStripDropTarget,
     pub(crate) edges: winter_render::PaneStripEdges,
     pub(crate) hover: winter_render::PaneStripHit,
     pub(crate) layout: winter_render::PaneStripLayout,
@@ -136,6 +137,10 @@ impl App {
     pub(crate) fn strip_frames(&self, viewport: Rect, (cw, ch): (f32, f32)) -> Vec<StripFrame> {
         let areas = self.strip_areas_in(viewport);
         let rects: Vec<Rect> = areas.iter().map(|(area, _)| area.rect).collect();
+        let (cx, cy) = self.pointer.cursor_pos;
+        let drag_info = self.tabs.drag_start.filter(|(_, sx, sy)| {
+            ((cx - sx).powi(2) + (cy - sy).powi(2)).sqrt() >= DRAG_THRESHOLD_PX
+        });
         areas
             .into_iter()
             .map(|(area, rect)| {
@@ -162,7 +167,55 @@ impl App {
                 // above it, which is divided from it like any other neighbor.
                 edges.top |=
                     viewport.y > 0.0 && (area.rect.y - viewport.y).abs() <= EDGE_TOLERANCE_PX;
+
+                let drop_target = if let Some((drag_tab, _, _)) = drag_info {
+                    let r = Self::layout_rect_to_pane(rect);
+                    let over_strip =
+                        cx >= r.x && cx < r.x + r.width && cy >= r.y && cy < r.y + r.height;
+                    if over_strip {
+                        let rel_x = cx - r.x;
+                        let mut found_ix = None;
+                        for tab_reg in &layout.tabs {
+                            if tab_reg.w <= 0.0 {
+                                continue;
+                            }
+                            if rel_x < tab_reg.x + tab_reg.w {
+                                if rel_x < tab_reg.x + tab_reg.w / 2.0 {
+                                    found_ix = Some(tab_reg.x);
+                                } else {
+                                    found_ix = Some(tab_reg.x + tab_reg.w);
+                                }
+                                break;
+                            }
+                        }
+                        let ix = found_ix.unwrap_or_else(|| {
+                            layout.tabs.last().map(|t| t.x + t.w).unwrap_or(0.0)
+                        });
+                        winter_render::PaneStripDropTarget {
+                            indicator_x: Some(ix),
+                            is_target_pane: false,
+                        }
+                    } else if let Some((target_pane, _)) = self.pane_at_pixel(cx, cy) {
+                        if area.members.contains(&target_pane) && !area.members.contains(&drag_tab)
+                        {
+                            winter_render::PaneStripDropTarget {
+                                indicator_x: Some(
+                                    layout.tabs.last().map(|t| t.x + t.w).unwrap_or(0.0),
+                                ),
+                                is_target_pane: true,
+                            }
+                        } else {
+                            winter_render::PaneStripDropTarget::default()
+                        }
+                    } else {
+                        winter_render::PaneStripDropTarget::default()
+                    }
+                } else {
+                    winter_render::PaneStripDropTarget::default()
+                };
+
                 StripFrame {
+                    drop_target,
                     edges,
                     hover,
                     layout,
@@ -176,10 +229,20 @@ impl App {
     /// Build the GPU `PaneTab`s for group `area`.
     pub(crate) fn pane_tabs(&self, area: &GroupArea) -> Vec<winter_render::PaneTab> {
         let focused = self.layout().focused();
+        let (cx, cy) = self.pointer.cursor_pos;
+        let dragging_tab = self.tabs.drag_start.and_then(|(pane, sx, sy)| {
+            let dist = ((cx - sx).powi(2) + (cy - sy).powi(2)).sqrt();
+            if dist >= DRAG_THRESHOLD_PX {
+                Some(pane)
+            } else {
+                None
+            }
+        });
         area.members
             .iter()
             .map(|&pane| winter_render::PaneTab {
                 active: pane == area.active,
+                dragging: dragging_tab == Some(pane),
                 focused: pane == focused,
                 icon: self.tab_icon(pane),
                 tab_id: pane.0,
@@ -253,7 +316,7 @@ impl App {
             (StripHit::Close(pane), _) | (StripHit::Tab(pane), true) => self.close_tab(pane),
             (StripHit::Tab(pane), false) => {
                 self.show_tab(pane);
-                self.tabs.drag_start = Some((pane, x));
+                self.tabs.drag_start = Some((pane, x, y));
             }
             (StripHit::NewTab(shown), false) => {
                 self.layout_mut().focus(shown);
@@ -277,18 +340,31 @@ impl App {
     }
 
     /// On release, move a dragged tab to where it was let go, when that is
-    /// another tab of the same strip and the pointer moved far enough to mean
-    /// a drag rather than a click.
+    /// another tab of the same strip or across panes, and the pointer moved
+    /// far enough to mean a drag rather than a click.
     pub(crate) fn finalize_tab_drag(&mut self) {
-        let Some((pane, start_x)) = self.tabs.drag_start.take() else {
+        let Some((pane, start_x, start_y)) = self.tabs.drag_start.take() else {
             return;
         };
         let (x, y) = self.pointer.cursor_pos;
-        if (x - start_x).abs() < DRAG_THRESHOLD_PX {
+        let dist = ((x - start_x).powi(2) + (y - start_y).powi(2)).sqrt();
+        if dist < DRAG_THRESHOLD_PX {
             return;
         }
-        if let StripHit::Tab(target) | StripHit::Close(target) = self.strip_hit(x, y) {
-            self.move_tab_to(pane, target);
+        match self.strip_hit(x, y) {
+            StripHit::Tab(target) | StripHit::Close(target) if target == pane => {}
+            StripHit::Tab(target) | StripHit::Close(target) => {
+                self.move_tab_to(pane, target);
+            }
+            _ => {
+                if let Some((area, _)) = self.strip_at(x, y) {
+                    self.move_tab_to_group(pane, area.active);
+                } else if let Some((target_pane, _)) = self.pane_at_pixel(x, y) {
+                    if !self.layout().same_group(pane, target_pane) {
+                        self.move_tab_to_group(pane, target_pane);
+                    }
+                }
+            }
         }
     }
 }
@@ -351,6 +427,119 @@ mod tests {
         assert!(
             second_tabs[0].focused,
             "tab in focused group should be marked focused"
+        );
+    }
+
+    #[test]
+    fn test_finalize_tab_drag_reorders_in_same_strip() {
+        let mut app = App::new();
+        let tab0 = app.layout().focused();
+        app.new_tab();
+        let tab1 = app.layout().focused();
+        assert_eq!(app.layout().members(), vec![tab0, tab1]);
+
+        // Drag tab1 back to tab0's position
+        let strip = app.strip_areas()[0].1;
+        let strip_y = strip.y + strip.height / 2.0;
+        app.tabs.drag_start = Some((tab1, 100.0, strip_y));
+        app.pointer.cursor_pos = (20.0, strip_y);
+        app.finalize_tab_drag();
+        assert_eq!(app.layout().members(), vec![tab1, tab0]);
+    }
+
+    #[test]
+    fn test_finalize_tab_drag_across_panes_into_other_strip() {
+        let mut app = App::new();
+        let tab0 = app.layout().focused();
+        app.new_tab();
+        let tab1 = app.layout().focused();
+        app.split_pane(crate::model::layout::Direction::Horizontal);
+        let tab2 = app.layout().focused();
+
+        // Pane 1 has [tab0, tab1], Pane 2 has [tab2]
+        assert_eq!(app.layout().panes().len(), 2);
+        assert_eq!(app.layout().group_members(tab0), vec![tab0, tab1]);
+        assert_eq!(app.layout().group_members(tab2), vec![tab2]);
+
+        // Drag tab1 into pane 2's strip over tab2
+        let pane2_rect = app.pane_rect(tab2).expect("pane 2 rect");
+        let strip2_y = pane2_rect.y - 10.0;
+        app.tabs.drag_start = Some((tab1, 20.0, 5.0));
+        app.pointer.cursor_pos = (pane2_rect.x + 20.0, strip2_y);
+
+        app.finalize_tab_drag();
+        assert_eq!(app.layout().panes().len(), 2);
+        assert_eq!(app.layout().group_members(tab0), vec![tab0]);
+        assert_eq!(app.layout().group_members(tab2), vec![tab1, tab2]);
+        assert_eq!(app.layout().focused(), tab1);
+    }
+
+    #[test]
+    fn test_finalize_tab_drag_into_other_pane_body_collapses_empty_source_pane() {
+        let mut app = App::new();
+        let tab0 = app.layout().focused();
+        app.split_pane(crate::model::layout::Direction::Horizontal);
+        let tab1 = app.layout().focused();
+        assert_eq!(app.layout().panes().len(), 2);
+
+        // Drag tab0 into tab1's pane content area
+        let pane1_rect = app.pane_rect(tab1).expect("pane 1 rect");
+        let drop_x = pane1_rect.x + pane1_rect.width / 2.0;
+        let drop_y = pane1_rect.y + pane1_rect.height / 2.0;
+
+        app.tabs.drag_start = Some((tab0, 20.0, 5.0));
+        app.pointer.cursor_pos = (drop_x, drop_y);
+
+        app.finalize_tab_drag();
+        // Since tab0 was the only tab in its pane, that pane collapses!
+        assert_eq!(app.layout().panes().len(), 1);
+        assert_eq!(app.layout().group_members(tab1), vec![tab1, tab0]);
+        assert_eq!(app.layout().focused(), tab0);
+    }
+
+    #[test]
+    fn test_strip_frames_drop_target_and_dragging_feedback() {
+        let mut app = App::new();
+        let tab0 = app.layout().focused();
+        app.split_pane(crate::model::layout::Direction::Horizontal);
+        let tab1 = app.layout().focused();
+        let viewport = Rect::new(0.0, 0.0, 800.0, 600.0);
+
+        // 1. Idle state: no dragging, no drop indicator
+        let frames = app.strip_frames(viewport, (10.0, 20.0));
+        assert_eq!(frames.len(), 2);
+        assert!(!frames[0].tabs[0].dragging);
+        assert_eq!(frames[0].drop_target.indicator_x, None);
+        assert!(!frames[0].drop_target.is_target_pane);
+
+        // 2. Active drag of tab0 over its own strip
+        let strip0 = app.strip_areas_in(viewport)[0].1;
+        app.tabs.drag_start = Some((tab0, 10.0, 10.0));
+        app.pointer.cursor_pos = (strip0.x + 30.0, strip0.y + 10.0);
+        let frames = app.strip_frames(viewport, (10.0, 20.0));
+        let frame0 = frames.iter().find(|f| f.tabs[0].tab_id == tab0.0).unwrap();
+        assert!(frame0.tabs[0].dragging, "dragged tab should be marked dragging");
+        assert!(
+            frame0.drop_target.indicator_x.is_some(),
+            "strip being hovered should show insertion indicator"
+        );
+        assert!(!frame0.drop_target.is_target_pane);
+
+        // 3. Active drag of tab0 over tab1's pane content body
+        let pane1_rect = app.pane_rect(tab1).expect("pane 1 rect");
+        app.pointer.cursor_pos = (
+            pane1_rect.x + pane1_rect.width / 2.0,
+            pane1_rect.y + pane1_rect.height / 2.0,
+        );
+        let frames = app.strip_frames(viewport, (10.0, 20.0));
+        let frame1 = frames.iter().find(|f| f.tabs[0].tab_id == tab1.0).unwrap();
+        assert!(
+            frame1.drop_target.is_target_pane,
+            "hovered target pane body should trigger target pane feedback"
+        );
+        assert!(
+            frame1.drop_target.indicator_x.is_some(),
+            "target pane strip should show insertion indicator at the end"
         );
     }
 }

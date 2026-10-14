@@ -16,8 +16,9 @@ use super::GpuRenderer;
 use super::{NoticeKind, StatusNotice};
 use crate::image::ImagePlacement;
 use crate::tabbar::{
-    self, layout as tabbar_layout, PaneStripEdges, PaneStripHit, PaneStripLayout, PaneTab, Region,
-    TabbarHit, TabbarLayout, TopTabbar, TAB_H_PAD_CELLS, ZOOM_CELLS,
+    self, layout as tabbar_layout, PaneStripDropTarget, PaneStripEdges, PaneStripHit,
+    PaneStripLayout, PaneTab, Region, TabbarHit, TabbarLayout, TopTabbar, TAB_H_PAD_CELLS,
+    ZOOM_CELLS,
 };
 use crate::theme::{Rgb, Theme};
 use glyphon::{Color, FontSystem, SwashCache};
@@ -314,10 +315,9 @@ impl GpuRenderer {
             let title = truncate_label(&labeled, max_chars);
             let active = i == tabbar.active_tab;
             let color = if active { active_tab } else { inactive_tab };
-            // Tab titles use the regular (non-bold) sans-serif UI weight, like
-            // VS Code's tab labels; the active tab is distinguished by its color
-            // and pill.
-            let buffer = self.tabbar_line_buffer(&title, color, false, true);
+            // Tab titles use the desktop environment's interface font; the active
+            // tab is bolded and distinguished by its color and pill.
+            let buffer = self.tabbar_line_buffer(&title, color, active, true);
             texts.push(TabbarText {
                 bounds: text_bounds(title_x, tab.y, title_end, tab.y + tab.h),
                 buffer,
@@ -1358,6 +1358,9 @@ const TAB_ICON_GAP_CELLS: f32 = 0.5;
 /// Height of the top accent indicator bar on selected tab pills, in pixels.
 const PANE_STRIP_ACTIVE_INDICATOR_PX: f32 = 2.0;
 
+/// Darker and more saturated deep royal blue accent for the active tab indicator (#1d4ed8).
+const PANE_STRIP_ACTIVE_INDICATOR_COLOR: Rgb = Rgb::new(0x1d, 0x4e, 0xd8);
+
 /// Border color mix strength for unfocused active tab outline.
 const UNFOCUSED_ACTIVE_BORDER_MIX: f32 = 0.15;
 
@@ -1373,6 +1376,7 @@ pub fn rasterize_pane_strip_rgba(
     theme: &Theme,
     hover: PaneStripHit,
     separator: Rgb,
+    drop_target: PaneStripDropTarget,
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
     ctx: &FontCtx,
@@ -1423,7 +1427,9 @@ pub fn rasterize_pane_strip_rgba(
         }
 
         let is_hovered = matches!(hover, PaneStripHit::Tab(id) | PaneStripHit::CloseTab(id) if id == tab.tab_id);
-        let pill_color = if tab.active {
+        let pill_color = if tab.dragging {
+            mix_rgb(PANE_STRIP_BAND_BG, PANE_STRIP_ACTIVE_BG, 0.25)
+        } else if tab.active {
             if tab.focused {
                 PANE_STRIP_ACTIVE_BG
             } else if is_hovered {
@@ -1437,6 +1443,7 @@ pub fn rasterize_pane_strip_rgba(
             inactive_bg
         };
 
+        let pill_alpha = if tab.dragging { 0.45 } else { 1.0 };
         let pill_bounds = (
             tab_reg.x + tabbar::TAB_GAP_PX / 2.0,
             tab_reg.y + tab_vpad_top,
@@ -1449,14 +1456,15 @@ pub fn rasterize_pane_strip_rgba(
             pill_bounds,
             SQUARE_CORNER,
             pill_color,
-            1.0,
+            pill_alpha,
         );
 
         // Decorate selected tab: an accent bar along the top edge of the active tab.
-        // In the focused pane, it uses the full cursor/accent color.
+        // In the focused pane, it uses a darker and more saturated royal blue accent.
         // In the non-focused pane, it uses a dimmed accent color and a subtle hairline border
         // so the selected tab remains immediately recognizable without competing for focus.
-        if tab.active {
+        if tab.active && !tab.dragging {
+            let active_indicator = PANE_STRIP_ACTIVE_INDICATOR_COLOR;
             if tab.focused {
                 fill_rounded_rect(
                     &mut rgba,
@@ -1468,12 +1476,12 @@ pub fn rasterize_pane_strip_rgba(
                         PANE_STRIP_ACTIVE_INDICATOR_PX,
                     ),
                     SQUARE_CORNER,
-                    theme.cursor_bg,
+                    active_indicator,
                     1.0,
                 );
             } else {
                 let unfocused_border = mix_rgb(unfocused_active_bg, bright_target, UNFOCUSED_ACTIVE_BORDER_MIX);
-                let unfocused_indicator = mix_rgb(theme.cursor_bg, PANE_STRIP_BAND_BG, DIM_FACTOR);
+                let unfocused_indicator = mix_rgb(active_indicator, PANE_STRIP_BAND_BG, DIM_FACTOR);
                 fill_rounded_rect(
                     &mut rgba,
                     canvas,
@@ -1525,7 +1533,7 @@ pub fn rasterize_pane_strip_rgba(
             ch,
         );
         let is_close_hovered = hover == PaneStripHit::CloseTab(tab.tab_id);
-        if is_close_hovered {
+        if is_close_hovered && !tab.dragging {
             let close_hover_color = mix_rgb(pill_color, theme.foreground, 0.18);
             fill_rounded_rect(
                 &mut rgba,
@@ -1539,13 +1547,16 @@ pub fn rasterize_pane_strip_rgba(
 
         // Close button vector 'X'
         {
-            let close_color = if is_close_hovered || is_hovered || (tab.active && tab.focused) {
+            let close_color = if tab.dragging {
+                mix_rgb(PANE_STRIP_BAND_BG, theme.ansi[8], 0.4)
+            } else if is_close_hovered || is_hovered || (tab.active && tab.focused) {
                 theme.foreground
             } else if tab.active {
                 mix_rgb(theme.foreground, PANE_STRIP_BAND_BG, DIM_FACTOR)
             } else {
                 theme.ansi[8]
             };
+            let close_alpha = if tab.dragging { 0.45 } else { 1.0 };
             let (cx, cy) = pill_center(close_pill);
             let size = (ch * 0.35).round();
             let half = size / 2.0;
@@ -1557,7 +1568,7 @@ pub fn rasterize_pane_strip_rgba(
                 (cx + half, cy + half),
                 thickness,
                 close_color,
-                1.0,
+                close_alpha,
             );
             fill_line_segment(
                 &mut rgba,
@@ -1566,7 +1577,7 @@ pub fn rasterize_pane_strip_rgba(
                 (cx + half, cy - half),
                 thickness,
                 close_color,
-                1.0,
+                close_alpha,
             );
         }
 
@@ -1575,7 +1586,10 @@ pub fn rasterize_pane_strip_rgba(
         let title_x = tab_reg.x + TAB_H_PAD_CELLS * cw;
         let title_end = close_reg.x;
         let mut text_x = title_x + pad;
-        let text_color = if tab.active {
+        let text_color = if tab.dragging {
+            let dimmed_rgb = mix_rgb(PANE_STRIP_BAND_BG, theme.ansi[8], 0.5);
+            Color::rgba(dimmed_rgb.r, dimmed_rgb.g, dimmed_rgb.b, 115)
+        } else if tab.active {
             if tab.focused {
                 active_text_color
             } else {
@@ -1603,7 +1617,7 @@ pub fn rasterize_pane_strip_rgba(
         let max_chars = (avail / cw).floor() as usize;
         let labeled = format!("{}: {}", i + 1, tab.title);
         let title = truncate_label(&labeled, max_chars);
-        let mut buffer = shape_chrome_line(font_system, ctx, &title, text_color, false, true);
+        let mut buffer = shape_chrome_line(font_system, ctx, &title, text_color, tab.active, true);
         let vcenter_y = tab_reg.y
             + tab_vpad_top
             + (tab_reg.h - tab_vpad_top - tab_vpad_bottom - ctx.line_height) / 2.0
@@ -1719,6 +1733,11 @@ pub fn rasterize_pane_strip_rgba(
         theme.background,
         1.0,
     );
+    let sep_color = if drop_target.is_target_pane {
+        PANE_STRIP_ACTIVE_INDICATOR_COLOR
+    } else {
+        separator
+    };
     fill_rounded_rect(
         &mut rgba,
         canvas,
@@ -1729,9 +1748,62 @@ pub fn rasterize_pane_strip_rgba(
             crate::PANE_STRIP_SEPARATOR_PX,
         ),
         0.0,
-        separator,
+        sep_color,
         1.0,
     );
+    if drop_target.is_target_pane {
+        fill_rounded_rect(
+            &mut rgba,
+            canvas,
+            (
+                0.0,
+                height as f32 - inset - crate::PANE_STRIP_SEPARATOR_PX,
+                width as f32,
+                crate::PANE_STRIP_SEPARATOR_PX + inset,
+            ),
+            0.0,
+            PANE_STRIP_ACTIVE_INDICATOR_COLOR,
+            1.0,
+        );
+    }
+
+    // 6. Drop insertion indicator bar with serif caps at top and bottom.
+    if let Some(ix) = drop_target.indicator_x {
+        let bar_w = 3.0;
+        let bar_x = (ix - bar_w / 2.0).clamp(0.0, (width as f32 - bar_w).max(0.0));
+        let bar_top = tab_vpad_top;
+        let bar_h = (height as f32 - tab_vpad_top - tab_vpad_bottom).max(0.0);
+        let indicator_color = PANE_STRIP_ACTIVE_INDICATOR_COLOR;
+
+        fill_rounded_rect(
+            &mut rgba,
+            canvas,
+            (bar_x, bar_top, bar_w, bar_h),
+            SQUARE_CORNER,
+            indicator_color,
+            1.0,
+        );
+
+        let cap_w = 7.0;
+        let cap_h = 2.0;
+        let cap_x = (ix - cap_w / 2.0).clamp(0.0, (width as f32 - cap_w).max(0.0));
+        fill_rounded_rect(
+            &mut rgba,
+            canvas,
+            (cap_x, bar_top, cap_w, cap_h),
+            SQUARE_CORNER,
+            indicator_color,
+            1.0,
+        );
+        fill_rounded_rect(
+            &mut rgba,
+            canvas,
+            (cap_x, (bar_top + bar_h - cap_h).max(bar_top), cap_w, cap_h),
+            SQUARE_CORNER,
+            indicator_color,
+            1.0,
+        );
+    }
 
     rgba
 }
@@ -1812,6 +1884,7 @@ impl GpuRenderer {
         height: u32,
         hover: PaneStripHit,
         edges: PaneStripEdges,
+        drop_target: PaneStripDropTarget,
         x: f32,
         y: f32,
     ) -> ImagePlacement {
@@ -1835,6 +1908,7 @@ impl GpuRenderer {
             &self.theme,
             hover,
             self.split_divider_color(),
+            drop_target,
             &mut self.font_system,
             &mut self.swash_cache,
             &ctx,
@@ -2069,7 +2143,7 @@ mod tests {
     #[test]
     fn test_pane_strip_button_hover_pills_are_equal_squares_centered_in_the_strip() {
         use crate::renderer::test_support::sample_font_ctx;
-        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        use crate::tabbar::{layout_pane_strip, PaneStripDropTarget, PaneStripHit, PaneTab};
         let theme = Theme::dark();
         let ctx = sample_font_ctx();
         let mut fonts = FontSystem::new();
@@ -2079,6 +2153,7 @@ mod tests {
         let tabs = vec![
             PaneTab {
                 active: true,
+                dragging: false,
                 focused: true,
                 icon: None,
                 tab_id: 1,
@@ -2086,6 +2161,7 @@ mod tests {
             },
             PaneTab {
                 active: false,
+                dragging: false,
                 focused: false,
                 icon: None,
                 tab_id: 2,
@@ -2108,6 +2184,7 @@ mod tests {
                 &theme,
                 hover,
                 Rgb::new(60, 60, 60),
+                PaneStripDropTarget::default(),
                 &mut fonts,
                 &mut swash,
                 &ctx,
@@ -2184,7 +2261,7 @@ mod tests {
     #[test]
     fn test_pane_strip_tab_pills_have_square_corners() {
         use crate::renderer::test_support::sample_font_ctx;
-        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        use crate::tabbar::{layout_pane_strip, PaneStripDropTarget, PaneStripHit, PaneTab};
         let theme = Theme::dark();
         let ctx = sample_font_ctx();
         let mut fonts = FontSystem::new();
@@ -2193,6 +2270,7 @@ mod tests {
         let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
         let tabs = vec![PaneTab {
             active: true,
+            dragging: false,
             focused: true,
             icon: None,
             tab_id: 1,
@@ -2209,6 +2287,7 @@ mod tests {
             &theme,
             PaneStripHit::None,
             Rgb::new(60, 60, 60),
+            PaneStripDropTarget::default(),
             &mut fonts,
             &mut swash,
             &ctx,
@@ -2293,6 +2372,7 @@ mod tests {
         let tabs = vec![
             PaneTab {
                 active: true,
+                dragging: false,
                 focused: true,
                 icon: None,
                 tab_id: 1,
@@ -2300,6 +2380,7 @@ mod tests {
             },
             PaneTab {
                 active: false,
+                dragging: false,
                 focused: false,
                 icon: None,
                 tab_id: 2,
@@ -2320,6 +2401,7 @@ mod tests {
                 &theme,
                 PaneStripHit::None,
                 Rgb::new(60, 60, 60),
+                crate::tabbar::PaneStripDropTarget::default(),
                 &mut fonts,
                 &mut swash,
                 &ctx,
@@ -2358,7 +2440,7 @@ mod tests {
     #[test]
     fn test_new_tab_plus_is_a_crisp_symmetric_cross_centered_on_its_pill() {
         use crate::renderer::test_support::sample_font_ctx;
-        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        use crate::tabbar::{layout_pane_strip, PaneStripDropTarget, PaneStripHit, PaneTab};
         let theme = Theme::dark();
         let ctx = sample_font_ctx();
         let mut fonts = FontSystem::new();
@@ -2367,6 +2449,7 @@ mod tests {
         let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
         let tabs = vec![PaneTab {
             active: true,
+            dragging: false,
             focused: true,
             icon: None,
             tab_id: 1,
@@ -2384,6 +2467,7 @@ mod tests {
             &theme,
             PaneStripHit::None,
             Rgb::new(60, 60, 60),
+            PaneStripDropTarget::default(),
             &mut fonts,
             &mut swash,
             &ctx,
@@ -2422,7 +2506,7 @@ mod tests {
     #[test]
     fn test_unfocused_active_tab_is_dimmed_compared_to_focused_active_tab() {
         use crate::renderer::test_support::sample_font_ctx;
-        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        use crate::tabbar::{layout_pane_strip, PaneStripDropTarget, PaneStripHit, PaneTab};
         let theme = Theme::dark();
         let ctx = sample_font_ctx();
         let mut fonts = FontSystem::new();
@@ -2431,6 +2515,7 @@ mod tests {
         let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
         let focused_tabs = vec![PaneTab {
             active: true,
+            dragging: false,
             focused: true,
             icon: None,
             tab_id: 1,
@@ -2438,6 +2523,7 @@ mod tests {
         }];
         let unfocused_tabs = vec![PaneTab {
             active: true,
+            dragging: false,
             focused: false,
             icon: None,
             tab_id: 1,
@@ -2454,6 +2540,7 @@ mod tests {
             &theme,
             PaneStripHit::None,
             Rgb::new(60, 60, 60),
+            PaneStripDropTarget::default(),
             &mut fonts,
             &mut swash,
             &ctx,
@@ -2468,6 +2555,7 @@ mod tests {
             &theme,
             PaneStripHit::None,
             Rgb::new(60, 60, 60),
+            PaneStripDropTarget::default(),
             &mut fonts,
             &mut swash,
             &ctx,
@@ -2485,7 +2573,7 @@ mod tests {
     #[test]
     fn test_unfocused_active_tab_has_indicator_and_border_distinct_from_inactive_tab() {
         use crate::renderer::test_support::sample_font_ctx;
-        use crate::tabbar::{layout_pane_strip, PaneStripHit, PaneTab};
+        use crate::tabbar::{layout_pane_strip, PaneStripDropTarget, PaneStripHit, PaneTab};
         let theme = Theme::dark();
         let ctx = sample_font_ctx();
         let mut fonts = FontSystem::new();
@@ -2495,6 +2583,7 @@ mod tests {
         let tabs = vec![
             PaneTab {
                 active: true,
+                dragging: false,
                 focused: false,
                 icon: None,
                 tab_id: 1,
@@ -2502,6 +2591,7 @@ mod tests {
             },
             PaneTab {
                 active: false,
+                dragging: false,
                 focused: false,
                 icon: None,
                 tab_id: 2,
@@ -2519,6 +2609,7 @@ mod tests {
             &theme,
             PaneStripHit::None,
             Rgb::new(60, 60, 60),
+            PaneStripDropTarget::default(),
             &mut fonts,
             &mut swash,
             &ctx,
@@ -2535,6 +2626,138 @@ mod tests {
         assert_ne!(
             active_top_pixel, inactive_top_pixel,
             "unfocused active tab should have distinct accent indicator at the top"
+        );
+        let expected_unfocused_indicator = mix_rgb(PANE_STRIP_ACTIVE_INDICATOR_COLOR, PANE_STRIP_BAND_BG, DIM_FACTOR);
+        assert_eq!(
+            active_top_pixel,
+            &[expected_unfocused_indicator.r, expected_unfocused_indicator.g, expected_unfocused_indicator.b],
+            "unfocused active tab should use dimmed royal blue accent for the top border"
+        );
+    }
+
+    #[test]
+    fn test_focused_active_tab_has_saturated_royal_blue_indicator() {
+        use crate::renderer::test_support::sample_font_ctx;
+        use crate::tabbar::{layout_pane_strip, PaneStripDropTarget, PaneStripHit, PaneTab};
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let mut fonts = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let w = 400;
+        let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
+        let tabs = vec![PaneTab {
+            active: true,
+            dragging: false,
+            focused: true,
+            icon: None,
+            tab_id: 1,
+            title: "zsh".into(),
+        }];
+        let layout = layout_pane_strip(&tabs, w as f32, h as f32, CELL_W, CELL_H, 0);
+        let rgba = rasterize_pane_strip_rgba(
+            &tabs,
+            &layout,
+            w,
+            h,
+            CELL_W,
+            CELL_H,
+            &theme,
+            PaneStripHit::None,
+            Rgb::new(60, 60, 60),
+            PaneStripDropTarget::default(),
+            &mut fonts,
+            &mut swash,
+            &ctx,
+        );
+
+        let active_top_x = (layout.tabs[0].x + layout.tabs[0].w / 2.0) as usize;
+        let active_top_y = (crate::PANE_STRIP_TOP_PAD_PX + 0.5) as usize;
+
+        let active_top_pixel = &rgba[((active_top_y * w as usize + active_top_x) * 4)..][..3];
+        assert_eq!(
+            active_top_pixel,
+            &[PANE_STRIP_ACTIVE_INDICATOR_COLOR.r, PANE_STRIP_ACTIVE_INDICATOR_COLOR.g, PANE_STRIP_ACTIVE_INDICATOR_COLOR.b],
+            "focused active tab should use the deep saturated royal blue color for the top border"
+        );
+    }
+
+    #[test]
+    fn test_pane_strip_drop_indicator_and_dragging_tab() {
+        use crate::renderer::test_support::sample_font_ctx;
+        use crate::tabbar::{layout_pane_strip, PaneStripDropTarget, PaneStripHit, PaneTab};
+        let theme = Theme::dark();
+        let ctx = sample_font_ctx();
+        let mut fonts = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let w = 400;
+        let h = crate::pane_strip_height_px(CELL_H).ceil() as u32;
+        let tabs = vec![
+            PaneTab {
+                active: true,
+                dragging: true,
+                focused: true,
+                icon: None,
+                tab_id: 1,
+                title: "zsh".into(),
+            },
+            PaneTab {
+                active: false,
+                dragging: false,
+                focused: false,
+                icon: None,
+                tab_id: 2,
+                title: "vim".into(),
+            },
+        ];
+        let layout = layout_pane_strip(&tabs, w as f32, h as f32, CELL_W, CELL_H, 0);
+        let drop_target = PaneStripDropTarget {
+            indicator_x: Some(150.0),
+            is_target_pane: true,
+        };
+        let rgba = rasterize_pane_strip_rgba(
+            &tabs,
+            &layout,
+            w,
+            h,
+            CELL_W,
+            CELL_H,
+            &theme,
+            PaneStripHit::None,
+            Rgb::new(60, 60, 60),
+            drop_target,
+            &mut fonts,
+            &mut swash,
+            &ctx,
+        );
+
+        // 1. Dragging tab suppresses the top active accent line
+        let tab0_top_x = (layout.tabs[0].x + layout.tabs[0].w / 2.0) as usize;
+        let tab0_top_y = (crate::PANE_STRIP_TOP_PAD_PX + 0.5) as usize;
+        let tab0_top_pixel = &rgba[((tab0_top_y * w as usize + tab0_top_x) * 4)..][..3];
+        assert_ne!(
+            tab0_top_pixel,
+            &[PANE_STRIP_ACTIVE_INDICATOR_COLOR.r, PANE_STRIP_ACTIVE_INDICATOR_COLOR.g, PANE_STRIP_ACTIVE_INDICATOR_COLOR.b],
+            "dragging active tab should suppress the top active accent indicator"
+        );
+
+        // 2. Drop target insertion line renders royal blue at indicator_x
+        let ind_x = 150usize;
+        let ind_y = (crate::PANE_STRIP_TOP_PAD_PX + 4.0) as usize;
+        let ind_pixel = &rgba[((ind_y * w as usize + ind_x) * 4)..][..3];
+        assert_eq!(
+            ind_pixel,
+            &[PANE_STRIP_ACTIVE_INDICATOR_COLOR.r, PANE_STRIP_ACTIVE_INDICATOR_COLOR.g, PANE_STRIP_ACTIVE_INDICATOR_COLOR.b],
+            "drop insertion bar should render with royal blue accent at indicator_x"
+        );
+
+        // 3. Target pane separator line renders with royal blue accent
+        let sep_y = (h - 1) as usize;
+        let sep_x = (w / 2) as usize;
+        let sep_pixel = &rgba[((sep_y * w as usize + sep_x) * 4)..][..3];
+        assert_eq!(
+            sep_pixel,
+            &[PANE_STRIP_ACTIVE_INDICATOR_COLOR.r, PANE_STRIP_ACTIVE_INDICATOR_COLOR.g, PANE_STRIP_ACTIVE_INDICATOR_COLOR.b],
+            "target pane bottom line should highlight with royal blue accent"
         );
     }
 }

@@ -6,21 +6,21 @@ For what Winter is and how to install it, see the [README](../README.md). For ho
 
 ## Modes
 
-A Winter pane is always in exactly one of five modes, and each pane keeps its own. The mode is shown in the status bar, which is shown by default (`status-bar { show #false }` hides it and frees its row).
+A Winter pane is always in exactly one of five modes, and each pane keeps its own. The status bar is shown by default (`status-bar { show #false }` hides it and frees its row), and the mode indicator can be enabled in it via `status-bar { show-mode #true }` (hidden by default).
 
 | Mode | Who owns the keyboard | Enter it with |
 |---|---|---|
 | **Insert** | The PTY. This is an ordinary terminal. | `i`, `a`, or `o` from Normal |
-| **Normal** | Winter. Motions, operators, layout commands. | `Esc` from Insert |
+| **Normal** | Winter. Motions, operators, layout commands. | `Alt-Esc` or `Ctrl-Shift-Space` from Insert |
 | **Visual** | Normal, but motions extend a selection. | `v` `V` `Ctrl-v` from Normal |
 | **Block-Focus** | A rich block's WebView. | `Enter` from Normal, on a block |
 | **Page** | A tool page, such as Dir. | Opening a tool; the pane holds it until closed |
 
 Insert is the default, so Winter behaves like a normal terminal until you ask it not to.
 
-**Getting into Normal mode.** Press `Esc`. The first one is always Winter's, even with a program running in the pane (vim, btop, Claude Code) or a tab completion pending; `Ctrl-Shift-Space` enters Normal mode in one press too.
+**Getting into Normal mode.** Press `Alt-Esc` (or `Ctrl-Shift-Space`). Bare `Esc` is always sent to the program running in the pane (vim, btop, Claude Code, or the shell) so it never interferes with full-screen editors or modal tools.
 
-**Getting out.** `i`, `a`, or `o` return to Insert. `Esc` in Normal stays in Normal, and it goes to Winter's own features first: a half-typed command or count, a search, a quick-select, a selection. Only when Winter has nothing of its own to put away does it reach the program underneath, so with a program running (or a tab completion pending) a further `Esc` is sent to it. To send `Esc` to Claude Code, for example, press `Esc` twice.
+**Getting out.** `Alt-Esc`, `i`, `a`, or `o` return to Insert. `Esc` in Normal stays in Normal, and it goes to Winter's own features first: a half-typed command or count, a search, a quick-select, a selection. Only when Winter has nothing of its own to put away does it reach the program underneath, so with a program running (or a tab completion pending) an `Esc` is sent to it.
 
 Normal mode works against any shell, over `ssh`, and inside a Python REPL, because Winter owns the keyboard while it is active and nothing has to be installed on the far end.
 
@@ -196,7 +196,8 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Shift-Alt-h/l` | Scroll page up, page down |
 | `Shift-Alt-k/j` | Scroll line up, line down |
 | `Shift-Alt-a` / `Shift-Alt-e` | Scroll to top, to bottom |
-| `Ctrl-Shift-t` / `Ctrl-Shift-w` | New tab, close tab |
+| `Ctrl-Shift-Alt-n` | New window |
+| `Ctrl-Shift-n` / `Ctrl-Shift-w` | New tab, close tab |
 | `Ctrl-PageUp` / `Ctrl-PageDown` | Previous tab, next tab |
 | `Ctrl-[` / `Ctrl-]` | Previous tab, next tab |
 | `Ctrl-1` .. `Ctrl-9` | Go to tab N |
@@ -616,7 +617,7 @@ The window you are running must already contain this feature: a window started f
 | `prompt-edit-bindings` | `"emacs"` (default) or `"none"`, see above |
 | `icons` | Tool-pane entry icons: `"svg"` (default), `"font"`, or `"none"` |
 | `cursor { ... }` | `blink`, `hide-in-inactive`, plus the shape per mode: `insert`, `normal`, `visual`, `block-focus` |
-| `status-bar { ... }` | `show` (default on), `show-mode`, and the per-mode icons |
+| `status-bar { ... }` | `show` (default on), `show-mode` (default off), and the per-mode icons |
 | `clipboard-read` | Let programs read the clipboard through OSC 52 |
 | `security { ... }` | `block-max-trust`, `block-remote-assets` |
 

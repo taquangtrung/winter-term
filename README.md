@@ -44,7 +44,8 @@ A Winter pane is always in one of five modes: **Insert** (owns the PTY), **Norma
 | | `Alt-h/j/k/l` | Move focus between panes |
 | | `Shift-Alt-=` | Zoom or restore focused pane (toggle) |
 | | `Ctrl-Shift-q` | Close focused pane |
-| **Tabs** | `Ctrl-Shift-t` / `Ctrl-Shift-w` | New tab, close tab |
+| **Window** | `Ctrl-Shift-Alt-n` | New window |
+| **Tabs** | `Ctrl-Shift-n` / `Ctrl-Shift-w` | New tab, close tab |
 | | `gt` / `gT` | Next tab, previous tab |
 | **Tools** | `Ctrl-Shift-d` / `Ctrl-Shift-g` | Directory listing, git status |
 | | `Ctrl-Shift-f` | Browse files in the palette, and open one |

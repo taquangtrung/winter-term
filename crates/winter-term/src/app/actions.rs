@@ -250,6 +250,9 @@ impl App {
             Action::NewTab => {
                 self.new_tab();
             }
+            Action::NewWindow => {
+                self.new_window();
+            }
             Action::NextTab => {
                 self.cycle_tab(true);
             }

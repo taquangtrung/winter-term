@@ -1043,6 +1043,7 @@ impl ApplicationHandler for App {
                 if !focused {
                     self.pending = input::PendingPrefix::None;
                     self.pending_since = None;
+                    self.tabs.drag_start = None;
                 }
                 if self.window_focused != focused {
                     self.window_focused = focused;
@@ -1630,7 +1631,10 @@ mod tests {
     #[test]
     fn test_status_bar_labels_each_mode() {
         let theme = Theme::dark();
-        let cfg = StatusBarConfig::default();
+        let cfg = StatusBarConfig {
+            show_mode: true,
+            ..StatusBarConfig::default()
+        };
         assert_eq!(
             status_bar(Mode::Insert, &theme, None, None, &cfg, None).mode,
             " I"
@@ -1652,12 +1656,16 @@ mod tests {
     #[test]
     fn test_status_bar_show_mode_toggle_hides_mode_label() {
         let theme = Theme::dark();
-        let cfg = StatusBarConfig {
-            show_mode: false,
+        let default_cfg = StatusBarConfig::default();
+        let bar = status_bar(Mode::Normal, &theme, None, None, &default_cfg, None);
+        assert_eq!(bar.mode, "");
+
+        let enabled_cfg = StatusBarConfig {
+            show_mode: true,
             ..StatusBarConfig::default()
         };
-        let bar = status_bar(Mode::Normal, &theme, None, None, &cfg, None);
-        assert_eq!(bar.mode, "");
+        let bar_enabled = status_bar(Mode::Normal, &theme, None, None, &enabled_cfg, None);
+        assert_eq!(bar_enabled.mode, " N");
     }
 
     #[test]

@@ -119,6 +119,8 @@ pub enum WindowAction {
     Paste,
     /// Open a new tab.
     NewTab,
+    /// Open a new window.
+    NewWindow,
     /// Close the active tab.
     CloseTab,
     /// Close every tab in the focused pane except the active one.
@@ -176,6 +178,7 @@ impl WindowAction {
                 | WindowAction::CopyCwd
                 | WindowAction::Paste
                 | WindowAction::NewTab
+                | WindowAction::NewWindow
                 | WindowAction::CloseTab
                 | WindowAction::CloseOtherTabs
                 | WindowAction::OpenSettings
@@ -299,6 +302,7 @@ impl WindowAction {
             WindowAction::CopyCwd => Action::CopyCwd,
             WindowAction::Paste => Action::Paste,
             WindowAction::NewTab => Action::NewTab,
+            WindowAction::NewWindow => Action::NewWindow,
             WindowAction::CloseTab => Action::CloseTab(None),
             WindowAction::CloseOtherTabs => Action::CloseOtherTabs,
             WindowAction::OpenSettings => Action::OpenSettings,
@@ -339,6 +343,7 @@ impl WindowAction {
             "copy_cwd" | "copy_reference" | "copy_file_reference" => WindowAction::CopyCwd,
             "paste_from_clipboard" => WindowAction::Paste,
             "new_tab" => WindowAction::NewTab,
+            "new_window" => WindowAction::NewWindow,
             "close_tab" => WindowAction::CloseTab,
             "close_other_tabs" => WindowAction::CloseOtherTabs,
             "open_settings" => WindowAction::OpenSettings,
@@ -869,6 +874,37 @@ mod tests {
         assert_eq!(parse_chord_sequence("C+h").map(|k| k.len()), Some(1));
         assert_eq!(parse_chord_sequence(""), None);
         assert_eq!(parse_chord_sequence("a b c"), None);
+    }
+    #[test]
+    fn test_new_tab_is_bound_to_ctrl_shift_n_and_not_ctrl_shift_t() {
+        let keymap = WindowKeymap::default();
+        let ctrl_shift_n = Key {
+            alt: false,
+            code: KeyCode::Char('n'),
+            ctrl: true,
+            shift: true,
+        };
+        let ctrl_shift_t = Key {
+            alt: false,
+            code: KeyCode::Char('t'),
+            ctrl: true,
+            shift: true,
+        };
+        assert_eq!(keymap.global_action(&ctrl_shift_n), Some(Action::NewTab));
+        assert_ne!(keymap.global_action(&ctrl_shift_t), Some(Action::NewTab));
+        assert_eq!(keymap.chord_hint("new_tab"), "Ctrl-Shift-n");
+    }
+    #[test]
+    fn test_new_window_is_bound_to_ctrl_shift_alt_n() {
+        let keymap = WindowKeymap::default();
+        let ctrl_shift_alt_n = Key {
+            alt: true,
+            code: KeyCode::Char('n'),
+            ctrl: true,
+            shift: true,
+        };
+        assert_eq!(keymap.global_action(&ctrl_shift_alt_n), Some(Action::NewWindow));
+        assert_eq!(keymap.chord_hint("new_window"), "Ctrl-Shift-Alt-n");
     }
     #[test]
     fn test_config_rebinds_window_action_and_drops_default() {

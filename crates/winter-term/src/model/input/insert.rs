@@ -56,7 +56,8 @@ pub(super) fn resolve_block_focus(
     Action::ForwardToBlock(encode(key, flags, None))
 }
 pub(super) fn is_entry_chord(key: &Key) -> bool {
-    key.ctrl && key.shift && key.code == KeyCode::Space
+    (key.ctrl && key.shift && key.code == KeyCode::Space)
+        || (key.alt && !key.ctrl && !key.shift && key.code == KeyCode::Escape)
 }
 /// Encode a key as the bytes a terminal program expects on the PTY.
 /// `flags` is the active Kitty keyboard protocol bitmask for the pane
@@ -483,6 +484,14 @@ mod tests {
         };
         assert_eq!(
             resolve_simple(Mode::Insert, &chord),
+            Action::SwitchMode(Mode::Normal)
+        );
+        let alt_esc = Key {
+            alt: true,
+            ..key(KeyCode::Escape)
+        };
+        assert_eq!(
+            resolve_simple(Mode::Insert, &alt_esc),
             Action::SwitchMode(Mode::Normal)
         );
     }

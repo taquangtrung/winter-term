@@ -1010,19 +1010,25 @@ impl GpuRenderer {
             .color(self.theme.ansi[4].to_glyphon());
 
         // Mode label (e.g. Normal, Insert, Block)
-        let mode_start = status_text.len();
-        status_text.push_str(&status.mode);
-        let mode_end = status_text.len();
-        spans.push((mode_start..mode_end, accent_attrs));
+        if !status.mode.is_empty() {
+            let mode_start = status_text.len();
+            status_text.push_str(&status.mode);
+            let mode_end = status_text.len();
+            spans.push((mode_start..mode_end, accent_attrs));
+        }
 
         // The live `/` search query follows the mode label while a search
         // is active, showing the query text and its match position; hidden
         // once the search is cancelled (`status.search` is `None`).
         if let Some(ref search) = status.search {
-            let sep_start = status_text.len();
-            status_text.push_str("  •  ");
-            let sep_end = status_text.len();
-            spans.push((sep_start..sep_end, muted_attrs.clone()));
+            if !status_text.is_empty() {
+                let sep_start = status_text.len();
+                status_text.push_str("  •  ");
+                let sep_end = status_text.len();
+                spans.push((sep_start..sep_end, muted_attrs.clone()));
+            } else {
+                status_text.push(' ');
+            }
 
             let query_start = status_text.len();
             status_text.push(if search.reverse { '?' } else { '/' });
@@ -1046,10 +1052,14 @@ impl GpuRenderer {
         // A transient notice follows the mode label: red for errors, green
         // for info confirmations (e.g. "Copied to clipboard").
         if let Some(ref notice) = status.notice {
-            let sep_start = status_text.len();
-            status_text.push_str("  •  ");
-            let sep_end = status_text.len();
-            spans.push((sep_start..sep_end, muted_attrs.clone()));
+            if !status_text.is_empty() {
+                let sep_start = status_text.len();
+                status_text.push_str("  •  ");
+                let sep_end = status_text.len();
+                spans.push((sep_start..sep_end, muted_attrs.clone()));
+            } else {
+                status_text.push(' ');
+            }
 
             let notice_attrs = match notice.kind {
                 NoticeKind::Error => error_attrs,

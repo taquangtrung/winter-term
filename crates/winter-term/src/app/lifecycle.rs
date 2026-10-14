@@ -142,6 +142,9 @@ impl App {
             "new_tab" => {
                 self.new_tab();
             }
+            "new_window" => {
+                self.new_window();
+            }
             "close_tab" => {
                 self.close_tab(focused);
             }

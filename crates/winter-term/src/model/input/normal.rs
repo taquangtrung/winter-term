@@ -266,6 +266,7 @@ fn resolve_chord(key: &Key, pending: &mut PendingPrefix, window: &WindowKeymap) 
         // Alt chords resolve immediately too, clearing any prefix.
         *pending = PendingPrefix::None;
         return Some(match key.code {
+            KeyCode::Escape => Action::EnterInsert(InsertAt::Cursor),
             // `Alt-i`: vim's `vip` in a single chord.
             KeyCode::Char('i') | KeyCode::Char('I') => Action::SelectParagraph,
             _ => Action::Ignore,
@@ -1428,6 +1429,18 @@ mod tests {
         assert_eq!(
             resolve(Mode::Normal, &key(KeyCode::Char('>')), &mut pending, 0),
             Action::MoveTabRight,
+        );
+    }
+
+    #[test]
+    fn test_alt_escape_in_normal_returns_to_insert() {
+        let alt_esc = Key {
+            alt: true,
+            ..key(KeyCode::Escape)
+        };
+        assert_eq!(
+            resolve_simple(Mode::Normal, &alt_esc),
+            Action::EnterInsert(InsertAt::Cursor)
         );
     }
 }

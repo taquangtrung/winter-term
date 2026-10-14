@@ -135,7 +135,8 @@ status-bar {
     show #true
 
     // Show the current mode label (N / I / V / B).
-    show-mode #true
+    // Default: hidden (#false).
+    show-mode #false
 }
 
 // Which line-editor bindings your shell answers to, for Vim operators on the
