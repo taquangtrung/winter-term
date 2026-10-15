@@ -8,7 +8,7 @@ use super::view::{DropdownImage, InputView, PaletteView, WhichKeyView};
 use super::{
     DROPDOWN_RADIUS, DROPDOWN_SHADOW, DROPDOWN_SHADOW_ALPHA, INPUT_WIDTH_RATIO, MENU_HOVER_INSET,
     PALETTE_HEIGHT_RATIO, PALETTE_ITEM_PAD_X, PALETTE_ITEM_PAD_Y, PALETTE_JUMP_HEIGHT_RATIO,
-    PALETTE_WIDTH_RATIO, SHADOW_COLOR, WHICH_KEY_HEIGHT_RATIO, WHICH_KEY_WIDTH_RATIO,
+    PALETTE_WIDTH_RATIO, SHADOW_COLOR,
 };
 use crate::renderer::glyphs::FontCtx;
 use crate::tabbar::{
@@ -782,8 +782,11 @@ pub(super) fn palette_rgba(
         y: (palette_y - margin).round(),
     }
 }
-/// Rasterize the which-key hint popup: an elevated card showing continuation keys
-/// and labels when the user pauses mid-prefix.
+/// The signature royal blue active indicator used across Winter's chrome tabs.
+const POPUP_ACTIVE_ACCENT: Rgb = Rgb::new(0x1d, 0x4e, 0xd8);
+
+/// Rasterize the which-key hint popup: a modern, content-proportional card showing
+/// continuation keys in sleek keycap badges alongside their action descriptions.
 pub(super) fn which_key_rgba(
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
@@ -794,28 +797,64 @@ pub(super) fn which_key_rgba(
     surface_h: f32,
 ) -> DropdownImage {
     let margin = DROPDOWN_SHADOW;
-    let pad_x = (ctx.cell_w * 1.5).max(14.0);
-    let pad_y = (ctx.cell_h * 0.8).max(10.0);
+    let pad_x = (ctx.cell_w * 1.5).max(16.0);
+    let pad_y = (ctx.cell_h * 0.8).max(12.0);
     let title_h = ctx.line_height + 4.0;
-    let item_h = (ctx.line_height + 4.0).round();
+    let item_h = (ctx.line_height + 6.0).round();
+    let row_gap = 2.0;
 
-    // The card is the same size whatever it holds, so a hint is always read
-    // in the same place: what varies with the number of keys is how many
-    // columns they flow into, not how big the panel is.
-    let panel_w = (surface_w * WHICH_KEY_WIDTH_RATIO)
+    let foreground = theme.foreground.to_glyphon();
+    let accent = theme.cursor_bg.to_glyphon();
+    let muted = theme.ansi[8].to_glyphon();
+
+    // 1. Column and row layout: determine optimal columns for readability.
+    let count = view.items.len();
+    let cols = match count {
+        0..=6 => 1,
+        7..=14 => 2,
+        _ => 3.min(count.div_ceil(8)),
+    };
+    let rows = count.div_ceil(cols).max(1);
+
+    // 2. Shape headers and item lines to compute natural content dimensions.
+    let mut title_buf = shape_chrome_line(font_system, ctx, &view.title, foreground, true, true);
+    let title_w = buffer_width(&title_buf).ceil();
+
+    let dismiss_text = "Esc to cancel";
+    let mut hint_buf = shape_chrome_line(font_system, ctx, dismiss_text, muted, false, true);
+    let hint_w = buffer_width(&hint_buf).ceil();
+    let header_min_w = title_w + hint_w + 32.0;
+
+    // Measure key badges and labels
+    let mut shaped_items = Vec::with_capacity(count);
+    let mut max_item_w: f32 = 0.0;
+    for (key, label) in &view.items {
+        let key_buf = shape_chrome_line(font_system, ctx, key, accent, true, true);
+        let key_text_w = buffer_width(&key_buf).ceil();
+        let badge_w = (key_text_w + 12.0).max(22.0);
+
+        let label_buf = shape_chrome_line(font_system, ctx, label, foreground, false, true);
+        let label_w = buffer_width(&label_buf).ceil();
+
+        let total_item_w = badge_w + 10.0 + label_w;
+        if total_item_w > max_item_w {
+            max_item_w = total_item_w;
+        }
+        shaped_items.push((key_buf, key_text_w, badge_w, label_buf));
+    }
+
+    // Column width accommodates the widest item comfortably
+    let min_col_w = (max_item_w + 16.0).max(200.0);
+    let natural_w = cols as f32 * min_col_w + pad_x * 2.0;
+    let panel_w = natural_w
+        .max(header_min_w + pad_x * 2.0)
         .min(surface_w - 40.0)
         .floor()
-        .max(220.0);
-    let panel_h = (surface_h * WHICH_KEY_HEIGHT_RATIO)
-        .min(surface_h - 40.0)
-        .floor()
-        .max(60.0);
-    let items_h = (panel_h - pad_y * 2.0 - title_h - 8.0).max(item_h);
-    let rows = ((items_h / item_h).floor() as usize)
-        .max(1)
-        .min(view.items.len().max(1));
-    let cols = view.items.len().div_ceil(rows).max(1);
+        .max(260.0);
     let col_w = (panel_w - pad_x * 2.0) / cols as f32;
+
+    let content_h = pad_y * 2.0 + title_h + 8.0 + rows as f32 * (item_h + row_gap);
+    let panel_h = content_h.min(surface_h - 40.0).floor().max(70.0);
 
     let width = (panel_w + 2.0 * margin) as u32;
     let height = (panel_h + 2.0 * margin) as u32;
@@ -824,7 +863,7 @@ pub(super) fn which_key_rgba(
 
     let mut rgba = vec![0u8; (width * height * 4) as usize];
 
-    // Soft drop shadow.
+    // 3. Drop shadow
     for py in 0..height {
         for px in 0..width {
             let sdf = rounded_rect_sdf(
@@ -847,7 +886,7 @@ pub(super) fn which_key_rgba(
         }
     }
 
-    // Elevated rounded panel with hairline border.
+    // 4. Elevated rounded panel with hairline border
     let border = theme.divider;
     fill_rounded_rect(&mut rgba, canvas, panel_rect, DROPDOWN_RADIUS, border, 1.0);
     fill_rounded_rect(
@@ -859,66 +898,131 @@ pub(super) fn which_key_rgba(
         1.0,
     );
 
-    // Hairline divider under title.
-    let divider_y = margin + pad_y + title_h;
+    // Winter Term signature royal blue top accent indicator
     fill_rounded_rect(
         &mut rgba,
         canvas,
-        (margin, divider_y, panel_w, 1.0),
-        0.0,
-        theme.divider,
-        0.5,
+        (margin + 1.0, margin + 1.0, panel_w - 2.0, 2.0),
+        1.0,
+        POPUP_ACTIVE_ACCENT,
+        1.0,
     );
 
-    let foreground = theme.foreground.to_glyphon();
-    let accent = theme.cursor_bg.to_glyphon();
-    let muted = theme.ansi[8].to_glyphon();
+    // 5. Header: title + dismiss hint + divider
+    let title_y = margin + pad_y;
+    // Accent indicator dot before title
+    let dot_size = 5.0;
+    let dot_y = title_y + (title_h - dot_size) / 2.0;
+    fill_rounded_rect(
+        &mut rgba,
+        canvas,
+        (margin + pad_x, dot_y, dot_size, dot_size),
+        dot_size / 2.0,
+        POPUP_ACTIVE_ACCENT,
+        1.0,
+    );
 
-    // The title, in the same thin muted hand the picker heads its own list
-    // with: it says what the keys below belong to, and the keys are what the
-    // card is read for.
-    let mut title_buf = shape_chrome_line(font_system, ctx, &view.title, muted, false, true);
+    let title_x = margin + pad_x + dot_size + 8.0;
     composite_buffer(
         font_system,
         swash_cache,
         &mut rgba,
         canvas,
         &mut title_buf,
-        ((margin + pad_x) as i32, (margin + pad_y) as i32),
+        (title_x as i32, title_y as i32),
+        foreground,
+    );
+
+    // Right-aligned dismiss hint
+    let hint_x = margin + panel_w - pad_x - hint_w;
+    composite_buffer(
+        font_system,
+        swash_cache,
+        &mut rgba,
+        canvas,
+        &mut hint_buf,
+        (hint_x as i32, title_y as i32),
         muted,
     );
 
-    // Draw Items.
-    let items_top = divider_y + 6.0;
-    for (i, (key, label)) in view.items.iter().enumerate() {
+    // Hairline divider under title
+    let divider_y = title_y + title_h + 4.0;
+    fill_rounded_rect(
+        &mut rgba,
+        canvas,
+        (margin + pad_x, divider_y, panel_w - pad_x * 2.0, 1.0),
+        0.0,
+        theme.divider,
+        0.5,
+    );
+
+    // 6. Draw items with keycap badges and styled rows
+    let items_top = divider_y + 8.0;
+    for (i, (mut key_buf, key_text_w, badge_w, mut label_buf)) in
+        shaped_items.into_iter().enumerate()
+    {
         let col = i / rows;
         let row = i % rows;
         let item_x = margin + pad_x + col as f32 * col_w;
-        let item_y = items_top + row as f32 * item_h;
+        let item_y = items_top + row as f32 * (item_h + row_gap);
 
-        let mut key_buf = shape_chrome_line(font_system, ctx, key, accent, true, true);
+        // Subtle row card container
+        let row_w = col_w - 8.0;
+        fill_rounded_rect(
+            &mut rgba,
+            canvas,
+            (item_x, item_y, row_w, item_h),
+            3.0,
+            theme.menu_hover_bg,
+            0.3,
+        );
+
+        // Keycap badge (<kbd> pill)
+        let badge_h = (ctx.line_height + 2.0).round();
+        let badge_x = item_x + 5.0;
+        let badge_y = item_y + (item_h - badge_h) / 2.0;
+
+        // Keycap border & background
+        fill_rounded_rect(
+            &mut rgba,
+            canvas,
+            (badge_x, badge_y, badge_w, badge_h),
+            3.0,
+            theme.divider,
+            0.8,
+        );
+        fill_rounded_rect(
+            &mut rgba,
+            canvas,
+            (badge_x + 1.0, badge_y + 1.0, badge_w - 2.0, badge_h - 2.0),
+            2.0,
+            theme.menu_bg,
+            1.0,
+        );
+
+        // Center key text inside keycap
+        let key_x = badge_x + (badge_w - key_text_w) / 2.0;
+        let key_y = badge_y + (badge_h - ctx.line_height) / 2.0;
         composite_buffer(
             font_system,
             swash_cache,
             &mut rgba,
             canvas,
             &mut key_buf,
-            (item_x as i32, item_y as i32),
+            (key_x.round() as i32, key_y.round() as i32),
             accent,
         );
 
-        // The key is accented and the label is not, which is what tells the
-        // two apart; a glyph between them only adds a column of noise to
-        // every row.
-        let key_w = ctx.cell_w * 7.0;
-        let mut label_buf = shape_chrome_line(font_system, ctx, label, foreground, false, true);
+        // Label beside badge
+        let label_x = badge_x + badge_w + 8.0;
+        let label_y = item_y + (item_h - ctx.line_height) / 2.0;
         composite_buffer(
             font_system,
             swash_cache,
             &mut rgba,
             canvas,
             &mut label_buf,
-            ((item_x + key_w) as i32, item_y as i32),
+            (label_x.round() as i32, label_y.round() as i32),
             foreground,
         );
     }
@@ -1315,10 +1419,7 @@ mod tests {
     }
 
     #[test]
-    fn test_the_key_hint_card_is_one_size_whatever_it_holds() {
-        // A hint is read in the same place every time, so two of them of very
-        // different lengths draw the same panel: the keys flow into more
-        // columns rather than the card growing under them.
+    fn test_the_key_hint_card_is_content_adaptive_and_compact() {
         let mut font_system = FontSystem::new();
         let mut swash = SwashCache::new();
         let theme = Theme::dark();
@@ -1344,14 +1445,14 @@ mod tests {
         };
 
         let small = card(2);
-        assert_eq!(card(15), small, "fifteen keys draw the card two do");
-        // The image carries the drop shadow on each side, so it is the panel
-        // plus two margins.
-        let expected = surface_w * WHICH_KEY_WIDTH_RATIO + 2.0 * DROPDOWN_SHADOW;
+        let large = card(15);
         assert!(
-            (small.0 as f32 - expected).abs() < 2.0,
-            "and it is sized against the window, got {small:?}"
+            small.0 < large.0 || small.1 < large.1,
+            "small menu is more compact than 15-item menu, got small={small:?} large={large:?}"
         );
+        // It stays bounded within the surface margins
+        assert!(large.0 as f32 <= surface_w + 2.0 * DROPDOWN_SHADOW);
+        assert!(large.1 as f32 <= surface_h + 2.0 * DROPDOWN_SHADOW);
     }
 
     #[test]

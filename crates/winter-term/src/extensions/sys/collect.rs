@@ -9,8 +9,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use crate::model::system::{
     CoreLoad, CoreReading, CpuSample, MemoryReading, Overview, SystemSample,
 };
-use crate::tools::gpu;
-use crate::tools::run::run_text;
+use crate::extensions::gpu;
+use crate::extensions::run::run_text;
 
 use super::parse;
 

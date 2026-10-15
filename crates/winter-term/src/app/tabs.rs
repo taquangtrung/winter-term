@@ -358,6 +358,21 @@ impl App {
         }
         let snapshot = self.layout().export_tree();
         let group_gone = self.layout().group_members(tab).len() <= 1;
+        let is_commit_editor = self.commit_companions.contains_key(&tab)
+            || self.pages.get(&tab).is_some_and(|slot| {
+                slot.tool() == super::page::EDITOR_TOOL && slot.page.is_commit_editor()
+            });
+        let commit_repo = if is_commit_editor {
+            self.pages.get(&tab).and_then(|slot| slot.page.cwd()).map(|p| {
+                if p.file_name().is_some_and(|n| n == ".git") {
+                    p.parent().unwrap_or(&p).to_path_buf()
+                } else {
+                    p
+                }
+            })
+        } else {
+            None
+        };
         if let Some(slot) = self.pages.remove(&tab) {
             if closing == Closing::Keep {
                 self.stash_closed_page(tab, slot);
@@ -375,6 +390,9 @@ impl App {
         self.after_tab_change();
         if let Some(companion) = self.commit_companions.remove(&tab) {
             self.close_tab_now(companion, Closing::Forget);
+        }
+        if let Some(repo) = commit_repo {
+            self.focus_or_open_git_page(repo);
         }
     }
 

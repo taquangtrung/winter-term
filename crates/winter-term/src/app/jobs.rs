@@ -15,8 +15,8 @@ use crate::model::page::{
     CommandOutput, CommandRequest, JobReply, JobRequest, SearchHit, SearchRequest, SearchResult,
 };
 
-use crate::tools::proc::collect;
-use crate::tools::sys;
+use crate::extensions::proc::collect;
+use crate::extensions::sys;
 
 use super::App;
 

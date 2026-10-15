@@ -36,25 +36,28 @@ pub struct Session {
     pub layout: SessionTree,
     /// Every terminal in the snapshot.
     pub panes: Vec<PaneSession>,
-    /// Every tool tab in the snapshot. Absent from files written before tools
+    /// Every extension tab in the snapshot. Absent from files written before extensions
     /// were saved, which restore with terminals only.
-    #[serde(default)]
-    pub tools: Vec<ToolSession>,
+    #[serde(default, alias = "tools")]
+    pub extensions: Vec<ExtensionSession>,
 }
 
-/// One tool tab's snapshot: which tool, and where it was looking.
+/// One extension tab's snapshot: which extension, and where it was looking.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct ToolSession {
+pub struct ExtensionSession {
     /// Identifier tying this tab to a leaf of the layout tree.
     pub id: usize,
-    /// Which tool: `dir`, `git`, `grep`, or `editor`.
+    /// Which extension: `dir`, `git`, `grep`, or `editor`.
     pub kind: String,
     /// The line an editor had its cursor on, counting from one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
-    /// The directory the tool was rooted in, or the file the editor had open.
+    /// The directory the extension was rooted in, or the file the editor had open.
     pub path: String,
 }
+
+/// Backwards compatibility alias for [`ExtensionSession`].
+pub type ToolSession = ExtensionSession;
 
 /// A terminal whose program is still running and is carried into the next
 /// incarnation of this process by `exec` (see [`Session::save_handover`]).
@@ -122,8 +125,12 @@ pub enum SessionTree {
 
 impl Session {
     /// Write a snapshot of the current layout to the state directory.
-    pub fn save(layout: &Layout, panes: &HashMap<TabId, Terminal>, tools: Vec<ToolSession>) {
-        Self::write(&Self::capture(layout, panes, tools));
+    pub fn save(
+        layout: &Layout,
+        panes: &HashMap<TabId, Terminal>,
+        extensions: Vec<ExtensionSession>,
+    ) {
+        Self::write(&Self::capture(layout, panes, extensions));
     }
 
     fn write(session: &Self) {
@@ -144,9 +151,9 @@ impl Session {
     pub fn save_handover(
         layout: &Layout,
         panes: &HashMap<TabId, Terminal>,
-        tools: Vec<ToolSession>,
+        extensions: Vec<ExtensionSession>,
     ) {
-        let mut session = Self::capture(layout, panes, tools);
+        let mut session = Self::capture(layout, panes, extensions);
         for entry in &mut session.panes {
             let Some(tab) = panes.get(&TabId(entry.id as u64)) else {
                 continue;
@@ -194,9 +201,14 @@ impl Session {
         }
     }
 
-    fn capture(layout: &Layout, panes: &HashMap<TabId, Terminal>, tools: Vec<ToolSession>) -> Self {
+    fn capture(
+        layout: &Layout,
+        panes: &HashMap<TabId, Terminal>,
+        extensions: Vec<ExtensionSession>,
+    ) -> Self {
         let kept = |id: TabId| {
-            panes.contains_key(&id) || tools.iter().any(|tool| tool.id == id.0 as usize)
+            panes.contains_key(&id)
+                || extensions.iter().any(|ext| ext.id == id.0 as usize)
         };
         let tree = layout.export_tree().retain(&kept);
         let pane_sessions: Vec<PaneSession> = panes
@@ -212,13 +224,18 @@ impl Session {
             focused: layout.focused().0 as usize,
             layout: layout_tree_to_session(&tree),
             panes: pane_sessions,
-            tools,
+            extensions,
         }
     }
 
-    /// Take the tool tabs out of this snapshot, to be opened again.
-    pub fn take_tools(&mut self) -> Vec<ToolSession> {
-        std::mem::take(&mut self.tools)
+    /// Take the extension tabs out of this snapshot, to be opened again.
+    pub fn take_extensions(&mut self) -> Vec<ExtensionSession> {
+        std::mem::take(&mut self.extensions)
+    }
+
+    /// Backwards compatibility alias for [`Session::take_extensions`].
+    pub fn take_tools(&mut self) -> Vec<ExtensionSession> {
+        self.take_extensions()
     }
 
     /// Split this snapshot into the layout to rebuild, the tab to focus, and a
@@ -352,7 +369,17 @@ mod tests {
     fn test_a_file_from_before_tools_were_saved_still_loads() {
         let old = r#"{"focused":0,"layout":{"t":"Pane","id":0},"panes":[{"command":null,"cwd":null,"id":0}]}"#;
         let session: Session = serde_json::from_str(old).expect("loads");
-        assert!(session.tools.is_empty());
+        assert!(session.extensions.is_empty());
+    }
+
+    #[test]
+    fn test_backward_compatibility_tools_key_loads_into_extensions() {
+        let old = r#"{"focused":0,"layout":{"t":"Pane","id":0},"panes":[],"tools":[{"id":1,"kind":"git","path":"/repo"}]}"#;
+        let mut session: Session = serde_json::from_str(old).expect("loads");
+        assert_eq!(session.extensions.len(), 1);
+        assert_eq!(session.extensions[0].kind, "git");
+        let taken = session.take_extensions();
+        assert_eq!(taken.len(), 1);
     }
 
     #[test]
@@ -382,7 +409,7 @@ mod tests {
                     ids: vec![1, 2],
                 }),
             },
-            tools: vec![ToolSession {
+            extensions: vec![ExtensionSession {
                 id: 2,
                 kind: "editor".into(),
                 line: Some(40),
@@ -392,8 +419,8 @@ mod tests {
         let json = serde_json::to_string_pretty(&session).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
         assert_eq!(
-            restored.tools, session.tools,
-            "the tool tab comes back where it was"
+            restored.extensions, session.extensions,
+            "the extension tab comes back where it was"
         );
         assert_eq!(restored.focused, 1);
         assert_eq!(restored.panes.len(), 2);

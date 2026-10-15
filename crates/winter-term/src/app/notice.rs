@@ -29,6 +29,22 @@ impl App {
                 title: self.tab_title(focused),
                 app_name: terminal
                     .and_then(|p| p.foreground_process_name())
+                    .or_else(|| {
+                        self.pages.get(&focused).map(|slot| {
+                            match slot.tool() {
+                                "dir" => "Dir",
+                                "editor" => "Editor",
+                                "git" => "Git",
+                                "grep" => "Grep",
+                                "keys" => "Keys View",
+                                "pdf" => "PDF",
+                                "proc" => "Processes",
+                                "sys" => "System",
+                                other => other,
+                            }
+                            .to_string()
+                        })
+                    })
                     .unwrap_or_default(),
                 pane_title: self
                     .tab_titles
@@ -37,6 +53,12 @@ impl App {
                     .unwrap_or_default(),
                 cwd: terminal
                     .and_then(|p| p.cwd().map(|c| tabbar::clean_cwd(&c)))
+                    .or_else(|| {
+                        self.pages
+                            .get(&focused)
+                            .and_then(|slot| slot.page.cwd())
+                            .map(|p| tabbar::clean_cwd(&p.to_string_lossy()))
+                    })
                     .unwrap_or_default(),
             },
         )

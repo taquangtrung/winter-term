@@ -130,7 +130,7 @@ fn extension_icon(name: &str) -> Option<char> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tools::dir::entry::Meta;
+    use crate::extensions::dir::entry::Meta;
     use std::path::PathBuf;
 
     fn entry(name: &str, kind: EntryKind, mode: Option<u32>) -> Entry {

@@ -15,16 +15,16 @@ use crate::model::palette::{Palette, PaletteMode};
 use crate::model::textedit::field::TextField;
 use crate::model::textedit::modal::EditOutcome;
 use crate::model::textedit::recall::Recall;
-use crate::session::ToolSession;
-use crate::tools::dir::DirPage;
-use crate::tools::editor::{EditorPage, DIRTY_MARK};
-use crate::tools::git::GitPage;
-use crate::tools::grep::GrepPage;
-use crate::tools::keys::KeysPage;
-use crate::tools::pdf::PdfPage;
-use crate::tools::proc::ProcPage;
-use crate::tools::reltime;
-use crate::tools::sys::SysPage;
+use crate::extensions::dir::DirPage;
+use crate::extensions::editor::{EditorPage, DIRTY_MARK};
+use crate::extensions::git::GitPage;
+use crate::extensions::grep::GrepPage;
+use crate::extensions::keys::KeysPage;
+use crate::extensions::pdf::PdfPage;
+use crate::extensions::proc::ProcPage;
+use crate::extensions::reltime;
+use crate::extensions::sys::SysPage;
+use crate::session::ExtensionSession;
 use winter_render::Grid;
 #[cfg(test)]
 use winter_render::InputView;
@@ -35,29 +35,37 @@ use super::{App, SPLIT_RATIO};
 // Constants
 // ========================================================================
 
-/// Tool name recorded for the directory listing, so its own chord toggles it.
-const DIR_TOOL: &str = "dir";
+/// Extension name recorded for the directory listing, so its own chord toggles it.
+const DIR_EXTENSION: &str = "dir";
+const DIR_TOOL: &str = DIR_EXTENSION;
 
-/// Tool name recorded for the editor.
-const EDITOR_TOOL: &str = "editor";
+/// Extension name recorded for the editor.
+pub(crate) const EDITOR_EXTENSION: &str = "editor";
+pub(crate) const EDITOR_TOOL: &str = EDITOR_EXTENSION;
 
-/// Tool name recorded for the git view.
-const GIT_TOOL: &str = "git";
+/// Extension name recorded for the git view.
+const GIT_EXTENSION: &str = "git";
+const GIT_TOOL: &str = GIT_EXTENSION;
 
-/// Tool name recorded for the text search.
-const GREP_TOOL: &str = "grep";
+/// Extension name recorded for the text search.
+const GREP_EXTENSION: &str = "grep";
+const GREP_TOOL: &str = GREP_EXTENSION;
 
-/// Tool name recorded for the keys page.
-const KEYS_TOOL: &str = "keys";
+/// View name recorded for the keys view.
+const KEYS_VIEW: &str = "keys";
+const KEYS_TOOL: &str = KEYS_VIEW;
 
-/// Tool name recorded for the PDF viewer.
-const PDF_TOOL: &str = "pdf";
+/// Extension name recorded for the PDF viewer.
+const PDF_EXTENSION: &str = "pdf";
+const PDF_TOOL: &str = PDF_EXTENSION;
 
-/// Tool name recorded for the process monitor.
-const PROC_TOOL: &str = "proc";
+/// Extension name recorded for the process monitor.
+const PROC_EXTENSION: &str = "proc";
+const PROC_TOOL: &str = PROC_EXTENSION;
 
-/// Tool name recorded for the system monitor.
-const SYS_TOOL: &str = "sys";
+/// Extension name recorded for the system monitor.
+const SYS_EXTENSION: &str = "sys";
+const SYS_TOOL: &str = SYS_EXTENSION;
 
 /// How many closed things are kept for reopening. The point of the stash is
 /// the tool just closed by accident, not a history of every tool ever closed,
@@ -385,12 +393,12 @@ fn named(unsaved: &[String]) -> String {
     }
 }
 
-/// How a row of the tool list names one page: the tool, what it is showing, a
+/// How a row of the extension list names one page: the extension, what it is showing, a
 /// mark when it is holding edits that are on no disk, and the directory it is
 /// looking at. The directory is what tells two files of the same name apart,
 /// and what makes either findable by the tree it sits in.
-fn tool_row_label(tool: &str, page: &dyn Page) -> String {
-    let mut label = page_label(tool, &page.title());
+fn extension_row_label(extension: &str, page: &dyn Page) -> String {
+    let mut label = page_label(extension, &page.title());
     if page.is_dirty() {
         label.push_str(DIRTY_MARK);
     }
@@ -399,6 +407,11 @@ fn tool_row_label(tool: &str, page: &dyn Page) -> String {
         label.push_str(&dir.display().to_string());
     }
     label
+}
+
+#[allow(dead_code)]
+fn tool_row_label(tool: &str, page: &dyn Page) -> String {
+    extension_row_label(tool, page)
 }
 
 /// How a page is named away from the page itself: the tool it was opened as
@@ -497,6 +510,29 @@ impl App {
         let first = page.initial_request();
         let tab_id = self.show_page_beside(GIT_TOOL, Box::new(page));
         self.jobs.spawn(tab_id, first);
+    }
+
+    /// Focus the open git page for `repo` if one exists, otherwise open a new
+    /// git page for `repo` and focus it.
+    pub(crate) fn focus_or_open_git_page(&mut self, repo: PathBuf) {
+        let matches_repo = |page: &dyn Page| {
+            page.root_dir().is_some_and(|root| {
+                repo == root || repo.starts_with(&root) || root.starts_with(&repo)
+            })
+        };
+        let open_tab = self.layout().members().into_iter().find(|&member| {
+            self.pages.get(&member).is_some_and(|slot| {
+                slot.tool == GIT_TOOL && matches_repo(&*slot.page)
+            })
+        });
+        if let Some(tab) = open_tab {
+            self.show_tab(tab);
+        } else {
+            let page = GitPage::new(repo);
+            let first = page.initial_request();
+            let tab_id = self.show_page_beside(GIT_TOOL, Box::new(page));
+            self.jobs.spawn(tab_id, first);
+        }
     }
 
     /// Move focus to another pane when the window has more than one, so what
@@ -707,13 +743,13 @@ impl App {
 
     /// Open `page` in a new tab beside the focused one and show it. Returns
     /// the tab it went into.
-    /// The tool tabs as a session saves them: each that can say where it was.
-    pub(crate) fn tool_sessions(&self) -> Vec<ToolSession> {
+    /// The extension or view tabs as a session saves them: each that can say where it was.
+    pub(crate) fn extension_sessions(&self) -> Vec<ExtensionSession> {
         self.pages
             .iter()
             .filter_map(|(id, slot)| {
                 let at = slot.page.snapshot()?;
-                Some(ToolSession {
+                Some(ExtensionSession {
                     id: id.0 as usize,
                     kind: slot.tool.to_string(),
                     line: at.line,
@@ -723,24 +759,29 @@ impl App {
             .collect()
     }
 
-    /// Open a saved tool tab again as tab `id`, outside the layout, which the
-    /// restore rebuilds from the session. `false` for a tool that cannot be
+    /// Backwards compatibility alias for [`App::extension_sessions`].
+    pub(crate) fn tool_sessions(&self) -> Vec<ExtensionSession> {
+        self.extension_sessions()
+    }
+
+    /// Open a saved extension tab again as tab `id`, outside the layout, which the
+    /// restore rebuilds from the session. `false` for an extension that cannot be
     /// opened there any more (a file since deleted, a kind no longer known).
-    pub(crate) fn restore_tool(&mut self, id: TabId, tool: &ToolSession) -> bool {
-        let path = PathBuf::from(&tool.path);
+    pub(crate) fn restore_extension(&mut self, id: TabId, ext: &ExtensionSession) -> bool {
+        let path = PathBuf::from(&ext.path);
         // A view that knows nothing until git answers has to ask, as it does
         // when opened; restored without the request it would wait for ever.
         let mut first = None;
-        let (key, page): (&'static str, Box<dyn Page>) = match tool.kind.as_str() {
-            DIR_TOOL if path.is_dir() => (DIR_TOOL, Box::new(DirPage::new(path))),
-            GIT_TOOL if path.is_dir() => {
+        let (key, page): (&'static str, Box<dyn Page>) = match ext.kind.as_str() {
+            DIR_EXTENSION if path.is_dir() => (DIR_EXTENSION, Box::new(DirPage::new(path))),
+            GIT_EXTENSION if path.is_dir() => {
                 let page = GitPage::new(path);
                 first = Some(page.initial_request());
-                (GIT_TOOL, Box::new(page))
+                (GIT_EXTENSION, Box::new(page))
             }
-            GREP_TOOL if path.is_dir() => (GREP_TOOL, Box::new(GrepPage::new(path))),
-            EDITOR_TOOL => match EditorPage::new(path, tool.line) {
-                Ok(page) => (EDITOR_TOOL, Box::new(page)),
+            GREP_EXTENSION if path.is_dir() => (GREP_EXTENSION, Box::new(GrepPage::new(path))),
+            EDITOR_EXTENSION => match EditorPage::new(path, ext.line) {
+                Ok(page) => (EDITOR_EXTENSION, Box::new(page)),
                 Err(_) => return false,
             },
             _ => return false,
@@ -759,6 +800,12 @@ impl App {
             self.jobs.spawn(id, first);
         }
         true
+    }
+
+    /// Backwards compatibility alias for [`App::restore_extension`].
+    #[allow(dead_code)]
+    pub(crate) fn restore_tool(&mut self, id: TabId, tool: &ExtensionSession) -> bool {
+        self.restore_extension(id, tool)
     }
 
     pub(crate) fn show_page(&mut self, tool: &'static str, page: Box<dyn Page>) -> TabId {
@@ -1032,9 +1079,9 @@ impl App {
         self.restore_closed(closed);
     }
 
-    /// Act on a row of the tool list: go to a tool that is open somewhere, or
+    /// Act on a row of the extension list: go to an extension that is open somewhere, or
     /// put back one that was closed.
-    pub(crate) fn choose_tool_row(&mut self, action: &str) {
+    pub(crate) fn choose_extension_row(&mut self, action: &str) {
         if let Some(pane) = action
             .strip_prefix(OPEN_ROW)
             .and_then(|id| id.parse::<u64>().ok())
@@ -1050,24 +1097,32 @@ impl App {
         }
     }
 
-    /// Show every tool as a list to pick from: the ones open somewhere first,
+    /// Backwards compatibility alias for [`App::choose_extension_row`].
+    #[allow(dead_code)]
+    pub(crate) fn choose_tool_row(&mut self, action: &str) {
+        self.choose_extension_row(action);
+    }
+
+    /// Show every extension as a list to pick from: the ones open somewhere first,
     /// then the ones closed recently, newest first.
-    ///
-    /// The same fuzzy panel every other list in Winter is picked from, so the
-    /// tool wanted is typed for rather than counted back to, and one list for
-    /// both means not having to know which of the two a tool is in.
-    pub(crate) fn open_tool_palette(&mut self) {
-        let rows = self.tool_rows();
+    pub(crate) fn open_extension_palette(&mut self) {
+        let rows = self.extension_rows();
         if rows.is_empty() {
             self.set_notice(NOTHING_CLOSED);
             return;
         }
-        self.palette = Some(Palette::open_tools(rows));
+        self.palette = Some(Palette::open_extensions(rows));
         self.dirty = true;
     }
 
-    /// Every row of the tool list, as `(action, label, hint)`.
-    fn tool_rows(&self) -> Vec<(String, String, String)> {
+    /// Backwards compatibility alias for [`App::open_extension_palette`].
+    #[allow(dead_code)]
+    pub(crate) fn open_tool_palette(&mut self) {
+        self.open_extension_palette();
+    }
+
+    /// Every row of the extension list, as `(action, label, hint)`.
+    fn extension_rows(&self) -> Vec<(String, String, String)> {
         let mut rows: Vec<(String, String, String)> = Vec::new();
         let shown = self.layout().panes();
         for pane in self.layout().members() {
@@ -1080,7 +1135,7 @@ impl App {
             };
             rows.push((
                 format!("{OPEN_ROW}{}", pane.0),
-                tool_row_label(slot.tool, slot.page.as_ref()),
+                extension_row_label(slot.tool, slot.page.as_ref()),
                 hint.to_string(),
             ));
         }
@@ -1095,6 +1150,11 @@ impl App {
             rows.push((format!("{CLOSED_ROW}{}", closed.id()), label, age));
         }
         rows
+    }
+
+    #[allow(dead_code)]
+    fn tool_rows(&self) -> Vec<(String, String, String)> {
+        self.extension_rows()
     }
 
     /// How the list names closed terminals: where their shells were, and the
@@ -1969,7 +2029,7 @@ mod tests {
 
         app.open_tool_palette();
         let palette = app.palette.as_ref().expect("the list opens");
-        assert_eq!(palette.mode, PaletteMode::Tools);
+        assert_eq!(palette.mode, PaletteMode::Extensions);
         let labels: Vec<&str> = palette
             .entries
             .iter()
@@ -2191,6 +2251,29 @@ mod tests {
             "the diff goes with the editor"
         );
         assert!(app.commit_companions.is_empty());
+    }
+
+    #[test]
+    fn test_closing_commit_editor_focuses_git_view_of_repo() {
+        use crate::control::EditWaiter;
+        use std::os::unix::net::UnixStream;
+
+        let tree = TempTree::new("commit-focus", &["COMMIT_EDITMSG"]);
+        let mut app = App::new();
+        let git_page = GitPage::new(tree.0.clone());
+        let git_tab = app.show_page(GIT_TOOL, Box::new(git_page));
+
+        let (stream, _client) = UnixStream::pair().expect("socket pair");
+        app.open_waited_editor(tree.0.join("COMMIT_EDITMSG"), EditWaiter::new(stream));
+        let editor = app.layout().focused();
+        assert_ne!(editor, git_tab);
+
+        app.close_page(editor);
+        assert_eq!(
+            app.layout().focused(),
+            git_tab,
+            "closing the commit editor focuses on the repo's git view"
+        );
     }
 
     /// A terminal tab over `cat`, with a full-screen program on it when
@@ -2767,7 +2850,7 @@ mod tests {
     fn test_a_restored_git_tab_asks_git_for_its_repository() {
         let dir = std::env::temp_dir().join(format!("winter-restore-git-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let tool = ToolSession {
+        let tool = ExtensionSession {
             id: 7,
             kind: GIT_TOOL.to_string(),
             line: None,
@@ -2781,7 +2864,7 @@ mod tests {
             "its first read is under way, not awaited"
         );
 
-        let dir_tool = ToolSession {
+        let dir_tool = ExtensionSession {
             kind: DIR_TOOL.to_string(),
             ..tool
         };

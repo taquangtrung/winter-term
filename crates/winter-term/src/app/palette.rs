@@ -223,9 +223,9 @@ impl App {
                     }
                 }
             }
-            PaletteMode::Tools => {
+            PaletteMode::Extensions => {
                 if let Some(action) = action {
-                    self.choose_tool_row(&action);
+                    self.choose_extension_row(&action);
                 }
             }
             PaletteMode::Panes => {

@@ -14,7 +14,7 @@ use crate::model::page::{
 use crate::model::textedit::field::TextField;
 use crate::model::textedit::modal::{EditMode, EditOutcome};
 use crate::model::vim::nav::buffer_end;
-use crate::tools::editor::file;
+use crate::extensions::editor::file;
 
 // ========================================================================
 // Constants

@@ -42,7 +42,7 @@ pub fn expand_window_title_template(template: &str, vars: &WindowTitleVars) -> S
         };
         let value = match after[..end].trim() {
             "title" => Some(&vars.title),
-            "app_name" => Some(&vars.app_name),
+            "app_name" | "extension" | "extension_name" | "view" => Some(&vars.app_name),
             "pane_title" => Some(&vars.pane_title),
             "cwd" => Some(&vars.cwd),
             _ => None,

@@ -364,12 +364,12 @@ impl App {
     fn titlebar_path(&self) -> String {
         let focused = self.layout().focused();
         if let Some(slot) = self.pages.get(&focused) {
-            let app_name = match slot.tool() {
+            let ext_or_view_name = match slot.tool() {
                 "dir" => "Dir",
                 "editor" => "Editor",
                 "git" => "Git",
                 "grep" => "Grep",
-                "keys" => "Keys",
+                "keys" => "Keys View",
                 "pdf" => "PDF",
                 "proc" => "Processes",
                 "sys" => "System",
@@ -377,8 +377,8 @@ impl App {
             };
             let target = slot.page.address();
             return match target {
-                Some(tgt) if !tgt.is_empty() => format!("{app_name}: {tgt}"),
-                _ => app_name.to_string(),
+                Some(tgt) if !tgt.is_empty() => format!("{ext_or_view_name}: {tgt}"),
+                _ => ext_or_view_name.to_string(),
             };
         }
         if let Some(terminal) = self.terminals.get(&focused) {
@@ -725,7 +725,7 @@ mod tests {
     use super::*;
     use crate::model::input::{Key, WindowKeymap};
     use crate::model::page::{Page, PageContent, PageOutcome};
-    use crate::tools::keys::KeysPage;
+    use crate::extensions::keys::KeysPage;
 
     #[test]
     fn test_modern_has_one_menu_classic_has_several() {
@@ -997,7 +997,7 @@ mod tests {
                 address: None,
             }),
         );
-        assert_eq!(app.titlebar_path(), "Keys");
+        assert_eq!(app.titlebar_path(), "Keys View");
 
         // The bar names the page's address, not wherever its cursor has
         // wandered: the folder or reference it follows is ignored.

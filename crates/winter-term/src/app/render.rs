@@ -34,10 +34,10 @@ const PANE_STRIP_TEXTURE_BASE: u64 = u64::MAX - 200;
 /// Raster image MIME types rendered natively on the GPU. Other rich types
 /// (HTML, markdown, ...) still go to the WebView.
 const RASTER_MIMES: [&str; 4] = ["image/gif", "image/jpeg", "image/png", "image/webp"];
-/// What the tool list is headed by. A list of commands needs no naming, but
-/// rows naming tools and directories do not say on their own what picking one
+/// What the extension list is headed by. A list of commands needs no naming, but
+/// rows naming extensions and directories do not say on their own what picking one
 /// would do.
-const TOOLS_TITLE: &str = "Tools: open, then recently closed";
+const EXTENSIONS_TITLE: &str = "Extensions: open, then recently closed";
 
 const CSV_MIME: &str = "text/csv";
 const JSON_MIME: &str = "application/json";
@@ -611,7 +611,7 @@ fn image_placements(
 /// behind them, and the empty-state message matching what it searches over.
 fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) -> PaletteView {
     let empty_message = match palette.mode {
-        PaletteMode::Tools => "No matching tools",
+        PaletteMode::Extensions => "No matching extensions",
         PaletteMode::Files => "Nothing here by that name",
         PaletteMode::History => "No matching history",
         PaletteMode::PagePick => "Nothing matches",
@@ -635,7 +635,7 @@ fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) ->
             Some(title) => title.clone(),
             None => match &palette.dir {
                 Some(dir) => dir.display().to_string(),
-                None if palette.mode == PaletteMode::Tools => TOOLS_TITLE.to_string(),
+                None if palette.mode == PaletteMode::Extensions => EXTENSIONS_TITLE.to_string(),
                 None => pick.unwrap_or_default().to_string(),
             },
         },

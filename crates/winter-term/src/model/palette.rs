@@ -34,10 +34,10 @@ pub enum PaletteMode {
     Files,
     /// Recalling an earlier query.
     History,
-    /// Every tool: the ones open somewhere, then the ones closed recently.
+    /// Every extension: the ones open somewhere, then the ones closed recently.
     /// Selecting an open one goes to it, and a closed one comes back as the
-    /// page it was rather than as a fresh tool of its kind.
-    Tools,
+    /// page it was rather than as a fresh extension of its kind.
+    Extensions,
     /// Pane switcher: selecting an entry focuses that pane.
     Panes,
     /// `cd` target picker: selecting an entry executes `cd <dir>` immediately.
@@ -180,15 +180,15 @@ impl Palette {
         }
     }
 
-    /// Open the palette over every tool: the ones open somewhere first, then
+    /// Open the palette over every extension: the ones open somewhere first, then
     /// the ones closed recently, newest first.
     ///
     /// Each entry is `(action, label, hint)`. The action says which pane a
     /// row goes to or which closed thing it puts back, named rather than
     /// numbered by position, so a row means the same thing however the list
     /// has changed since it was drawn.
-    pub fn open_tools(tools: Vec<(String, String, String)>) -> Self {
-        let entries = tools
+    pub fn open_extensions(extensions: Vec<(String, String, String)>) -> Self {
+        let entries = extensions
             .into_iter()
             .map(|(action, label, hint)| PaletteEntry {
                 action,
@@ -206,12 +206,17 @@ impl Palette {
             history: EditHistory::new(String::new()),
             history_index: None,
             live_query: String::new(),
-            mode: PaletteMode::Tools,
+            mode: PaletteMode::Extensions,
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
             title: None,
         }
+    }
+
+    /// Backwards compatibility alias for [`Palette::open_extensions`].
+    pub fn open_tools(tools: Vec<(String, String, String)>) -> Self {
+        Self::open_extensions(tools)
     }
 
     /// Open the palette in pane switcher mode.
@@ -916,7 +921,7 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ("font_increase", "Font Size: Increase", ""),
         ("font_reset", "Font Size: Reset", ""),
         ("jump", "Navigate: Jump to Target", ""),
-        ("keys_page", "Keys: Show Every Command", ""),
+        ("keys_page", "Keys View: Show Every Command", ""),
         ("proc_page", "Processes: Monitor", ""),
         ("sys_page", "System: Monitor", ""),
         ("move_tab_down", "Move Tab to Pane Below", ""),
@@ -945,9 +950,10 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ("recent_tab_back", "Recent Tab (Backward)", ""),
         ("recent_tab_forward", "Recent Tab (Forward)", ""),
         ("reload", "Reload Window", ""),
-        ("reopen_page", "Tool: Reopen Last Closed", ""),
+        ("reopen_page", "Extension: Reopen Last Closed", ""),
         ("reveal_terminal", "Terminal: Reveal Most Recent", ""),
-        ("tool_list", "Tool: Go To or Reopen...", ""),
+        ("tool_list", "Extension: Go To or Reopen...", ""),
+        ("extension_list", "Extension: Go To or Reopen...", ""),
         ("search", "Search Blocks", ""),
         ("select_pane", "Go to Pane", ""),
         ("scroll_page_up", "Scroll Page Up", ""),

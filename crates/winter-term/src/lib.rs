@@ -4,8 +4,8 @@
 //!
 //! The architecture is layered on a Vim foundation ([`model::vim`]): the
 //! vocabulary, text primitives, and key mapping every Vim surface shares.
-//! The terminal's grid-based Normal mode stands on it, and the tool pages
-//! ([`tools`]) stand on it in turn, reinterpreting the same motions over
+//! The terminal's grid-based Normal mode stands on it, and the extensions
+//! ([`extensions`]) stand on it in turn, reinterpreting the same motions over
 //! their own content with their own keys overriding the defaults.
 //!
 //! This library is published so the binary can be built from the registry, not
@@ -18,13 +18,14 @@
 pub mod app;
 pub mod config;
 pub mod control;
+pub mod extensions;
 pub(crate) mod icons;
 pub mod model;
 pub mod mux;
 pub(crate) mod paths;
 pub mod session;
 pub mod terminal;
-pub mod tools;
+pub use extensions as tools;
 
 pub use model::input::{resolve, Action, BlockNav, Key, KeyCode};
 pub use model::layout::{Direction, FocusDir, Layout, Rect, TabId};

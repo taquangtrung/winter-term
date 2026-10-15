@@ -31,7 +31,7 @@ use crate::model::page::{
     PromptRequest, SpawnRequest,
 };
 use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
-use crate::tools::refresh::RefreshTimer;
+use crate::extensions::refresh::RefreshTimer;
 
 use commit::{CommitContent, CommitFile};
 use diff::{FileDiff, Hunk};

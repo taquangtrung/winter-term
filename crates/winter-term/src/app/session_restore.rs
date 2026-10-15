@@ -24,7 +24,7 @@ impl App {
         // Programs the previous process image left running and handed on are
         // taken over as they are, ahead of anything that would start a new one.
         let mut handovers = session.take_handovers();
-        let tools = session.take_tools();
+        let extensions = session.take_extensions();
         let (tree, focused, pane_map) = session.into_parts();
 
         let (cols, rows) = if let Some(r) = &self.renderer {
@@ -127,13 +127,13 @@ impl App {
                 None => failed_ids.push(*id),
             }
         }
-        // The tool tabs come back where they were looking; one that cannot
+        // The extension tabs come back where they were looking; one that cannot
         // (its file gone, say) is dropped like a terminal that would not spawn.
-        let restored: Vec<TabId> = tools
+        let restored: Vec<TabId> = extensions
             .iter()
-            .filter_map(|tool| {
-                let id = TabId(tool.id as u64);
-                self.restore_tool(id, tool).then_some(id)
+            .filter_map(|ext| {
+                let id = TabId(ext.id as u64);
+                self.restore_extension(id, ext).then_some(id)
             })
             .collect();
         // A terminal that could not be respawned is dropped from the layout,

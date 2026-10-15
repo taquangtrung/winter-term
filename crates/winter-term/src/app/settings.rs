@@ -238,7 +238,7 @@ impl App {
                     IconStyle::Svg => 1,
                     IconStyle::None => 2,
                 };
-                SettingsField::choice("icons", "Tool page icons", icon_options, idx)
+                SettingsField::choice("icons", "Extension icons", icon_options, idx)
                     .in_section("Terminal")
                     .with_note("Where the icon beside each entry comes from. Font needs a patched terminal font; SVG always draws but blurs at small cell sizes")
             },
@@ -327,7 +327,7 @@ impl App {
                     idx,
                 )
                 .in_section("Security")
-                .with_note("Ceiling on the tier a block asks for. Trusted grants scripting to any stream that reaches a pane, not only to the tools you had in mind")
+                .with_note("Ceiling on the tier a block asks for. Trusted grants scripting to any stream that reaches a pane, not only to the extensions you had in mind")
             },
             SettingsField::toggle(
                 "security.block_remote_assets",

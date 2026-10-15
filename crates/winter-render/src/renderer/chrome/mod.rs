@@ -72,15 +72,7 @@ pub(super) const INPUT_WIDTH_RATIO: f32 = 0.5;
 ///
 /// A fixed size whatever the card holds: a hint is read at a glance, in the
 /// same place every time, and a panel that grew and shrank with the number of
-/// keys would move the first row somewhere new on every prefix. The keys flow
-/// into as many columns as the fixed height needs.
-///
-/// Sized for the longest menu rather than the common one: a prefix offering a
-/// dozen keys should still read down a single column, which is what the
-/// height buys, and the width is what keeps a second column legible when one
-/// offers more than that.
-pub(super) const WHICH_KEY_WIDTH_RATIO: f32 = 0.66;
-pub(super) const WHICH_KEY_HEIGHT_RATIO: f32 = 0.55;
+
 
 /// The palette's width and height as fractions of the surface.
 ///

@@ -938,6 +938,11 @@ pub trait Page {
         false
     }
 
+    /// Whether this page is editing a commit message.
+    fn is_commit_editor(&self) -> bool {
+        false
+    }
+
     /// The page is showing again after another one was closed over the top of
     /// it. What it was showing may have changed while it was covered, so a
     /// page that reads the world re-reads it here. Pages showing something

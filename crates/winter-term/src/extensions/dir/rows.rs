@@ -400,7 +400,7 @@ mod tests {
     }
 
     use super::*;
-    use crate::tools::dir::entry::Entry;
+    use crate::extensions::dir::entry::Entry;
     use std::path::PathBuf;
 
     fn row(name: &str, kind: EntryKind, depth: usize, expanded: bool) -> Row {

@@ -916,6 +916,10 @@ impl Page for EditorPage {
         Some(OpenTarget::at_line(path.clone(), self.buffer().row() + 1))
     }
 
+    fn is_commit_editor(&self) -> bool {
+        self.edits_commit()
+    }
+
     fn cwd(&self) -> Option<PathBuf> {
         // The buffer being edited, not the one the editor opened with, so
         // stepping through buffers takes the answer with it.

@@ -252,7 +252,7 @@ fn next_word(
 mod tests {
     use super::*;
     use crate::model::input::WindowKeymap;
-    use crate::tools::keys::KeysPage;
+    use crate::extensions::keys::KeysPage;
     use winter_render::Grid;
 
     /// An app whose focused tab is a page already painted with `lines`,

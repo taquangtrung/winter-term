@@ -2939,7 +2939,7 @@ mod tests {
 
     #[test]
     fn test_buffer_jump_on_page_previews_confirms_and_cancels() {
-        use crate::tools::dir::DirPage;
+        use crate::extensions::dir::DirPage;
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();

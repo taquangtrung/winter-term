@@ -213,14 +213,14 @@ impl App {
             "sys_page" => {
                 self.open_sys_page();
             }
-            "keys_page" => {
+            "keys_page" | "keys_view" => {
                 self.open_keys_page();
             }
             "reopen_page" => {
                 self.reopen_last_closed();
             }
-            "tool_list" => {
-                self.open_tool_palette();
+            "tool_list" | "extension_list" => {
+                self.open_extension_palette();
             }
             "copy_cwd" => {
                 self.copy_pane_cwd(focused);
