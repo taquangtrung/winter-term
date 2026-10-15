@@ -89,6 +89,14 @@ pub enum WindowAction {
     FocusRight,
     /// Move focus to the pane above.
     FocusUp,
+    /// Move the current tab to the pane below.
+    MoveTabDown,
+    /// Move the current tab to the pane on the left.
+    MoveTabLeft,
+    /// Move the current tab to the pane on the right.
+    MoveTabRight,
+    /// Move the current tab to the pane above.
+    MoveTabUp,
     /// Split the focused pane into upper and lower halves.
     SplitHorizontal,
     /// Split the focused pane into left and right halves.
@@ -260,7 +268,7 @@ pub struct WindowKeymap {
     pub(super) named: Vec<(Key, String)>,
     /// Keys that select an action when pressed after the `leader`, matched by
     /// key code alone (modifiers on the follow key are ignored, as in Vim).
-    pub(super) sequence: Vec<(KeyCode, WindowAction)>,
+    pub(super) sequence: Vec<(Key, Key, WindowAction)>,
 }
 /// The built-in default keybindings, embedded from the canonical file (also
 /// installed as a reference copy at `~/.config/winter-term/keybindings.kdl`).
@@ -271,7 +279,7 @@ pub(super) const DEFAULT_KEYBINDINGS_KDL: &str = include_str!("../../../samples/
 /// The leader key when no two-chord `window` binding (default or user) has
 /// set one explicitly. There is no built-in two-chord default to parse this
 /// from, so it stays a plain constant.
-pub(super) const DEFAULT_LEADER: Key = Key {
+pub(crate) const DEFAULT_LEADER: Key = Key {
     alt: false,
     code: KeyCode::Char('w'),
     ctrl: true,
@@ -287,6 +295,10 @@ impl WindowAction {
             WindowAction::FocusLeft => Action::FocusPane(FocusDir::Left),
             WindowAction::FocusRight => Action::FocusPane(FocusDir::Right),
             WindowAction::FocusUp => Action::FocusPane(FocusDir::Up),
+            WindowAction::MoveTabDown => Action::MoveTabToPane(FocusDir::Down),
+            WindowAction::MoveTabLeft => Action::MoveTabToPane(FocusDir::Left),
+            WindowAction::MoveTabRight => Action::MoveTabToPane(FocusDir::Right),
+            WindowAction::MoveTabUp => Action::MoveTabToPane(FocusDir::Up),
             WindowAction::SplitHorizontal => Action::SplitPane(Direction::Horizontal),
             WindowAction::SplitVertical => Action::SplitPane(Direction::Vertical),
             WindowAction::Zoom => Action::ZoomPane,
@@ -328,6 +340,16 @@ impl WindowAction {
             "focus_left" => WindowAction::FocusLeft,
             "focus_right" => WindowAction::FocusRight,
             "focus_up" => WindowAction::FocusUp,
+            "move_tab_down" | "move_tab_down_pane" | "move_tab_to_down_pane" => {
+                WindowAction::MoveTabDown
+            }
+            "move_tab_left" | "move_tab_left_pane" | "move_tab_to_left_pane" => {
+                WindowAction::MoveTabLeft
+            }
+            "move_tab_right" | "move_tab_right_pane" | "move_tab_to_right_pane" => {
+                WindowAction::MoveTabRight
+            }
+            "move_tab_up" | "move_tab_up_pane" | "move_tab_to_up_pane" => WindowAction::MoveTabUp,
             "split_horizontal" => WindowAction::SplitHorizontal,
             "split_vertical" => WindowAction::SplitVertical,
             "toggle_pane_zoom" | "zoom_pane" => WindowAction::Zoom,
@@ -446,15 +468,15 @@ impl WindowKeymap {
         self.direct.retain(|(_, action)| !rebound.contains(action));
         self.global.retain(|(_, action)| !rebound.contains(action));
         self.sequence
-            .retain(|(_, action)| !rebound.contains(action));
+            .retain(|(_, _, action)| !rebound.contains(action));
 
         for (keys, action) in parsed {
             match keys.as_slice() {
                 [single] if action.is_global() => self.global.push((single.clone(), action)),
                 [single] => self.direct.push((single.clone(), action)),
                 [leader, follow] => {
-                    self.leader = leader.clone();
-                    self.sequence.push((follow.code, action));
+                    self.leader = *leader;
+                    self.sequence.push((*leader, *follow, action));
                 }
                 _ => {}
             }
@@ -527,12 +549,17 @@ impl WindowKeymap {
         find_chord(&self.editing, key)
     }
 
-    /// The action the follow key selects after the leader, if any.
+    /// The action the follow key selects after a leader, if any.
     pub(super) fn sequence_action(&self, code: KeyCode) -> Option<WindowAction> {
         self.sequence
             .iter()
-            .find(|(follow, _)| *follow == code)
-            .map(|(_, action)| *action)
+            .find(|(_, follow, _)| follow.code == code)
+            .map(|(_, _, action)| *action)
+    }
+
+    /// Whether any sequence is registered for `key` as leader.
+    pub(super) fn has_sequence_for_leader(&self, key: &Key) -> bool {
+        self.sequence.iter().any(|(leader, _, _)| leader == key)
     }
 }
 impl Default for WindowKeymap {
@@ -560,12 +587,18 @@ impl WindowKeymap {
                 .map(|(key, _)| format_key(key))
                 .unwrap_or_default();
         };
-        self.direct
+        if let Some((key, _)) = self
+            .direct
             .iter()
             .chain(self.global.iter())
             .find(|(_, a)| *a == action)
-            .map(|(key, _)| format_key(key))
-            .unwrap_or_default()
+        {
+            return format_key(key);
+        }
+        if let Some((leader, follow, _)) = self.sequence.iter().find(|(_, _, a)| *a == action) {
+            return format!("{} {}", format_key(leader), format_key(follow));
+        }
+        String::new()
     }
 }
 /// Format a [`Key`] as a human-readable shortcut string (e.g. `"Ctrl-Shift-T"`).
@@ -903,7 +936,10 @@ mod tests {
             ctrl: true,
             shift: true,
         };
-        assert_eq!(keymap.global_action(&ctrl_shift_alt_n), Some(Action::NewWindow));
+        assert_eq!(
+            keymap.global_action(&ctrl_shift_alt_n),
+            Some(Action::NewWindow)
+        );
         assert_eq!(keymap.chord_hint("new_window"), "Ctrl-Shift-Alt-n");
     }
     #[test]
@@ -953,7 +989,10 @@ mod tests {
             ctrl: true,
             shift: true,
         };
-        assert_eq!(keymap.global_action(&ctrl_shift_q), Some(Action::CloseTab(None)));
+        assert_eq!(
+            keymap.global_action(&ctrl_shift_q),
+            Some(Action::CloseTab(None))
+        );
     }
     #[test]
     fn test_shift_alt_q_and_w_close_other_tabs_and_the_pane_by_default() {
@@ -1194,7 +1233,15 @@ mod tests {
         let keymap = WindowKeymap::default();
         let mut pending = PendingPrefix::None;
         assert_eq!(
-            resolve_with(Mode::Normal, &key(KeyCode::F(8)), &mut pending, &keymap, 0, None, false),
+            resolve_with(
+                Mode::Normal,
+                &key(KeyCode::F(8)),
+                &mut pending,
+                &keymap,
+                0,
+                None,
+                false
+            ),
             Action::RunCommand("next_error".to_string())
         );
     }
@@ -1926,5 +1973,58 @@ mod tests {
             false,
         );
         assert_eq!(a, Action::JumpToPreviousPrompt);
+    }
+
+    #[test]
+    fn test_move_tab_keybindings_and_hints() {
+        let win = WindowKeymap::default();
+        assert_eq!(win.chord_hint("move_tab_left"), "Alt-g Alt-h");
+        assert_eq!(win.chord_hint("move_tab_down"), "Alt-g Alt-j");
+        assert_eq!(win.chord_hint("move_tab_up"), "Alt-g Alt-k");
+        assert_eq!(win.chord_hint("move_tab_right"), "Alt-g Alt-l");
+
+        let alt_g = Key::with_alt(KeyCode::Char('g'));
+        let alt_h = Key::with_alt(KeyCode::Char('h'));
+        let alt_j = Key::with_alt(KeyCode::Char('j'));
+        let alt_k = Key::with_alt(KeyCode::Char('k'));
+        let alt_l = Key::with_alt(KeyCode::Char('l'));
+
+        // Alt+g then Alt+h in Normal mode
+        let mut pending = PendingPrefix::None;
+        let a = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
+        assert_eq!(a, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::CtrlW);
+
+        let a = resolve_with(Mode::Normal, &alt_h, &mut pending, &win, 0, None, false);
+        assert_eq!(a, Action::MoveTabToPane(FocusDir::Left));
+        assert_eq!(pending, PendingPrefix::None);
+
+        // Alt+g then Alt+j in Normal mode
+        let _ = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
+        let a = resolve_with(Mode::Normal, &alt_j, &mut pending, &win, 0, None, false);
+        assert_eq!(a, Action::MoveTabToPane(FocusDir::Down));
+
+        // Alt+g then Alt+k in Normal mode
+        let _ = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
+        let a = resolve_with(Mode::Normal, &alt_k, &mut pending, &win, 0, None, false);
+        assert_eq!(a, Action::MoveTabToPane(FocusDir::Up));
+
+        // Alt+g then Alt+l in Normal mode
+        let _ = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
+        let a = resolve_with(Mode::Normal, &alt_l, &mut pending, &win, 0, None, false);
+        assert_eq!(a, Action::MoveTabToPane(FocusDir::Right));
+
+        // Bare h after Alt+g also matches
+        let _ = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
+        let a = resolve_with(
+            Mode::Normal,
+            &Key::plain(KeyCode::Char('h')),
+            &mut pending,
+            &win,
+            0,
+            None,
+            false,
+        );
+        assert_eq!(a, Action::MoveTabToPane(FocusDir::Left));
     }
 }

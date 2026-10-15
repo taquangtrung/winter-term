@@ -523,14 +523,22 @@ mod tests {
         theme.fit_chrome_to_background();
         let band = theme.tabbar_bg.luminance();
         assert!(band > 0.7, "a light band: {}", theme.tabbar_bg.to_hex());
-        assert!(band < theme.background.luminance(), "darker than the terminal");
+        assert!(
+            band < theme.background.luminance(),
+            "darker than the terminal"
+        );
         assert_eq!(theme.tab_active_bg, theme.background);
 
         // And the presets' own bands are the ones the rule derives.
         for preset in [Theme::dark(), Theme::light()] {
             let mut fitted = preset.clone();
             fitted.fit_chrome_to_background();
-            assert_eq!(fitted.tabbar_bg, preset.tabbar_bg, "{}", preset.tabbar_bg.to_hex());
+            assert_eq!(
+                fitted.tabbar_bg,
+                preset.tabbar_bg,
+                "{}",
+                preset.tabbar_bg.to_hex()
+            );
         }
     }
 
@@ -566,7 +574,11 @@ mod tests {
         assert_eq!(teal.to_hex(), "#14708acc");
         assert_eq!(Rgb::parse_hex("#14708aff").unwrap().to_hex(), "#14708a");
         assert_eq!(Rgb::parse_hex("#14708a0"), None);
-        assert_eq!(Rgb::parse_hex("#é4708a"), None, "multi-byte text must not panic");
+        assert_eq!(
+            Rgb::parse_hex("#é4708a"),
+            None,
+            "multi-byte text must not panic"
+        );
 
         let black = Rgb::new(0, 0, 0);
         let white = Rgb::new(255, 255, 255);

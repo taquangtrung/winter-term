@@ -64,9 +64,9 @@ pub(super) fn with_action(line: &str, action: &str) -> Option<String> {
 /// the first commit cannot fold into a commit before it, since there is none.
 pub(super) fn problem(lines: &[String]) -> Option<String> {
     let (first, _) = lines.iter().find_map(|line| command_of(line))?;
-    FOLDING
-        .contains(&first)
-        .then(|| format!("the first commit cannot {first}: there is nothing before it to fold into"))
+    FOLDING.contains(&first).then(|| {
+        format!("the first commit cannot {first}: there is nothing before it to fold into")
+    })
 }
 
 /// A plan line's action word and everything after it, for a line that is one.
@@ -93,7 +93,10 @@ mod tests {
             with_action("pick abc123 do it", "fixup").as_deref(),
             Some("fixup abc123 do it")
         );
-        assert_eq!(with_action("s abc123 do it", "drop").as_deref(), Some("drop abc123 do it"));
+        assert_eq!(
+            with_action("s abc123 do it", "drop").as_deref(),
+            Some("drop abc123 do it")
+        );
         assert_eq!(with_action("# pick is the default", "drop"), None);
         assert_eq!(with_action("", "drop"), None);
         assert_eq!(with_action("exec make", "drop"), None, "not a commit line");

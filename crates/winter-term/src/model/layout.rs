@@ -538,7 +538,9 @@ impl Layout {
             let from_group = find_group_mut(&mut self.root, tab).unwrap();
             from_group.remove(tab);
             let to_group = find_group_mut(&mut self.root, target_tab).unwrap();
-            let pos = insert_at.unwrap_or(to_group.members.len()).min(to_group.members.len());
+            let pos = insert_at
+                .unwrap_or(to_group.members.len())
+                .min(to_group.members.len());
             to_group.members.insert(pos, tab);
             to_group.show(tab);
             self.focused = tab;
@@ -553,7 +555,9 @@ impl Layout {
                 return false;
             }
             let to_group = find_group_mut(&mut self.root, target_tab).unwrap();
-            to_group.members.insert(pos.min(to_group.members.len()), tab);
+            to_group
+                .members
+                .insert(pos.min(to_group.members.len()), tab);
             to_group.show(tab);
             self.focused = tab;
             self.balance();
@@ -585,27 +589,30 @@ impl Layout {
         }
     }
 
-    /// Focus the nearest group in the given direction within `viewport`, by the
-    /// distance between group centers. Returns whether focus moved.
-    pub fn focus_in_direction(&mut self, direction: FocusDir, viewport: Rect) -> bool {
+    /// Find the nearest group in the given direction within `viewport`, by the
+    /// distance between group centers, or `None` if there is no group in that
+    /// direction.
+    pub fn pane_in_direction(&self, direction: FocusDir, viewport: Rect) -> Option<TabId> {
         let rects = self.rects(viewport);
-        let Some(current) = rects.iter().find(|(id, _)| *id == self.focused) else {
-            return false;
-        };
+        let current = rects.iter().find(|(id, _)| *id == self.focused)?;
         let from = current.1.center();
 
-        let best = rects
+        rects
             .iter()
             .filter(|(id, _)| *id != self.focused)
             .filter(|(_, rect)| is_toward(direction, from, rect.center()))
-            .min_by(|a, b| distance(from, a.1.center()).total_cmp(&distance(from, b.1.center())));
+            .min_by(|a, b| distance(from, a.1.center()).total_cmp(&distance(from, b.1.center())))
+            .map(|(id, _)| *id)
+    }
 
-        match best {
-            Some((id, _)) => {
-                self.focused = *id;
-                true
-            }
-            None => false,
+    /// Focus the nearest group in the given direction within `viewport`, by the
+    /// distance between group centers. Returns whether focus moved.
+    pub fn focus_in_direction(&mut self, direction: FocusDir, viewport: Rect) -> bool {
+        if let Some(target) = self.pane_in_direction(direction, viewport) {
+            self.focused = target;
+            true
+        } else {
+            false
         }
     }
 
@@ -1402,11 +1409,7 @@ mod tests {
         layout.split(Direction::Vertical, 0.5, TabId(1));
         layout.add_tab(TabId(2));
         assert!(layout.close(TabId(2)));
-        assert_eq!(
-            layout.panes(),
-            vec![TabId(0), TabId(1)],
-            "the group stays"
-        );
+        assert_eq!(layout.panes(), vec![TabId(0), TabId(1)], "the group stays");
         assert!(layout.close(TabId(1)));
         assert_eq!(layout.rects(VIEWPORT), vec![(TabId(0), VIEWPORT)]);
         assert_eq!(layout.focused(), TabId(0));
@@ -1524,5 +1527,30 @@ mod tests {
         );
         let nothing = LayoutTree::single(TabId(0)).retain(&|_| false);
         assert!(Layout::from_tree(nothing, TabId(0)).is_none());
+    }
+
+    #[test]
+    fn test_pane_in_direction_locates_adjacent_panes() {
+        let mut layout = Layout::new();
+        // Initially single pane (TabId(0))
+        assert_eq!(layout.pane_in_direction(FocusDir::Right, VIEWPORT), None);
+        assert_eq!(layout.pane_in_direction(FocusDir::Down, VIEWPORT), None);
+
+        // Split vertically (TabId(0) left, TabId(1) right)
+        layout.split(Direction::Vertical, 0.5, TabId(1));
+        layout.focus(TabId(0));
+        assert_eq!(
+            layout.pane_in_direction(FocusDir::Right, VIEWPORT),
+            Some(TabId(1))
+        );
+        assert_eq!(layout.pane_in_direction(FocusDir::Left, VIEWPORT), None);
+
+        // From TabId(1), left is TabId(0)
+        layout.focus(TabId(1));
+        assert_eq!(
+            layout.pane_in_direction(FocusDir::Left, VIEWPORT),
+            Some(TabId(0))
+        );
+        assert_eq!(layout.pane_in_direction(FocusDir::Right, VIEWPORT), None);
     }
 }

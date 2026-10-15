@@ -136,12 +136,7 @@ pub fn path_spans(path: &str) -> Vec<PageSpan> {
 
 /// The header: where the listing is, which toggles are on, how much is marked,
 /// and what the last operation reported.
-pub fn header_row(
-    root: &str,
-    flags: HeaderFlags,
-    marked: usize,
-    message: Option<&str>,
-) -> PageRow {
+pub fn header_row(root: &str, flags: HeaderFlags, marked: usize, message: Option<&str>) -> PageRow {
     let HeaderFlags {
         editing,
         show_hidden,
@@ -639,31 +634,45 @@ mod tests {
     fn test_the_header_path_is_formatted_for_os() {
         #[cfg(windows)]
         {
-            let home = crate::model::path::home_dir().unwrap_or_else(|| PathBuf::from(r"C:\Users\User"));
+            let home =
+                crate::model::path::home_dir().unwrap_or_else(|| PathBuf::from(r"C:\Users\User"));
             let sub = home.join("projects").join("winter");
             let row = header_row(&sub.to_string_lossy(), HeaderFlags::default(), 0, None);
             let row_str = text(row);
             let expected_prefix = crate::model::path::format_full_path(&sub);
-            assert!(row_str.starts_with(&expected_prefix), "expected {expected_prefix}, got {row_str:?}");
+            assert!(
+                row_str.starts_with(&expected_prefix),
+                "expected {expected_prefix}, got {row_str:?}"
+            );
 
             let forward_slash_path = "C:/Windows/System32";
             let row_win = header_row(forward_slash_path, HeaderFlags::default(), 0, None);
             let row_win_str = text(row_win);
-            assert!(row_win_str.starts_with(r"C:\Windows\System32"), "got {row_win_str:?}");
+            assert!(
+                row_win_str.starts_with(r"C:\Windows\System32"),
+                "got {row_win_str:?}"
+            );
         }
         #[cfg(not(windows))]
         {
-            let home = crate::model::path::home_dir().unwrap_or_else(|| PathBuf::from("/home/user"));
+            let home =
+                crate::model::path::home_dir().unwrap_or_else(|| PathBuf::from("/home/user"));
             let sub = home.join("projects").join("winter");
             let row = header_row(&sub.to_string_lossy(), HeaderFlags::default(), 0, None);
             let row_str = text(row);
             let expected_prefix = crate::model::path::format_full_path(&sub);
-            assert!(row_str.starts_with(&expected_prefix), "expected {expected_prefix}, got {row_str:?}");
+            assert!(
+                row_str.starts_with(&expected_prefix),
+                "expected {expected_prefix}, got {row_str:?}"
+            );
 
             let posix_path = "/var/log";
             let row_posix = header_row(posix_path, HeaderFlags::default(), 0, None);
             let row_posix_str = text(row_posix);
-            assert!(row_posix_str.starts_with("/var/log"), "got {row_posix_str:?}");
+            assert!(
+                row_posix_str.starts_with("/var/log"),
+                "got {row_posix_str:?}"
+            );
         }
     }
 
@@ -732,13 +741,29 @@ mod tests {
         assert!(!row.iter().any(|span| span.text.contains("sort")));
 
         // Verify key and value styling
-        assert!(row.iter().any(|span| span.style == PageStyle::Dim && span.text == "  editing:"));
-        assert!(row.iter().any(|span| span.style == PageStyle::HeaderAccent && span.text == "insert"));
-        assert!(row.iter().any(|span| span.style == PageStyle::Header && span.text == "dotfiles"));
-        assert!(row.iter().any(|span| span.style == PageStyle::Header && span.text == "details"));
-        assert!(row.iter().any(|span| span.style == PageStyle::Header && span.text == "sizes"));
-        assert!(row.iter().any(|span| span.style == PageStyle::SyntaxNumber && span.text == "5"));
-        assert!(row.iter().any(|span| span.style == PageStyle::Dim && span.text == " marked"));
-        assert!(row.iter().any(|span| span.style == PageStyle::HeaderAccent && span.text == "file created"));
+        assert!(row
+            .iter()
+            .any(|span| span.style == PageStyle::Dim && span.text == "  editing:"));
+        assert!(row
+            .iter()
+            .any(|span| span.style == PageStyle::HeaderAccent && span.text == "insert"));
+        assert!(row
+            .iter()
+            .any(|span| span.style == PageStyle::Header && span.text == "dotfiles"));
+        assert!(row
+            .iter()
+            .any(|span| span.style == PageStyle::Header && span.text == "details"));
+        assert!(row
+            .iter()
+            .any(|span| span.style == PageStyle::Header && span.text == "sizes"));
+        assert!(row
+            .iter()
+            .any(|span| span.style == PageStyle::SyntaxNumber && span.text == "5"));
+        assert!(row
+            .iter()
+            .any(|span| span.style == PageStyle::Dim && span.text == " marked"));
+        assert!(row
+            .iter()
+            .any(|span| span.style == PageStyle::HeaderAccent && span.text == "file created"));
     }
 }

@@ -1,7 +1,6 @@
 //! Insert mode: encoding key events into the bytes the PTY expects.
 
-use super::WindowKeymap;
-use super::{Action, Key, KeyCode};
+use super::{Action, Key, KeyCode, PendingPrefix, WindowKeymap};
 use crate::model::mode::{Mode, ModeEvent};
 
 // ========================================================================
@@ -14,16 +13,28 @@ pub(super) const ESCAPE: u8 = 0x1b;
 pub(super) const CARRIAGE_RETURN: u8 = b'\r';
 pub(super) fn resolve_insert(
     key: &Key,
+    pending: &mut PendingPrefix,
     flags: u32,
     modify_other_keys: Option<i64>,
     window: &WindowKeymap,
     is_alt_screen: bool,
 ) -> Action {
+    if *pending == PendingPrefix::CtrlW {
+        *pending = PendingPrefix::None;
+        if let Some(action) = window.sequence_action(key.code) {
+            return action.to_action();
+        }
+        return Action::Ignore;
+    }
     // Window direct chords intercept in every mode so pane management works
     // regardless of what the terminal is doing. Scroll-type chords are bypassed
     // when a full-screen TUI app owns the pane.
     if let Some(action) = window.direct_action(key, is_alt_screen) {
         return action;
+    }
+    if window.has_sequence_for_leader(key) {
+        *pending = PendingPrefix::CtrlW;
+        return Action::Ignore;
     }
     if let Some(a) = window.specific_index_action(key) {
         return a;
@@ -237,7 +248,12 @@ pub(super) fn kitty_modifier(key: &Key) -> u32 {
 /// release adds the `:3` event type to the modifier field, which is then always
 /// written. Encoding these as private-use codepoints, as the other keys are,
 /// leaves a program that reads `CSI A` for Up with nothing it recognises.
-pub(super) fn kitty_legacy_key(number: u32, final_byte: u8, modifier: u32, release: bool) -> Vec<u8> {
+pub(super) fn kitty_legacy_key(
+    number: u32,
+    final_byte: u8,
+    modifier: u32,
+    release: bool,
+) -> Vec<u8> {
     let last = final_byte as char;
     match (release, modifier) {
         (false, 1) if final_byte != b'~' => format!("\x1b[{last}").into_bytes(),
@@ -760,13 +776,25 @@ mod tests {
         assert_eq!(kitty(KeyCode::Up), Action::SendBytes(b"\x1b[A".to_vec()));
         assert_eq!(kitty(KeyCode::Down), Action::SendBytes(b"\x1b[B".to_vec()));
         assert_eq!(kitty(KeyCode::Home), Action::SendBytes(b"\x1b[H".to_vec()));
-        assert_eq!(kitty(KeyCode::Delete), Action::SendBytes(b"\x1b[3~".to_vec()));
-        assert_eq!(kitty(KeyCode::PageDown), Action::SendBytes(b"\x1b[6~".to_vec()));
-        assert_eq!(kitty(KeyCode::F(5)), Action::SendBytes(b"\x1b[15~".to_vec()));
+        assert_eq!(
+            kitty(KeyCode::Delete),
+            Action::SendBytes(b"\x1b[3~".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::PageDown),
+            Action::SendBytes(b"\x1b[6~".to_vec())
+        );
+        assert_eq!(
+            kitty(KeyCode::F(5)),
+            Action::SendBytes(b"\x1b[15~".to_vec())
+        );
     }
     #[test]
     fn test_kitty_release_of_a_legacy_key_carries_the_event_type() {
-        assert_eq!(encode_release(&key(KeyCode::Up), 2), b"\x1b[1;1:3A".to_vec());
+        assert_eq!(
+            encode_release(&key(KeyCode::Up), 2),
+            b"\x1b[1;1:3A".to_vec()
+        );
         let ctrl_delete = Key {
             ctrl: true,
             ..key(KeyCode::Delete)
@@ -954,5 +982,27 @@ mod tests {
         };
         let bytes = encode(&plain_e, 0, Some(2));
         assert_eq!(bytes, b"e".to_vec());
+    }
+
+    #[test]
+    fn test_alt_g_alt_hjkl_sequence_in_insert_mode() {
+        let win = WindowKeymap::default();
+        let mut pending = PendingPrefix::None;
+
+        let alt_g = Key::with_alt(KeyCode::Char('g'));
+        let alt_h = Key::with_alt(KeyCode::Char('h'));
+
+        let a =
+            super::super::resolve_with(Mode::Insert, &alt_g, &mut pending, &win, 0, None, false);
+        assert_eq!(a, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::CtrlW);
+
+        let a =
+            super::super::resolve_with(Mode::Insert, &alt_h, &mut pending, &win, 0, None, false);
+        assert_eq!(
+            a,
+            Action::MoveTabToPane(crate::model::layout::FocusDir::Left)
+        );
+        assert_eq!(pending, PendingPrefix::None);
     }
 }

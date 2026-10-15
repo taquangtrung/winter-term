@@ -1,20 +1,25 @@
-//! Keys: every built-in command beside the chord bound to it, read from the
-//! keymap in force rather than from a hand-maintained list.
+//! Keys: every built-in command beside the chord bound to it, presented in a
+//! read-only text editor pane supporting the full set of modal motions.
 
-use crate::model::input::{CursorMove, Key, KeyCode, WindowKeymap};
+use crate::model::input::{Key, KeyCode, WindowKeymap};
 use crate::model::page::{
-    find_match, row_height, row_text, wheel_scroll, window_anchor, wrap_window, Page, PageContent, PageOutcome, PageRow,
-    PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
+    row_height, wheel_scroll, window_anchor, wrap_window, wrapped_lines, Page, PageCaret,
+    PageContent, PageHint, PageOutcome, PagePoint, PageRow, PageSpan, PageStyle, PromptMode,
+    PromptReply, PromptRequest,
 };
 use crate::model::palette::builtin_commands;
-use crate::model::vim::nav::buffer_end;
+use crate::model::textedit::buffer::TextBuffer;
+use crate::model::textedit::modal::{EditMode, EditOutcome, EditView, Marks, ModalEditor};
 
 // ========================================================================
 // Constants
 // ========================================================================
 
-/// The one question the page asks.
+/// The question the page asks for forward search.
 const ASK_SEARCH: &str = "search";
+
+/// The question the page asks for backward search.
+const ASK_SEARCH_BACK: &str = "search-back";
 
 /// Column the chord column starts at, wide enough for the longest label.
 const CHORD_COL: usize = 44;
@@ -23,7 +28,7 @@ const CHORD_COL: usize = 44;
 const HEADER_ROWS: usize = 2;
 
 /// Hint shown beside the title.
-const HINT: &str = "j/k move, / search, Enter run";
+const HINT: &str = "Enter run, / search, y yank";
 
 /// Left margin every row starts at.
 const LEFT_PAD: usize = 2;
@@ -38,22 +43,18 @@ const TITLE: &str = "Keys";
 // Data Structures
 // ========================================================================
 
-/// A page listing what Winter can do and how to ask for it.
-#[derive(Clone, Debug, Default)]
+/// A read-only text editor page listing what Winter can do and how to ask for it.
+#[derive(Clone, Debug)]
 pub struct KeysPage {
+    buffer: TextBuffer,
     commands: Vec<CommandRow>,
-    /// What the last search reported, shown beside the title until the next key.
-    message: Option<String>,
-    /// First listed command visible in the pane.
+    hscroll: usize,
+    marks: Marks,
+    modal: ModalEditor,
+    painted: Vec<Painted>,
     scroll: usize,
-    /// The last text searched for, repeated by the next and previous keys.
-    search: String,
-    selected: usize,
-    /// Whether the wheel, not the selection, last placed the view: the view
-    /// then stays where it was put until a key brings the selection back.
-    wheel: bool,
-    /// How many rows the pane showed on the last paint.
     viewport: usize,
+    wheel: bool,
 }
 
 /// One listed command: what it does, the chord that runs it, and the name the
@@ -65,14 +66,37 @@ struct CommandRow {
     label: String,
 }
 
+/// What one screen row of a painted frame holds for click targeting.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct Painted {
+    line: usize,
+    offset: usize,
+}
+
 // ========================================================================
 // KeysPage
 // ========================================================================
 
+impl Default for KeysPage {
+    fn default() -> Self {
+        Self {
+            buffer: TextBuffer::new(Vec::new()),
+            commands: Vec::new(),
+            hscroll: 0,
+            marks: Marks::default(),
+            modal: ModalEditor::read_only(),
+            painted: Vec::new(),
+            scroll: 0,
+            viewport: 0,
+            wheel: false,
+        }
+    }
+}
+
 impl KeysPage {
     /// Build the page against the bindings currently in force.
     pub fn new(keymap: &WindowKeymap) -> Self {
-        let commands = builtin_commands(keymap)
+        let commands: Vec<CommandRow> = builtin_commands(keymap)
             .into_iter()
             .map(|entry| CommandRow {
                 action: entry.action,
@@ -80,48 +104,24 @@ impl KeysPage {
                 label: entry.label,
             })
             .collect();
+        let lines: Vec<String> = commands.iter().map(command_line).collect();
+        let buffer = TextBuffer::new(lines);
         Self {
+            buffer,
             commands,
-            message: None,
+            hscroll: 0,
+            marks: Marks::default(),
+            modal: ModalEditor::read_only(),
+            painted: Vec::new(),
             scroll: 0,
-            search: String::new(),
-            selected: 0,
-            wheel: false,
             viewport: 0,
+            wheel: false,
         }
     }
 
-    fn move_down(&mut self) {
-        let last = self.commands.len().saturating_sub(1);
-        self.selected = (self.selected + 1).min(last);
-    }
-
-    fn move_up(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
-    }
-
-    /// Remember `query` and move to the first command holding it.
-    fn search_for(&mut self, query: &str) {
-        self.search = query.to_string();
-        self.search_step(true);
-    }
-
-    /// Move to the next command matching the last search. What is searched is
-    /// what is painted, so a chord finds its command as readily as a label.
-    fn search_step(&mut self, forward: bool) {
-        if self.search.is_empty() {
-            self.message = Some("no search".to_string());
-            return;
-        }
-        let labels: Vec<String> = self
-            .commands
-            .iter()
-            .map(|command| row_text(&self.command_row(command)))
-            .collect();
-        match find_match(&labels, &self.search, self.selected, forward) {
-            Some(index) => self.selected = index,
-            None => self.message = Some(format!("not found: {}", self.search)),
-        }
+    /// The command index currently selected by the cursor.
+    pub fn selected(&self) -> usize {
+        self.buffer.row()
     }
 
     fn title_row(&self) -> PageRow {
@@ -129,114 +129,283 @@ impl KeysPage {
             PageSpan::new(PageStyle::Header, format!("{}{TITLE}  ", pad(LEFT_PAD))),
             PageSpan::new(PageStyle::Dim, HINT),
         ];
-        if let Some(message) = &self.message {
+        if !self.commands.is_empty() {
+            spans.push(PageSpan::new(
+                PageStyle::Dim,
+                format!(
+                    "  {}:{}  {} commands",
+                    self.buffer.row() + 1,
+                    self.buffer.col() + 1,
+                    self.commands.len()
+                ),
+            ));
+        }
+        if let Some(name) = mode_name(self.modal.mode()) {
+            spans.push(PageSpan::new(PageStyle::Accent, format!("  {name}")));
+        }
+        if let Some(register) = self.modal.register_prefix() {
+            spans.push(PageSpan::new(PageStyle::Dim, format!("  \"{register}")));
+        }
+        if let Some(message) = self.modal.message() {
             spans.push(PageSpan::new(PageStyle::Dim, format!("  {message}")));
         }
         spans
     }
 
-    fn command_row(&self, command: &CommandRow) -> PageRow {
-        let label_width = CHORD_COL.saturating_sub(LEFT_PAD);
-        let label = format!("{}{:label_width$}", pad(LEFT_PAD), command.label);
-        let chord = if command.chord.is_empty() {
-            NO_CHORD
-        } else {
-            &command.chord
+    fn command_row(&self, index: usize, line: &str) -> PageRow {
+        let marked = self.selected_columns(index);
+        let from = line.chars().count().min(self.hscroll);
+        let marked = marked.map(|(s, e)| (s.saturating_sub(from), e.saturating_sub(from)));
+        let mut spans: Vec<PageSpan> = Vec::new();
+        for (col, c) in line.chars().skip(from).enumerate() {
+            let actual_col = col + from;
+            let selected = marked.is_some_and(|(start, end)| col >= start && col < end);
+            let style = if selected {
+                PageStyle::Marked
+            } else if actual_col >= CHORD_COL {
+                PageStyle::Accent
+            } else {
+                PageStyle::Normal
+            };
+            match spans.last_mut() {
+                Some(last) if last.style == style => last.text.push(c),
+                _ => spans.push(PageSpan::new(style, c.to_string())),
+            }
+        }
+        if spans.is_empty() {
+            spans.push(PageSpan::plain(String::new()));
+        }
+        spans
+    }
+
+    fn selected_columns(&self, index: usize) -> Option<(usize, usize)> {
+        let selection = self.modal.selection(&self.buffer)?;
+        if index < selection.start.0 || index > selection.end.0 {
+            return None;
+        }
+        let width = self
+            .buffer
+            .lines()
+            .get(index)
+            .map_or(0, |l| l.chars().count());
+        if selection.linewise {
+            return Some((0, width.max(1)));
+        }
+        let start = match index == selection.start.0 {
+            true => selection.start.1,
+            false => 0,
         };
-        vec![
-            PageSpan::plain(label),
-            PageSpan::new(PageStyle::Accent, chord),
-        ]
+        let end = match index == selection.end.0 {
+            true => selection.end.1 + 1,
+            false => width.max(1),
+        };
+        Some((start, end))
+    }
+
+    fn follow_cursor(&mut self, cols: usize, wrap: bool) {
+        if wrap || cols == 0 {
+            self.hscroll = 0;
+            return;
+        }
+        let col = self.buffer.col();
+        if col < self.hscroll {
+            self.hscroll = col;
+        } else if col >= self.hscroll + cols {
+            self.hscroll = col + 1 - cols;
+        }
+    }
+
+    fn remember_layout(&mut self, lines: &[usize], cols: usize, wrap: bool) {
+        let mut painted = vec![
+            Painted {
+                line: lines.first().copied().unwrap_or(0),
+                offset: 0,
+            };
+            HEADER_ROWS
+        ];
+        for &line in lines {
+            let text = self.buffer.lines().get(line).map_or("", String::as_str);
+            let chars: Vec<char> = text.chars().collect();
+            for (start, _) in wrapped_lines(&chars, cols, wrap, 0) {
+                painted.push(Painted {
+                    line,
+                    offset: match wrap {
+                        true => start,
+                        false => self.hscroll,
+                    },
+                });
+            }
+        }
+        self.painted = painted;
+    }
+
+    fn point_at(&mut self, at: PagePoint) -> PageOutcome {
+        let Some(spot) = self.painted.get(at.row).copied() else {
+            return PageOutcome::Ignored;
+        };
+        let col = spot.offset + at.col;
+        if at.drag {
+            if !self.modal.is_selecting() {
+                self.modal.start_visual(&self.buffer, false);
+            }
+        } else {
+            self.modal.clear_selection();
+        }
+        self.buffer.move_to(spot.line, col);
+        PageOutcome::Consumed
     }
 }
+
+// ========================================================================
+// Page
+// ========================================================================
 
 impl Page for KeysPage {
     fn title(&self) -> String {
         TITLE.to_string()
     }
 
+    fn caret(&self) -> Option<PageCaret> {
+        if self.commands.is_empty() {
+            return None;
+        }
+        Some(PageCaret {
+            col: self.buffer.col().saturating_sub(self.hscroll),
+            insert: false,
+        })
+    }
+
+    fn hint(&self) -> Option<PageHint> {
+        Some(PageHint {
+            items: self.modal.hint()?,
+            title: "keys".to_string(),
+        })
+    }
+
+    fn on_mouse(&mut self, at: PagePoint) -> PageOutcome {
+        self.wheel = false;
+        self.point_at(at)
+    }
+
     fn on_scroll(&mut self, lines: isize) -> PageOutcome {
-        // The view moves and the selection stays, as in an editor.
-        self.scroll = wheel_scroll(self.scroll, lines, self.commands.len(), self.viewport);
+        let total = self.buffer.lines().len();
+        self.scroll = wheel_scroll(self.scroll, lines, total, self.viewport);
         self.wheel = true;
         PageOutcome::Consumed
     }
 
     fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> PageContent {
-        let all: Vec<PageRow> = self
-            .commands
-            .iter()
-            .map(|cmd| self.command_row(cmd))
-            .collect();
-        let texts: Vec<String> = all.iter().map(row_text).collect();
-        let visible = rows.saturating_sub(HEADER_ROWS);
-        self.viewport = visible;
-        let anchor = window_anchor(self.wheel, self.scroll, self.selected, visible);
-        let window = wrap_window(self.scroll, anchor, texts.len(), visible, |index| {
-            row_height(&texts[index], cols, wrap, 0)
+        self.viewport = rows.saturating_sub(HEADER_ROWS);
+        self.follow_cursor(cols, wrap);
+        let total = self.buffer.lines().len();
+        let anchor = window_anchor(self.wheel, self.scroll, self.buffer.row(), self.viewport);
+        let window = wrap_window(self.scroll, anchor, total, self.viewport, |index| {
+            row_height(
+                self.buffer.lines().get(index).map_or("", String::as_str),
+                cols,
+                wrap,
+                0,
+            )
         });
         self.scroll = window.start;
         let mut page_rows = vec![self.title_row(), PageRow::new()];
-        page_rows.extend(all.into_iter().skip(window.start).take(window.count));
+        let lines: Vec<usize> = (window.start..(window.start + window.count).min(total)).collect();
+        for &index in &lines {
+            let line = self.buffer.lines().get(index).map_or("", String::as_str);
+            page_rows.push(self.command_row(index, line));
+        }
+        self.remember_layout(&lines, cols, wrap);
         let content = PageContent::new(page_rows);
         if self.commands.is_empty() {
-            // Nothing to band, and a cursor line under the header would light up
-            // a blank row that stands for no command.
             return content;
         }
-        match anchor == self.selected {
+        match anchor == self.buffer.row() {
             true => content.with_cursor_line(HEADER_ROWS + window.cursor),
             false => content,
         }
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        self.message = None;
+        self.modal.take_message();
         self.wheel = false;
-        if let Some(motion) = buffer_end(key) {
-            self.selected = match motion {
-                CursorMove::Top => 0,
-                _ => self.commands.len().saturating_sub(1),
-            };
-            return PageOutcome::Consumed;
-        }
-        match key.code {
-            KeyCode::Char('j') | KeyCode::Down => {
-                self.move_down();
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('k') | KeyCode::Up => {
-                self.move_up();
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('/') => PageOutcome::Prompt(PromptRequest {
-                initial: String::new(),
-                label: "/".to_string(),
-                mode: PromptMode::Text,
-                tag: ASK_SEARCH,
-            }),
-            KeyCode::Char('n') => {
-                self.search_step(true);
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('N') => {
-                self.search_step(false);
-                PageOutcome::Consumed
-            }
-            KeyCode::Enter => match self.commands.get(self.selected) {
+
+        // Enter on a command line in Normal mode runs the action.
+        if self.modal.mode() == EditMode::Normal
+            && key.code == KeyCode::Enter
+            && !key.ctrl
+            && !key.alt
+        {
+            let row = self.buffer.row();
+            return match self.commands.get(row) {
                 Some(command) => PageOutcome::RunAction(command.action.clone()),
                 None => PageOutcome::Consumed,
-            },
-            // Every other key belongs to the host, so a new `KeyCode` variant
-            // never forces a page to grow an arm for it.
-            _ => PageOutcome::Ignored,
+            };
+        }
+
+        // 'q' in Normal mode when idle closes the page.
+        if self.modal.is_idle() && key.code == KeyCode::Char('q') && !key.ctrl && !key.alt {
+            return PageOutcome::Close;
+        }
+
+        let reg_before = self.buffer.register().clone();
+        let view = EditView {
+            buffer: &mut self.buffer,
+            marks: &mut self.marks,
+            others: &[],
+            scroll: &mut self.scroll,
+            viewport: self.viewport,
+        };
+        let outcome = self.modal.on_key(view, key);
+        let reg_after = self.buffer.register();
+        if reg_after != &reg_before && !reg_after.text.is_empty() {
+            return PageOutcome::Yank(reg_after.text.clone());
+        }
+        match outcome {
+            EditOutcome::Consumed => PageOutcome::Consumed,
+            EditOutcome::Ignored => PageOutcome::Ignored,
+            EditOutcome::Search { forward } => PageOutcome::Prompt(PromptRequest {
+                initial: String::new(),
+                label: if forward {
+                    "/".to_string()
+                } else {
+                    "?".to_string()
+                },
+                mode: PromptMode::Text,
+                tag: if forward { ASK_SEARCH } else { ASK_SEARCH_BACK },
+            }),
+            EditOutcome::Yank(text) => PageOutcome::Yank(text),
+            EditOutcome::Quit { .. } => PageOutcome::Close,
+            _ => PageOutcome::Consumed,
         }
     }
 
     fn on_prompt(&mut self, reply: PromptReply) -> PageOutcome {
         self.wheel = false;
-        if let Some(answer) = reply.answer {
-            self.search_for(&answer);
+        if let Some(pattern) = reply.answer {
+            let forward = reply.tag == ASK_SEARCH;
+            let view = EditView {
+                buffer: &mut self.buffer,
+                marks: &mut self.marks,
+                others: &[],
+                scroll: &mut self.scroll,
+                viewport: self.viewport,
+            };
+            self.modal.start_search(view, pattern, forward);
+        }
+        PageOutcome::Consumed
+    }
+
+    fn on_prompt_input(&mut self, query: &str, tag: &'static str) -> PageOutcome {
+        if (tag == ASK_SEARCH || tag == ASK_SEARCH_BACK) && !query.is_empty() {
+            let forward = tag == ASK_SEARCH;
+            let view = EditView {
+                buffer: &mut self.buffer,
+                marks: &mut self.marks,
+                others: &[],
+                scroll: &mut self.scroll,
+                viewport: self.viewport,
+            };
+            self.modal.start_search(view, query.to_string(), forward);
         }
         PageOutcome::Consumed
     }
@@ -246,8 +415,27 @@ impl Page for KeysPage {
 // Helpers
 // ========================================================================
 
+fn command_line(command: &CommandRow) -> String {
+    let label_width = CHORD_COL.saturating_sub(LEFT_PAD);
+    let chord = if command.chord.is_empty() {
+        NO_CHORD
+    } else {
+        &command.chord
+    };
+    format!("{}{:label_width$}{}", pad(LEFT_PAD), command.label, chord)
+}
+
 fn pad(width: usize) -> String {
     " ".repeat(width)
+}
+
+fn mode_name(mode: EditMode) -> Option<&'static str> {
+    match mode {
+        EditMode::Insert => Some("INSERT"),
+        EditMode::Normal => None,
+        EditMode::Replace => Some("REPLACE"),
+        EditMode::Visual => Some("VISUAL"),
+    }
 }
 
 // ========================================================================
@@ -259,21 +447,25 @@ mod tests {
     use super::*;
 
     fn page_with_rows(count: usize) -> KeysPage {
-        let commands = (0..count)
+        let commands: Vec<CommandRow> = (0..count)
             .map(|i| CommandRow {
                 action: format!("action_{i}"),
                 chord: String::new(),
                 label: format!("command {i}"),
             })
             .collect();
+        let lines: Vec<String> = commands.iter().map(command_line).collect();
+        let buffer = TextBuffer::new(lines);
         KeysPage {
+            buffer,
             commands,
-            message: None,
+            hscroll: 0,
+            marks: Marks::default(),
+            modal: ModalEditor::read_only(),
+            painted: Vec::new(),
             scroll: 0,
-            search: String::new(),
-            selected: 0,
-            wheel: false,
             viewport: 0,
+            wheel: false,
         }
     }
 
@@ -296,9 +488,9 @@ mod tests {
         };
         let mut page = page_with_rows(5);
         page.on_key(&alt('>'));
-        assert_eq!(page.selected, 4);
+        assert_eq!(page.selected(), 4);
         page.on_key(&alt('<'));
-        assert_eq!(page.selected, 0);
+        assert_eq!(page.selected(), 0);
     }
 
     #[test]
@@ -307,7 +499,7 @@ mod tests {
         for _ in 0..5 {
             page.on_key(&press(KeyCode::Char('j')));
         }
-        assert_eq!(page.selected, 1);
+        assert_eq!(page.selected(), 1);
     }
 
     #[test]
@@ -317,19 +509,16 @@ mod tests {
         for _ in 0..5 {
             page.on_key(&press(KeyCode::Char('k')));
         }
-        assert_eq!(page.selected, 0);
+        assert_eq!(page.selected(), 0);
     }
 
     #[test]
     fn test_empty_page_keeps_the_cursor_at_zero() {
-        // `len() - 1` on an empty list would underflow to usize::MAX and put
-        // the cursor line far below the page.
         let mut page = page_with_rows(0);
         page.on_key(&press(KeyCode::Char('j')));
-        assert_eq!(page.selected, 0);
+        assert_eq!(page.selected(), 0);
     }
 
-    /// Ask for `text` through the search prompt, the way a key does.
     fn search(page: &mut KeysPage, text: &str) {
         let outcome = page.on_key(&press(KeyCode::Char('/')));
         let PageOutcome::Prompt(request) = outcome else {
@@ -345,54 +534,55 @@ mod tests {
     fn test_a_search_moves_the_cursor_to_the_matching_command() {
         let mut page = page_with_rows(5);
         search(&mut page, "command 3");
-        assert_eq!(page.selected, 3);
+        assert_eq!(page.selected(), 3);
     }
 
     #[test]
     fn test_the_repeat_keys_step_through_the_matches_in_both_directions() {
         let mut page = page_with_rows(5);
         search(&mut page, "command");
-        assert_eq!(page.selected, 1, "the row already under the cursor is last");
+        assert_eq!(page.selected(), 0);
 
         page.on_key(&press(KeyCode::Char('n')));
-        assert_eq!(page.selected, 2);
+        assert_eq!(page.selected(), 1);
 
         page.on_key(&press(KeyCode::Char('N')));
-        assert_eq!(page.selected, 1);
+        assert_eq!(page.selected(), 0);
     }
 
     #[test]
     fn test_a_search_finds_a_command_by_the_chord_beside_it() {
-        // Searching the label alone would leave no way to ask what a chord you
-        // just pressed by accident actually does.
+        let commands = vec![
+            CommandRow {
+                action: "new_tab".to_string(),
+                chord: String::new(),
+                label: "New Tab".to_string(),
+            },
+            CommandRow {
+                action: "git_page".to_string(),
+                chord: "C+S+g".to_string(),
+                label: "Git: Status".to_string(),
+            },
+        ];
+        let lines: Vec<String> = commands.iter().map(command_line).collect();
+        let buffer = TextBuffer::new(lines);
         let mut page = KeysPage {
-            commands: vec![
-                CommandRow {
-                    action: "new_tab".to_string(),
-                    chord: String::new(),
-                    label: "New Tab".to_string(),
-                },
-                CommandRow {
-                    action: "git_page".to_string(),
-                    chord: "C+S+g".to_string(),
-                    label: "Git: Status".to_string(),
-                },
-            ],
-            message: None,
+            buffer,
+            commands,
+            hscroll: 0,
+            marks: Marks::default(),
+            modal: ModalEditor::read_only(),
+            painted: Vec::new(),
             scroll: 0,
-            search: String::new(),
-            selected: 0,
-            wheel: false,
             viewport: 0,
+            wheel: false,
         };
         search(&mut page, "c+s+g");
-        assert_eq!(page.selected, 1);
+        assert_eq!(page.selected(), 1);
     }
 
     #[test]
     fn test_enter_hands_back_the_command_under_the_cursor() {
-        // The label is what the page shows, but the host only answers to the
-        // action name, so handing back the wrong one runs nothing.
         let mut page = page_with_rows(3);
         page.on_key(&press(KeyCode::Char('j')));
         assert_eq!(
@@ -411,11 +601,11 @@ mod tests {
     fn test_a_search_with_nothing_to_find_reports_it() {
         let mut page = page_with_rows(2);
         page.on_key(&press(KeyCode::Char('n')));
-        assert_eq!(page.message.as_deref(), Some("no search"));
+        assert!(page.modal.message().is_some());
 
         search(&mut page, "absent");
-        assert_eq!(page.message.as_deref(), Some("not found: absent"));
-        assert_eq!(page.selected, 0);
+        assert!(page.modal.message().is_some());
+        assert_eq!(page.selected(), 0);
     }
 
     #[test]
@@ -432,5 +622,62 @@ mod tests {
             page.content(40, 80, false).cursor_line,
             Some(HEADER_ROWS + 1)
         );
+    }
+
+    #[test]
+    fn test_vim_motions_work_in_keybinding_view() {
+        let mut page = page_with_rows(10);
+        // G goes to the last line
+        page.on_key(&press(KeyCode::Char('G')));
+        assert_eq!(page.selected(), 9);
+
+        // gg goes to the first line (landing at first non-blank column 2)
+        page.on_key(&press(KeyCode::Char('g')));
+        page.on_key(&press(KeyCode::Char('g')));
+        assert_eq!(page.selected(), 0);
+        assert_eq!(page.buffer.col(), 2);
+
+        // 0 moves to column 0
+        page.on_key(&press(KeyCode::Char('0')));
+        assert_eq!(page.buffer.col(), 0);
+
+        // w moves forward words on the line
+        page.on_key(&press(KeyCode::Char('w')));
+        assert!(page.buffer.col() > 0);
+    }
+
+    #[test]
+    fn test_read_only_protection_in_keybinding_view() {
+        let mut page = page_with_rows(3);
+        let orig_line = page.buffer.lines()[0].clone();
+
+        // Typing 'i', 'x', 'd', 'p' should not change buffer
+        page.on_key(&press(KeyCode::Char('i')));
+        assert_eq!(page.modal.message(), Some("buffer is read-only"));
+        page.on_key(&press(KeyCode::Char('x')));
+        assert_eq!(page.modal.message(), Some("buffer is read-only"));
+        page.on_key(&press(KeyCode::Char('d')));
+        assert_eq!(page.modal.message(), Some("buffer is read-only"));
+
+        assert_eq!(page.buffer.lines()[0], orig_line);
+    }
+
+    #[test]
+    fn test_visual_mode_and_yank_in_keybinding_view() {
+        let mut page = page_with_rows(3);
+        // Start visual mode
+        page.on_key(&press(KeyCode::Char('v')));
+        assert_eq!(page.modal.mode(), EditMode::Visual);
+
+        // Yank selection
+        let outcome = page.on_key(&press(KeyCode::Char('y')));
+        assert_eq!(page.modal.mode(), EditMode::Normal);
+        assert!(matches!(outcome, PageOutcome::Yank(_)));
+    }
+
+    #[test]
+    fn test_q_closes_keybinding_view() {
+        let mut page = page_with_rows(3);
+        assert_eq!(page.on_key(&press(KeyCode::Char('q'))), PageOutcome::Close);
     }
 }

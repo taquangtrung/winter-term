@@ -2,7 +2,7 @@
 
 use crate::config::PromptEditBindings;
 use crate::model::input::{self, Action, CursorMove, EditAction, InsertAt, VisualKind};
-use crate::model::layout::{TabId, Rect};
+use crate::model::layout::{Rect, TabId};
 use crate::model::mode::{Mode, ModeEvent};
 use crate::model::palette::{Palette, PaletteMode};
 
@@ -247,6 +247,9 @@ impl App {
             Action::MoveTabRight => {
                 self.move_tab(true);
             }
+            Action::MoveTabToPane(dir) => {
+                self.move_tab_in_direction(dir);
+            }
             Action::NewTab => {
                 self.new_tab();
             }
@@ -303,27 +306,47 @@ impl App {
                 if let Some(q) = &mut self.search.query {
                     q.push(c);
                 }
-                self.search_step(focused, self.search_start_direction(), SearchFrom::Origin);
+                self.update_search_preview(focused);
+                self.search_debounce = Some((
+                    std::time::Instant::now()
+                        + std::time::Duration::from_millis(super::SEARCH_DEBOUNCE_MILLIS),
+                    focused,
+                ));
                 self.dirty = true;
             }
             Action::SearchBackspace => {
                 if let Some(q) = &mut self.search.query {
                     q.pop();
                 }
-                self.search_step(focused, self.search_start_direction(), SearchFrom::Origin);
+                self.update_search_preview(focused);
+                self.search_debounce = Some((
+                    std::time::Instant::now()
+                        + std::time::Duration::from_millis(super::SEARCH_DEBOUNCE_MILLIS),
+                    focused,
+                ));
                 self.dirty = true;
             }
             Action::SearchExecute => {
+                self.search_debounce = None;
                 // Enter accepts the match the incremental search already landed
-                // on, so it scans from the origin again (idempotent) rather than
-                // stepping forward: `n` is what advances.
+                // on, so it commits to the jumplist and reveals the match from origin.
+                self.push_jump(focused);
                 self.search_step(focused, self.search_start_direction(), SearchFrom::Origin);
+                self.search.origin = None;
                 self.dirty = true;
             }
             // Also the plain `Esc` in Normal mode (vim's `:nohlsearch`), which no
             // longer leaves Normal, so this does nothing at all when there is no
             // search to clear rather than forcing a status-bar resize.
-            Action::SearchCancel => self.dismiss_search(),
+            Action::SearchCancel => {
+                self.search_debounce = None;
+                if let Some((origin_tab, origin_pos)) = self.search.origin {
+                    if origin_tab == focused {
+                        self.reveal_position(focused, origin_pos);
+                    }
+                }
+                self.dismiss_search();
+            }
             Action::SearchNext => {
                 self.resume_last_search();
                 self.search_in_pane(focused, self.search_start_direction());
@@ -582,6 +605,7 @@ impl App {
     /// [`SearchState::last`]: super::navigation::SearchState::last
     /// [`SearchState::reverse`]: super::navigation::SearchState::reverse
     fn dismiss_search(&mut self) {
+        self.search_debounce = None;
         if self.search.query.is_none() {
             return;
         }
@@ -667,7 +691,8 @@ impl App {
     /// the arrow-key alignment would overshoot it and the following Delete
     /// keypresses would eat characters the operator never targeted.
     pub(crate) fn prompt_edit_hits_decoration(terminal: &Terminal, targets: &[usize]) -> bool {
-        terminal.prompt_line_start()
+        terminal
+            .prompt_line_start()
             .is_some_and(|start| targets.iter().any(|&col| col < start))
     }
 

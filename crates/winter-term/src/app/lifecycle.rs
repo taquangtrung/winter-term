@@ -8,7 +8,7 @@ use winit::event_loop::ActiveEventLoop;
 use crate::config::Config;
 use crate::control::{self};
 use crate::model::input::{self, PendingPrefix, WindowKeymap};
-use crate::model::layout::{Direction, FocusDir, TabId, Rect};
+use crate::model::layout::{Direction, FocusDir, Rect, TabId};
 use crate::model::mode::Mode;
 use crate::model::palette::Palette;
 use crate::model::textedit::field::TextField;
@@ -76,6 +76,8 @@ impl App {
             icon_texture_box: (0, 0),
             jobs: crate::app::jobs::Jobs::new(),
             page_prompt: None,
+            prompt_debounce: None,
+            search_debounce: None,
             prompt_answers: Answers::default(),
             error_walk: None,
             page_pick: None,
@@ -236,6 +238,30 @@ impl App {
                 let viewport = self.viewport_rect();
                 let layout_vp = Rect::new(viewport.x, viewport.y, viewport.width, viewport.height);
                 self.layout_mut().focus_in_direction(dir, layout_vp);
+            }
+            "move_tab_down"
+            | "move_tab_up"
+            | "move_tab_left"
+            | "move_tab_right"
+            | "move_tab_left_pane"
+            | "move_tab_right_pane"
+            | "move_tab_up_pane"
+            | "move_tab_down_pane"
+            | "move_tab_to_left_pane"
+            | "move_tab_to_right_pane"
+            | "move_tab_to_up_pane"
+            | "move_tab_to_down_pane" => {
+                let dir = match action {
+                    "move_tab_down" | "move_tab_down_pane" | "move_tab_to_down_pane" => {
+                        FocusDir::Down
+                    }
+                    "move_tab_up" | "move_tab_up_pane" | "move_tab_to_up_pane" => FocusDir::Up,
+                    "move_tab_left" | "move_tab_left_pane" | "move_tab_to_left_pane" => {
+                        FocusDir::Left
+                    }
+                    _ => FocusDir::Right,
+                };
+                self.move_tab_in_direction(dir);
             }
             "search" => {
                 self.search.query = Some(String::new());

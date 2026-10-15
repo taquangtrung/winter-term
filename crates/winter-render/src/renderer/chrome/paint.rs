@@ -373,10 +373,7 @@ pub(super) fn draw_highlighted_label(
     // label in per-match fragments lets cosmic-text resolve different fallback
     // fonts per segment, which makes the matched glyphs render unevenly.
     let family = ui_family(font_system);
-    let base_attrs = Attrs::new()
-        .family(family)
-        .color(base_color)
-        .weight(weight);
+    let base_attrs = Attrs::new().family(family).color(base_color).weight(weight);
     let mut attrs_list = glyphon::AttrsList::new(&base_attrs);
     let mut matched_bytes: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut byte = 0usize;
@@ -475,10 +472,7 @@ mod tests {
             parse_system_font_name("Inter Medium 10.5"),
             Some("Inter Medium".to_string())
         );
-        assert_eq!(
-            parse_system_font_name("SF Pro"),
-            Some("SF Pro".to_string())
-        );
+        assert_eq!(parse_system_font_name("SF Pro"), Some("SF Pro".to_string()));
         assert_eq!(parse_system_font_name(""), None);
     }
 

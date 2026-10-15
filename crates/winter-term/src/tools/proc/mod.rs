@@ -22,9 +22,9 @@ use std::time::{Duration, Instant};
 
 use crate::model::input::{CursorMove, Key, KeyCode};
 use crate::model::page::{
-    row_height, row_text, wheel_scroll, window_anchor, wrap_window, CommandOutput, JobReply, JobRequest, Page, PageContent,
-    PageMenuItem, PageOutcome, PagePoint, PageRow, PageSpan, PageStyle, PromptMode, PromptReply,
-    PromptRequest,
+    row_height, row_text, wheel_scroll, window_anchor, wrap_window, CommandOutput, JobReply,
+    JobRequest, Page, PageContent, PageMenuItem, PageOutcome, PagePoint, PageRow, PageSpan,
+    PageStyle, PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::process::{ProcState, ProcessSample};
 use crate::model::vim::nav::{VimKey, VimNav};
@@ -938,6 +938,16 @@ impl Page for ProcPage {
                 }
             }
             _ => PageOutcome::Consumed,
+        }
+    }
+
+    fn on_prompt_input(&mut self, query: &str, tag: &'static str) -> PageOutcome {
+        if tag == ASK_FILTER {
+            self.filter = query.trim().to_string();
+            self.rebuild();
+            PageOutcome::Consumed
+        } else {
+            PageOutcome::Ignored
         }
     }
 

@@ -10,9 +10,9 @@
 
 mod comment;
 mod commit;
-mod rebase;
 pub mod file;
 pub mod keys;
+mod rebase;
 pub mod syntax;
 
 use std::io;
@@ -21,8 +21,9 @@ use std::path::{Path, PathBuf};
 use crate::control::EditWaiter;
 use crate::model::input::Key;
 use crate::model::page::{
-    row_height, wheel_scroll, window_anchor, wrap_window, wrapped_lines, OpenTarget, Page, PageCaret, PageContent, PageHint,
-    PageOutcome, PagePoint, PageRow, PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
+    row_height, wheel_scroll, window_anchor, wrap_window, wrapped_lines, OpenTarget, Page,
+    PageCaret, PageContent, PageHint, PageOutcome, PagePoint, PageRow, PageSpan, PageStyle,
+    PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::textedit::buffer::TextBuffer;
 use crate::model::textedit::modal::{EditMode, EditView, Marks, ModalEditor, Selection};
@@ -742,7 +743,8 @@ impl EditorPage {
         self.doc_mut().states = vec![LineState::default()];
         let at = self.at.min(self.docs.len() - 1);
         self.modal.reset(&self.docs[at].buffer);
-        self.modal.set_message("changed on disk, re-read".to_string());
+        self.modal
+            .set_message("changed on disk, re-read".to_string());
         PageOutcome::Consumed
     }
 }
@@ -776,20 +778,14 @@ impl Page for EditorPage {
             self.buffer().row(),
             self.viewport,
         );
-        let window = wrap_window(
-            self.doc().scroll,
-            anchor,
-            total,
-            self.viewport,
-            |index| {
-                row_height(
-                    &expanded_text(&self.line_of(index)),
-                    text_cols,
-                    wrap,
-                    NUMBER_WIDTH + NUMBER_GAP.len(),
-                )
-            },
-        );
+        let window = wrap_window(self.doc().scroll, anchor, total, self.viewport, |index| {
+            row_height(
+                &expanded_text(&self.line_of(index)),
+                text_cols,
+                wrap,
+                NUMBER_WIDTH + NUMBER_GAP.len(),
+            )
+        });
         self.doc_mut().scroll = window.start;
         self.learn_states(window.start + window.count);
         let mut page_rows = vec![self.header_row()];
@@ -882,10 +878,31 @@ impl Page for EditorPage {
             }
             ASK_OVERWRITE if said_yes => self.write(),
             ASK_SEARCH | ASK_SEARCH_BACK => match reply.answer {
-                Some(pattern) => self.start_search(pattern, reply.tag == ASK_SEARCH),
-                None => PageOutcome::Consumed,
+                Some(pattern) => {
+                    self.jump_origin = None;
+                    self.start_search(pattern, reply.tag == ASK_SEARCH)
+                }
+                None => {
+                    if let Some((row, col, scroll)) = self.jump_origin.take() {
+                        self.buffer_mut().move_to(row, col);
+                        self.doc_mut().scroll = scroll;
+                    }
+                    PageOutcome::Consumed
+                }
             },
             _ => PageOutcome::Consumed,
+        }
+    }
+
+    fn on_prompt_input(&mut self, query: &str, tag: &'static str) -> PageOutcome {
+        if (tag == ASK_SEARCH || tag == ASK_SEARCH_BACK) && !query.is_empty() {
+            if self.jump_origin.is_none() {
+                self.jump_origin =
+                    Some((self.buffer().row(), self.buffer().col(), self.doc().scroll));
+            }
+            self.start_search(query.to_string(), tag == ASK_SEARCH)
+        } else {
+            PageOutcome::Consumed
         }
     }
 
@@ -1257,7 +1274,11 @@ mod tests {
         let mut chars = tmp.page("alpha beta\n");
         press(&mut chars, "vlld");
         assert_eq!(chars.buffer().lines(), ["ha beta"], "three cells taken");
-        assert_eq!(chars.modal.mode(), EditMode::Normal, "and the selection is over");
+        assert_eq!(
+            chars.modal.mode(),
+            EditMode::Normal,
+            "and the selection is over"
+        );
 
         let mut lines = tmp.page("one\ntwo\nthree\n");
         press(&mut lines, "Vjd");
@@ -1538,7 +1559,11 @@ mod tests {
         press(&mut page, "Vj");
         press_ctrl(&mut page, '/');
         assert_eq!(page.buffer().lines(), ["# x = 1", "# y = 2", "z = 3"]);
-        assert_eq!(page.modal.mode(), EditMode::Normal, "the selection is done with");
+        assert_eq!(
+            page.modal.mode(),
+            EditMode::Normal,
+            "the selection is done with"
+        );
 
         // Back on one line, in Insert mode, the caret keeps its character.
         press(&mut page, "A");
@@ -1550,15 +1575,26 @@ mod tests {
     #[test]
     fn test_a_rebase_plan_takes_action_chords_and_refuses_to_open_with_a_fold() {
         let tmp = TempDir::new("rebase-todo");
-        let path = tmp.file("git-rebase-todo", "pick aaa first\npick bbb second\n# help\n");
+        let path = tmp.file(
+            "git-rebase-todo",
+            "pick aaa first\npick bbb second\n# help\n",
+        );
         let mut page = EditorPage::new(path.clone(), None).expect("opens");
 
         // `C-c s` on the first line would fold it into nothing.
         press_ctrl(&mut page, 'c');
         press(&mut page, "s");
         press_ctrl(&mut page, 'c');
-        assert_eq!(press_ctrl(&mut page, 'c'), PageOutcome::Consumed, "refused, not closed");
-        assert!(page.modal.message().unwrap_or_default().contains("first commit"));
+        assert_eq!(
+            press_ctrl(&mut page, 'c'),
+            PageOutcome::Consumed,
+            "refused, not closed"
+        );
+        assert!(page
+            .modal
+            .message()
+            .unwrap_or_default()
+            .contains("first commit"));
 
         // Fix it: setting the action stepped onto the second commit, which
         // moves above the first, and then is dropped.
@@ -1592,7 +1628,11 @@ mod tests {
         assert_eq!(page.buffer().lines(), ["one "]);
         // The two kills ran back to back, so they come back as one.
         press_ctrl(&mut page, 'y');
-        assert_eq!(page.buffer().lines(), ["one two three"], "the whole run comes back");
+        assert_eq!(
+            page.buffer().lines(),
+            ["one two three"],
+            "the whole run comes back"
+        );
     }
 
     #[test]
@@ -1614,7 +1654,11 @@ mod tests {
         assert_eq!(page.buffer().row(), 0, "and back up");
         press_ctrl(&mut page, 'o');
         assert_eq!(page.buffer().lines(), ["ac", "", "xyz"].map(String::from));
-        assert_eq!(page.buffer().row(), 0, "the cursor stays ahead of the break");
+        assert_eq!(
+            page.buffer().row(),
+            0,
+            "the cursor stays ahead of the break"
+        );
     }
 
     #[test]
@@ -1638,7 +1682,11 @@ mod tests {
         let mut page = tmp.page("abc\n");
         press(&mut page, "i");
         for c in ['h', 'j', 'k', 'l', '1'] {
-            assert_eq!(press_alt(&mut page, KeyCode::Char(c)), PageOutcome::Ignored, "{c}");
+            assert_eq!(
+                press_alt(&mut page, KeyCode::Char(c)),
+                PageOutcome::Ignored,
+                "{c}"
+            );
         }
         assert_eq!(page.buffer().lines(), ["abc"]);
     }
@@ -1657,7 +1705,11 @@ mod tests {
         page.on_key(&key(KeyCode::Escape));
         press(&mut page, "0lr");
         page.on_key(&key(KeyCode::Space));
-        assert_eq!(page.buffer().lines(), ["  ab"], "r then space replaces the c");
+        assert_eq!(
+            page.buffer().lines(),
+            ["  ab"],
+            "r then space replaces the c"
+        );
     }
 
     #[test]
@@ -1798,10 +1850,7 @@ mod tests {
 
         press(&mut page, "'a");
         assert!(
-            page.modal
-                .message()
-                .unwrap_or_default()
-                .contains("not set"),
+            page.modal.message().unwrap_or_default().contains("not set"),
             "the mark stayed with its own file"
         );
     }

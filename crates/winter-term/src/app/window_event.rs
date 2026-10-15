@@ -301,7 +301,10 @@ impl App {
                 return false;
             }
         }
-        let at_prompt = self.terminals.get(&focused).is_some_and(|p| p.is_at_prompt());
+        let at_prompt = self
+            .terminals
+            .get(&focused)
+            .is_some_and(|p| p.is_at_prompt());
         let kitty_flags = self
             .terminals
             .get(&focused)
@@ -461,7 +464,10 @@ impl App {
         // Plain clicks always drive Winter's own selection, even over a
         // full-screen app (vim, htop) that has turned on mouse reporting.
         // Hold Shift to forward the click to that app's mouse handling instead.
-        let mouse_active = self.terminals.get(&focused).is_some_and(|p| p.mouse_tracking())
+        let mouse_active = self
+            .terminals
+            .get(&focused)
+            .is_some_and(|p| p.mouse_tracking())
             && self.modifiers.state().shift_key();
 
         if mouse_active {
@@ -824,7 +830,11 @@ impl App {
             }
             return;
         }
-        if self.terminals.get(&focused).is_some_and(|p| p.mouse_tracking()) {
+        if self
+            .terminals
+            .get(&focused)
+            .is_some_and(|p| p.mouse_tracking())
+        {
             self.drop_selection_in_pane(focused);
             self.forward_mouse_scroll(scroll_lines, focused);
             return;

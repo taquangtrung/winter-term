@@ -254,7 +254,8 @@ impl Terminal {
             // Git announces that it is waiting for an editor it does not know
             // to be a terminal one. Winter's is in a tab of its own, so the
             // line only tells a reader what the tabs already show.
-            for (name, value) in quiet_editor_config(std::env::var("GIT_CONFIG_COUNT").ok().as_deref())
+            for (name, value) in
+                quiet_editor_config(std::env::var("GIT_CONFIG_COUNT").ok().as_deref())
             {
                 command.env(name, value);
             }
@@ -623,7 +624,9 @@ impl Terminal {
     /// The deadline when any currently held synchronized output frame will
     /// expire and be forcibly shown, if a frame is currently being held.
     pub fn sync_hold_deadline(&self) -> Option<Instant> {
-        self.sync_hold.as_ref().map(|hold| hold.since + SYNC_OUTPUT_TIMEOUT)
+        self.sync_hold
+            .as_ref()
+            .map(|hold| hold.since + SYNC_OUTPUT_TIMEOUT)
     }
 
     /// Current Kitty keyboard protocol flags active in this pane (0 = legacy).
@@ -1033,10 +1036,15 @@ pub(crate) fn git_editor_command() -> Option<String> {
 /// environment already carries, so a user's own are kept. Git before 2.31
 /// does not read these and prints the hint anyway.
 fn quiet_editor_config(existing: Option<&str>) -> Vec<(String, String)> {
-    let count = existing.and_then(|n| n.trim().parse::<usize>().ok()).unwrap_or(0);
+    let count = existing
+        .and_then(|n| n.trim().parse::<usize>().ok())
+        .unwrap_or(0);
     vec![
         ("GIT_CONFIG_COUNT".to_string(), (count + 1).to_string()),
-        (format!("GIT_CONFIG_KEY_{count}"), "advice.waitingForEditor".to_string()),
+        (
+            format!("GIT_CONFIG_KEY_{count}"),
+            "advice.waitingForEditor".to_string(),
+        ),
         (format!("GIT_CONFIG_VALUE_{count}"), "false".to_string()),
     ]
 }
@@ -1125,7 +1133,10 @@ mod tests {
         // would replace the first of them.
         let env = quiet_editor_config(Some("2"));
         assert_eq!(env[0], ("GIT_CONFIG_COUNT".into(), "3".into()));
-        assert_eq!(env[1], ("GIT_CONFIG_KEY_2".into(), "advice.waitingForEditor".into()));
+        assert_eq!(
+            env[1],
+            ("GIT_CONFIG_KEY_2".into(), "advice.waitingForEditor".into())
+        );
         assert_eq!(env[2], ("GIT_CONFIG_VALUE_2".into(), "false".into()));
         assert_eq!(quiet_editor_config(None)[0].1, "1");
         assert_eq!(quiet_editor_config(Some("junk"))[1].0, "GIT_CONFIG_KEY_0");
@@ -1177,7 +1188,8 @@ mod tests {
         std::mem::forget(pair.master);
         drop(pair.slave);
 
-        let mut terminal = Terminal::adopt(20, 4, raw, pid, MAX_SCROLLBACK, "cat".into()).expect("adopts");
+        let mut terminal =
+            Terminal::adopt(20, 4, raw, pid, MAX_SCROLLBACK, "cat".into()).expect("adopts");
         assert!(terminal.is_alive(), "the adopted child is still running");
         terminal.write(b"hello\n");
         let deadline = std::time::Instant::now() + PTY_WAIT;
@@ -1287,8 +1299,9 @@ mod tests {
 
     #[test]
     fn test_pane_echo() {
-        let mut terminal = Terminal::with_command(40, 10, CommandBuilder::new("bash"), MAX_SCROLLBACK)
-            .expect("test pane spawn");
+        let mut terminal =
+            Terminal::with_command(40, 10, CommandBuilder::new("bash"), MAX_SCROLLBACK)
+                .expect("test pane spawn");
         terminal.write(b"echo hello\n");
         // Polled rather than slept through once: a shell on a loaded machine
         // takes far longer than any fixed beat to hand its output back.
@@ -1327,7 +1340,10 @@ mod tests {
         assert_eq!(terminal.prompt_line_start(), None);
 
         terminal.feed_program_output(b"\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\");
-        assert!(terminal.is_at_prompt(), "shell is drawing/accepting its prompt");
+        assert!(
+            terminal.is_at_prompt(),
+            "shell is drawing/accepting its prompt"
+        );
         assert_eq!(
             terminal.prompt_line_start(),
             Some(2),
@@ -1370,8 +1386,9 @@ mod tests {
 
     #[test]
     fn test_pane_resize_signals_pty() {
-        let mut terminal = Terminal::with_command(20, 5, CommandBuilder::new("bash"), MAX_SCROLLBACK)
-            .expect("test pane spawn");
+        let mut terminal =
+            Terminal::with_command(20, 5, CommandBuilder::new("bash"), MAX_SCROLLBACK)
+                .expect("test pane spawn");
         terminal.resize(40, 10);
         thread::sleep(std::time::Duration::from_millis(50));
         assert!(terminal.is_alive());
@@ -1447,7 +1464,8 @@ mod tests {
             let _ = resize_tx.send(saw_matching_resize);
         });
 
-        let mut terminal = Terminal::new_mux_at(&socket_path, 40, 10, "work", MAX_SCROLLBACK).unwrap();
+        let mut terminal =
+            Terminal::new_mux_at(&socket_path, 40, 10, "work", MAX_SCROLLBACK).unwrap();
         assert_eq!(terminal.mux_session(), Some("work"));
 
         let deadline = std::time::Instant::now() + PTY_WAIT;
@@ -1582,8 +1600,9 @@ mod tests {
         // running foreground command instead of switching straight to Normal
         // mode, so `has_foreground_process` must actually track a command
         // that isn't a full-screen (alt-screen) app.
-        let mut terminal = Terminal::with_command(40, 10, CommandBuilder::new("bash"), MAX_SCROLLBACK)
-            .expect("test pane spawn");
+        let mut terminal =
+            Terminal::with_command(40, 10, CommandBuilder::new("bash"), MAX_SCROLLBACK)
+                .expect("test pane spawn");
         for _ in 0..100 {
             terminal.drain_output();
             if !terminal.has_foreground_process() {
@@ -1649,4 +1668,3 @@ mod tests {
         assert!(!chunks_need_coalescing(&text_after_cr));
     }
 }
-

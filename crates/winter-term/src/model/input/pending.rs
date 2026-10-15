@@ -17,7 +17,7 @@ pub enum PendingPrefix {
     /// A count typed before a motion (`5` before `j`), accumulating further
     /// digits until the motion that spends it resolves.
     Count(usize),
-    /// Awaiting a window command after `Ctrl-W`.
+    /// Awaiting a window command after `Ctrl-W` or a configurable window leader.
     CtrlW,
     /// The change operator `c`, awaiting the motion or object it applies to.
     Change,

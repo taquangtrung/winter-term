@@ -1067,7 +1067,8 @@ pub(super) fn input_rgba(
         let caret_w = match before.len() == input.len() {
             true => input_w,
             false => {
-                let before_buf = shape_chrome_line(font_system, ctx, &before, foreground, true, true);
+                let before_buf =
+                    shape_chrome_line(font_system, ctx, &before, foreground, true, true);
                 buffer_width(&before_buf).ceil() as i32
             }
         };

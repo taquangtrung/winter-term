@@ -11,9 +11,8 @@ use winter_render::MenuStyle;
 
 use super::App;
 use super::{
-    edge_resize_direction_at,
-    AUTO_SCROLL_EDGE_MARGIN, AUTO_SCROLL_INTERVAL, AUTO_SCROLL_MAX_LINES_PER_TICK,
-    WINDOW_RESIZE_BORDER_PX,
+    edge_resize_direction_at, AUTO_SCROLL_EDGE_MARGIN, AUTO_SCROLL_INTERVAL,
+    AUTO_SCROLL_MAX_LINES_PER_TICK, WINDOW_RESIZE_BORDER_PX,
 };
 
 // ========================================================================
@@ -48,7 +47,10 @@ impl App {
     /// size) and `render_frame` (what's drawn), so they always agree on how
     /// much space is reserved at the bottom of the window.
     pub(crate) fn status_bar_visible(&self) -> bool {
-        self.config.status_bar.enabled || self.search.query.is_some()
+        self.config.status_bar.enabled
+            || self.search.query.is_some()
+            || self.page_prompt.is_some()
+            || self.theme_name_input.is_some()
     }
     pub(crate) fn viewport_rect(&self) -> PaneRect {
         let (w, h) = match (&self.window, &self.renderer) {

@@ -1426,7 +1426,8 @@ pub fn rasterize_pane_strip_rgba(
             continue;
         }
 
-        let is_hovered = matches!(hover, PaneStripHit::Tab(id) | PaneStripHit::CloseTab(id) if id == tab.tab_id);
+        let is_hovered =
+            matches!(hover, PaneStripHit::Tab(id) | PaneStripHit::CloseTab(id) if id == tab.tab_id);
         let pill_color = if tab.dragging {
             mix_rgb(PANE_STRIP_BAND_BG, PANE_STRIP_ACTIVE_BG, 0.25)
         } else if tab.active {
@@ -1480,7 +1481,11 @@ pub fn rasterize_pane_strip_rgba(
                     1.0,
                 );
             } else {
-                let unfocused_border = mix_rgb(unfocused_active_bg, bright_target, UNFOCUSED_ACTIVE_BORDER_MIX);
+                let unfocused_border = mix_rgb(
+                    unfocused_active_bg,
+                    bright_target,
+                    UNFOCUSED_ACTIVE_BORDER_MIX,
+                );
                 let unfocused_indicator = mix_rgb(active_indicator, PANE_STRIP_BAND_BG, DIM_FACTOR);
                 fill_rounded_rect(
                     &mut rgba,
@@ -2627,10 +2632,18 @@ mod tests {
             active_top_pixel, inactive_top_pixel,
             "unfocused active tab should have distinct accent indicator at the top"
         );
-        let expected_unfocused_indicator = mix_rgb(PANE_STRIP_ACTIVE_INDICATOR_COLOR, PANE_STRIP_BAND_BG, DIM_FACTOR);
+        let expected_unfocused_indicator = mix_rgb(
+            PANE_STRIP_ACTIVE_INDICATOR_COLOR,
+            PANE_STRIP_BAND_BG,
+            DIM_FACTOR,
+        );
         assert_eq!(
             active_top_pixel,
-            &[expected_unfocused_indicator.r, expected_unfocused_indicator.g, expected_unfocused_indicator.b],
+            &[
+                expected_unfocused_indicator.r,
+                expected_unfocused_indicator.g,
+                expected_unfocused_indicator.b
+            ],
             "unfocused active tab should use dimmed royal blue accent for the top border"
         );
     }
@@ -2676,7 +2689,11 @@ mod tests {
         let active_top_pixel = &rgba[((active_top_y * w as usize + active_top_x) * 4)..][..3];
         assert_eq!(
             active_top_pixel,
-            &[PANE_STRIP_ACTIVE_INDICATOR_COLOR.r, PANE_STRIP_ACTIVE_INDICATOR_COLOR.g, PANE_STRIP_ACTIVE_INDICATOR_COLOR.b],
+            &[
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.r,
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.g,
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.b
+            ],
             "focused active tab should use the deep saturated royal blue color for the top border"
         );
     }
@@ -2736,7 +2753,11 @@ mod tests {
         let tab0_top_pixel = &rgba[((tab0_top_y * w as usize + tab0_top_x) * 4)..][..3];
         assert_ne!(
             tab0_top_pixel,
-            &[PANE_STRIP_ACTIVE_INDICATOR_COLOR.r, PANE_STRIP_ACTIVE_INDICATOR_COLOR.g, PANE_STRIP_ACTIVE_INDICATOR_COLOR.b],
+            &[
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.r,
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.g,
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.b
+            ],
             "dragging active tab should suppress the top active accent indicator"
         );
 
@@ -2746,7 +2767,11 @@ mod tests {
         let ind_pixel = &rgba[((ind_y * w as usize + ind_x) * 4)..][..3];
         assert_eq!(
             ind_pixel,
-            &[PANE_STRIP_ACTIVE_INDICATOR_COLOR.r, PANE_STRIP_ACTIVE_INDICATOR_COLOR.g, PANE_STRIP_ACTIVE_INDICATOR_COLOR.b],
+            &[
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.r,
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.g,
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.b
+            ],
             "drop insertion bar should render with royal blue accent at indicator_x"
         );
 
@@ -2756,7 +2781,11 @@ mod tests {
         let sep_pixel = &rgba[((sep_y * w as usize + sep_x) * 4)..][..3];
         assert_eq!(
             sep_pixel,
-            &[PANE_STRIP_ACTIVE_INDICATOR_COLOR.r, PANE_STRIP_ACTIVE_INDICATOR_COLOR.g, PANE_STRIP_ACTIVE_INDICATOR_COLOR.b],
+            &[
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.r,
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.g,
+                PANE_STRIP_ACTIVE_INDICATOR_COLOR.b
+            ],
             "target pane bottom line should highlight with royal blue accent"
         );
     }

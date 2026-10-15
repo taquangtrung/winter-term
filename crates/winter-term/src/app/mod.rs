@@ -49,7 +49,7 @@ mod tabbar;
 mod tabs;
 mod window_event;
 
-use navigation::{SearchState, VimState};
+use navigation::{SearchFrom, SearchState, VimState};
 use pointer::{PointerState, SelectionState};
 use prompt_edit::PromptShadow;
 use tabbar::MenuState;
@@ -79,12 +79,14 @@ use crate::model::textedit::recall::Answers;
 use crate::terminal::session::Terminal;
 use crate::terminal::webview::{PaneViewport, WebViewManager};
 use winter_render::renderer::GpuRenderer;
-use winter_render::{NoticeKind, StatusBar, StatusNotice, StatusSearch, Theme};
+use winter_render::{NoticeKind, StatusBar, StatusNotice, StatusPrompt, StatusSearch, Theme};
 
 // ========================================================================
 // Constants
 // ========================================================================
 
+/// Debounce delay before executing incremental search or filter updates.
+pub(crate) const SEARCH_DEBOUNCE_MILLIS: u64 = 150;
 const PTY_POLL_INTERVAL: Duration = Duration::from_millis(16);
 /// Poll interval used once `PTY_ACTIVE_WINDOW` has passed with no output, input,
 /// or other window activity. `about_to_wait` still has no way to be woken
@@ -209,6 +211,7 @@ pub(crate) fn edge_resize_direction_at(
 fn status_bar(
     mode: Mode,
     theme: &Theme,
+    prompt: Option<StatusPrompt>,
     search: Option<StatusSearch>,
     notice: Option<StatusNotice>,
     config: &StatusBarConfig,
@@ -221,7 +224,7 @@ fn status_bar(
         Mode::BlockFocus => ("B", theme.ansi[5]),
         Mode::Page => ("P", theme.ansi[2]),
     };
-    let mode_label = if config.show_mode {
+    let mode_label = if config.show_mode && prompt.is_none() {
         format!(" {mode_name}")
     } else {
         String::new()
@@ -229,8 +232,9 @@ fn status_bar(
     StatusBar {
         accent,
         mode: mode_label,
-        search,
         notice,
+        prompt,
+        search,
         tool_icon,
     }
 }
@@ -611,6 +615,10 @@ pub struct App {
     pub(crate) jobs: jobs::Jobs,
     /// The question a page is waiting on an answer to, if any.
     pub(crate) page_prompt: Option<page::ActivePrompt>,
+    /// Debounce timer for active prompt input changes.
+    pub(crate) prompt_debounce: Option<(Instant, TabId)>,
+    /// Debounce timer for live search query input.
+    pub(crate) search_debounce: Option<(Instant, TabId)>,
     /// Where next-error has got to in the last command's file references.
     pub(crate) error_walk: Option<errors::ErrorWalk>,
     /// What each page question was answered with before, for the arrow keys.
@@ -1212,6 +1220,30 @@ impl ApplicationHandler for App {
         }
         let spinner_tick = self.update_spinners(Instant::now());
 
+        if let Some((deadline, focused)) = self.search_debounce {
+            let now = Instant::now();
+            if now >= deadline {
+                self.search_debounce = None;
+                self.search_step(focused, self.search_start_direction(), SearchFrom::Origin);
+                self.dirty = true;
+            }
+        }
+        if let Some((deadline, tab)) = self.prompt_debounce {
+            let now = Instant::now();
+            if now >= deadline {
+                self.prompt_debounce = None;
+                if let Some(prompt) = self.page_prompt.as_ref() {
+                    let query = prompt.field.text().to_string();
+                    let tag = prompt.request.tag;
+                    if let Some(slot) = self.pages.get_mut(&tab) {
+                        let outcome = slot.page.on_prompt_input(&query, tag);
+                        self.act_on_page_outcome(tab, outcome);
+                    }
+                }
+                self.dirty = true;
+            }
+        }
+
         // Turn the app-wide "what is drawn no longer matches the state" flag
         // into the one redraw request it stands for. This is the only place
         // `dirty` is read: most of the ~150 sites that set it never call
@@ -1237,6 +1269,12 @@ impl ApplicationHandler for App {
         } else {
             next_poll
         };
+        if let Some((deadline, _)) = self.search_debounce {
+            wakeup = wakeup.min(deadline);
+        }
+        if let Some((deadline, _)) = self.prompt_debounce {
+            wakeup = wakeup.min(deadline);
+        }
         if let Some(deadline) = page_tick {
             wakeup = wakeup.min(deadline);
         }
@@ -1358,7 +1396,10 @@ mod tests {
             .expect("terminal")
             .grid_mut()
             .scroll_up_history(6);
-        app.handle_action(crate::model::input::Action::SendBytes(b"a".to_vec()), focused);
+        app.handle_action(
+            crate::model::input::Action::SendBytes(b"a".to_vec()),
+            focused,
+        );
         assert_eq!(app.terminals[&focused].grid().scroll_offset(), 0, "typed");
 
         app.terminals
@@ -1636,20 +1677,20 @@ mod tests {
             ..StatusBarConfig::default()
         };
         assert_eq!(
-            status_bar(Mode::Insert, &theme, None, None, &cfg, None).mode,
+            status_bar(Mode::Insert, &theme, None, None, None, &cfg, None).mode,
             " I"
         );
         assert_eq!(
-            status_bar(Mode::Normal, &theme, None, None, &cfg, None).mode,
+            status_bar(Mode::Normal, &theme, None, None, None, &cfg, None).mode,
             " N"
         );
         assert_eq!(
-            status_bar(Mode::BlockFocus, &theme, None, None, &cfg, None).mode,
+            status_bar(Mode::BlockFocus, &theme, None, None, None, &cfg, None).mode,
             " B"
         );
         assert_ne!(
-            status_bar(Mode::Insert, &theme, None, None, &cfg, None).accent,
-            status_bar(Mode::Normal, &theme, None, None, &cfg, None).accent
+            status_bar(Mode::Insert, &theme, None, None, None, &cfg, None).accent,
+            status_bar(Mode::Normal, &theme, None, None, None, &cfg, None).accent
         );
     }
 
@@ -1657,15 +1698,40 @@ mod tests {
     fn test_status_bar_show_mode_toggle_hides_mode_label() {
         let theme = Theme::dark();
         let default_cfg = StatusBarConfig::default();
-        let bar = status_bar(Mode::Normal, &theme, None, None, &default_cfg, None);
+        let bar = status_bar(Mode::Normal, &theme, None, None, None, &default_cfg, None);
         assert_eq!(bar.mode, "");
 
         let enabled_cfg = StatusBarConfig {
             show_mode: true,
             ..StatusBarConfig::default()
         };
-        let bar_enabled = status_bar(Mode::Normal, &theme, None, None, &enabled_cfg, None);
+        let bar_enabled = status_bar(Mode::Normal, &theme, None, None, None, &enabled_cfg, None);
         assert_eq!(bar_enabled.mode, " N");
+    }
+
+    #[test]
+    fn test_status_bar_prompt_suppresses_mode_label() {
+        let theme = Theme::dark();
+        let enabled_cfg = StatusBarConfig {
+            show_mode: true,
+            ..StatusBarConfig::default()
+        };
+        let prompt = StatusPrompt {
+            caret: 3,
+            label: "/".to_string(),
+            value: "foo".to_string(),
+        };
+        let bar = status_bar(
+            Mode::Normal,
+            &theme,
+            Some(prompt),
+            None,
+            None,
+            &enabled_cfg,
+            None,
+        );
+        assert_eq!(bar.mode, "", "prompt suppresses mode label");
+        assert!(bar.prompt.is_some());
     }
 
     #[test]
@@ -1675,6 +1741,7 @@ mod tests {
         let active = status_bar(
             Mode::Normal,
             &theme,
+            None,
             Some(StatusSearch {
                 query: "foo".to_string(),
                 match_index: 1,
@@ -1687,8 +1754,122 @@ mod tests {
         );
         assert!(active.search.is_some());
 
-        let inactive = status_bar(Mode::Normal, &theme, None, None, &cfg, None);
+        let inactive = status_bar(Mode::Normal, &theme, None, None, None, &cfg, None);
         assert!(inactive.search.is_none());
+    }
+
+    #[test]
+    fn test_status_bar_visible_forces_on_during_prompt_or_theme_input() {
+        let mut app = App::new();
+        app.config.status_bar.enabled = false;
+        assert!(!app.status_bar_visible());
+
+        app.theme_name_input = Some(crate::model::textedit::field::TextField::line("custom"));
+        assert!(app.status_bar_visible());
+
+        app.theme_name_input = None;
+        assert!(!app.status_bar_visible());
+
+        let prompt = page::ActivePrompt {
+            field: crate::model::textedit::field::TextField::line("query"),
+            recall: crate::model::textedit::recall::Recall::default(),
+            tab: TabId(0),
+            request: crate::model::page::PromptRequest {
+                initial: String::new(),
+                label: "search: ".to_string(),
+                mode: crate::model::page::PromptMode::Text,
+                tag: "search",
+            },
+        };
+        app.page_prompt = Some(prompt);
+        assert!(app.status_bar_visible());
+
+        app.page_prompt = None;
+        assert!(!app.status_bar_visible());
+    }
+
+    #[test]
+    fn test_active_status_prompt_variants() {
+        let mut app = App::new();
+
+        // 1. None by default
+        assert!(app.active_status_prompt().is_none());
+
+        // 2. PagePrompt
+        let prompt = page::ActivePrompt {
+            field: crate::model::textedit::field::TextField::line("hello"),
+            recall: crate::model::textedit::recall::Recall::default(),
+            tab: TabId(0),
+            request: crate::model::page::PromptRequest {
+                initial: String::new(),
+                label: "find".to_string(),
+                mode: crate::model::page::PromptMode::Text,
+                tag: "search",
+            },
+        };
+        app.page_prompt = Some(prompt);
+        let status_prompt = app.active_status_prompt().expect("page prompt");
+        assert_eq!(status_prompt.label, "find: ");
+        assert_eq!(status_prompt.value, "hello");
+        assert_eq!(status_prompt.caret, 5);
+
+        // 3. ThemeNameInput takes precedence if no page_prompt
+        app.page_prompt = None;
+        app.theme_name_input = Some(crate::model::textedit::field::TextField::line("dracula"));
+        let status_prompt = app.active_status_prompt().expect("theme name prompt");
+        assert_eq!(status_prompt.label, "New theme name: ");
+        assert_eq!(status_prompt.value, "dracula");
+        assert_eq!(status_prompt.caret, 7);
+
+        // 4. PendingPrefix::SearchInput
+        app.theme_name_input = None;
+        app.pending = PendingPrefix::SearchInput;
+        app.search.reverse = false;
+        app.search.query = Some("term".to_string());
+        let status_prompt = app.active_status_prompt().expect("forward search prompt");
+        assert_eq!(status_prompt.label, "/");
+        assert_eq!(status_prompt.value, "term");
+        assert_eq!(status_prompt.caret, 4);
+
+        app.search.reverse = true;
+        let status_prompt = app.active_status_prompt().expect("reverse search prompt");
+        assert_eq!(status_prompt.label, "?");
+    }
+
+    #[test]
+    fn test_search_debounce_scheduling_and_cancellation() {
+        let mut app = app_with_tabs(1);
+        let focused = app.layout().focused();
+        app.modes.insert(focused, Mode::Normal);
+
+        app.handle_action(input::Action::SearchStart, focused);
+        assert_eq!(app.search.query, Some(String::new()));
+        assert!(app.search_debounce.is_none());
+
+        // Typing a character schedules debounce
+        app.handle_action(input::Action::SearchChar('f'), focused);
+        assert_eq!(app.search.query, Some("f".to_string()));
+        assert!(app.search_debounce.is_some());
+        let (deadline, tab) = app.search_debounce.unwrap();
+        assert_eq!(tab, focused);
+        assert!(deadline > Instant::now());
+
+        // Backspace reschedules debounce
+        app.handle_action(input::Action::SearchBackspace, focused);
+        assert_eq!(app.search.query, Some(String::new()));
+        assert!(app.search_debounce.is_some());
+
+        // SearchExecute clears debounce
+        app.handle_action(input::Action::SearchExecute, focused);
+        assert!(app.search_debounce.is_none());
+
+        // Start again and test SearchCancel clears debounce
+        app.handle_action(input::Action::SearchStart, focused);
+        app.handle_action(input::Action::SearchChar('x'), focused);
+        assert!(app.search_debounce.is_some());
+        app.handle_action(input::Action::SearchCancel, focused);
+        assert!(app.search_debounce.is_none());
+        assert!(app.search.query.is_none());
     }
 
     #[test]
@@ -1886,7 +2067,7 @@ mod tests {
             kind: NoticeKind::Info,
             text: "oops".to_string(),
         };
-        let bar = status_bar(Mode::Normal, &theme, None, Some(notice), &cfg, None);
+        let bar = status_bar(Mode::Normal, &theme, None, None, Some(notice), &cfg, None);
         assert_eq!(bar.notice.map(|n| n.text), Some("oops".to_string()));
     }
 
@@ -2017,8 +2198,9 @@ mod tests {
     /// it as dead. Waits for the child process to actually terminate rather
     /// than assuming immediate exit.
     fn insert_dead_pane(app: &mut App, id: TabId) {
-        let mut terminal = Terminal::with_command(20, 5, portable_pty::CommandBuilder::new("true"), 1000)
-            .expect("test pane spawn");
+        let mut terminal =
+            Terminal::with_command(20, 5, portable_pty::CommandBuilder::new("true"), 1000)
+                .expect("test pane spawn");
         let deadline = Instant::now() + PTY_WAIT;
         while Instant::now() < deadline {
             if !terminal.is_alive() {
@@ -2382,8 +2564,9 @@ mod tests {
         // Content is written directly to the grid (no live shell) so each
         // row holds a known, distinguishable number instead of depending on
         // PTY timing.
-        let mut pane = Terminal::with_command(10, 3, portable_pty::CommandBuilder::new("true"), 1000)
-            .expect("test pane spawn");
+        let mut pane =
+            Terminal::with_command(10, 3, portable_pty::CommandBuilder::new("true"), 1000)
+                .expect("test pane spawn");
         {
             let grid = pane.grid_mut();
             for n in 0..20 {

@@ -1307,7 +1307,11 @@ mod tests {
         assert_eq!((buf.row(), buf.col()), (0, 7), "bar");
         buf.move_emacs_word(true);
         buf.move_emacs_word(true);
-        assert_eq!((buf.row(), buf.col()), (1, 5), "baz, then onto the next line");
+        assert_eq!(
+            (buf.row(), buf.col()),
+            (1, 5),
+            "baz, then onto the next line"
+        );
         buf.move_emacs_word(false);
         assert_eq!((buf.row(), buf.col()), (1, 2), "back to qux");
         buf.move_emacs_word(false);
@@ -1325,7 +1329,11 @@ mod tests {
         buf.kill_emacs_word(false);
         assert_eq!(buf.lines(), [" three"]);
         assert_eq!(buf.col(), 0);
-        assert_eq!(buf.register().text, "one ", "the latest kill is the one kept");
+        assert_eq!(
+            buf.register().text,
+            "one ",
+            "the latest kill is the one kept"
+        );
         buf.yank();
         assert_eq!(buf.lines(), ["one  three"]);
         assert_eq!(buf.col(), 4, "the cursor steps past what came back");
@@ -1397,7 +1405,11 @@ mod tests {
         assert_eq!(buf.lines(), ["acdb"]);
         let mut start = buffer(&["ab"]);
         start.transpose_chars();
-        assert_eq!(start.lines(), ["ab"], "nothing precedes the first character");
+        assert_eq!(
+            start.lines(),
+            ["ab"],
+            "nothing precedes the first character"
+        );
     }
 
     #[test]

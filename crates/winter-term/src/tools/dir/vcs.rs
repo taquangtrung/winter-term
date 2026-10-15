@@ -75,7 +75,11 @@ pub fn marks(top: &Path, status: &str) -> HashMap<PathBuf, GitMark> {
         if better {
             marks.insert(path.clone(), (rank, mark));
         }
-        for dir in path.ancestors().skip(1).take_while(|dir| dir.starts_with(top) && *dir != top) {
+        for dir in path
+            .ancestors()
+            .skip(1)
+            .take_while(|dir| dir.starts_with(top) && *dir != top)
+        {
             marks.entry(dir.to_path_buf()).or_insert((
                 u8::MAX,
                 GitMark {
@@ -85,7 +89,10 @@ pub fn marks(top: &Path, status: &str) -> HashMap<PathBuf, GitMark> {
             ));
         }
     }
-    marks.into_iter().map(|(path, (_, mark))| (path, mark)).collect()
+    marks
+        .into_iter()
+        .map(|(path, (_, mark))| (path, mark))
+        .collect()
 }
 
 fn git_request(dir: &Path, args: &[&str], tag: &'static str) -> CommandRequest {

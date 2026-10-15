@@ -108,12 +108,23 @@ impl App {
     /// (`/`-typing) search always scans from that spot. Cleared when the search
     /// ends (`SearchCancel`, or leaving Normal mode).
     pub(crate) fn set_search_origin(&mut self, focused: TabId) {
-        let pos = self.terminals.get(&focused).map(|terminal| {
-            let grid = terminal.grid();
-            let (row, col) = self.nav_cursor(focused).unwrap_or_else(|| grid.cursor());
-            let row = row.min(grid.rows().saturating_sub(1));
-            (grid.to_absolute_row(row), col)
-        });
+        let pos = self
+            .terminals
+            .get(&focused)
+            .map(|terminal| {
+                let grid = terminal.grid();
+                let (row, col) = self.nav_cursor(focused).unwrap_or_else(|| grid.cursor());
+                let row = row.min(grid.rows().saturating_sub(1));
+                (grid.to_absolute_row(row), col)
+            })
+            .or_else(|| {
+                self.pages.get(&focused).and_then(|slot| {
+                    let grid = slot.painted.as_ref()?;
+                    let row = slot.cursor_line.unwrap_or(0);
+                    let col = slot.page.caret().map(|c| c.col).unwrap_or(0);
+                    Some((grid.to_absolute_row(row), col))
+                })
+            });
         self.search.origin = pos.map(|p| (focused, p));
     }
 
@@ -199,11 +210,102 @@ impl App {
         };
         self.search.match_index = pos + 1;
         self.search.current = Some((focused, matches[pos]));
-        // A confirmed search jump is one of vim's jumplist jumps: record where
-        // it started before revealing the match.
-        self.push_jump(focused);
+        if from == SearchFrom::Cursor {
+            // A confirmed search jump is one of vim's jumplist jumps: record where
+            // it started before revealing the match.
+            self.push_jump(focused);
+        }
         self.reveal_position(focused, matches[pos]);
         self.dirty = true;
+    }
+
+    /// Update the interactive search preview (match count and current match position)
+    /// without jumping the viewport or pushing to the jumplist.
+    pub(crate) fn update_search_preview(&mut self, focused: TabId) {
+        let query = match &self.search.query {
+            Some(q) if !q.is_empty() => q.clone(),
+            _ => {
+                if let Some(prompt) = self.page_prompt.as_ref() {
+                    if prompt.request.tag == "search" || prompt.request.tag == "search-back" {
+                        let text = prompt.field.text();
+                        if !text.is_empty() {
+                            text.to_string()
+                        } else {
+                            self.search.match_index = 0;
+                            self.search.match_total = 0;
+                            self.search.current = None;
+                            return;
+                        }
+                    } else {
+                        self.search.match_index = 0;
+                        self.search.match_total = 0;
+                        self.search.current = None;
+                        return;
+                    }
+                } else {
+                    self.search.match_index = 0;
+                    self.search.match_total = 0;
+                    self.search.current = None;
+                    return;
+                }
+            }
+        };
+
+        let is_reverse = self.search.reverse
+            || self
+                .page_prompt
+                .as_ref()
+                .is_some_and(|p| p.request.tag == "search-back");
+
+        let (matches, start) = if let Some(terminal) = self.terminals.get(&focused) {
+            let grid = terminal.grid();
+            (
+                buffer_match_starts(grid, &query),
+                self.search_start_pos(focused, SearchFrom::Origin, grid),
+            )
+        } else if let Some(slot) = self.pages.get(&focused) {
+            if let Some(grid) = slot.painted.as_ref() {
+                let start_row = slot.cursor_line.unwrap_or(0);
+                let start_col = slot.page.caret().map(|c| c.col).unwrap_or(0);
+                (
+                    buffer_match_starts(grid, &query),
+                    (grid.to_absolute_row(start_row), start_col),
+                )
+            } else {
+                self.search.match_index = 0;
+                self.search.match_total = 0;
+                self.search.current = None;
+                return;
+            }
+        } else {
+            self.search.match_index = 0;
+            self.search.match_total = 0;
+            self.search.current = None;
+            return;
+        };
+
+        self.search.match_total = matches.len();
+        if matches.is_empty() {
+            self.search.match_index = 0;
+            self.search.current = None;
+            return;
+        }
+
+        let direction = if is_reverse {
+            input::BlockNav::Previous
+        } else {
+            input::BlockNav::Next
+        };
+
+        let pos = match direction {
+            input::BlockNav::Next => matches.iter().position(|&m| m > start).unwrap_or(0),
+            input::BlockNav::Previous => matches
+                .iter()
+                .rposition(|&m| m < start)
+                .unwrap_or(matches.len() - 1),
+        };
+        self.search.match_index = pos + 1;
+        self.search.current = Some((focused, matches[pos]));
     }
 
     /// The buffer position a search step scans away from: the launch origin
@@ -435,8 +537,9 @@ fn row_match_spans(row_str: &str, query: &str) -> Vec<(usize, usize)> {
     if query.is_empty() {
         return vec![];
     }
+    let has_uppercase = query.chars().any(char::is_uppercase);
     if let Ok(re) = regex::RegexBuilder::new(query)
-        .case_insensitive(true)
+        .case_insensitive(!has_uppercase)
         .build()
     {
         let mut spans = Vec::new();
@@ -451,16 +554,29 @@ fn row_match_spans(row_str: &str, query: &str) -> Vec<(usize, usize)> {
             return spans;
         }
     }
-    let query_lower: Vec<char> = query.to_lowercase().chars().collect();
-    let row_chars: Vec<char> = row_str.to_lowercase().chars().collect();
-    let qlen = query_lower.len();
-    if qlen == 0 || row_chars.len() < qlen {
-        return vec![];
+    if has_uppercase {
+        let query_chars: Vec<char> = query.chars().collect();
+        let row_chars: Vec<char> = row_str.chars().collect();
+        let qlen = query_chars.len();
+        if qlen == 0 || row_chars.len() < qlen {
+            return vec![];
+        }
+        (0..=row_chars.len() - qlen)
+            .filter(|&s| row_chars[s..s + qlen] == query_chars)
+            .map(|s| (s, s + qlen))
+            .collect()
+    } else {
+        let query_lower: Vec<char> = query.to_lowercase().chars().collect();
+        let row_chars: Vec<char> = row_str.to_lowercase().chars().collect();
+        let qlen = query_lower.len();
+        if qlen == 0 || row_chars.len() < qlen {
+            return vec![];
+        }
+        (0..=row_chars.len() - qlen)
+            .filter(|&s| row_chars[s..s + qlen] == query_lower)
+            .map(|s| (s, s + qlen))
+            .collect()
     }
-    (0..=row_chars.len() - qlen)
-        .filter(|&s| row_chars[s..s + qlen] == query_lower)
-        .map(|s| (s, s + qlen))
-        .collect()
 }
 
 /// Every occurrence of `query` in the pane's whole buffer: scrollback plus
@@ -885,5 +1001,54 @@ mod tests {
 
         // Transitions to Mode::Insert
         assert_eq!(app.modes.get(&id), Some(&crate::model::mode::Mode::Insert));
+    }
+
+    #[test]
+    fn test_search_smartcase_matching() {
+        // Lowercase query matches case-insensitively
+        let spans_lower = row_match_spans("Foo foo FOO", "foo");
+        assert_eq!(spans_lower.len(), 3, "lowercase query matches all cases");
+
+        // Query with uppercase character matches exact case
+        let spans_upper = row_match_spans("Foo foo FOO", "Foo");
+        assert_eq!(
+            spans_upper,
+            vec![(0, 3)],
+            "uppercase query matches exact case"
+        );
+    }
+
+    #[test]
+    fn test_interactive_search_preview_and_cancel_restores_origin() {
+        let (mut app, id) = app_with_lines(LINES, "");
+        app.set_nav_cursor(id, (0, 5));
+        let jumps_before = app.vim.jump_lists.get(&id).map(|jl| jl.len()).unwrap_or(0);
+
+        app.handle_action(input::Action::SearchStart, id);
+        assert_eq!(app.search.origin, Some((id, (0, 5))));
+
+        // Typing updates match count immediately without touching jumplist
+        app.handle_action(input::Action::SearchChar('i'), id);
+        assert_eq!(app.search.match_total, 3);
+        let jumps_during = app.vim.jump_lists.get(&id).map(|jl| jl.len()).unwrap_or(0);
+        assert_eq!(
+            jumps_during, jumps_before,
+            "typing does not push to jumplist"
+        );
+
+        app.handle_action(input::Action::SearchChar('n'), id);
+        app.handle_action(input::Action::SearchChar('k'), id);
+        assert_eq!(app.search.match_total, 3);
+        assert_eq!(app.search.match_index, 1);
+        assert_eq!(app.search.current, Some((id, (1, 0))));
+
+        // Cancel restores nav cursor to the search origin
+        app.handle_action(input::Action::SearchCancel, id);
+        assert_eq!(app.search.query, None);
+        assert_eq!(
+            app.nav_cursor(id),
+            Some((0, 5)),
+            "Esc restores search origin"
+        );
     }
 }

@@ -325,6 +325,7 @@ pub(super) fn build_bg_vertices_offset(
                 || is_label
                 || is_find_label
                 || is_search_match
+                || is_current_match
                 || is_cursor_line
                 || in_sentence_band(col)
             {
@@ -998,7 +999,7 @@ fn cell_bg_color(
         QUICK_SELECT_BG
     } else if overlays.is_selected {
         theme.selection_bg.as_linear()
-    } else if overlays.is_search_match {
+    } else if overlays.is_search_match || overlays.is_current_match {
         // Search highlights are translucent: the tint blends into
         // whatever the cell's own background is, leaving the
         // glyph's foreground color legible on top of it (the text

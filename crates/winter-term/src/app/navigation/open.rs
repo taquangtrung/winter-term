@@ -171,7 +171,9 @@ fn percent_decode(s: &str) -> String {
             let h1 = chars.next().copied();
             let h2 = chars.next().copied();
             if let (Some(h1), Some(h2)) = (h1, h2) {
-                if let Ok(byte) = u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16) {
+                if let Ok(byte) =
+                    u8::from_str_radix(std::str::from_utf8(&[h1, h2]).unwrap_or(""), 16)
+                {
                     bytes.push(byte);
                     continue;
                 }
@@ -338,10 +340,13 @@ fn resolve_last_line_target(grid: &Grid, bottom: usize, cwd: Option<&str>) -> Op
         .rev()
         .map(|row| line_chars(grid, row))
         .find(|chars| chars.iter().any(|c| !c.is_whitespace()))?;
-    token_spans(&line).into_iter().rev().find_map(|(start, len)| {
-        let token: String = line[start..start + len].iter().collect();
-        resolve_file_token(&token, cwd)
-    })
+    token_spans(&line)
+        .into_iter()
+        .rev()
+        .find_map(|(start, len)| {
+            let token: String = line[start..start + len].iter().collect();
+            resolve_file_token(&token, cwd)
+        })
 }
 
 /// The innermost `[quote, quote)` span containing `idx`, as an inclusive
@@ -431,7 +436,9 @@ impl App {
         match self.target_at_point(self.layout().focused()) {
             Some(OpenTarget::File { path, .. }) if path.is_dir() => Palette::open_files(path),
             Some(OpenTarget::File { path, .. }) => {
-                let dir = path.parent().map_or_else(|| self.focused_start_dir(), Path::to_path_buf);
+                let dir = path
+                    .parent()
+                    .map_or_else(|| self.focused_start_dir(), Path::to_path_buf);
                 let mut palette = Palette::open_files(dir);
                 palette.select_path(&path);
                 palette

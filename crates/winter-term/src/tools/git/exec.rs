@@ -318,7 +318,12 @@ pub fn resolve_conflict(root: &Path, path: &str, ours: bool) -> JobRequest {
     owned_request(
         root,
         TAG_RESOLVE,
-        vec!["checkout".to_string(), side.to_string(), "--".to_string(), path.to_string()],
+        vec![
+            "checkout".to_string(),
+            side.to_string(),
+            "--".to_string(),
+            path.to_string(),
+        ],
     )
 }
 

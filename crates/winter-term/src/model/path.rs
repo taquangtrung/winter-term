@@ -134,7 +134,11 @@ fn split_line_suffix(location: &str) -> (&str, &str) {
             return (location, "");
         }
         let after = &location[colon_pos + 1..];
-        if !after.is_empty() && after.chars().all(|c| c.is_ascii_digit() || c == '-' || c == ':') {
+        if !after.is_empty()
+            && after
+                .chars()
+                .all(|c| c.is_ascii_digit() || c == '-' || c == ':')
+        {
             let before = &location[..colon_pos];
             if before.len() > 1 || !before.chars().all(|c| c.is_ascii_alphabetic()) {
                 return (before, &location[colon_pos..]);
@@ -249,14 +253,8 @@ mod tests {
         #[cfg(not(windows))]
         {
             let home = Path::new("/home/user");
-            assert_eq!(
-                format_file_reference_with_home("/home/user", home),
-                "~"
-            );
-            assert_eq!(
-                format_file_reference_with_home("/home/user/", home),
-                "~"
-            );
+            assert_eq!(format_file_reference_with_home("/home/user", home), "~");
+            assert_eq!(format_file_reference_with_home("/home/user/", home), "~");
         }
     }
 
@@ -353,15 +351,24 @@ mod tests {
         {
             let p1 = Path::new("C:/Users/Trung/Workspace");
             assert_eq!(format_full_path(p1), r"C:\Users\Trung\Workspace");
-            assert_eq!(normalize_path(p1), PathBuf::from(r"C:\Users\Trung\Workspace"));
+            assert_eq!(
+                normalize_path(p1),
+                PathBuf::from(r"C:\Users\Trung\Workspace")
+            );
 
             let p2 = Path::new("/C:/Users/Trung/Workspace");
             assert_eq!(format_full_path(p2), r"C:\Users\Trung\Workspace");
-            assert_eq!(normalize_path(p2), PathBuf::from(r"C:\Users\Trung\Workspace"));
+            assert_eq!(
+                normalize_path(p2),
+                PathBuf::from(r"C:\Users\Trung\Workspace")
+            );
 
             let p3 = Path::new("/c/Users/Trung/Workspace");
             assert_eq!(format_full_path(p3), r"C:\Users\Trung\Workspace");
-            assert_eq!(normalize_path(p3), PathBuf::from(r"C:\Users\Trung\Workspace"));
+            assert_eq!(
+                normalize_path(p3),
+                PathBuf::from(r"C:\Users\Trung\Workspace")
+            );
         }
         #[cfg(not(windows))]
         {

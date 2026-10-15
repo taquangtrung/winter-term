@@ -144,7 +144,9 @@ pub fn rename_all(renames: &[Rename]) -> (usize, Option<String>) {
         }
         // The ones taking a free name go first, which frees the names the
         // parked ones are waiting for.
-        let order = (0..level.len()).filter(|i| !waits[*i]).chain((0..level.len()).filter(|i| waits[*i]));
+        let order = (0..level.len())
+            .filter(|i| !waits[*i])
+            .chain((0..level.len()).filter(|i| waits[*i]));
         for index in order {
             let rename = &level[index];
             if let Err(e) = move_entry(&rename.from, &rename.to) {
@@ -330,7 +332,10 @@ mod tests {
         assert_eq!(check_renames(&batch), Ok(()));
         assert_eq!(rename_all(&batch), (4, None));
         let read = |name| fs::read_to_string(tree.path(name)).expect("read");
-        assert_eq!((read("a"), read("b"), read("d"), read("e")), ("B".into(), "A".into(), "C".into(), "D".into()));
+        assert_eq!(
+            (read("a"), read("b"), read("d"), read("e")),
+            ("B".into(), "A".into(), "C".into(), "D".into())
+        );
         assert!(!tree.path("c").exists());
     }
 

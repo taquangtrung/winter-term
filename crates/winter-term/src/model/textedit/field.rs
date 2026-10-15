@@ -200,8 +200,15 @@ mod tests {
         type_text(&mut field, "dd");
         assert_eq!(field.lines(), ["", "two"], "a deleted line is emptied");
         type_text(&mut field, "jyykp");
-        assert_eq!(field.lines(), ["two", "two"], "a yanked line pastes as text");
-        assert_eq!(field.on_key(&key(KeyCode::Char('o')), 1), EditOutcome::Consumed);
+        assert_eq!(
+            field.lines(),
+            ["two", "two"],
+            "a yanked line pastes as text"
+        );
+        assert_eq!(
+            field.on_key(&key(KeyCode::Char('o')), 1),
+            EditOutcome::Consumed
+        );
         assert_eq!(field.lines().len(), 2, "no line opens");
     }
 }

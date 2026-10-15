@@ -152,7 +152,9 @@ impl Hunk {
     fn starts(&self) -> Option<(usize, usize)> {
         let counts = self.header.strip_prefix(HUNK_MARK)?;
         let start = |mark: char| -> Option<usize> {
-            let side = counts.split_whitespace().find_map(|part| part.strip_prefix(mark))?;
+            let side = counts
+                .split_whitespace()
+                .find_map(|part| part.strip_prefix(mark))?;
             side.split(',').next()?.parse().ok()
         };
         Some((start('-')?, start('+')?))
@@ -267,16 +269,39 @@ index 1234567..89abcde 100644
             .spawn()
             .expect("git apply runs");
         use std::io::Write;
-        apply.stdin.take().expect("stdin").write_all(patch.as_bytes()).expect("patch sent");
-        assert!(apply.wait().expect("waited").success(), "git took the patch:\n{patch}");
-        assert_eq!(git(&["show", ":f.txt"]), "ONE\ntwo\nthree\n", "only the first change is staged");
+        apply
+            .stdin
+            .take()
+            .expect("stdin")
+            .write_all(patch.as_bytes())
+            .expect("patch sent");
+        assert!(
+            apply.wait().expect("waited").success(),
+            "git took the patch:\n{patch}"
+        );
+        assert_eq!(
+            git(&["show", ":f.txt"]),
+            "ONE\ntwo\nthree\n",
+            "only the first change is staged"
+        );
 
         // And the staged half comes back out the other way.
         let staged = parse_diff(&git(&["diff", "--cached", "-U5", "f.txt"]));
-        let at = staged.hunks[0].lines.iter().position(|l| l == "+ONE").expect("an addition");
+        let at = staged.hunks[0]
+            .lines
+            .iter()
+            .position(|l| l == "+ONE")
+            .expect("an addition");
         assert!(staged.patch_for_lines(0, at..=at, true).is_some());
-        let context = body.iter().position(|l| l == " two").expect("a context line");
-        assert_eq!(diff.patch_for_lines(0, context..=context, false), None, "context changes nothing");
+        let context = body
+            .iter()
+            .position(|l| l == " two")
+            .expect("a context line");
+        assert_eq!(
+            diff.patch_for_lines(0, context..=context, false),
+            None,
+            "context changes nothing"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

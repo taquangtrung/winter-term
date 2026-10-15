@@ -10,8 +10,8 @@ use super::background::{
 };
 use super::chrome::{InputView, PaletteView, TabbarText, WhichKeyView, DIM_FACTOR};
 use super::colors::{
-    block_cursor_cell, cell_text_fg, cursor_contrast_fg, mix_rgb, needs_dark_on_light_bold,
-    clear_color, theme_indexed_color, FAINT_FACTOR,
+    block_cursor_cell, cell_text_fg, clear_color, cursor_contrast_fg, mix_rgb,
+    needs_dark_on_light_bold, theme_indexed_color, FAINT_FACTOR,
 };
 use super::glyphs::{
     base_family, effective_bold_weight, glyph_key, is_braille, needs_complex_shaping, parse_weight,
@@ -211,7 +211,7 @@ impl GpuRenderer {
         // Exactly one cell row, flush with the window's bottom edge.
         let status_top = crate::status_bar_top_px(surface.height, self.cell_height);
         if let Some(status) = status {
-            self.push_status_bar_quads(status_top, surface, &mut layers);
+            self.push_status_bar_quads(status, status_top, surface, &mut layers);
             self.shape_status_bar(status, &style, surface.width, &mut status_buffer);
         }
 
@@ -499,6 +499,11 @@ impl GpuRenderer {
             )
             .collect();
 
+        let search_match_set: std::collections::HashSet<(usize, usize)> =
+            pane.search_matches.iter().copied().collect();
+        let search_current_set: std::collections::HashSet<(usize, usize)> =
+            pane.search_current.iter().copied().collect();
+
         // The viewport cell covered by an opaque block cursor, so the glyph
         // under it can be repainted when it would otherwise disappear into
         // the cursor's fill.
@@ -637,6 +642,46 @@ impl GpuRenderer {
                     // substitutions some fonts use to compose emoji/ZWJ
                     // sequences into a single glyph, so only strip them for
                     // characters that don't need complex shaping.
+                    if !needs_complex_shaping(ch) {
+                        if let Some(ff) = &style.ligatures_off {
+                            span_attrs = span_attrs.font_features(ff.clone());
+                        }
+                    }
+                    attrs_list.add_span(start..text.len(), &span_attrs);
+                } else if search_current_set.contains(&(row, col)) {
+                    let mut span_attrs = Attrs::new()
+                        .family(base_family(style.family.as_deref()))
+                        .color(dim_toward_bg(
+                            255,
+                            255,
+                            255,
+                            self.theme.background,
+                            pane_dim,
+                        ))
+                        .weight(effective_bold_weight(
+                            self.bold_weight.as_deref(),
+                            self.font_has_bold,
+                        ));
+                    if cell.is_some_and(|c| c.style.italic) {
+                        span_attrs = span_attrs.style(glyphon::cosmic_text::Style::Italic);
+                    }
+                    if !needs_complex_shaping(ch) {
+                        if let Some(ff) = &style.ligatures_off {
+                            span_attrs = span_attrs.font_features(ff.clone());
+                        }
+                    }
+                    attrs_list.add_span(start..text.len(), &span_attrs);
+                } else if search_match_set.contains(&(row, col)) {
+                    let mut span_attrs = Attrs::new()
+                        .family(base_family(style.family.as_deref()))
+                        .color(dim_toward_bg(0, 0, 0, self.theme.background, pane_dim))
+                        .weight(effective_bold_weight(
+                            self.bold_weight.as_deref(),
+                            self.font_has_bold,
+                        ));
+                    if cell.is_some_and(|c| c.style.italic) {
+                        span_attrs = span_attrs.style(glyphon::cosmic_text::Style::Italic);
+                    }
                     if !needs_complex_shaping(ch) {
                         if let Some(ff) = &style.ligatures_off {
                             span_attrs = span_attrs.font_features(ff.clone());
@@ -941,6 +986,7 @@ impl GpuRenderer {
     /// Append the status bar's border hairline and background band.
     fn push_status_bar_quads(
         &self,
+        status: &StatusBar,
         status_top: f32,
         surface: SurfaceSize,
         layers: &mut FrameLayers,
@@ -964,6 +1010,28 @@ impl GpuRenderer {
             surface.width,
             surface.height,
         ));
+
+        if let Some(ref prompt) = status.prompt {
+            let prefix_cols = if status.mode.is_empty() {
+                0
+            } else {
+                status.mode.chars().count() + 5
+            };
+            let caret_col = prefix_cols + prompt.label.chars().count() + prompt.caret;
+            let cursor_x = caret_col as f32 * self.cell_width;
+            let cursor_y = status_top + 1.0;
+            let cursor_w = self.cell_width;
+            let cursor_h = crate::STATUS_BAR_HEIGHT * self.cell_height;
+            layers.bg_verts.extend_from_slice(&quad_vertices(
+                cursor_x,
+                cursor_y,
+                (cursor_x + cursor_w).min(surface.width),
+                cursor_y + cursor_h,
+                self.theme.cursor_bg.as_linear(),
+                surface.width,
+                surface.height,
+            ));
+        }
     }
 
     /// Shape the status bar's line: the mode label, then the live search
@@ -1009,67 +1077,146 @@ impl GpuRenderer {
             ))
             .color(self.theme.ansi[4].to_glyphon());
 
-        // Mode label (e.g. Normal, Insert, Block)
-        if !status.mode.is_empty() {
-            let mode_start = status_text.len();
-            status_text.push_str(&status.mode);
-            let mode_end = status_text.len();
-            spans.push((mode_start..mode_end, accent_attrs));
-        }
+        if let Some(ref prompt) = status.prompt {
+            if !status.mode.is_empty() {
+                let mode_start = status_text.len();
+                status_text.push_str(&status.mode);
+                let mode_end = status_text.len();
+                spans.push((mode_start..mode_end, accent_attrs.clone()));
 
-        // The live `/` search query follows the mode label while a search
-        // is active, showing the query text and its match position; hidden
-        // once the search is cancelled (`status.search` is `None`).
-        if let Some(ref search) = status.search {
-            if !status_text.is_empty() {
                 let sep_start = status_text.len();
                 status_text.push_str("  •  ");
                 let sep_end = status_text.len();
                 spans.push((sep_start..sep_end, muted_attrs.clone()));
+            }
+
+            let label_start = status_text.len();
+            status_text.push_str(&prompt.label);
+            let label_end = status_text.len();
+            spans.push((label_start..label_end, accent_attrs.clone()));
+
+            let value_chars: Vec<char> = prompt.value.chars().collect();
+            let caret = prompt.caret.min(value_chars.len());
+
+            if caret > 0 {
+                let before_str: String = value_chars[..caret].iter().collect();
+                let b_start = status_text.len();
+                status_text.push_str(&before_str);
+                let b_end = status_text.len();
+                spans.push((b_start..b_end, info_attrs.clone()));
+            }
+
+            let cursor_text_attrs = Attrs::new()
+                .family(base_family(style.family.as_deref()))
+                .weight(effective_bold_weight(
+                    self.bold_weight.as_deref(),
+                    self.font_has_bold,
+                ))
+                .color(self.theme.background.to_glyphon());
+
+            if caret < value_chars.len() {
+                let c = value_chars[caret];
+                let c_start = status_text.len();
+                status_text.push(c);
+                let c_end = status_text.len();
+                spans.push((c_start..c_end, cursor_text_attrs));
+
+                if caret + 1 < value_chars.len() {
+                    let after_str: String = value_chars[caret + 1..].iter().collect();
+                    let a_start = status_text.len();
+                    status_text.push_str(&after_str);
+                    let a_end = status_text.len();
+                    spans.push((a_start..a_end, info_attrs.clone()));
+                }
             } else {
+                let s_start = status_text.len();
                 status_text.push(' ');
+                let s_end = status_text.len();
+                spans.push((s_start..s_end, cursor_text_attrs));
             }
 
-            let query_start = status_text.len();
-            status_text.push(if search.reverse { '?' } else { '/' });
-            status_text.push_str(&search.query);
-            let query_end = status_text.len();
-            spans.push((query_start..query_end, info_attrs.clone()));
-
-            if search.match_total > 0 {
-                let count_start = status_text.len();
-                status_text.push_str(&format!("  {}/{}", search.match_index, search.match_total));
-                let count_end = status_text.len();
-                spans.push((count_start..count_end, muted_attrs.clone()));
-            } else if !search.query.is_empty() {
-                let none_start = status_text.len();
-                status_text.push_str("  no matches");
-                let none_end = status_text.len();
-                spans.push((none_start..none_end, muted_attrs.clone()));
+            if let Some(ref search) = status.search {
+                if search.match_total > 0 {
+                    let count_start = status_text.len();
+                    status_text.push_str(&format!(
+                        "  [{}/{}]",
+                        search.match_index, search.match_total
+                    ));
+                    let count_end = status_text.len();
+                    spans.push((count_start..count_end, accent_attrs.clone()));
+                } else if !prompt.value.is_empty() {
+                    let none_start = status_text.len();
+                    status_text.push_str("  [no matches]");
+                    let none_end = status_text.len();
+                    spans.push((none_start..none_end, error_attrs.clone()));
+                }
             }
-        }
-
-        // A transient notice follows the mode label: red for errors, green
-        // for info confirmations (e.g. "Copied to clipboard").
-        if let Some(ref notice) = status.notice {
-            if !status_text.is_empty() {
-                let sep_start = status_text.len();
-                status_text.push_str("  •  ");
-                let sep_end = status_text.len();
-                spans.push((sep_start..sep_end, muted_attrs.clone()));
-            } else {
-                status_text.push(' ');
+        } else {
+            // Mode label (e.g. Normal, Insert, Block)
+            if !status.mode.is_empty() {
+                let mode_start = status_text.len();
+                status_text.push_str(&status.mode);
+                let mode_end = status_text.len();
+                spans.push((mode_start..mode_end, accent_attrs.clone()));
             }
 
-            let notice_attrs = match notice.kind {
-                NoticeKind::Error => error_attrs,
-                NoticeKind::Info => info_attrs,
-                NoticeKind::Progress => muted_attrs.clone(),
-            };
-            let notice_start = status_text.len();
-            status_text.push_str(&notice.text);
-            let notice_end = status_text.len();
-            spans.push((notice_start..notice_end, notice_attrs));
+            // The live `/` search query follows the mode label while a search
+            // is active, showing the query text and its match position; hidden
+            // once the search is cancelled (`status.search` is `None`).
+            if let Some(ref search) = status.search {
+                if !status_text.is_empty() {
+                    let sep_start = status_text.len();
+                    status_text.push_str("  •  ");
+                    let sep_end = status_text.len();
+                    spans.push((sep_start..sep_end, muted_attrs.clone()));
+                } else {
+                    status_text.push(' ');
+                }
+
+                let query_start = status_text.len();
+                status_text.push(if search.reverse { '?' } else { '/' });
+                status_text.push_str(&search.query);
+                let query_end = status_text.len();
+                spans.push((query_start..query_end, info_attrs.clone()));
+
+                if search.match_total > 0 {
+                    let count_start = status_text.len();
+                    status_text.push_str(&format!(
+                        "  [{}/{}]",
+                        search.match_index, search.match_total
+                    ));
+                    let count_end = status_text.len();
+                    spans.push((count_start..count_end, accent_attrs.clone()));
+                } else if !search.query.is_empty() {
+                    let none_start = status_text.len();
+                    status_text.push_str("  [no matches]");
+                    let none_end = status_text.len();
+                    spans.push((none_start..none_end, error_attrs.clone()));
+                }
+            }
+
+            // A transient notice follows the mode label: red for errors, green
+            // for info confirmations (e.g. "Copied to clipboard").
+            if let Some(ref notice) = status.notice {
+                if !status_text.is_empty() {
+                    let sep_start = status_text.len();
+                    status_text.push_str("  •  ");
+                    let sep_end = status_text.len();
+                    spans.push((sep_start..sep_end, muted_attrs.clone()));
+                } else {
+                    status_text.push(' ');
+                }
+
+                let notice_attrs = match notice.kind {
+                    NoticeKind::Error => error_attrs,
+                    NoticeKind::Info => info_attrs,
+                    NoticeKind::Progress => muted_attrs.clone(),
+                };
+                let notice_start = status_text.len();
+                status_text.push_str(&notice.text);
+                let notice_end = status_text.len();
+                spans.push((notice_start..notice_end, notice_attrs));
+            }
         }
 
         // The tool's glyph sits one cell in from the right edge: the line is

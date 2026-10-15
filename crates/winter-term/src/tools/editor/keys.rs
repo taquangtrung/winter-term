@@ -160,13 +160,14 @@ impl EditorPage {
     /// comment them back in, with the file's own comment marker (`Ctrl-/`).
     /// The cursor stays on the character it was on.
     fn toggle_comment(&mut self) -> PageOutcome {
-        let marker = self.doc().syntax.and_then(|syntax| {
-            match (syntax.line_comment(), syntax.block()) {
-                (Some(open), _) => Some(Marker::Line(open)),
-                (None, Some((open, close))) => Some(Marker::Block(open, close)),
-                (None, None) => None,
-            }
-        });
+        let marker =
+            self.doc()
+                .syntax
+                .and_then(|syntax| match (syntax.line_comment(), syntax.block()) {
+                    (Some(open), _) => Some(Marker::Line(open)),
+                    (None, Some((open, close))) => Some(Marker::Block(open, close)),
+                    (None, None) => None,
+                });
         let Some(marker) = marker else {
             self.modal
                 .set_message("no comment marker known for this file".to_string());
@@ -185,7 +186,8 @@ impl EditorPage {
         let shift = after[row - first].chars().count() as isize
             - before[row - first].chars().count() as isize;
         let col = (col as isize + shift).max(0) as usize;
-        self.buffer_mut().replace_rows(first, last - first + 1, after);
+        self.buffer_mut()
+            .replace_rows(first, last - first + 1, after);
         match self.modal.is_typing() {
             true => self.buffer_mut().move_to_typing(row, col),
             false => self.buffer_mut().move_to(row, col),

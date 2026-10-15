@@ -141,7 +141,11 @@ impl Session {
     /// image needs to take its program over (see [`Pane::hand_over`]) and what
     /// its screen shows. The caller then replaces the process image.
     #[cfg(unix)]
-    pub fn save_handover(layout: &Layout, panes: &HashMap<TabId, Terminal>, tools: Vec<ToolSession>) {
+    pub fn save_handover(
+        layout: &Layout,
+        panes: &HashMap<TabId, Terminal>,
+        tools: Vec<ToolSession>,
+    ) {
         let mut session = Self::capture(layout, panes, tools);
         for entry in &mut session.panes {
             let Some(tab) = panes.get(&TabId(entry.id as u64)) else {
@@ -191,7 +195,9 @@ impl Session {
     }
 
     fn capture(layout: &Layout, panes: &HashMap<TabId, Terminal>, tools: Vec<ToolSession>) -> Self {
-        let kept = |id: TabId| panes.contains_key(&id) || tools.iter().any(|tool| tool.id == id.0 as usize);
+        let kept = |id: TabId| {
+            panes.contains_key(&id) || tools.iter().any(|tool| tool.id == id.0 as usize)
+        };
         let tree = layout.export_tree().retain(&kept);
         let pane_sessions: Vec<PaneSession> = panes
             .iter()
@@ -385,7 +391,10 @@ mod tests {
         };
         let json = serde_json::to_string_pretty(&session).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
-        assert_eq!(restored.tools, session.tools, "the tool tab comes back where it was");
+        assert_eq!(
+            restored.tools, session.tools,
+            "the tool tab comes back where it was"
+        );
         assert_eq!(restored.focused, 1);
         assert_eq!(restored.panes.len(), 2);
         assert_eq!(restored.panes[0].command.as_deref(), Some("/bin/bash"));

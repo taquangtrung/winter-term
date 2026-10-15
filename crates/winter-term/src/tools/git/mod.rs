@@ -25,9 +25,10 @@ use std::time::{Duration, Instant};
 use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    find_match, row_height, row_text, wheel_scroll, window_anchor, wrap_window, CommandOutput, JobReply, JobRequest, OpenTarget,
-    Page, PageContent, PageHint, PageIcon, PageMenuItem, PageOutcome, PageSpan, PageStyle,
-    PickQuestion, PromptMode, PromptReply, PromptRequest, SpawnRequest,
+    find_match, row_height, row_text, wheel_scroll, window_anchor, wrap_window, CommandOutput,
+    JobReply, JobRequest, OpenTarget, Page, PageContent, PageHint, PageIcon, PageMenuItem,
+    PageNotice, PageOutcome, PageSpan, PageStyle, PickQuestion, PromptMode, PromptReply,
+    PromptRequest, SpawnRequest,
 };
 use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
 use crate::tools::refresh::RefreshTimer;
@@ -417,33 +418,30 @@ impl GitPage {
     }
 
     /// Remember `query` and move to the first row holding it.
-    fn search_for(&mut self, query: &str) {
+    fn search_for(&mut self, query: &str) -> PageOutcome {
         self.search = query.to_string();
-        self.search_step(true);
+        self.search_step(true)
     }
 
     /// Move to the next row matching the last search, in whichever view is up:
     /// one query serves the status and the output it opens.
-    fn search_step(&mut self, forward: bool) {
+    fn search_step(&mut self, forward: bool) -> PageOutcome {
         if self.search.is_empty() {
-            self.message = Some("no search".to_string());
-            self.rebuild();
-            return;
+            return PageOutcome::Notice(PageNotice::error("no search"));
         }
         if let Some(output) = self.output.as_mut() {
             if let Some(index) = find_match(&output.lines, &self.search, output.cursor, forward) {
                 output.cursor = index;
-                return;
+                return PageOutcome::Consumed;
             }
         } else {
             let labels: Vec<String> = self.rows.iter().map(|row| row_text(&row.spans)).collect();
             if let Some(index) = find_match(&labels, &self.search, self.cursor, forward) {
                 self.cursor = index;
-                return;
+                return PageOutcome::Consumed;
             }
         }
-        self.message = Some(format!("not found: {}", self.search));
-        self.rebuild();
+        PageOutcome::Notice(PageNotice::error(format!("not found: {}", self.search)))
     }
 
     /// The next or previous section heading in the direction of `forward`,
@@ -614,7 +612,11 @@ impl GitPage {
             self.message = Some(format!("nothing to {verb} in this section"));
             return PageOutcome::Consumed;
         }
-        let from = match self.line_mark.take().and_then(|mark| self.hunk_line_at(mark)) {
+        let from = match self
+            .line_mark
+            .take()
+            .and_then(|mark| self.hunk_line_at(mark))
+        {
             Some((marked, at)) if marked == hunk => at,
             _ => here,
         };
@@ -625,7 +627,8 @@ impl GitPage {
         let (Some(root), Some(diff)) = (self.root.as_ref(), self.diffs.get(&file)) else {
             return PageOutcome::Consumed;
         };
-        let Some(patch) = diff.patch_for_lines(hunk.index, from.min(here)..=from.max(here), unstage)
+        let Some(patch) =
+            diff.patch_for_lines(hunk.index, from.min(here)..=from.max(here), unstage)
         else {
             self.message = Some("no change on those lines".to_string());
             return PageOutcome::Consumed;
@@ -915,14 +918,8 @@ impl GitPage {
         }
         match key.code {
             KeyCode::Char('/') => Some(self.ask(ASK_SEARCH, "/")),
-            KeyCode::Char('n') => {
-                self.search_step(true);
-                Some(PageOutcome::Consumed)
-            }
-            KeyCode::Char('N') => {
-                self.search_step(false);
-                Some(PageOutcome::Consumed)
-            }
+            KeyCode::Char('n') => Some(self.search_step(true)),
+            KeyCode::Char('N') => Some(self.search_step(false)),
             _ => None,
         }
     }
@@ -1674,7 +1671,9 @@ impl Page for GitPage {
 
     /// The repository, as the `Repo:` row writes it.
     fn address(&self) -> Option<String> {
-        self.root.as_deref().map(crate::model::path::abbreviate_home)
+        self.root
+            .as_deref()
+            .map(crate::model::path::abbreviate_home)
     }
 
     fn on_scroll(&mut self, lines: isize) -> PageOutcome {
@@ -1710,15 +1709,10 @@ impl Page for GitPage {
             let anchor = window_anchor(self.wheel, self.scroll, output.cursor, visible);
             let window = wrap_window(self.scroll, anchor, output.lines.len(), visible, height);
             self.scroll = window.start;
-            let mut header = vec![
+            let header = vec![
                 PageSpan::new(PageStyle::Header, output.title.clone()),
                 PageSpan::new(PageStyle::Dim, "  q to go back".to_string()),
             ];
-            // The status header is not on screen here, so what a command
-            // reported has to be said in this one or not at all.
-            if let Some(message) = &self.message {
-                header.push(PageSpan::new(PageStyle::Dim, format!("  {message}")));
-            }
             let mut painted = vec![header];
             let mut wrap_indents = vec![0];
             let mut icons: Vec<PageIcon> = Vec::new();
@@ -1978,8 +1972,7 @@ impl Page for GitPage {
         // A search is the one question that asks nothing of git, so it is
         // answered before the repository is required.
         if reply.tag == ASK_SEARCH {
-            self.search_for(&answer);
-            return PageOutcome::Consumed;
+            return self.search_for(&answer);
         }
         let Some(root) = self.root.clone() else {
             return PageOutcome::Consumed;
@@ -2023,6 +2016,14 @@ impl Page for GitPage {
             ASK_WORKTREE_ADD => PageOutcome::Job(exec::worktree_add(&root, &answer)),
             ASK_WORKTREE_REMOVE => PageOutcome::Job(exec::worktree_remove(&root, &answer)),
             _ => PageOutcome::Consumed,
+        }
+    }
+
+    fn on_prompt_input(&mut self, query: &str, tag: &'static str) -> PageOutcome {
+        if tag == ASK_SEARCH && !query.is_empty() {
+            self.search_for(query)
+        } else {
+            PageOutcome::Ignored
         }
     }
 
@@ -2095,7 +2096,9 @@ impl Page for GitPage {
         if self.staged_only {
             return None;
         }
-        Some(OpenTarget::file(self.root.clone().unwrap_or_else(|| self.start.clone())))
+        Some(OpenTarget::file(
+            self.root.clone().unwrap_or_else(|| self.start.clone()),
+        ))
     }
 
     fn cwd(&self) -> Option<PathBuf> {
@@ -2498,7 +2501,8 @@ mod tests {
         let mut page = GitPage::new(PathBuf::from("/not-a-repo"));
         page.on_job(JobReply::Command(CommandOutput {
             code: Some(128),
-            stderr: "fatal: not a git repository (or any of the parent directories): .git".to_string(),
+            stderr: "fatal: not a git repository (or any of the parent directories): .git"
+                .to_string(),
             stdout: String::new(),
             tag: exec::TAG_ROOT,
         }));
@@ -2522,7 +2526,12 @@ mod tests {
             tag: exec::TAG_STATUS,
         }));
         let content = page.content(24, 80, false);
-        let text: String = content.rows.iter().flatten().map(|s| s.text.as_str()).collect();
+        let text: String = content
+            .rows
+            .iter()
+            .flatten()
+            .map(|s| s.text.as_str())
+            .collect();
         assert!(text.contains("command timed out after 15s"), "{text}");
         assert!(!text.contains(LOADING));
     }
@@ -2547,7 +2556,10 @@ mod tests {
         page.content(8, 80, false);
         page.on_key(&press_char('j'));
         let shown = page.content(8, 80, false);
-        assert_eq!(page.scroll, page.cursor, "a key reveals the cursor at the edge");
+        assert_eq!(
+            page.scroll, page.cursor,
+            "a key reveals the cursor at the edge"
+        );
         assert!(shown.cursor_line.is_some());
     }
 
@@ -2573,7 +2585,11 @@ mod tests {
         let command = command_of(&page.on_key(&press(KeyCode::Char('t'))));
         assert_eq!(command.args, ["checkout", "--theirs", "--", "fought.rs"]);
         let next = command_of(&page.on_job(reply(exec::TAG_RESOLVE, "")));
-        assert_eq!(next.args, ["add", "--", "fought.rs"], "staging marks it resolved");
+        assert_eq!(
+            next.args,
+            ["add", "--", "fought.rs"],
+            "staging marks it resolved"
+        );
     }
 
     #[test]
@@ -3170,8 +3186,14 @@ index aaa..bbb 100644
         let command = command_of(&page.on_key(&alt_s));
         let patch = command.stdin.clone().expect("the patch");
         assert!(patch.contains("@@ -1,2 +1,1 @@"), "recounted: {patch}");
-        assert!(patch.contains("\n-    old();\n"), "the chosen removal: {patch}");
-        assert!(!patch.contains("new();"), "the unchosen addition is dropped: {patch}");
+        assert!(
+            patch.contains("\n-    old();\n"),
+            "the chosen removal: {patch}"
+        );
+        assert!(
+            !patch.contains("new();"),
+            "the unchosen addition is dropped: {patch}"
+        );
     }
 
     #[test]
@@ -3186,7 +3208,10 @@ index aaa..bbb 100644
             ..press(KeyCode::Char('s'))
         };
         let patch = command_of(&page.on_key(&alt_s)).stdin.expect("the patch");
-        assert!(patch.contains("-    old();\n+    new();"), "both lines: {patch}");
+        assert!(
+            patch.contains("-    old();\n+    new();"),
+            "both lines: {patch}"
+        );
         assert_eq!(page.line_mark, None, "the mark is spent");
     }
 
@@ -3316,7 +3341,7 @@ index aaa..bbb 100644
     }
 
     /// Ask for `text` through the search prompt, the way a key does.
-    fn search(page: &mut GitPage, text: &str) {
+    fn search(page: &mut GitPage, text: &str) -> PageOutcome {
         let outcome = page.on_key(&press_char('/'));
         let PageOutcome::Prompt(request) = outcome else {
             panic!("expected a prompt, got {outcome:?}");
@@ -3325,7 +3350,7 @@ index aaa..bbb 100644
         page.on_prompt(PromptReply {
             answer: Some(text.to_string()),
             tag: request.tag,
-        });
+        })
     }
 
     fn row_under_cursor(page: &GitPage) -> String {
@@ -4547,11 +4572,21 @@ index aaa..bbb 100644
     #[test]
     fn test_a_search_that_finds_nothing_reports_it_instead_of_going_quiet() {
         let mut page = loaded_page();
-        page.on_key(&press_char('n'));
-        assert_eq!(page.message.as_deref(), Some("no search"));
+        let outcome = page.on_key(&press_char('n'));
+        assert_eq!(outcome, PageOutcome::Notice(PageNotice::error("no search")));
 
-        search(&mut page, "absent");
-        assert_eq!(page.message.as_deref(), Some("not found: absent"));
+        let outcome = search(&mut page, "absent");
+        assert_eq!(
+            outcome,
+            PageOutcome::Notice(PageNotice::error("not found: absent"))
+        );
+
+        let content = page.content(24, 80, false);
+        let found = content.rows.iter().any(|r| {
+            let row_str: String = r.iter().map(|s| s.text.as_str()).collect();
+            row_str.contains("not found: absent") || row_str.contains("no search")
+        });
+        assert!(!found, "notices must be routed to status bar, not printed into git view rows");
     }
 
     #[test]
@@ -4559,8 +4594,11 @@ index aaa..bbb 100644
         // Every other question needs a repository and is dropped without one,
         // which would swallow a search the user typed while the status loaded.
         let mut page = GitPage::new(PathBuf::from("/repo"));
-        search(&mut page, "anything");
-        assert_eq!(page.message.as_deref(), Some("not found: anything"));
+        let outcome = search(&mut page, "anything");
+        assert_eq!(
+            outcome,
+            PageOutcome::Notice(PageNotice::error("not found: anything"))
+        );
     }
 
     #[test]

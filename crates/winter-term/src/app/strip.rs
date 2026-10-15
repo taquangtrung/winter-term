@@ -1,7 +1,7 @@
 //! The strip of tabs along the top of every pane: where each tab sits on it,
 //! what a click there lands on, and the pane area left below it.
 
-use crate::model::layout::{GroupArea, TabId, Rect};
+use crate::model::layout::{GroupArea, Rect, TabId};
 
 use super::App;
 
@@ -518,7 +518,10 @@ mod tests {
         app.pointer.cursor_pos = (strip0.x + 30.0, strip0.y + 10.0);
         let frames = app.strip_frames(viewport, (10.0, 20.0));
         let frame0 = frames.iter().find(|f| f.tabs[0].tab_id == tab0.0).unwrap();
-        assert!(frame0.tabs[0].dragging, "dragged tab should be marked dragging");
+        assert!(
+            frame0.tabs[0].dragging,
+            "dragged tab should be marked dragging"
+        );
         assert!(
             frame0.drop_target.indicator_x.is_some(),
             "strip being hovered should show insertion indicator"
@@ -541,5 +544,36 @@ mod tests {
             frame1.drop_target.indicator_x.is_some(),
             "target pane strip should show insertion indicator at the end"
         );
+    }
+
+    #[test]
+    fn test_move_tab_in_direction_moves_tab_to_adjacent_pane() {
+        let mut app = App::new();
+        let tab0 = app.layout().focused();
+        // Split vertically (tab0 on left, tab1 on right)
+        app.split_pane(crate::model::layout::Direction::Vertical);
+        let tab1 = app.layout().focused();
+        assert_ne!(tab0, tab1);
+        assert_eq!(app.layout().panes().len(), 2);
+
+        // Focus left pane (tab0) and add another tab (tab2) to tab0's pane
+        app.layout_mut().focus(tab0);
+        app.new_tab();
+        let tab2 = app.layout().focused();
+        assert_ne!(tab2, tab0);
+        assert_eq!(app.layout().group_members(tab2), vec![tab0, tab2]);
+
+        // Move current tab (tab2) to the right pane
+        app.move_tab_in_direction(crate::model::layout::FocusDir::Right);
+        // tab2 is now in tab1's group
+        assert_eq!(app.layout().group_members(tab2), vec![tab1, tab2]);
+        assert_eq!(app.layout().group_members(tab0), vec![tab0]);
+        assert_eq!(app.layout().focused(), tab2);
+
+        // Move tab2 back to the left pane
+        app.move_tab_in_direction(crate::model::layout::FocusDir::Left);
+        assert_eq!(app.layout().group_members(tab2), vec![tab0, tab2]);
+        assert_eq!(app.layout().group_members(tab1), vec![tab1]);
+        assert_eq!(app.layout().focused(), tab2);
     }
 }

@@ -6,9 +6,10 @@ use base64::Engine;
 use serde_json::Value;
 
 use crate::config::IconStyle;
-use crate::model::layout::{TabId, Rect};
+use crate::model::input::PendingPrefix;
+use crate::model::layout::{Rect, TabId};
 use crate::model::mode::Mode;
-use crate::model::page::{wrap_start, wrapped_lines, PageContent, PageIcon, PageStyle, PromptMode};
+use crate::model::page::{wrap_start, wrapped_lines, PageContent, PageIcon, PageStyle};
 use crate::model::palette::{Palette, PaletteMode};
 use crate::model::settings_page::{Control, SettingsField, SettingsPage};
 use crate::terminal::block_queue::{BlockEntry, BlockKind};
@@ -18,10 +19,10 @@ use winter_core::winter_proto::EmitBlock;
 use winter_render::renderer::{PaneRect, PaneView};
 use winter_render::{
     Color, CursorShape, Grid, ImagePlacement, PaletteItem, PaletteView, RgbColor, StatusNotice,
-    StatusSearch, Style, Theme, ThemeRgb,
+    StatusPrompt, StatusSearch, Style, Theme, ThemeRgb,
 };
 
-use super::{page, status_bar, App, ImageBlock, ReflowSource};
+use super::{status_bar, App, ImageBlock, ReflowSource};
 
 /// Base texture ID for rasterized pane tab strips (below chrome overlay IDs).
 const PANE_STRIP_TEXTURE_BASE: u64 = u64::MAX - 200;
@@ -207,6 +208,8 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                     blink_phase,
                     selection.filter(|s| s.tab == *id),
                     page_cursors.get(id).copied(),
+                    &overlays.search_matches[i],
+                    &overlays.search_current[i],
                 ));
             }
         } else if let Some(pane) = panes.get(id) {
@@ -356,6 +359,7 @@ impl PaneCaret {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn page_pane_view<'a>(
     paint: &'a PagePaint,
     grid: &'a Grid,
@@ -366,6 +370,8 @@ fn page_pane_view<'a>(
     blink_phase: bool,
     selection: Option<&'a super::Selection>,
     text_cursor: Option<PaneCaret>,
+    search_matches: &'a [(usize, usize)],
+    search_current: &'a [(usize, usize)],
 ) -> PaneView<'a> {
     let (sel_tuple, sel_block) = match selection {
         Some(s) => (
@@ -414,8 +420,8 @@ fn page_pane_view<'a>(
         rect: App::layout_rect_to_pane(rect),
         scroll_offset: 0,
         scrollback_len: 0,
-        search_matches: &[],
-        search_current: &[],
+        search_matches,
+        search_current,
         sentence_spans: &[],
         selection: sel_tuple,
         selection_block: sel_block,
@@ -672,6 +678,46 @@ fn which_key_view(
 // ========================================================================
 
 impl App {
+    /// The interactive prompt currently keyed into the status bar, if any.
+    pub(crate) fn active_status_prompt(&self) -> Option<StatusPrompt> {
+        if let Some(prompt) = self.page_prompt.as_ref() {
+            let label = prompt.request.label.trim_end().to_string();
+            let label =
+                if label.ends_with(':') || label.ends_with('?') || label == "/" || label == "?" {
+                    format!("{label} ")
+                } else {
+                    format!("{label}: ")
+                };
+            return Some(StatusPrompt {
+                caret: prompt.field.col(),
+                label,
+                value: prompt.field.text().to_string(),
+            });
+        }
+        if let Some(input) = self.theme_name_input.as_ref() {
+            return Some(StatusPrompt {
+                caret: input.col(),
+                label: "New theme name: ".to_string(),
+                value: input.text().to_string(),
+            });
+        }
+        if self.pending == PendingPrefix::SearchInput {
+            let query = self.search.query.clone().unwrap_or_default();
+            let label = if self.search.reverse {
+                "?".to_string()
+            } else {
+                "/".to_string()
+            };
+            let caret = query.chars().count();
+            return Some(StatusPrompt {
+                caret,
+                label,
+                value: query,
+            });
+        }
+        None
+    }
+
     pub(crate) fn render_frame(&mut self) {
         // What is about to be drawn is the current state, so the pending-repaint
         // flag is spent here. Clearing it at the top rather than the bottom keeps
@@ -685,22 +731,11 @@ impl App {
             return;
         }
 
-        // Questions are asked in the dialog over the middle of the window, so
-        // the status bar is left to say what it has to say.
         let notice = self.active_notice().map(|(text, kind)| StatusNotice {
             kind,
             text: text.to_string(),
         });
-        // A tool's question, or the one the app asks for a new theme's name:
-        // both are a line typed in answer to a label, and both are read in
-        // the same place.
-        let input_view = self.input_view().or_else(|| {
-            self.theme_name_input
-                .as_ref()
-                .map(|input| {
-                    page::input_dialog("New theme name", input.text(), input.col(), PromptMode::Text)
-                })
-        });
+        let prompt = self.active_status_prompt();
         // A live `/` search forces the status bar on for its duration even if
         // it's configured hidden: it's the only place search feedback (query
         // text, match position) is shown, so there'd otherwise be nowhere to
@@ -728,7 +763,6 @@ impl App {
         let focused = self.tabs.layout.focused();
         let strip_frames = self.strip_frames(viewport, (cw, ch));
         let mode = self.modes.get(&focused).copied().unwrap_or_default();
-        let overlays = self.build_pane_overlays(&rects, renderer.theme());
         // Pages paint themselves into a grid of their own, so the renderer
         // draws a tool pane through exactly the path a terminal pane takes. A
         // page is handed its row count first, so it can window a listing longer
@@ -762,17 +796,37 @@ impl App {
                 tab: *id,
             });
         }
+        let overlays = self.build_pane_overlays(&rects, renderer.theme());
         let hovered_pane = self.hovered_pane(&rects);
-        let search = self.search.query.as_ref().map(|q| StatusSearch {
-            query: q.clone(),
-            match_index: self.search.match_index,
-            match_total: self.search.match_total,
-            reverse: self.search.reverse,
-        });
+        let search = self
+            .search
+            .query
+            .as_ref()
+            .map(|q| StatusSearch {
+                query: q.clone(),
+                match_index: self.search.match_index,
+                match_total: self.search.match_total,
+                reverse: self.search.reverse,
+            })
+            .or_else(|| {
+                self.page_prompt.as_ref().and_then(|p| {
+                    if p.request.tag == "search" || p.request.tag == "search-back" {
+                        Some(StatusSearch {
+                            query: p.field.text().to_string(),
+                            match_index: self.search.match_index,
+                            match_total: self.search.match_total,
+                            reverse: p.request.tag == "search-back",
+                        })
+                    } else {
+                        None
+                    }
+                })
+            });
         let tool_icon = self.pages.get(&focused).and_then(|slot| slot.status_icon());
         let status = status_bar(
             mode,
             renderer.theme(),
+            prompt,
             search,
             notice,
             &self.config.status_bar,
@@ -842,8 +896,13 @@ impl App {
             return;
         };
         reflow_width_wrapped_blocks(&mut self.image_blocks, &rects, renderer);
-        let mut placements =
-            image_placements(&self.image_blocks, &self.terminals, &rects, ch, &page_paints);
+        let mut placements = image_placements(
+            &self.image_blocks,
+            &self.terminals,
+            &rects,
+            ch,
+            &page_paints,
+        );
         placements.extend(icon_placements);
         for (i, frame) in strip_frames.iter().enumerate() {
             placements.push(renderer.rasterize_pane_strip(
@@ -872,7 +931,7 @@ impl App {
             page_cursors: &page_cursors,
             page_paints: &page_paints,
             pages: &self.pages,
-            overlay_open: self.palette.is_some() || input_view.is_some(),
+            overlay_open: self.palette.is_some(),
             panes: &self.terminals,
             rects: &rects,
             selection: self.selection.span.as_ref(),
@@ -884,7 +943,7 @@ impl App {
             Some(&tabbar),
             &placements,
             palette_view.as_ref(),
-            input_view.as_ref(),
+            None,
             toast.as_ref(),
             which_key_view.as_ref(),
         );
@@ -958,14 +1017,38 @@ impl App {
 
         // Precompute search match cell positions per pane so PaneView can borrow
         // them as slices. Built before the view loop to satisfy the borrow checker.
-        let query_str = self.search.query.as_deref().filter(|q| !q.is_empty());
+        let page_search_query = self.page_prompt.as_ref().and_then(|p| {
+            if p.request.tag == "search" || p.request.tag == "search-back" {
+                let text = p.field.text();
+                if !text.is_empty() {
+                    Some(text)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        });
+        let query_str = self
+            .search
+            .query
+            .as_deref()
+            .filter(|q| !q.is_empty())
+            .or(page_search_query);
         let search_match_data: Vec<Vec<(usize, usize)>> = rects
             .iter()
-            .map(|(id, _)| match (query_str, self.terminals.get(id)) {
-                (Some(qs), Some(pane)) => {
-                    crate::app::navigation::search::visible_match_cells(pane.grid(), qs)
+            .map(|(id, _)| {
+                let grid = self
+                    .terminals
+                    .get(id)
+                    .map(|pane| pane.grid())
+                    .or_else(|| self.pages.get(id).and_then(|slot| slot.painted.as_ref()));
+                match (query_str, grid) {
+                    (Some(qs), Some(grid)) => {
+                        crate::app::navigation::search::visible_match_cells(grid, qs)
+                    }
+                    _ => vec![],
                 }
-                _ => vec![],
             })
             .collect();
         // The focused match's cells, drawn in a different color than the rest.
@@ -973,10 +1056,14 @@ impl App {
         // sits on is actually on screen.
         let search_current_data: Vec<Vec<(usize, usize)>> = rects
             .iter()
-            .map(
-                |(id, _)| match (query_str, self.search.current, self.terminals.get(id)) {
-                    (Some(qs), Some((tab_id, (abs_row, col))), Some(pane)) if tab_id == *id => {
-                        let grid = pane.grid();
+            .map(|(id, _)| {
+                let grid = self
+                    .terminals
+                    .get(id)
+                    .map(|pane| pane.grid())
+                    .or_else(|| self.pages.get(id).and_then(|slot| slot.painted.as_ref()));
+                match (query_str, self.search.current, grid) {
+                    (Some(qs), Some((tab_id, (abs_row, col))), Some(grid)) if tab_id == *id => {
                         let top = grid.to_absolute_row(0);
                         if abs_row >= top && abs_row < top + grid.rows() {
                             let len = qs.chars().count().max(1);
@@ -986,8 +1073,8 @@ impl App {
                         }
                     }
                     _ => vec![],
-                },
-            )
+                }
+            })
             .collect();
 
         let sentence_span_data = if self.config.sentence_highlight {
@@ -1207,9 +1294,7 @@ impl App {
         }
         for message in self.webview_mgr.drain_surface_messages() {
             match message {
-                SurfaceMessage::Key(relayed) => {
-                    self.route_surface_key(relayed.tab_id, relayed.key)
-                }
+                SurfaceMessage::Key(relayed) => self.route_surface_key(relayed.tab_id, relayed.key),
                 SurfaceMessage::Text(said) => {
                     let Some(slot) = self.pages.get_mut(&said.tab_id) else {
                         continue;
@@ -1614,8 +1699,7 @@ impl App {
                 block.abs_row = block.abs_row.saturating_add_signed(delta);
             }
         }
-        self.webview_mgr
-            .shift_tiles_at_or_below(tab_id, row, delta);
+        self.webview_mgr.shift_tiles_at_or_below(tab_id, row, delta);
     }
 
     pub(crate) fn update_live_tiles(&mut self, patched: &[(TabId, usize)]) {
@@ -1708,11 +1792,10 @@ impl App {
         let ch = renderer.cell_size().1;
 
         for report in self.webview_mgr.drain_height_reports() {
-            let Some((abs_row, reserved_rows)) = self.webview_mgr.tile_band(
-                report.tab_id,
-                report.block_index,
-                report.segment_index,
-            ) else {
+            let Some((abs_row, reserved_rows)) =
+                self.webview_mgr
+                    .tile_band(report.tab_id, report.block_index, report.segment_index)
+            else {
                 continue;
             };
             // Grow-only, like a live block: a WebView re-reports its height on
@@ -1988,12 +2071,22 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
             ..Style::default()
         },
         PageStyle::Added => Style {
-            background: git_band(theme, theme.git.inserted_line, ANSI_GREEN, PAGE_DIFF_LINE_MIX),
+            background: git_band(
+                theme,
+                theme.git.inserted_line,
+                ANSI_GREEN,
+                PAGE_DIFF_LINE_MIX,
+            ),
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
         PageStyle::AddedEdit => Style {
-            background: git_band(theme, theme.git.inserted_text, ANSI_GREEN, PAGE_DIFF_EDIT_MIX),
+            background: git_band(
+                theme,
+                theme.git.inserted_text,
+                ANSI_GREEN,
+                PAGE_DIFF_EDIT_MIX,
+            ),
             bold: true,
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
@@ -2037,12 +2130,8 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // which section without the row shouting.
         PageStyle::HeadingConflict => heading_style(theme, None, ANSI_RED),
         PageStyle::HeadingStaged => heading_style(theme, theme.git.header_staged, ANSI_CYAN),
-        PageStyle::HeadingUnstaged => {
-            heading_style(theme, theme.git.header_unstaged, ANSI_YELLOW)
-        }
-        PageStyle::HeadingUntracked => {
-            heading_style(theme, theme.git.header_untracked, ANSI_GREEN)
-        }
+        PageStyle::HeadingUnstaged => heading_style(theme, theme.git.header_unstaged, ANSI_YELLOW),
+        PageStyle::HeadingUntracked => heading_style(theme, theme.git.header_untracked, ANSI_GREEN),
         // Everything else a git view heads a block with — the recent commits,
         // a log's title, and the labels the header block is read down — is
         // blue, which is where magic-vscode's grammar sends every heading it
@@ -2815,6 +2904,8 @@ mod tests {
                 true,
                 None,
                 caret,
+                &[],
+                &[],
             );
             (view.cursor_unfocused, view.cursor_shape)
         };
@@ -2852,18 +2943,39 @@ mod tests {
         let caret = Some(PaneCaret::at(0, 1));
         let mut config = crate::config::Config::default();
         let shown = |config: &crate::config::Config, focused, phase, caret| {
-            page_pane_view(&paint, &grid, rect, focused, true, config, phase, None, caret)
-                .nav_cursor_visible
+            page_pane_view(
+                &paint,
+                &grid,
+                rect,
+                focused,
+                true,
+                config,
+                phase,
+                None,
+                caret,
+                &[],
+                &[],
+            )
+            .nav_cursor_visible
         };
 
         assert!(config.cursor.blink, "blinking is the default");
         assert!(shown(&config, true, true, caret), "on phase");
         assert!(!shown(&config, true, false, caret), "off phase");
-        assert!(shown(&config, false, false, caret), "hollow outline holds steady");
-        assert!(!shown(&config, true, true, None), "no caret, nothing to show");
+        assert!(
+            shown(&config, false, false, caret),
+            "hollow outline holds steady"
+        );
+        assert!(
+            !shown(&config, true, true, None),
+            "no caret, nothing to show"
+        );
 
         config.cursor.blink = false;
-        assert!(shown(&config, true, false, caret), "steady when blink is off");
+        assert!(
+            shown(&config, true, false, caret),
+            "steady when blink is off"
+        );
     }
 
     #[test]

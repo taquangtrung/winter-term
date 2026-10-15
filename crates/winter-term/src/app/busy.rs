@@ -74,7 +74,11 @@ impl App {
         self.spinning = spinning;
         self.spinner_frame = frame;
         match self.spinning.is_empty() {
-            true => self.busy_since.values().min().map(|since| *since + SPINNER_DELAY),
+            true => self
+                .busy_since
+                .values()
+                .min()
+                .map(|since| *since + SPINNER_DELAY),
             false => Some(now + SPINNER_FRAME),
         }
     }
@@ -120,6 +124,9 @@ mod tests {
         assert_eq!(app.strip_title(tab), title);
         app.spinning.insert(tab);
         app.spinner_frame = 2;
-        assert_eq!(app.strip_title(tab), format!("{} {title}", spinner_glyph(2)));
+        assert_eq!(
+            app.strip_title(tab),
+            format!("{} {title}", spinner_glyph(2))
+        );
     }
 }

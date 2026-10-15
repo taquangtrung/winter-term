@@ -114,8 +114,16 @@ mod tests {
         assert_eq!(recall.newer(given), None, "nothing newer before the walk");
         assert_eq!(recall.older(given, "draf").as_deref(), Some("alpha"));
         assert_eq!(recall.older(given, "alpha").as_deref(), Some("beta"));
-        assert_eq!(recall.older(given, "beta"), None, "nothing older than the oldest");
+        assert_eq!(
+            recall.older(given, "beta"),
+            None,
+            "nothing older than the oldest"
+        );
         assert_eq!(recall.newer(given).as_deref(), Some("alpha"));
-        assert_eq!(recall.newer(given).as_deref(), Some("draf"), "back to the draft");
+        assert_eq!(
+            recall.newer(given).as_deref(),
+            Some("draf"),
+            "back to the draft"
+        );
     }
 }

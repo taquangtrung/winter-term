@@ -29,9 +29,9 @@ use std::time::{Instant, SystemTime};
 use crate::model::input::CursorMove;
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    find_match, row_height, row_text, wheel_scroll, window_anchor, wrap_window, JobReply, JobRequest, OpenTarget, Page,
-    PageContent, PageIcon, PageMenuItem, PageOutcome, PageSpan, PageStyle, PageWindow,
-    PickQuestion, PromptMode, PromptReply, PromptRequest,
+    find_match, row_height, row_text, wheel_scroll, window_anchor, wrap_window, JobReply,
+    JobRequest, OpenTarget, Page, PageContent, PageIcon, PageMenuItem, PageNotice, PageOutcome,
+    PageSpan, PageStyle, PageWindow, PickQuestion, PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::path::{abbreviate_home, format_full_path, normalize_path};
 use crate::model::textedit::field::TextField;
@@ -623,17 +623,17 @@ impl DirPage {
     }
 
     /// Remember `query` and move to the first entry whose name holds it.
-    fn search_for(&mut self, query: &str) {
+    fn search_for(&mut self, query: &str) -> PageOutcome {
         self.search = query.to_string();
-        self.search_step(true);
+        self.search_step(true)
     }
 
     /// Move to the next entry matching the last search, or report that there is
     /// nothing to move to: a listing that silently stays put looks broken.
-    fn search_step(&mut self, forward: bool) {
+    fn search_step(&mut self, forward: bool) -> PageOutcome {
         if self.search.is_empty() {
             self.message = Some("no search".to_string());
-            return;
+            return PageOutcome::Notice(PageNotice::error("no search"));
         }
         let names: Vec<&str> = self
             .rows
@@ -641,8 +641,15 @@ impl DirPage {
             .map(|row| row.entry.name.as_str())
             .collect();
         match find_match(&names, &self.search, self.cursor, forward) {
-            Some(index) => self.cursor = index,
-            None => self.message = Some(format!("not found: {}", self.search)),
+            Some(index) => {
+                self.cursor = index;
+                PageOutcome::Consumed
+            }
+            None => {
+                let text = format!("not found: {}", self.search);
+                self.message = Some(text.clone());
+                PageOutcome::Notice(PageNotice::error(text))
+            }
         }
     }
 
@@ -1053,7 +1060,7 @@ impl Page for DirPage {
         match reply.answer {
             // A search moves the cursor and nothing else, so it must not clear
             // the marks or re-read the listing the way an operation does.
-            Some(answer) if reply.tag == ASK_SEARCH => self.search_for(&answer),
+            Some(answer) if reply.tag == ASK_SEARCH => return self.search_for(&answer),
             Some(_) if reply.tag == ASK_APPLY_EDITS => {
                 return match self.rename_plan.take() {
                     Some(plan) => self.run_renames(plan),
@@ -1069,6 +1076,14 @@ impl Page for DirPage {
             None => self.message = Some("cancelled".to_string()),
         }
         PageOutcome::Consumed
+    }
+
+    fn on_prompt_input(&mut self, query: &str, tag: &'static str) -> PageOutcome {
+        if tag == ASK_SEARCH && !query.is_empty() {
+            self.search_for(query)
+        } else {
+            PageOutcome::Ignored
+        }
     }
 
     fn title(&self) -> String {
@@ -1233,14 +1248,8 @@ impl Page for DirPage {
                 PageOutcome::Consumed
             }
             KeyCode::Char('/') => self.ask(ASK_SEARCH, "/".to_string(), String::new()),
-            KeyCode::Char('n') => {
-                self.search_step(true);
-                PageOutcome::Consumed
-            }
-            KeyCode::Char('N') => {
-                self.search_step(false);
-                PageOutcome::Consumed
-            }
+            KeyCode::Char('n') => self.search_step(true),
+            KeyCode::Char('N') => self.search_step(false),
             KeyCode::Char('.') => {
                 self.show_hidden = !self.show_hidden;
                 self.reload_keeping_selection();
@@ -1634,7 +1643,11 @@ impl DirPage {
         if renames.len() == 1 {
             return self.run_renames(renames);
         }
-        let label = format!("Rename {} entries: {}? (y/n) ", renames.len(), rename_summary(&renames));
+        let label = format!(
+            "Rename {} entries: {}? (y/n) ",
+            renames.len(),
+            rename_summary(&renames)
+        );
         self.rename_plan = Some(renames);
         self.confirm(ASK_APPLY_EDITS, label)
     }
@@ -2969,7 +2982,10 @@ mod tests {
         page.on_key(&press(KeyCode::Escape));
         assert!(page.edit.is_some(), "the second is inert");
         assert_eq!(
-            page.edit.as_ref().and_then(|e| e.lines().first()).map(String::as_str),
+            page.edit
+                .as_ref()
+                .and_then(|e| e.lines().first())
+                .map(String::as_str),
             Some("base.txt2")
         );
     }
@@ -2989,9 +3005,16 @@ mod tests {
         let PageOutcome::Prompt(request) = &outcome else {
             panic!("expected a prompt, got {outcome:?}");
         };
-        assert_eq!(request.initial, format!("{}/", beside.display()), "the pane beside, not this one");
+        assert_eq!(
+            request.initial,
+            format!("{}/", beside.display()),
+            "the pane beside, not this one"
+        );
         answer(&mut page, outcome.clone(), &request.initial.clone());
-        assert!(beside.join("report.txt").exists(), "copied into it under its own name");
+        assert!(
+            beside.join("report.txt").exists(),
+            "copied into it under its own name"
+        );
         assert!(tree.path("report.txt").exists());
     }
 
@@ -3009,11 +3032,21 @@ mod tests {
             page.on_key(&press(KeyCode::Escape));
         }
         let outcome = page.on_key(&press(KeyCode::Char('Z')));
-        assert_eq!(outcome, PageOutcome::Consumed, "fixture: the first half of ZZ");
+        assert_eq!(
+            outcome,
+            PageOutcome::Consumed,
+            "fixture: the first half of ZZ"
+        );
         let outcome = page.on_key(&press(KeyCode::Char('Z')));
         answer(&mut page, outcome, "y");
-        assert_eq!(fs::read_to_string(tree.path("left.txt")).expect("read"), "R");
-        assert_eq!(fs::read_to_string(tree.path("right.txt")).expect("read"), "L");
+        assert_eq!(
+            fs::read_to_string(tree.path("left.txt")).expect("read"),
+            "R"
+        );
+        assert_eq!(
+            fs::read_to_string(tree.path("right.txt")).expect("read"),
+            "L"
+        );
     }
 
     #[test]

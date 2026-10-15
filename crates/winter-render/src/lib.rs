@@ -23,13 +23,13 @@ pub use grid::{
 pub use image::ImagePlacement;
 pub use renderer::{
     start_font_load, FontConfig, FontLoad, InputView, NoticeKind, PaletteItem, PaletteView,
-    PaneRect, PaneView, StatusBar, StatusNotice, StatusSearch, WhichKeyView,
+    PaneRect, PaneView, StatusBar, StatusNotice, StatusPrompt, StatusSearch, WhichKeyView,
 };
 pub use screen::Screen;
 pub use tabbar::{
-    hit_test, hit_test_pane_strip, layout_pane_strip, tabbar_rows, ContextMenu, ControlsSide,
-    Menu, MenuItem, MenuStyle, PaneStripDropTarget, PaneStripEdges, PaneStripHit, PaneStripLayout, PaneTab, Region, TabLabel,
-    TabbarHit, TopTabbar,
+    hit_test, hit_test_pane_strip, layout_pane_strip, tabbar_rows, ContextMenu, ControlsSide, Menu,
+    MenuItem, MenuStyle, PaneStripDropTarget, PaneStripEdges, PaneStripHit, PaneStripLayout,
+    PaneTab, Region, TabLabel, TabbarHit, TopTabbar,
 };
 pub use theme::{GitColors, Rgb as ThemeRgb, SyntaxColors, Theme};
 

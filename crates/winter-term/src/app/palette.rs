@@ -307,7 +307,10 @@ impl App {
                     Some((name, command)) => {
                         // Start where the user is: the focused pane's OSC 7
                         // cwd, when the shell has reported one.
-                        let cwd = self.terminals.get(&focused).and_then(|terminal| terminal.cwd());
+                        let cwd = self
+                            .terminals
+                            .get(&focused)
+                            .and_then(|terminal| terminal.cwd());
                         self.spawn_mux_tab_at(
                             &crate::mux::server::default_socket_path(),
                             &name,

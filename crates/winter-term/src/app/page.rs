@@ -6,7 +6,7 @@ use std::time::{Instant, SystemTime};
 
 use crate::control::EditWaiter;
 use crate::model::input::{self, Key, KeyCode};
-use crate::model::layout::{Direction, LayoutTree, TabId, Rect};
+use crate::model::layout::{Direction, LayoutTree, Rect, TabId};
 use crate::model::mode::Mode;
 use crate::model::page::{
     OpenTarget, Page, PageOutcome, PagePoint, PromptMode, PromptReply, PromptRequest,
@@ -26,6 +26,7 @@ use crate::tools::proc::ProcPage;
 use crate::tools::reltime;
 use crate::tools::sys::SysPage;
 use winter_render::Grid;
+#[cfg(test)]
 use winter_render::InputView;
 
 use super::{App, SPLIT_RATIO};
@@ -103,9 +104,9 @@ const NOTHING_CLOSED: &str = "no tool has been closed to reopen";
 /// which is the one way a list drawn a moment ago can be out of date.
 const GONE_FROM_LIST: &str = "that tool is no longer there to reopen";
 
-/// How each kind of question is answered, said under the input: a dialog
-/// taking one key has to name it, and a line has to say what ends it.
+#[cfg(test)]
 const HINT_CONFIRM: &str = "y to confirm, any other key to cancel";
+#[cfg(test)]
 const HINT_TEXT: &str = "Enter to accept, Esc to cancel";
 
 /// The glyph each tool shows at the status bar's right edge. One
@@ -128,12 +129,12 @@ const TOOL_ICONS: [(&str, char); 8] = [
 /// A question a page asked, and the answer being typed for it.
 pub(crate) struct ActivePrompt {
     /// What has been typed, edited with the same keys as any other text.
-    field: TextField,
+    pub(crate) field: TextField,
     /// How far the arrow keys have walked back through earlier answers.
-    recall: Recall,
+    pub(crate) recall: Recall,
     /// The tab that asked.
     pub(crate) tab: TabId,
-    request: PromptRequest,
+    pub(crate) request: PromptRequest,
 }
 
 /// The page question the palette is standing in for while it shows a list of
@@ -423,6 +424,7 @@ fn recall_step(key: &Key) -> Option<bool> {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn input_dialog(label: &str, input: &str, caret: usize, mode: PromptMode) -> InputView {
     InputView {
         caret,
@@ -476,8 +478,9 @@ impl App {
     pub(crate) fn open_git_page(&mut self) {
         let start = self.focused_start_dir();
         let matches_repo = |page: &dyn Page| {
-            page.root_dir()
-                .is_some_and(|root| start == root || start.starts_with(&root) || root.starts_with(&start))
+            page.root_dir().is_some_and(|root| {
+                start == root || start.starts_with(&root) || root.starts_with(&start)
+            })
         };
         if self.toggle_tool_matching(GIT_TOOL, &matches_repo) {
             return;
@@ -1307,6 +1310,11 @@ impl App {
                 };
                 if let Some(text) = recalled {
                     prompt.field.set_text(&text);
+                    self.prompt_debounce = Some((
+                        std::time::Instant::now()
+                            + std::time::Duration::from_millis(super::SEARCH_DEBOUNCE_MILLIS),
+                        prompt.tab,
+                    ));
                 }
                 None
             }
@@ -1314,18 +1322,43 @@ impl App {
             // same Emacs keys a file does while typing.
             (PromptMode::Text, _) => match prompt.field.on_key(key, 1) {
                 EditOutcome::Submit => {
+                    self.prompt_debounce = None;
                     let answer = prompt.field.text().to_string();
                     self.prompt_answers.record(prompt.request.tag, &answer);
                     Some(Some(answer))
                 }
-                EditOutcome::Cancel => Some(None),
-                _ => None,
+                EditOutcome::Cancel => {
+                    self.prompt_debounce = None;
+                    Some(None)
+                }
+                outcome => {
+                    if outcome != EditOutcome::Ignored {
+                        self.prompt_debounce = Some((
+                            std::time::Instant::now()
+                                + std::time::Duration::from_millis(super::SEARCH_DEBOUNCE_MILLIS),
+                            prompt.tab,
+                        ));
+                    }
+                    None
+                }
             },
         };
         self.dirty = true;
+        if answer.is_none() {
+            if let Some(prompt) = self.page_prompt.as_ref() {
+                if prompt.request.tag == "search" || prompt.request.tag == "search-back" {
+                    let tab = prompt.tab;
+                    self.update_search_preview(tab);
+                }
+            }
+        }
         let Some(answer) = answer else {
             return;
         };
+        self.search.match_index = 0;
+        self.search.match_total = 0;
+        self.search.current = None;
+        self.prompt_debounce = None;
         let Some(prompt) = self.page_prompt.take() else {
             return;
         };
@@ -1365,6 +1398,7 @@ impl App {
     }
 
     /// What the open prompt shows: its question, then what has been typed.
+    #[cfg(test)]
     pub(crate) fn input_view(&self) -> Option<InputView> {
         let prompt = self.page_prompt.as_ref()?;
         Some(input_dialog(
@@ -1410,6 +1444,10 @@ impl App {
             }
             PageOutcome::Job(request) => {
                 self.jobs.spawn(tab_id, request);
+                true
+            }
+            PageOutcome::Notice(notice) => {
+                self.show_notice(notice.text, notice.kind);
                 true
             }
             PageOutcome::Spawn(request) => {
@@ -1681,10 +1719,7 @@ mod tests {
         assert!(app.pages.is_empty());
         assert_eq!(app.layout().members(), vec![terminal]);
         assert_eq!(app.modes.get(&terminal).copied(), Some(Mode::Normal));
-        assert!(
-            !app.modes.contains_key(&tab),
-            "the page's tab is forgotten"
-        );
+        assert!(!app.modes.contains_key(&tab), "the page's tab is forgotten");
     }
 
     /// Put `claimed` keys into the page covering `pane`, which is what makes
@@ -2133,10 +2168,7 @@ mod tests {
             app.pages.get(&editor).map(|slot| slot.tool),
             Some(EDITOR_TOOL)
         );
-        let diff = *app
-            .commit_companions
-            .get(&editor)
-            .expect("a tab beside it");
+        let diff = *app.commit_companions.get(&editor).expect("a tab beside it");
         assert_eq!(app.pages.get(&diff).map(|slot| slot.tool), Some(GIT_TOOL));
         assert_eq!(
             app.layout().members().len(),
@@ -2692,7 +2724,11 @@ mod tests {
         };
         app.handle_prompt_key(&ctrl('a'));
         app.handle_prompt_key(&press(KeyCode::Char('>')));
-        assert_eq!(app.input_view().map(|view| view.caret), Some(1), "the caret is mid-line");
+        assert_eq!(
+            app.input_view().map(|view| view.caret),
+            Some(1),
+            "the caret is mid-line"
+        );
         app.handle_prompt_key(&ctrl('k'));
         app.handle_prompt_key(&ctrl('y'));
         app.handle_prompt_key(&press(KeyCode::Enter));
@@ -2714,9 +2750,15 @@ mod tests {
 
         let mut fresh = App::new();
         for tool in &saved {
-            assert!(fresh.restore_tool(TabId(100 + tool.id as u64), tool), "{tool:?}");
+            assert!(
+                fresh.restore_tool(TabId(100 + tool.id as u64), tool),
+                "{tool:?}"
+            );
         }
-        let editor = saved.iter().find(|tool| tool.kind == EDITOR_TOOL).expect("the editor");
+        let editor = saved
+            .iter()
+            .find(|tool| tool.kind == EDITOR_TOOL)
+            .expect("the editor");
         assert_eq!(editor.line, Some(3), "at the line it was on");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2734,7 +2776,10 @@ mod tests {
         let mut app = App::new();
         assert!(!app.jobs.is_busy());
         assert!(app.restore_tool(TabId(7), &tool));
-        assert!(app.jobs.is_busy(), "its first read is under way, not awaited");
+        assert!(
+            app.jobs.is_busy(),
+            "its first read is under way, not awaited"
+        );
 
         let dir_tool = ToolSession {
             kind: DIR_TOOL.to_string(),
@@ -2764,7 +2809,10 @@ mod tests {
             Some("seed!")
         );
         app.handle_prompt_key(&press(KeyCode::Down));
-        assert_eq!(app.input_view().and_then(|view| view.input).as_deref(), Some(""));
+        assert_eq!(
+            app.input_view().and_then(|view| view.input).as_deref(),
+            Some("")
+        );
         app.handle_prompt_key(&press(KeyCode::Up));
         app.handle_prompt_key(&press(KeyCode::Enter));
         assert_eq!(heard.borrow().len(), 2);

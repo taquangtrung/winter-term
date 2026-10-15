@@ -100,6 +100,18 @@ pub struct PaneView<'a> {
     /// Controlled by the `url-underline` config option.
     pub url_underline: bool,
 }
+/// An active interactive prompt keyed into the status bar: the label (e.g.
+/// `"/"`, `"Search: "`, `"Filter: "`), the typed value, and the caret index.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StatusPrompt {
+    /// How many Unicode characters sit before the caret.
+    pub caret: usize,
+    /// The prompt prefix or question, e.g. `"/"` or `"Filter: "`.
+    pub label: String,
+    /// What has been typed so far.
+    pub value: String,
+}
+
 /// A Vim-style bottom status bar: the `label` (e.g. " NORMAL ") is drawn over a
 /// segment filled with `accent`, atop a full-width strip in the theme's status
 /// colors. Occupies the bottom-most cell row of the surface.
@@ -108,12 +120,14 @@ pub struct StatusBar {
     pub accent: Rgb,
     /// The mode label drawn over `accent`, e.g. `" NORMAL "`.
     pub mode: String,
-    /// The in-progress or last-run `/` search query, shown after the mode
-    /// label while a search is active and cleared once it's cancelled.
-    pub search: Option<StatusSearch>,
     /// A transient notice (an error or an info confirmation), shown after the
     /// mode label until it expires.
     pub notice: Option<StatusNotice>,
+    /// The active interactive prompt being typed into the status bar, if any.
+    pub prompt: Option<StatusPrompt>,
+    /// The in-progress or last-run `/` search query, shown after the mode
+    /// label while a search is active and cleared once it's cancelled.
+    pub search: Option<StatusSearch>,
     /// A glyph for the tool that owns the keyboard, drawn at the bar's right
     /// edge.
     pub tool_icon: Option<char>,

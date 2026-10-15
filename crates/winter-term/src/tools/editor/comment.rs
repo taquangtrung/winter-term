@@ -23,7 +23,10 @@ pub(super) enum Marker {
 /// goes in at the shallowest indent of the lines it covers, so a commented
 /// block keeps its shape.
 pub(super) fn toggle(lines: &[String], marker: Marker) -> Vec<String> {
-    let filled: Vec<&String> = lines.iter().filter(|line| !line.trim().is_empty()).collect();
+    let filled: Vec<&String> = lines
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
     if filled.is_empty() {
         return lines.to_vec();
     }
@@ -67,7 +70,9 @@ fn uncommented(line: &str, marker: Marker) -> String {
     let text = line.trim_start();
     let lead = &line[..line.len() - text.len()];
     let inner = match marker {
-        Marker::Line(open) => text.strip_prefix(open).map(|rest| rest.strip_prefix(' ').unwrap_or(rest)),
+        Marker::Line(open) => text
+            .strip_prefix(open)
+            .map(|rest| rest.strip_prefix(' ').unwrap_or(rest)),
         Marker::Block(open, close) => text
             .trim_end()
             .strip_prefix(open)
@@ -99,14 +104,20 @@ mod tests {
     fn test_lines_comment_at_their_shallowest_indent_and_come_back_unchanged() {
         let code = lines(&["    if x {", "", "        y();", "    }"]);
         let out = toggle(&code, Marker::Line("//"));
-        assert_eq!(out, lines(&["    // if x {", "", "    //     y();", "    // }"]));
+        assert_eq!(
+            out,
+            lines(&["    // if x {", "", "    //     y();", "    // }"])
+        );
         assert_eq!(toggle(&out, Marker::Line("//")), code, "and back again");
     }
 
     #[test]
     fn test_a_mix_of_commented_and_plain_lines_comments_them_all() {
         let mixed = lines(&["# done", "todo"]);
-        assert_eq!(toggle(&mixed, Marker::Line("#")), lines(&["# # done", "# todo"]));
+        assert_eq!(
+            toggle(&mixed, Marker::Line("#")),
+            lines(&["# # done", "# todo"])
+        );
     }
 
     #[test]

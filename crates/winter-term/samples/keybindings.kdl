@@ -54,6 +54,12 @@ window {
     "M+k" "focus_up"
     "M+l" "focus_right"
 
+    // Move the current tab to an adjacent pane.
+    "M+g M+h" "move_tab_left"
+    "M+g M+j" "move_tab_down"
+    "M+g M+k" "move_tab_up"
+    "M+g M+l" "move_tab_right"
+
     // Scroll the terminal screen.
     "S+M+h" "scroll_page_up"
     "S+M+l" "scroll_page_down"

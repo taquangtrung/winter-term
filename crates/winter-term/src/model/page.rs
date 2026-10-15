@@ -4,6 +4,8 @@
 use std::path::PathBuf;
 use std::time::Instant;
 
+pub use winter_render::NoticeKind;
+
 use super::input::Key;
 use super::process::ProcessSample;
 use super::system::SystemSample;
@@ -315,6 +317,33 @@ pub struct SpawnRequest {
     pub program: String,
 }
 
+/// A transient message for the shared status bar (or floating notice fallback).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PageNotice {
+    /// Visual style of the notice (error or info confirmation).
+    pub kind: NoticeKind,
+    /// The message to display.
+    pub text: String,
+}
+
+impl PageNotice {
+    /// Create an error notice (red in status bar).
+    pub fn error(text: impl Into<String>) -> Self {
+        Self {
+            kind: NoticeKind::Error,
+            text: text.into(),
+        }
+    }
+
+    /// Create an informational confirmation notice (green/accent in status bar).
+    pub fn info(text: impl Into<String>) -> Self {
+        Self {
+            kind: NoticeKind::Info,
+            text: text.into(),
+        }
+    }
+}
+
 /// What a page is asking the host to read from the user.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PromptRequest {
@@ -449,6 +478,8 @@ pub enum PageOutcome {
     CancelJobs,
     /// The page asks the host to do slow work for it.
     Job(JobRequest),
+    /// The page asks the host to show a transient notice in the status bar.
+    Notice(PageNotice),
     /// The page asks the host to read an answer from the user.
     Prompt(PromptRequest),
     /// The page asks the host to have the user choose from a list, rather
@@ -830,6 +861,12 @@ pub trait Page {
     /// ask never implement it.
     fn on_prompt(&mut self, _reply: PromptReply) -> PageOutcome {
         PageOutcome::Consumed
+    }
+
+    /// Hand back intermediate, debounced changes to what has been typed into an
+    /// open prompt, allowing pages to perform iterative search or live filtering.
+    fn on_prompt_input(&mut self, _query: &str, _tag: &'static str) -> PageOutcome {
+        PageOutcome::Ignored
     }
 
     /// Hand back the result of work the page asked for.

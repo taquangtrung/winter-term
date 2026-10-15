@@ -63,6 +63,7 @@
 //! // a two-chord binding sets the leader (default `C+w`). Actions:
 //! // split_vertical, split_horizontal, close_pane, close_other_panes,
 //! // focus_left, focus_down, focus_up, focus_right, toggle_pane_zoom,
+//! // move_tab_left, move_tab_down, move_tab_up, move_tab_right,
 //! // prev_tab, next_tab, new_tab, close_tab, close_other_tabs, copy_selection,
 //! // paste_from_clipboard, open_settings, font_increase, font_decrease,
 //! // font_reset, toggle_command_palette, toggle_history_palette,
@@ -111,7 +112,9 @@ pub(crate) use title::{
 use std::collections::HashMap;
 
 use winter_core::winter_proto::TrustTier;
-use winter_render::{ControlsSide, CursorShape, GitColors, MenuStyle, SyntaxColors, Theme, ThemeRgb};
+use winter_render::{
+    ControlsSide, CursorShape, GitColors, MenuStyle, SyntaxColors, Theme, ThemeRgb,
+};
 
 // ========================================================================
 // Data Structures
@@ -635,11 +638,9 @@ impl Config {
 
         let status_bar = kdl
             .status_bar
-            .map(|sb| {
-                StatusBarConfig {
-                    enabled: sb.show.unwrap_or(true),
-                    show_mode: sb.show_mode.unwrap_or(false),
-                }
+            .map(|sb| StatusBarConfig {
+                enabled: sb.show.unwrap_or(true),
+                show_mode: sb.show_mode.unwrap_or(false),
             })
             .unwrap_or_default();
 
@@ -886,8 +887,12 @@ impl Config {
         let any = scalars.iter().any(|(_, v)| v.is_some())
             || c.ansi.iter().any(Option::is_some)
             || c.brights.iter().any(Option::is_some)
-            || GitColors::NAMES.iter().any(|name| c.git.get(name).is_some())
-            || SyntaxColors::NAMES.iter().any(|name| c.syntax.get(name).is_some())
+            || GitColors::NAMES
+                .iter()
+                .any(|name| c.git.get(name).is_some())
+            || SyntaxColors::NAMES
+                .iter()
+                .any(|name| c.syntax.get(name).is_some())
             || !c.indexed.is_empty();
         if !any {
             return None;
@@ -1516,24 +1521,52 @@ cursor {
         let mut config = Config::default();
         config.colors.background = ThemeRgb::parse_hex("#00000080");
         config.colors.selection_bg = ThemeRgb::parse_hex("#ffffff80");
-        config.colors.git.set("file-band", ThemeRgb::parse_hex("#ff000000"));
-        config.colors.syntax.set("comment", ThemeRgb::parse_hex("#11223380"));
+        config
+            .colors
+            .git
+            .set("file-band", ThemeRgb::parse_hex("#ff000000"));
+        config
+            .colors
+            .syntax
+            .set("comment", ThemeRgb::parse_hex("#11223380"));
 
         let mut theme = Theme::dark();
         config.colors.apply(&mut theme);
         assert_eq!(theme.background_alpha, 0x80, "the window shows through");
         assert_eq!(theme.background, ThemeRgb::new(0, 0, 0));
         assert_eq!(theme.selection_bg, ThemeRgb::new(128, 128, 128));
-        assert_eq!(theme.git.file_band, ThemeRgb::parse_hex("#ff000000"), "kept as written");
+        assert_eq!(
+            theme.git.file_band,
+            ThemeRgb::parse_hex("#ff000000"),
+            "kept as written"
+        );
         assert!(theme.selection_bg.is_opaque());
-        assert_eq!(theme.git.hunk_band, Theme::dark().git.hunk_band, "unset keeps the preset's");
+        assert_eq!(
+            theme.git.hunk_band,
+            Theme::dark().git.hunk_band,
+            "unset keeps the preset's"
+        );
 
         let parsed = Config::parse(&config.to_kdl());
         assert_eq!(parsed.colors.selection_bg, ThemeRgb::parse_hex("#ffffff80"));
-        assert_eq!(parsed.colors.git.get("file-band"), ThemeRgb::parse_hex("#ff000000"));
-        assert_eq!(parsed.colors.syntax.get("comment"), ThemeRgb::parse_hex("#11223380"));
-        assert_eq!(theme.syntax.comment, ThemeRgb::parse_hex("#11223380"), "kept as written");
-        assert_eq!(theme.syntax.string, Theme::dark().syntax.string, "unset keeps the preset's");
+        assert_eq!(
+            parsed.colors.git.get("file-band"),
+            ThemeRgb::parse_hex("#ff000000")
+        );
+        assert_eq!(
+            parsed.colors.syntax.get("comment"),
+            ThemeRgb::parse_hex("#11223380")
+        );
+        assert_eq!(
+            theme.syntax.comment,
+            ThemeRgb::parse_hex("#11223380"),
+            "kept as written"
+        );
+        assert_eq!(
+            theme.syntax.string,
+            Theme::dark().syntax.string,
+            "unset keeps the preset's"
+        );
     }
 
     #[test]

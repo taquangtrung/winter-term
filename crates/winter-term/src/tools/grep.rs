@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 
 use crate::model::input::{CursorMove, Key, KeyCode};
 use crate::model::page::{
-    row_height, row_text, wheel_scroll, window_anchor, wrap_window, JobReply, JobRequest, OpenTarget, Page, PageCaret,
-    PageContent, PageMenuItem, PageOutcome, PageRow, PageSpan, PageStyle, PromptMode, PromptReply,
-    PromptRequest, SearchHit, SearchRequest, SearchResult,
+    row_height, row_text, wheel_scroll, window_anchor, wrap_window, JobReply, JobRequest,
+    OpenTarget, Page, PageCaret, PageContent, PageMenuItem, PageOutcome, PageRow, PageSpan,
+    PageStyle, PromptMode, PromptReply, PromptRequest, SearchHit, SearchRequest, SearchResult,
 };
 use crate::model::textedit::field::TextField;
 use crate::model::textedit::modal::{EditMode, EditOutcome};
@@ -349,7 +349,10 @@ impl GrepPage {
         self.rebuild();
         let mut report = format!("wrote {} in {files} files", lines_count(written));
         if refused > 0 {
-            report.push_str(&format!(", {} changed on disk, left alone", lines_count(refused)));
+            report.push_str(&format!(
+                ", {} changed on disk, left alone",
+                lines_count(refused)
+            ));
         }
         self.message = Some(report);
         PageOutcome::Consumed
@@ -445,7 +448,10 @@ impl GrepPage {
                 EditMode::Replace => "replace",
                 EditMode::Visual => "visual",
             };
-            spans.push(PageSpan::new(PageStyle::Accent, format!("  editing:{mode}")));
+            spans.push(PageSpan::new(
+                PageStyle::Accent,
+                format!("  editing:{mode}"),
+            ));
         }
         if let Some(message) = &self.message {
             spans.push(PageSpan::new(PageStyle::Dim, format!("  {message}")));
@@ -592,6 +598,14 @@ impl Page for GrepPage {
         match reply.answer {
             Some(answer) => self.start_search(&answer),
             None => PageOutcome::Consumed,
+        }
+    }
+
+    fn on_prompt_input(&mut self, query: &str, tag: &'static str) -> PageOutcome {
+        if tag == ASK_QUERY && query.trim().len() >= 2 {
+            self.start_search(query)
+        } else {
+            PageOutcome::Consumed
         }
     }
 
@@ -819,8 +833,16 @@ mod tests {
         page.query = "thing".to_string();
         page.on_job(JobReply::Search(SearchResult {
             hits: vec![
-                SearchHit { line: 2, path: kept.clone(), text: "thing here".to_string() },
-                SearchHit { line: 1, path: moved.clone(), text: "thing".to_string() },
+                SearchHit {
+                    line: 2,
+                    path: kept.clone(),
+                    text: "thing here".to_string(),
+                },
+                SearchHit {
+                    line: 1,
+                    path: moved.clone(),
+                    text: "thing".to_string(),
+                },
             ],
             query: "thing".to_string(),
             truncated: false,
@@ -828,7 +850,10 @@ mod tests {
         // Something else rewrites one of the files after the search.
         std::fs::write(&moved, "other\n").expect("write");
 
-        let ctrl = |c| Key { ctrl: true, ..press(KeyCode::Char(c)) };
+        let ctrl = |c| Key {
+            ctrl: true,
+            ..press(KeyCode::Char(c))
+        };
         page.on_key(&ctrl('x'));
         page.on_key(&ctrl('q'));
         assert!(page.edit.is_some(), "editing");
@@ -851,7 +876,10 @@ mod tests {
         );
         assert_eq!(std::fs::read_to_string(&moved).expect("read"), "other\n");
         let message = page.message.clone().unwrap_or_default();
-        assert!(message.contains("1 line changed on disk"), "got {message:?}");
+        assert!(
+            message.contains("1 line changed on disk"),
+            "got {message:?}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

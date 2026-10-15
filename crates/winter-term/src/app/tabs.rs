@@ -3,7 +3,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::layout::{Layout, TabId};
+use crate::model::layout::{FocusDir, Layout, Rect, TabId};
 use crate::model::mode::Mode;
 use crate::terminal::session::Terminal;
 
@@ -296,6 +296,19 @@ impl App {
         }
     }
 
+    /// Move the focused tab into the neighbouring pane in the given direction.
+    pub(crate) fn move_tab_in_direction(&mut self, direction: FocusDir) {
+        if self.layout().is_zoomed() {
+            return;
+        }
+        let viewport = self.viewport_rect();
+        let layout_vp = Rect::new(viewport.x, viewport.y, viewport.width, viewport.height);
+        if let Some(target) = self.layout().pane_in_direction(direction, layout_vp) {
+            let focused = self.layout().focused();
+            self.move_tab_to_group(focused, target);
+        }
+    }
+
     // --------------------------------------------------------------------
     // Closing
     // --------------------------------------------------------------------
@@ -376,6 +389,14 @@ impl App {
         self.pages.remove(&tab);
         if self.page_prompt.as_ref().is_some_and(|p| p.tab == tab) {
             self.page_prompt = None;
+            self.prompt_debounce = None;
+        }
+        if self
+            .search_debounce
+            .as_ref()
+            .is_some_and(|(_, t)| *t == tab)
+        {
+            self.search_debounce = None;
         }
         if self.page_cursor.as_ref().is_some_and(|c| c.tab == tab) {
             self.stop_page_cursor();

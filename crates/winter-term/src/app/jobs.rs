@@ -333,8 +333,18 @@ fn run_with_timeout(
             bytes
         })
     };
-    let stdout = drain(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
-    let stderr = drain(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
+    let stdout = drain(
+        child
+            .stdout
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
+    let stderr = drain(
+        child
+            .stderr
+            .take()
+            .map(|p| Box::new(p) as Box<dyn Read + Send>),
+    );
 
     let started = Instant::now();
     loop {
@@ -410,7 +420,13 @@ fn search_with_ripgrep(request: &SearchRequest, cancel: &AtomicBool) -> Option<S
     let mut command = Command::new(RIPGREP);
     command
         .args(["--line-number", "--with-filename", "--no-heading", "--null"])
-        .args(["--color", "never", "--ignore-case", "--fixed-strings", "--hidden"])
+        .args([
+            "--color",
+            "never",
+            "--ignore-case",
+            "--fixed-strings",
+            "--hidden",
+        ])
         .args(["--sort", "path", "--no-require-git"])
         .arg(format!("--max-filesize={SEARCH_MAX_FILE_BYTES}"))
         .arg(format!("--max-depth={SEARCH_MAX_DEPTH}"));
@@ -620,7 +636,10 @@ mod tests {
         };
         let out = run_with_timeout(&slow, Duration::from_millis(100)).expect("runs");
         assert!(out.is_none(), "over the limit: no answer");
-        assert!(started.elapsed() < Duration::from_secs(5), "killed, not waited out");
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "killed, not waited out"
+        );
 
         let echo = match command("sh", &["-c", "cat; echo err >&2"]) {
             JobRequest::Command(request) => CommandRequest {
@@ -799,7 +818,11 @@ mod tests {
         let names: Vec<String> = found
             .hits
             .iter()
-            .filter_map(|hit| hit.path.file_name().map(|n| n.to_string_lossy().to_string()))
+            .filter_map(|hit| {
+                hit.path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+            })
             .collect();
         assert_eq!(names, ["kept.txt"]);
     }

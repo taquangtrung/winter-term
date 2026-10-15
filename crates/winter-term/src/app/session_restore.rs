@@ -101,7 +101,8 @@ impl App {
                 if let Some(dir) = cwd {
                     builder.cwd(dir);
                 }
-                match Terminal::with_command(cols.max(1), want_rows.max(1), builder, max_scrollback) {
+                match Terminal::with_command(cols.max(1), want_rows.max(1), builder, max_scrollback)
+                {
                     Ok(pane) => Some(pane),
                     Err(e) => {
                         self.set_error(format!(

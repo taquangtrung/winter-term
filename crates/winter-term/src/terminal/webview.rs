@@ -420,11 +420,7 @@ impl WebViewManager {
     /// A tile straddling a pane edge is clipped to the pane rather than
     /// hidden, so a block slides under the boundary the way the rows around it
     /// do instead of vanishing the moment its first line does.
-    pub fn reposition_tiles(
-        &mut self,
-        viewports: &HashMap<TabId, PaneViewport>,
-        cell_height: f32,
-    ) {
+    pub fn reposition_tiles(&mut self, viewports: &HashMap<TabId, PaneViewport>, cell_height: f32) {
         for (key, slot) in self.tiles.iter_mut() {
             let Some(viewport) = viewports.get(&key.tab_id) else {
                 slot.hide();

@@ -154,6 +154,11 @@ const CLASSIC_MENUS: &[MenuDef] = &[
             leaf("focus_down", "Focus Down", ""),
             leaf("focus_up", "Focus Up", ""),
             leaf("focus_right", "Focus Right", ""),
+            SEPARATOR,
+            leaf("move_tab_left", "Move Tab Left", ""),
+            leaf("move_tab_down", "Move Tab Down", ""),
+            leaf("move_tab_up", "Move Tab Up", ""),
+            leaf("move_tab_right", "Move Tab Right", ""),
         ],
     },
 ];

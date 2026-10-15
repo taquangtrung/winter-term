@@ -67,7 +67,8 @@ impl App {
     /// a shell's own directory decide.
     pub(crate) fn focused_start_dir(&self) -> PathBuf {
         let focused = self.layout().focused();
-        let dir = self.pages
+        let dir = self
+            .pages
             .get(&focused)
             .and_then(|slot| slot.page.cwd())
             .or_else(|| self.focused_cwd().map(PathBuf::from))

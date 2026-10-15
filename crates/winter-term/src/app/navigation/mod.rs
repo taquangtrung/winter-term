@@ -21,7 +21,7 @@ use super::FindLabel;
 use super::Selection;
 
 pub(crate) use open::resolve_existing_path;
-pub(crate) use search::SearchState;
+pub(crate) use search::{SearchFrom, SearchState};
 
 /// Label keys for the `f`/`t` jump overlay, home-row first so the common cases sit
 /// under the fingers. Lowercase only: the overlay is dismissed by anything else,
@@ -101,6 +101,12 @@ impl JumpList {
         if self.entries.len() > MAX_JUMP_LIST_LEN {
             self.entries.remove(0);
         }
+    }
+
+    /// Number of entries currently in the jumplist.
+    #[cfg(test)]
+    pub(crate) fn len(&self) -> usize {
+        self.entries.len()
     }
 
     /// The origin `Ctrl+O` lands on next, or `None` when already at the oldest
@@ -339,7 +345,10 @@ impl App {
     /// Visual anchor and the `gv` snapshot both address text.
     pub(crate) fn absolute_nav_cursor(&self, terminal: TabId) -> Option<(usize, usize)> {
         let (row, col) = self.nav_cursor(terminal)?;
-        Some((self.terminals.get(&terminal)?.grid().to_absolute_row(row), col))
+        Some((
+            self.terminals.get(&terminal)?.grid().to_absolute_row(row),
+            col,
+        ))
     }
 
     /// Record the focused pane's traversal cursor.
@@ -457,7 +466,10 @@ impl App {
                 }
             }
             _ if is_change_action(action)
-                && self.terminals.get(&focused).is_some_and(|p| p.is_at_prompt()) =>
+                && self
+                    .terminals
+                    .get(&focused)
+                    .is_some_and(|p| p.is_at_prompt()) =>
             {
                 self.vim
                     .last_changes
@@ -509,7 +521,11 @@ impl App {
         match change {
             LastChange::Action(action) => self.handle_action(action, focused),
             LastChange::Typed(run) => {
-                if self.terminals.get(&focused).is_some_and(|p| p.is_at_prompt()) {
+                if self
+                    .terminals
+                    .get(&focused)
+                    .is_some_and(|p| p.is_at_prompt())
+                {
                     if let Some(pos) = self.live_jump_position(focused) {
                         self.vim.change_lists.entry(focused).or_default().push(pos);
                     }
@@ -1126,8 +1142,10 @@ impl App {
         if abs_r1 != abs_row || abs_r2 != abs_row || c1 >= c2 {
             return;
         }
-        if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(terminal, &[nav_col, c1, c2]))
-        {
+        if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(
+            terminal,
+            &[nav_col, c1, c2],
+        )) {
             return;
         }
         if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
@@ -1162,8 +1180,10 @@ impl App {
         if abs_r1 != abs_row || abs_r2 != abs_row || c1 >= c2 {
             return;
         }
-        if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(terminal, &[nav_col, c1, c2]))
-        {
+        if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(
+            terminal,
+            &[nav_col, c1, c2],
+        )) {
             return;
         }
         let Some((open, close, _)) = vim::surround_pair_chars(replacement) else {
@@ -1784,7 +1804,8 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_lines(&["--a--", "--a--"]));
+        app.terminals
+            .insert(id, pane_with_lines(&["--a--", "--a--"]));
         app.modes.insert(id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
 
@@ -1895,7 +1916,11 @@ mod tests {
         app.config.status_bar.enabled = true;
         let id = TabId(1);
         app.terminals.insert(id, terminal);
-        assert_eq!(app.terminals[&id].grid().scrollback_len(), 1, "one line above");
+        assert_eq!(
+            app.terminals[&id].grid().scrollback_len(),
+            1,
+            "one line above"
+        );
         app.set_nav_cursor(id, (0, 0));
 
         app.move_nav_cursor(input::CursorMove::WordEndBack, id);
@@ -2673,7 +2698,8 @@ mod tests {
     fn test_select_text_object_word_in_normal_enters_visual() {
         let mut app = App::new();
         let id = app.layout().panes()[0];
-        app.terminals.insert(id, pane_with_lines(&["hello world foo"]));
+        app.terminals
+            .insert(id, pane_with_lines(&["hello world foo"]));
         app.modes.insert(id, Mode::Normal);
         app.set_nav_cursor(id, (0, 7)); // on 'o' in 'world'
 

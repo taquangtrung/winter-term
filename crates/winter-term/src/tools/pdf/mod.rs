@@ -921,6 +921,14 @@ impl Page for PdfPage {
         }
     }
 
+    fn on_prompt_input(&mut self, query: &str, tag: &'static str) -> PageOutcome {
+        if (tag == ASK_SEARCH || tag == ASK_SEARCH_BACK) && !query.is_empty() {
+            self.start_search(query.to_string(), tag == ASK_SEARCH)
+        } else {
+            PageOutcome::Consumed
+        }
+    }
+
     fn cwd(&self) -> Option<PathBuf> {
         self.path.parent().map(Path::to_path_buf)
     }

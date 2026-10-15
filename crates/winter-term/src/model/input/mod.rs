@@ -14,8 +14,8 @@ mod pending;
 mod visual;
 
 pub use insert::encode_release;
-pub(crate) use keymap::window_action_by_name;
 pub use keymap::{format_key, EditAction, EditBinding, WindowAction, WindowKeymap};
+pub(crate) use keymap::{window_action_by_name, DEFAULT_LEADER};
 pub use motion::{
     BlockNav, CursorMove, FindChar, GotoMark, InsertAt, TextObject, TextObjectSpec, VisualKind,
 };
@@ -33,7 +33,7 @@ use super::mode::Mode;
 // ========================================================================
 
 /// A decoded key event from the windowing layer.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Key {
     /// Whether Alt was held.
     pub alt: bool,
@@ -216,6 +216,8 @@ pub enum Action {
     MoveTabLeft,
     /// Move the active tab one place right.
     MoveTabRight,
+    /// Move the current tab to the neighbouring pane in the given direction.
+    MoveTabToPane(FocusDir),
     /// Open a new tab.
     NewTab,
     /// Open a new window.
@@ -539,7 +541,14 @@ pub fn resolve_with(
     is_alt_screen: bool,
 ) -> Action {
     match mode {
-        Mode::Insert => resolve_insert(key, flags, modify_other_keys, window, is_alt_screen),
+        Mode::Insert => resolve_insert(
+            key,
+            pending,
+            flags,
+            modify_other_keys,
+            window,
+            is_alt_screen,
+        ),
         Mode::Normal => resolve_normal(key, pending, window),
         Mode::Visual => resolve_visual(key, pending, window),
         Mode::BlockFocus => resolve_block_focus(key, flags, window, is_alt_screen),
@@ -631,7 +640,10 @@ mod tests {
             code: KeyCode::Char('C'),
             ..Key::with_ctrl_shift(KeyCode::Char('c'))
         };
-        assert_eq!(ctrl_shift_c.chorded(), Key::with_ctrl_shift(KeyCode::Char('c')));
+        assert_eq!(
+            ctrl_shift_c.chorded(),
+            Key::with_ctrl_shift(KeyCode::Char('c'))
+        );
         let alt_shift_q = Key {
             shift: true,
             ..Key::with_alt(KeyCode::Char('Q'))

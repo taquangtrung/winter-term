@@ -3,7 +3,7 @@
 use super::{Action, Key, KeyCode};
 use super::{
     BlockNav, CursorMove, FindChar, GotoMark, InsertAt, PendingPrefix, TextObject, TextObjectSpec,
-    VisualKind, WindowAction, WindowKeymap,
+    VisualKind, WindowAction, WindowKeymap, DEFAULT_LEADER,
 };
 use crate::model::mode::{Mode, ModeEvent};
 
@@ -219,7 +219,7 @@ fn resolve_chord(key: &Key, pending: &mut PendingPrefix, window: &WindowKeymap) 
     }
 
     // The configurable window leader opens that sequence.
-    if key == &window.leader {
+    if key == &DEFAULT_LEADER || key == &window.leader || window.has_sequence_for_leader(key) {
         *pending = PendingPrefix::CtrlW;
         return Some(Action::Ignore);
     }
@@ -1401,7 +1401,10 @@ mod tests {
             Action::ZoomPane
         );
         // Ctrl-Shift-m used to be an alternative zoom chord; it is not one now.
-        assert_ne!(resolve_simple(Mode::Normal, &ctrl_shift_m), Action::ZoomPane);
+        assert_ne!(
+            resolve_simple(Mode::Normal, &ctrl_shift_m),
+            Action::ZoomPane
+        );
     }
     #[test]
     fn test_shift_alt_o_closes_other_panes() {

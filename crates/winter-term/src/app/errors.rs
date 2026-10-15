@@ -78,7 +78,10 @@ impl App {
             at + 1,
             targets.len(),
             target.path.display(),
-            target.line.map(|line| format!(":{line}")).unwrap_or_default()
+            target
+                .line
+                .map(|line| format!(":{line}"))
+                .unwrap_or_default()
         );
         self.error_walk = Some(ErrorWalk {
             at,
@@ -156,7 +159,11 @@ note: see src/lib.rs:12:5 again, and gone.rs:4 which does not exist
 ";
         let found = references(output, dir.to_str());
         let lines: Vec<Option<usize>> = found.iter().map(|target| target.line).collect();
-        assert_eq!(lines, [Some(12), Some(3)], "in order, each once, only what exists");
+        assert_eq!(
+            lines,
+            [Some(12), Some(3)],
+            "in order, each once, only what exists"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -78,7 +78,9 @@ fn trash_root() -> Option<PathBuf> {
     let data = std::env::var_os("XDG_DATA_HOME")
         .map(PathBuf::from)
         .filter(|dir| dir.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share")))?;
+        .or_else(|| {
+            std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".local/share"))
+        })?;
     Some(data.join("Trash"))
 }
 
@@ -140,10 +142,12 @@ fn trash_info(original: &Path, now: SystemTime) -> String {
 /// `text` with every byte outside the unreserved set written `%XX`.
 fn percent_encoded(text: &str) -> String {
     text.bytes()
-        .map(|byte| match byte.is_ascii_alphanumeric() || UNRESERVED.contains(&byte) {
-            true => (byte as char).to_string(),
-            false => format!("%{byte:02X}"),
-        })
+        .map(
+            |byte| match byte.is_ascii_alphanumeric() || UNRESERVED.contains(&byte) {
+                true => (byte as char).to_string(),
+                false => format!("%{byte:02X}"),
+            },
+        )
         .collect()
 }
 
@@ -172,7 +176,11 @@ fn civil_date(days: i64) -> (i64, i64, i64) {
     let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
     let month_index = (5 * day_of_year + 2) / 153;
     let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 { month_index + 3 } else { month_index - 9 };
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
     let year = year_of_era + era * ERA_YEARS + i64::from(month <= 2);
     (year, month, day)
 }
@@ -206,7 +214,10 @@ mod tests {
             fs::read_to_string(root.join("files/my notes.txt")).expect("first"),
             "keep me"
         );
-        assert!(root.join("files/my notes 2.txt").exists(), "a second one is renamed");
+        assert!(
+            root.join("files/my notes 2.txt").exists(),
+            "a second one is renamed"
+        );
         let info = fs::read_to_string(root.join("info/my notes.txt.trashinfo")).expect("info");
         let original = percent_encoded(&doomed.to_string_lossy());
         assert!(original.contains("my%20notes.txt"), "{original}");

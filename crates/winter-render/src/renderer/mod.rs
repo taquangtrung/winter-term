@@ -20,7 +20,9 @@ mod frame;
 mod surface;
 mod view;
 
-pub use view::{NoticeKind, PaneRect, PaneView, StatusBar, StatusNotice, StatusSearch};
+pub use view::{
+    NoticeKind, PaneRect, PaneView, StatusBar, StatusNotice, StatusPrompt, StatusSearch,
+};
 mod background;
 mod chrome;
 mod colors;

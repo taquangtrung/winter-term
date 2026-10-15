@@ -28,6 +28,6 @@ pub mod keys;
 pub mod pdf;
 pub mod proc;
 pub mod refresh;
+pub mod reltime;
 pub mod run;
 pub mod sys;
-pub mod reltime;

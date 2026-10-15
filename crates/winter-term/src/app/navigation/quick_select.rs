@@ -103,7 +103,9 @@ impl App {
             let current_row = terminal.grid().cursor().0;
             if live_row > current_row {
                 if let Some(terminal) = self.terminals.get_mut(&focused) {
-                    terminal.grid_mut().scroll_up_history(live_row - current_row);
+                    terminal
+                        .grid_mut()
+                        .scroll_up_history(live_row - current_row);
                 }
             }
         } else if block_start > 0 || diff > 0 {

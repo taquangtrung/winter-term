@@ -106,8 +106,14 @@ fn watch_git_head() {
     };
     let git_dir = Path::new(&git_dir);
     println!("cargo:rerun-if-changed={}", git_dir.join("HEAD").display());
-    println!("cargo:rerun-if-changed={}", git_dir.join("packed-refs").display());
-    println!("cargo:rerun-if-changed={}", git_dir.join("refs/tags").display());
+    println!(
+        "cargo:rerun-if-changed={}",
+        git_dir.join("packed-refs").display()
+    );
+    println!(
+        "cargo:rerun-if-changed={}",
+        git_dir.join("refs/tags").display()
+    );
     if let Some(branch) = git(&["symbolic-ref", "-q", "HEAD"]) {
         println!("cargo:rerun-if-changed={}", git_dir.join(branch).display());
     }

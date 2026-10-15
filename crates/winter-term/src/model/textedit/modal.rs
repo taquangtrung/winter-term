@@ -40,9 +40,21 @@ const NUMBERED_REGISTERS: [char; 9] = ['1', '2', '3', '4', '5', '6', '7', '8', '
 const GOTO: &[(char, Goto, &str)] = &[
     ('b', Goto::Buffers, "list the open files"),
     ('g', Goto::Motion(CursorMove::Top), "the first line"),
-    ('e', Goto::Motion(CursorMove::WordEndBack), "the end of the word before"),
-    ('E', Goto::Motion(CursorMove::WordEndBackBig), "the end of the WORD before"),
-    ('_', Goto::Motion(CursorMove::LastNonBlank), "the last character with ink on it"),
+    (
+        'e',
+        Goto::Motion(CursorMove::WordEndBack),
+        "the end of the word before",
+    ),
+    (
+        'E',
+        Goto::Motion(CursorMove::WordEndBackBig),
+        "the end of the WORD before",
+    ),
+    (
+        '_',
+        Goto::Motion(CursorMove::LastNonBlank),
+        "the last character with ink on it",
+    ),
 ];
 
 /// The `z` placements of the cursor's line in the view.
@@ -57,6 +69,9 @@ const LEAVE: &[(char, bool, &str)] = &[
     ('Z', true, "write and close"),
     ('Q', false, "close, discarding edits"),
 ];
+
+/// What is said when an edit key is pressed in a read-only buffer.
+const READ_ONLY_MESSAGE: &str = "buffer is read-only";
 
 // ========================================================================
 // Data Structures
@@ -176,6 +191,8 @@ pub struct ModalEditor {
     operator: Option<Operator>,
     /// A command part-way through being typed, waiting on its next key.
     pending: Option<Pending>,
+    /// Whether this editor rejects edits because its text is read-only.
+    read_only: bool,
     /// The keys of the command being typed, as they are pressed.
     record: Vec<Key>,
     /// The register the next command reads or writes, from a `"` prefix.
@@ -380,10 +397,35 @@ impl ModalEditor {
         }
     }
 
+    /// An engine for read-only text: motions and yanks work, but edits are
+    /// rejected.
+    pub fn read_only() -> Self {
+        Self {
+            read_only: true,
+            ..Self::default()
+        }
+    }
+
     /// The same engine, starting in `mode`.
     pub fn with_mode(mut self, mode: EditMode) -> Self {
         self.mode = mode;
         self
+    }
+
+    /// Mark this engine as read-only or writable.
+    pub fn with_read_only(mut self, read_only: bool) -> Self {
+        self.read_only = read_only;
+        self
+    }
+
+    /// Set whether this engine rejects edits because the text is read-only.
+    pub fn set_read_only(&mut self, read_only: bool) {
+        self.read_only = read_only;
+    }
+
+    /// Whether this engine rejects edits because the text is read-only.
+    pub fn is_read_only(&self) -> bool {
+        self.read_only
     }
 
     /// Which mode has the keyboard.
@@ -452,15 +494,23 @@ impl ModalEditor {
                 ("\" ' ` ( [ {", "what they hold".to_string()),
             ],
             Pending::Register => vec![
-                ("<letter>", "use that register, or append to it in capitals".to_string()),
-                ("0 or 1-9", "the last yank, the last big deletes".to_string()),
+                (
+                    "<letter>",
+                    "use that register, or append to it in capitals".to_string(),
+                ),
+                (
+                    "0 or 1-9",
+                    "the last yank, the last big deletes".to_string(),
+                ),
                 ("-", "the last small delete".to_string()),
                 ("_", "the black hole, which keeps nothing".to_string()),
                 ("+", "the system clipboard".to_string()),
             ],
             Pending::Replace => vec![("<char>", "replace with it".to_string())],
             Pending::Scroll => {
-                return Some(table_hint(SCROLL.iter().map(|(key, _, what)| (*key, *what))));
+                return Some(table_hint(
+                    SCROLL.iter().map(|(key, _, what)| (*key, *what)),
+                ));
             }
         };
         Some(
@@ -570,6 +620,10 @@ impl ModalEditor {
     /// Put text the host read out of the clipboard in at the cursor: the
     /// answer to an [`EditOutcome::Paste`], and what a pasted chord brings.
     pub fn paste_text(&mut self, view: EditView<'_>, text: String) {
+        if self.read_only {
+            self.message = Some(READ_ONLY_MESSAGE.to_string());
+            return;
+        }
         Session::new(self, view).paste_text(text);
     }
 }
@@ -684,6 +738,18 @@ impl Session<'_> {
             self.ed.count = None;
             self.ed.register = None;
             return EditOutcome::Consumed;
+        }
+        if self.ed.read_only {
+            match key.code {
+                KeyCode::Char(
+                    'i' | 'a' | 'I' | 'A' | 'o' | 'O' | 'R' | 's' | 'S' | 'x' | 'X' | 'C' | 'D'
+                    | 'r' | '~' | 'J' | 'p' | 'P' | 'u' | '.' | 'd' | 'c' | '>' | '<',
+                ) => {
+                    self.ed.message = Some(READ_ONLY_MESSAGE.to_string());
+                    return EditOutcome::Consumed;
+                }
+                _ => {}
+            }
         }
         match key.code {
             KeyCode::Char('i') => self.enter_insert(),
@@ -839,6 +905,10 @@ impl Session<'_> {
 
     /// The Ctrl chords: saving, redo, the number keys, and the paging motions.
     fn on_ctrl_key(&mut self, key: &Key) -> EditOutcome {
+        if self.ed.read_only && matches!(key.code, KeyCode::Char('s' | 'r' | 'a' | 'x')) {
+            self.ed.message = Some(READ_ONLY_MESSAGE.to_string());
+            return EditOutcome::Consumed;
+        }
         match key.code {
             KeyCode::Char('s') => EditOutcome::Save,
             KeyCode::Char('r') => {
@@ -1100,8 +1170,10 @@ impl Session<'_> {
         let Some(older) = self.ed.kills.yank_pop() else {
             return;
         };
-        self.buffer_mut().take_between(yanked.start, yanked.end, false);
-        self.buffer_mut().move_to_typing(yanked.start.0, yanked.start.1);
+        self.buffer_mut()
+            .take_between(yanked.start, yanked.end, false);
+        self.buffer_mut()
+            .move_to_typing(yanked.start.0, yanked.start.1);
         self.buffer_mut().set_register(older);
         self.put_yank();
     }
@@ -1127,8 +1199,12 @@ impl Session<'_> {
                 if typed.is_empty() {
                     return;
                 }
-                let candidates =
-                    completion_candidates(self.buffer().lines(), (row, start), &typed, self.view.others);
+                let candidates = completion_candidates(
+                    self.buffer().lines(),
+                    (row, start),
+                    &typed,
+                    self.view.others,
+                );
                 if candidates.is_empty() {
                     self.ed.message = Some(format!("nothing completes `{typed}`"));
                     return;
@@ -1237,6 +1313,15 @@ impl Session<'_> {
         let Some(selection) = self.selection() else {
             return self.leave_visual();
         };
+        if self.ed.read_only {
+            match key.code {
+                KeyCode::Char('d' | 'x' | 'c' | 's' | '>' | '<' | 'J' | '~' | 'p' | 'P' | 'r') => {
+                    self.ed.message = Some(READ_ONLY_MESSAGE.to_string());
+                    return EditOutcome::Consumed;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Escape | KeyCode::Char('q') => self.leave_visual(),
             KeyCode::Char('v') => match selection.linewise {
@@ -1709,7 +1794,8 @@ impl Session<'_> {
             // reaches to the line's end, not into the next line, and not one
             // short of the last character.
             let here = (self.buffer().row(), self.buffer().col());
-            let last_word = count == 1 && next_word_start(&self.buffer().chars(), here.1, big).is_none();
+            let last_word =
+                count == 1 && next_word_start(&self.buffer().chars(), here.1, big).is_none();
             if last_word || to.0 != here.0 {
                 to = (here.0, self.buffer().line_len());
                 inclusive = false;
@@ -1855,7 +1941,9 @@ impl Session<'_> {
                             self.ed.registers.insert(pair[1], older);
                         }
                     }
-                    self.ed.registers.insert(NUMBERED_REGISTERS[0], taken.clone());
+                    self.ed
+                        .registers
+                        .insert(NUMBERED_REGISTERS[0], taken.clone());
                 } else {
                     self.ed.registers.insert('-', taken.clone());
                 }
@@ -2049,7 +2137,9 @@ impl Session<'_> {
             // The scroll placements move the window rather than the cursor,
             // so they are the view's to answer, not the text's.
             CursorMove::LineToTop => *self.view.scroll = row,
-            CursorMove::LineToCenter => *self.view.scroll = row.saturating_sub(viewport / HALF_PAGE),
+            CursorMove::LineToCenter => {
+                *self.view.scroll = row.saturating_sub(viewport / HALF_PAGE)
+            }
             CursorMove::LineToBottom => {
                 *self.view.scroll = row.saturating_sub(viewport.saturating_sub(1));
             }
@@ -2185,7 +2275,10 @@ fn completion_candidates(
             .map(str::to_string)
             .collect()
     };
-    let line: Vec<char> = lines.get(row).map(|l| l.chars().collect()).unwrap_or_default();
+    let line: Vec<char> = lines
+        .get(row)
+        .map(|l| l.chars().collect())
+        .unwrap_or_default();
     let before: String = line[..col.min(line.len())].iter().collect();
     let after: String = line[col.min(line.len())..].iter().collect();
     let mut found: Vec<String> = Vec::new();
@@ -2402,7 +2495,8 @@ mod tests {
 
         // A motion between kills starts a new entry, and `M-y` reaches back
         // past it to the run before.
-        ed.keys("<C-e> <M-bs> <C-a> <M-d> <C-y>").assert("one| two ");
+        ed.keys("<C-e> <M-bs> <C-a> <M-d> <C-y>")
+            .assert("one| two ");
         ed.keys("<M-y>").assert("three| two ");
         ed.keys("<M-y>").assert("one two| two ");
     }
@@ -2430,7 +2524,11 @@ mod tests {
         assert_eq!(ed.register('2'), Some("one"), "shifted up");
         ed.keys("d w");
         assert_eq!(ed.register('-'), Some("three "), "a delete inside a line");
-        assert_eq!(ed.register('1'), Some("two"), "which leaves the numbered alone");
+        assert_eq!(
+            ed.register('1'),
+            Some("two"),
+            "which leaves the numbered alone"
+        );
     }
 
     #[test]
@@ -2455,8 +2553,35 @@ mod tests {
         // name is one the keys carry out.
         let mut ed = Harness::new("one two\nthree |four");
         ed.keys("g");
-        let hinted: Vec<String> = ed.modal.hint().unwrap_or_default().into_iter().map(|(k, _)| k).collect();
-        assert!(hinted.contains(&"E".to_string()), "gE is listed: {hinted:?}");
+        let hinted: Vec<String> = ed
+            .modal
+            .hint()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|(k, _)| k)
+            .collect();
+        assert!(
+            hinted.contains(&"E".to_string()),
+            "gE is listed: {hinted:?}"
+        );
         ed.keys("E").assert("one two\nthre|e four");
+    }
+
+    #[test]
+    fn test_read_only_editor_allows_motions_and_yanks_but_rejects_edits() {
+        let mut ed = Harness::new("|hello world");
+        ed.modal.set_read_only(true);
+        ed.keys("w").assert("hello |world");
+        ed.keys("x");
+        assert_eq!(ed.modal.message(), Some(READ_ONLY_MESSAGE));
+        ed.assert("hello |world");
+        ed.keys("i");
+        assert_eq!(ed.modal.message(), Some(READ_ONLY_MESSAGE));
+        assert_eq!(ed.modal.mode(), EditMode::Normal);
+        ed.keys("y $");
+        assert_eq!(
+            ed.modal.registers.get(&'0').map(|r| r.text.as_str()),
+            Some("world")
+        );
     }
 }
