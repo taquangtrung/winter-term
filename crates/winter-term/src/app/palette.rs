@@ -7,8 +7,8 @@ use winit::keyboard::{Key, NamedKey, PhysicalKey};
 use crate::model::input::{self, EditBinding};
 use crate::model::layout::TabId;
 use crate::model::mode::Mode;
-use crate::model::page;
 use crate::model::palette::{Palette, PaletteMode};
+use crate::model::tool;
 
 use super::navigation;
 use super::App;
@@ -111,10 +111,10 @@ impl App {
                         }
                     }
                 }
-                // A page waiting on a choice is told there was none, the way
+                // A tool waiting on a choice is told there was none, the way
                 // an escaped prompt answers with nothing.
-                if palette.mode == PaletteMode::PagePick {
-                    self.answer_page_pick(None);
+                if palette.mode == PaletteMode::ToolPick {
+                    self.answer_tool_pick(None);
                 }
                 palette.close();
                 self.palette = None;
@@ -239,11 +239,11 @@ impl App {
                 if let Some(path) = action {
                     // Over the focused pane, as every other way into a file
                     // does it, so closing it puts the shell back.
-                    self.open_path_page(page::OpenTarget::file(PathBuf::from(path)));
+                    self.open_path_tool(tool::OpenTarget::file(PathBuf::from(path)));
                 }
             }
-            PaletteMode::PagePick => {
-                self.answer_page_pick(action);
+            PaletteMode::ToolPick => {
+                self.answer_tool_pick(action);
             }
             PaletteMode::Swoop => {
                 if let Some(action) = action {
@@ -260,8 +260,8 @@ impl App {
             PaletteMode::Jump => {
                 if let Some(action) = action {
                     if let Ok(target) = action.parse::<usize>() {
-                        if let Some(slot) = self.open_tabs.page_mut(&focused) {
-                            slot.page.jump_confirm(target);
+                        if let Some(slot) = self.open_tabs.tool_mut(&focused) {
+                            slot.tool.jump_confirm(target);
                         } else {
                             if let Some((_pid, origin)) = self.swoop_initial_cursor.take() {
                                 self.vim.jump_lists.entry(focused).or_default().push(origin);
@@ -472,10 +472,10 @@ impl App {
 
     /// Buffer jump: open fuzzy target completion dialog for the active buffer view.
     pub(crate) fn open_jump(&mut self, focused: TabId) {
-        if let Some(slot) = self.open_tabs.page_mut(&focused) {
-            if let Some(targets) = slot.page.jump_targets() {
-                let title = format!("Jump: {}", slot.page.title());
-                let initial_cursor = slot.page.jump_cursor();
+        if let Some(slot) = self.open_tabs.tool_mut(&focused) {
+            if let Some(targets) = slot.tool.jump_targets() {
+                let title = format!("Jump: {}", slot.tool.title());
+                let initial_cursor = slot.tool.jump_cursor();
                 let mut palette = Palette::open_jump(targets, Some(title))
                     .with_query_history(self.palette_history.clone());
                 if let Some(cur) = initial_cursor {
@@ -483,7 +483,7 @@ impl App {
                 }
                 if let Some(action) = palette.selected_action() {
                     if let Ok(target) = action.parse::<usize>() {
-                        slot.page.jump_to(target);
+                        slot.tool.jump_to(target);
                     }
                 }
                 self.palette = Some(palette);
@@ -535,8 +535,8 @@ impl App {
     pub(crate) fn update_jump_preview(&mut self, palette: &Palette, focused: TabId) {
         if let Some(action) = palette.selected_action() {
             if let Ok(target) = action.parse::<usize>() {
-                if let Some(slot) = self.open_tabs.page_mut(&focused) {
-                    slot.page.jump_to(target);
+                if let Some(slot) = self.open_tabs.tool_mut(&focused) {
+                    slot.tool.jump_to(target);
                 } else {
                     self.set_nav_cursor(focused, (target, 0));
                     self.reveal_position_centered(focused, (target, 0));
@@ -551,8 +551,8 @@ impl App {
 
     /// Restore the pre-jump view/cursor position when jump is cancelled.
     pub(crate) fn cancel_jump(&mut self, focused: TabId) {
-        if let Some(slot) = self.open_tabs.page_mut(&focused) {
-            slot.page.jump_cancel();
+        if let Some(slot) = self.open_tabs.tool_mut(&focused) {
+            slot.tool.jump_cancel();
         } else if let Some((pid, (r, c))) = self.swoop_initial_cursor.take() {
             if pid == focused {
                 self.set_nav_cursor(focused, (r, c));

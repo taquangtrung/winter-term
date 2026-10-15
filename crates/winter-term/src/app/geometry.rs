@@ -49,7 +49,7 @@ impl App {
     pub(crate) fn status_bar_visible(&self) -> bool {
         self.config.status_bar.enabled
             || self.search.query.is_some()
-            || self.page_prompt.is_some()
+            || self.tool_prompt.is_some()
             || self.theme_name_input.is_some()
     }
     pub(crate) fn viewport_rect(&self) -> PaneRect {
@@ -107,7 +107,7 @@ impl App {
     /// While a selection drag is held near the top/bottom edge of the content
     /// viewport, scroll the selection's pane one line into (or back out of)
     /// history and extend the drag's live end to the new edge row, so text
-    /// outside the current page can be reached, and pulled into the
+    /// outside the current tool can be reached, and pulled into the
     /// selection, without the pointer leaving the window. Because `Selection`
     /// rows are absolute ([`winter_render::Grid::to_absolute_row`]),
     /// re-deriving the edge row from each post-scroll view grows `end_row`

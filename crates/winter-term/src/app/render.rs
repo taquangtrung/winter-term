@@ -9,7 +9,7 @@ use crate::config::IconStyle;
 use crate::model::input::PendingPrefix;
 use crate::model::layout::{Rect, TabId};
 use crate::model::mode::Mode;
-use crate::model::page::{wrap_start, wrapped_lines, PageContent, PageIcon, PageStyle};
+use crate::model::paint::{self, wrap_start, wrapped_lines, Frame, Icon};
 use crate::model::palette::{Palette, PaletteMode};
 use crate::model::settings_page::{Control, SettingsField, SettingsPage};
 use crate::terminal::block_queue::{BlockEntry, BlockKind};
@@ -23,7 +23,7 @@ use winter_render::{
 };
 
 use super::open_tabs::OpenTabs;
-use super::{status_bar, App, ImageBlock, ReflowSource};
+use super::{status_bar, App, FocusedTool, ImageBlock, ReflowSource};
 
 /// Base texture ID for rasterized pane tab strips (below chrome overlay IDs).
 const PANE_STRIP_TEXTURE_BASE: u64 = u64::MAX - 200;
@@ -36,7 +36,7 @@ const PANE_STRIP_TEXTURE_BASE: u64 = u64::MAX - 200;
 /// (HTML, markdown, ...) still go to the WebView.
 const RASTER_MIMES: [&str; 4] = ["image/gif", "image/jpeg", "image/png", "image/webp"];
 /// What the tab list is headed by. A list of commands needs no naming, but
-/// rows naming pages and directories do not say on their own what picking one
+/// rows naming tools and directories do not say on their own what picking one
 /// would do.
 const TAB_LIST_TITLE: &str = "Tabs: open, then recently closed";
 
@@ -63,14 +63,14 @@ const CLOSED_BLOCK_ALPHA: f32 = 0.5;
 /// raises it, short enough that a genuine pause gets an answer.
 const WHICH_KEY_DELAY: std::time::Duration = std::time::Duration::from_millis(1000);
 
-/// Settings-page layout, in cells: the label indent, the column dim notes start
+/// Settings-tool layout, in cells: the label indent, the column dim notes start
 /// at, the right margin values align to, and the body's first row (below the
 /// header band and its divider).
 const SETTINGS_LEFT_PAD: usize = 4;
 const SETTINGS_NOTE_COL: usize = 28;
 const SETTINGS_RIGHT_PAD: usize = 4;
 const SETTINGS_FIRST_ROW: usize = 3;
-/// How far a page's dim style is blended toward the background.
+/// How far a tool's dim style is blended toward the background.
 const PAGE_DIM_MIX: f32 = 0.45;
 
 /// How far an added or removed diff line's background is blended toward the
@@ -145,27 +145,27 @@ struct PaneViewInput<'a> {
     hovered_pane: Option<TabId>,
     hovered_url: Option<&'a str>,
     overlays: &'a PaneOverlays,
-    page_paints: &'a [PagePaint],
-    /// Where each page's caret sits, and whether it is typing there.
-    page_cursors: &'a std::collections::HashMap<TabId, PaneCaret>,
+    tool_paints: &'a [ToolPaint],
+    /// Where each tool's caret sits, and whether it is typing there.
+    tool_cursors: &'a std::collections::HashMap<TabId, PaneCaret>,
     /// Whether an overlay has the keyboard: the palette, or a question being
     /// answered in the input dialog.
     overlay_open: bool,
     rects: &'a [(TabId, Rect)],
     selection: Option<&'a super::Selection>,
-    /// Every open tab: the grid each page last painted into, and each
+    /// Every open tab: the grid each tool last painted into, and each
     /// terminal with its mode.
     tabs: &'a OpenTabs,
     window_focused: bool,
 }
 
-/// One page tab's painted frame: the grid the page rendered itself into, and
+/// One tool tab's painted frame: the grid the tool rendered itself into, and
 /// the row its cursor line sits on.
-struct PagePaint {
+struct ToolPaint {
     cursor_line: Option<usize>,
     /// Icons to rasterize over the painted rows. Empty unless the icon style
     /// calls for artwork; a glyph style has already been drawn into the grid.
-    icons: Vec<PageIcon>,
+    icons: Vec<Icon>,
     tab: TabId,
 }
 
@@ -180,8 +180,8 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
         hovered_pane,
         hovered_url,
         overlays,
-        page_cursors,
-        page_paints,
+        tool_cursors,
+        tool_paints,
         overlay_open,
         rects,
         selection,
@@ -190,11 +190,11 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
     } = input;
     let mut views: Vec<PaneView> = Vec::new();
     for (i, (id, rect)) in rects.iter().enumerate() {
-        // A page tab paints a grid of its own; every other tab drawn is a
+        // A tool tab paints a grid of its own; every other tab drawn is a
         // terminal.
-        if let Some(paint) = page_paints.iter().find(|paint| paint.tab == *id) {
-            if let Some(grid) = tabs.page(id).and_then(|slot| slot.painted.as_ref()) {
-                views.push(page_pane_view(
+        if let Some(paint) = tool_paints.iter().find(|paint| paint.tab == *id) {
+            if let Some(grid) = tabs.tool(id).and_then(|slot| slot.painted.as_ref()) {
+                views.push(tool_pane_view(
                     paint,
                     grid,
                     *rect,
@@ -203,7 +203,7 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                     config,
                     blink_phase,
                     selection.filter(|s| s.tab == *id),
-                    page_cursors.get(id).copied(),
+                    tool_cursors.get(id).copied(),
                     &overlays.search_matches[i],
                     &overlays.search_current[i],
                 ));
@@ -324,13 +324,13 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
     views
 }
 
-/// Build the view for a page tab.
+/// Build the view for a tool tab.
 ///
-/// A page has no terminal caret of its own, so the cursor is parked out of
-/// bounds (suppressing it) and the cursor line marks where the page's own
-/// selection sits. A text selection over the page is drawn here the same way a
-/// terminal draws one: the rows it names are the page's, so it has to be
-/// resolved against the grid the page painted.
+/// A tool has no terminal caret of its own, so the cursor is parked out of
+/// bounds (suppressing it) and the cursor line marks where the tool's own
+/// selection sits. A text selection over the tool is drawn here the same way a
+/// terminal draws one: the rows it names are the tool's, so it has to be
+/// resolved against the grid the tool painted.
 /// Where a pane's caret is drawn and how it reads: the cell it is on, and
 /// whether what is happening there is typing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -352,8 +352,8 @@ impl PaneCaret {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn page_pane_view<'a>(
-    paint: &'a PagePaint,
+fn tool_pane_view<'a>(
+    paint: &'a ToolPaint,
     grid: &'a Grid,
     rect: Rect,
     focused: bool,
@@ -372,14 +372,14 @@ fn page_pane_view<'a>(
         ),
         None => (None, false),
     };
-    // A caret in a page that does not have the keyboard, because another pane
+    // A caret in a tool that does not have the keyboard, because another pane
     // does or because the window lost focus, is drawn hollow.
     let caret_unfocused = text_cursor.is_some() && !(focused && window_focused);
     PaneView {
         bracket_colors: &[],
         block_band: None,
-        // A page's caret is a block over the cell it is on, as the traversal
-        // cursor is everywhere else; a page taking typed text takes the shape
+        // A tool's caret is a block over the cell it is on, as the traversal
+        // cursor is everywhere else; a tool taking typed text takes the shape
         // the terminal's own cursor has while typing, so the two read apart at
         // a glance. Without the keyboard it is the block's hollow outline,
         // whatever it was, since that is the one unfocused form that cannot be
@@ -397,8 +397,8 @@ fn page_pane_view<'a>(
         labels: None,
         find_labels: &[],
         // Out of bounds when there is no text cursor, which suppresses it: a
-        // page has no caret of its own, so the cursor line is the only mark of
-        // where the page's own selection sits.
+        // tool has no caret of its own, so the cursor line is the only mark of
+        // where the tool's own selection sits.
         nav_cursor: Some(
             text_cursor
                 .map(|caret| (caret.row, caret.col))
@@ -466,7 +466,7 @@ struct BlockClip {
     y: f32,
 }
 
-/// Hand a page surface the colors it has to match, as a global its document
+/// Hand a tool surface the colors it has to match, as a global its document
 /// reads on load. Only the host knows the theme, and a surface that guessed
 /// would sit in the pane as an obviously foreign rectangle.
 fn surface_theme_script(theme: &Theme) -> String {
@@ -537,14 +537,14 @@ fn image_placements(
     tabs: &OpenTabs,
     rects: &[(TabId, Rect)],
     cell_height: f32,
-    covered: &[PagePaint],
+    covered: &[ToolPaint],
 ) -> Vec<ImagePlacement> {
     let mut placements: Vec<ImagePlacement> = Vec::new();
     for img in blocks {
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == img.tab_id) else {
             continue;
         };
-        // A page owns every row of its tab, the same way an
+        // A tool owns every row of its tab, the same way an
         // alternate-screen app does below.
         if covered.iter().any(|paint| paint.tab == img.tab_id) {
             continue;
@@ -606,7 +606,7 @@ fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) ->
         PaletteMode::TabList => "No matching tabs",
         PaletteMode::Files => "Nothing here by that name",
         PaletteMode::History => "No matching history",
-        PaletteMode::PagePick => "Nothing matches",
+        PaletteMode::ToolPick => "Nothing matches",
         PaletteMode::Panes => "No matching panes",
         PaletteMode::RecentDirs => "No recent directories",
         PaletteMode::Swoop => "No matching lines",
@@ -620,7 +620,7 @@ fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) ->
     PaletteView {
         align_top: palette.mode == PaletteMode::Jump,
         empty_message: empty_message.to_string(),
-        // A page's list is headed by what it is a list of, and a browser by
+        // A tool's list is headed by what it is a list of, and a browser by
         // where it is; the command palette needs no naming and is drawn
         // without a heading.
         title: match &palette.title {
@@ -672,7 +672,7 @@ fn which_key_view(
 impl App {
     /// The interactive prompt currently keyed into the status bar, if any.
     pub(crate) fn active_status_prompt(&self) -> Option<StatusPrompt> {
-        if let Some(prompt) = self.page_prompt.as_ref() {
+        if let Some(prompt) = self.tool_prompt.as_ref() {
             let label = prompt.request.label.trim_end().to_string();
             let label =
                 if label.ends_with(':') || label.ends_with('?') || label == "/" || label == "?" {
@@ -755,30 +755,30 @@ impl App {
         let focused = self.tabs.layout.focused();
         let strip_frames = self.strip_frames(viewport, (cw, ch));
         let mode = self.open_tabs.mode(&focused);
-        // Pages paint themselves into a grid of their own, so the renderer
-        // draws a page tab through exactly the path a terminal tab takes. A
-        // page is handed its row count first, so it can window a listing longer
+        // Tools paint themselves into a grid of their own, so the renderer
+        // draws a tool tab through exactly the path a terminal tab takes. A
+        // tool is handed its row count first, so it can window a listing longer
         // than the pane around its own cursor.
         let icon_style = self.config.icons;
-        let mut page_paints: Vec<PagePaint> = Vec::new();
+        let mut tool_paints: Vec<ToolPaint> = Vec::new();
         for (id, rect) in &rects {
             let (cols, rows) = renderer.grid_size_for(App::layout_rect_to_pane(*rect));
-            let Some(slot) = self.open_tabs.page_mut(id) else {
+            let Some(slot) = self.open_tabs.tool_mut(id) else {
                 continue;
             };
-            let content = slot.page.content(rows, cols, self.page_wrap);
+            let content = slot.tool.content(rows, cols, self.tool_wrap);
             // Kept on the slot rather than in the paint, so that selecting over
             // the pane after this frame reads the rows the user can see.
             slot.cursor_line = content.cursor_line;
-            slot.painted = Some(build_page_grid(
+            slot.painted = Some(build_frame_grid(
                 &content,
                 renderer.theme(),
                 cols,
                 rows,
                 icon_style,
-                self.page_wrap,
+                self.tool_wrap,
             ));
-            page_paints.push(PagePaint {
+            tool_paints.push(ToolPaint {
                 cursor_line: content.cursor_line,
                 icons: if icon_style == IconStyle::Svg {
                     content.icons.clone()
@@ -801,7 +801,7 @@ impl App {
                 reverse: self.search.reverse,
             })
             .or_else(|| {
-                self.page_prompt.as_ref().and_then(|p| {
+                self.tool_prompt.as_ref().and_then(|p| {
                     if p.request.tag == "search" || p.request.tag == "search-back" {
                         Some(StatusSearch {
                             query: p.field.text().to_string(),
@@ -814,7 +814,10 @@ impl App {
                     }
                 })
             });
-        let page_icon = self.open_tabs.page(&focused).map(|slot| slot.status_icon());
+        let tool = self.open_tabs.tool(&focused).map(|slot| FocusedTool {
+            icon: slot.status_icon(),
+            status: slot.tool.status(),
+        });
         let status = status_bar(
             mode,
             renderer.theme(),
@@ -822,24 +825,24 @@ impl App {
             search,
             notice,
             &self.config.status_bar,
-            page_icon,
+            tool,
         );
         let status = status_enabled.then_some(&status);
         let palette_view = self.palette.as_ref().map(|p| {
             palette_view(
                 p,
                 self.config.palette_match_underline,
-                self.page_pick.as_ref().map(|pick| pick.label.as_str()),
+                self.tool_pick.as_ref().map(|pick| pick.label.as_str()),
             )
         });
-        // A page part-way through a multi-key command says so through the
+        // A tool part-way through a multi-key command says so through the
         // same card the terminal's own prefixes use, and says it at once: the
-        // menus are how the pages are learned, where the terminal's hints
+        // menus are how the tools are learned, where the terminal's hints
         // wait to see whether the typing stalls.
         let which_key_view = self
             .open_tabs
-            .page(&focused)
-            .and_then(|slot| slot.page.hint())
+            .tool(&focused)
+            .and_then(|slot| slot.tool.hint())
             .map(|hint| winter_render::WhichKeyView {
                 items: hint.items,
                 title: hint.title,
@@ -850,23 +853,23 @@ impl App {
         let focused_bands = self.block_bands(focused);
         // Rasterized before the renderer is taken mutably below, since filling
         // the icon cache needs it mutably too.
-        let icon_placements = self.page_icon_placements(&page_paints, &rects, (cw, ch));
-        // Every page tab shows a block cursor, not only one that `v` has
+        let icon_placements = self.tool_icon_placements(&tool_paints, &rects, (cw, ch));
+        // Every tool tab shows a block cursor, not only one that `v` has
         // started a text cursor in. The row band says which entry is current;
         // the cursor says which cell a selection would start from, and without
-        // it a page looks like it has no cursor at all.
-        let page_cursors: std::collections::HashMap<TabId, PaneCaret> = self
+        // it a tool looks like it has no cursor at all.
+        let tool_cursors: std::collections::HashMap<TabId, PaneCaret> = self
             .open_tabs
-            .pages()
+            .tools()
             .filter_map(|(id, slot)| {
-                if let Some(cursor) = self.page_cursor.as_ref().filter(|c| c.tab == *id) {
+                if let Some(cursor) = self.tool_cursor.as_ref().filter(|c| c.tab == *id) {
                     return Some((*id, PaneCaret::at(cursor.row, cursor.col)));
                 }
                 let row = slot.cursor_line?;
-                // A page that edits text says which cell it is on; one whose
+                // A tool that edits text says which cell it is on; one whose
                 // cursor is a whole row leaves it to the row's first painted
                 // character, which is where the eye starts reading it.
-                if let Some(caret) = slot.page.caret() {
+                if let Some(caret) = slot.tool.caret() {
                     return Some((
                         *id,
                         PaneCaret {
@@ -879,7 +882,7 @@ impl App {
                 let grid = slot.painted.as_ref()?;
                 Some((
                     *id,
-                    PaneCaret::at(row, super::page_cursor::first_non_blank(grid, row)),
+                    PaneCaret::at(row, super::tool_cursor::first_non_blank(grid, row)),
                 ))
             })
             .collect();
@@ -893,7 +896,7 @@ impl App {
             &self.open_tabs,
             &rects,
             ch,
-            &page_paints,
+            &tool_paints,
         );
         placements.extend(icon_placements);
         for (i, frame) in strip_frames.iter().enumerate() {
@@ -918,8 +921,8 @@ impl App {
             hovered_pane,
             hovered_url: self.pointer.hovered_url.as_deref(),
             overlays: &overlays,
-            page_cursors: &page_cursors,
-            page_paints: &page_paints,
+            tool_cursors: &tool_cursors,
+            tool_paints: &tool_paints,
             overlay_open: self.palette.is_some(),
             rects: &rects,
             selection: self.selection.span.as_ref(),
@@ -938,7 +941,7 @@ impl App {
         );
 
         self.reposition_block_tiles(&rects, ch);
-        self.place_page_surfaces(&rects, ch);
+        self.place_tool_surfaces(&rects, ch);
     }
 
     // --------------------------------------------------------------------
@@ -1006,7 +1009,7 @@ impl App {
 
         // Precompute search match cell positions per pane so PaneView can borrow
         // them as slices. Built before the view loop to satisfy the borrow checker.
-        let page_search_query = self.page_prompt.as_ref().and_then(|p| {
+        let tool_search_query = self.tool_prompt.as_ref().and_then(|p| {
             if p.request.tag == "search" || p.request.tag == "search-back" {
                 let text = p.field.text();
                 if !text.is_empty() {
@@ -1023,7 +1026,7 @@ impl App {
             .query
             .as_deref()
             .filter(|q| !q.is_empty())
-            .or(page_search_query);
+            .or(tool_search_query);
         let search_match_data: Vec<Vec<(usize, usize)>> = rects
             .iter()
             .map(|(id, _)| {
@@ -1033,7 +1036,7 @@ impl App {
                     .map(|terminal| terminal.grid())
                     .or_else(|| {
                         self.open_tabs
-                            .page(id)
+                            .tool(id)
                             .and_then(|slot| slot.painted.as_ref())
                     });
                 match (query_str, grid) {
@@ -1056,7 +1059,7 @@ impl App {
                     .map(|terminal| terminal.grid())
                     .or_else(|| {
                         self.open_tabs
-                            .page(id)
+                            .tool(id)
                             .and_then(|slot| slot.painted.as_ref())
                     });
                 match (query_str, self.search.current, grid) {
@@ -1153,19 +1156,19 @@ impl App {
         slot
     }
 
-    /// Quads for every icon the pages want drawn this frame.
+    /// Quads for every icon the tools want drawn this frame.
     ///
-    /// Recomputed from scratch each frame rather than anchored, because a page
+    /// Recomputed from scratch each frame rather than anchored, because a tool
     /// repaints its rows from its own model every frame anyway: there is no
     /// scrollback row for an icon to drift away from.
-    fn page_icon_placements(
+    fn tool_icon_placements(
         &mut self,
-        paints: &[PagePaint],
+        paints: &[ToolPaint],
         rects: &[(TabId, Rect)],
         cell: (f32, f32),
     ) -> Vec<ImagePlacement> {
         let (cw, ch) = cell;
-        let box_w = (cw * PageIcon::WIDTH as f32).round().max(1.0) as u32;
+        let box_w = (cw * Icon::WIDTH as f32).round().max(1.0) as u32;
         let box_h = ch.round().max(1.0) as u32;
         let mut placements = Vec::new();
         for paint in paints {
@@ -1229,14 +1232,14 @@ impl App {
         self.last_tile_layout = Some(viewports);
     }
 
-    /// Give every page that owns a surface a WebView over its pane, building
-    /// it the first time the page is drawn, and take off screen the surfaces
-    /// of panes that no longer show the page they belong to.
+    /// Give every tool that owns a surface a WebView over its pane, building
+    /// it the first time the tool is drawn, and take off screen the surfaces
+    /// of panes that no longer show the tool they belong to.
     ///
-    /// A surface covers its pane from the first row its page leaves it down:
-    /// the rows above stay the page's own, painted in the terminal's font, so
+    /// A surface covers its pane from the first row its tool leaves it down:
+    /// the rows above stay the tool's own, painted in the terminal's font, so
     /// a PDF keeps a native header over a document Winter cannot draw.
-    fn place_page_surfaces(&mut self, rects: &[(TabId, Rect)], ch: f32) {
+    fn place_tool_surfaces(&mut self, rects: &[(TabId, Rect)], ch: f32) {
         let Some(window) = self.window.clone() else {
             return;
         };
@@ -1247,10 +1250,10 @@ impl App {
 
         let mut showing: Vec<TabId> = Vec::new();
         for (tab_id, rect) in rects {
-            let Some(slot) = self.open_tabs.page(tab_id) else {
+            let Some(slot) = self.open_tabs.tool(tab_id) else {
                 continue;
             };
-            let Some(surface) = slot.page.surface() else {
+            let Some(surface) = slot.tool.surface() else {
                 continue;
             };
             let pane_rect = Self::layout_rect_to_pane(*rect);
@@ -1281,11 +1284,11 @@ impl App {
         self.webview_mgr.hide_surfaces_except(&showing);
     }
 
-    /// Run whatever the open pages have queued for their surfaces, and hand
-    /// each page back what its own surface posted out.
-    pub(crate) fn pump_page_surfaces(&mut self) {
-        for (tab_id, slot) in self.open_tabs.pages_mut() {
-            if let Some(js) = slot.page.take_surface_script() {
+    /// Run whatever the open tools have queued for their surfaces, and hand
+    /// each tool back what its own surface posted out.
+    pub(crate) fn pump_tool_surfaces(&mut self) {
+        for (tab_id, slot) in self.open_tabs.tools_mut() {
+            if let Some(js) = slot.tool.take_surface_script() {
                 self.webview_mgr.run_surface_script(*tab_id, &js);
             }
         }
@@ -1293,11 +1296,11 @@ impl App {
             match message {
                 SurfaceMessage::Key(relayed) => self.route_surface_key(relayed.tab_id, relayed.key),
                 SurfaceMessage::Text(said) => {
-                    let Some(slot) = self.open_tabs.page_mut(&said.tab_id) else {
+                    let Some(slot) = self.open_tabs.tool_mut(&said.tab_id) else {
                         continue;
                     };
-                    let outcome = slot.page.on_surface_message(said.body);
-                    self.act_on_page_outcome(said.tab_id, outcome);
+                    let outcome = slot.tool.on_surface_message(said.body);
+                    self.act_on_tool_outcome(said.tab_id, outcome);
                 }
             }
             self.dirty = true;
@@ -1309,7 +1312,7 @@ impl App {
     ///
     /// `rects` covers the active tab alone, so a background tab's panes are
     /// already out. Left out on top of those: a pane showing an
-    /// alternate-screen app, and a page tab. Those are the
+    /// alternate-screen app, and a tool tab. Those are the
     /// panes `image_placements` skips too, for the same reason: something
     /// else owns the viewport, and a primary-screen block painted over it
     /// would hide what does until it goes away.
@@ -1319,7 +1322,7 @@ impl App {
             let Some(terminal) = self.open_tabs.terminal(tab_id) else {
                 continue;
             };
-            if terminal.grid().is_alt_screen() || self.open_tabs.is_page(tab_id) {
+            if terminal.grid().is_alt_screen() || self.open_tabs.is_tool(tab_id) {
                 continue;
             }
             let pane_rect = Self::layout_rect_to_pane(*rect);
@@ -1344,7 +1347,7 @@ impl App {
     /// Draw the settings page as a single full-window grid: no tabbar, status
     /// bar, panes, or block tiles, just the modal overlay.
     fn render_settings_frame(&mut self) {
-        let Some(page) = &self.settings_page else {
+        let Some(tool) = &self.settings_page else {
             return;
         };
         let Some(renderer) = &mut self.renderer else {
@@ -1352,7 +1355,7 @@ impl App {
         };
         let (cols, rows) = renderer.grid_size();
         let (cw, ch) = renderer.cell_size();
-        let grid = build_settings_grid(page, renderer.theme(), cols, rows);
+        let grid = build_settings_grid(tool, renderer.theme(), cols, rows);
         let view = PaneView {
             bracket_colors: &[],
             block_band: None,
@@ -1860,7 +1863,7 @@ enum NativeImage {
 /// band, then titled sections of rows. Each row shows a label, a dim note, and a
 /// right-aligned control; the selected row gets an accent bar and a highlight. A
 /// key-hint footer sits along the bottom.
-fn build_settings_grid(page: &SettingsPage, theme: &Theme, cols: usize, rows: usize) -> Grid {
+fn build_settings_grid(tool: &SettingsPage, theme: &Theme, cols: usize, rows: usize) -> Grid {
     let mut grid = Grid::new(cols, rows);
     let pal = SettingsPalette {
         accent: theme_rgb(theme.cursor_bg),
@@ -1905,7 +1908,7 @@ fn build_settings_grid(page: &SettingsPage, theme: &Theme, cols: usize, rows: us
     let body_end = rows.saturating_sub(2);
     let mut row = SETTINGS_FIRST_ROW;
     let mut section: Option<&str> = None;
-    for (i, field) in page.fields.iter().enumerate() {
+    for (i, field) in tool.fields.iter().enumerate() {
         if let Some(name) = field.section.as_deref() {
             if section != Some(name) {
                 section = Some(name);
@@ -1930,7 +1933,7 @@ fn build_settings_grid(page: &SettingsPage, theme: &Theme, cols: usize, rows: us
         if row >= body_end {
             break;
         }
-        draw_field_row(&mut grid, row, cols, field, i == page.selected, &pal);
+        draw_field_row(&mut grid, row, cols, field, i == tool.selected, &pal);
         row += 1;
     }
 
@@ -1957,11 +1960,11 @@ fn build_settings_grid(page: &SettingsPage, theme: &Theme, cols: usize, rows: us
     grid
 }
 
-/// Paint a page into a fresh `cols` x `rows` grid: its rows in order, each span
+/// Paint a tool into a fresh `cols` x `rows` grid: its rows in order, each span
 /// resolved from a semantic style to the theme's colors, clipped at the pane's
 /// last row.
-fn build_page_grid(
-    content: &PageContent,
+fn build_frame_grid(
+    content: &Frame,
     theme: &Theme,
     cols: usize,
     rows: usize,
@@ -1972,17 +1975,17 @@ fn build_page_grid(
     if cols == 0 {
         return grid;
     }
-    // The screen row each of the page's own rows starts on, so icons — which
-    // name their row among the page's — land on the right screen row once
+    // The screen row each of the tool's own rows starts on, so icons — which
+    // name their row among the tool's — land on the right screen row once
     // earlier rows wrap.
     let mut row_starts: Vec<usize> = Vec::with_capacity(content.rows.len());
     let mut screen = 0;
-    'page: for (index, spans) in content.rows.iter().enumerate() {
+    'tool: for (index, spans) in content.rows.iter().enumerate() {
         row_starts.push(screen);
         // The column this row's wrapped continuations start at, reserving the
         // room its leading span gives the diff marker.
         let indent = wrap_start(content.wrap_indents.get(index).copied().unwrap_or(0), cols);
-        let lead = spans.first().map(|span| page_span_style(span.style, theme));
+        let lead = spans.first().map(|span| span_style(span.style, theme));
         // The row flattened across its spans, each char carrying its own
         // style: wrapping works on words, which straddle spans, so the fold
         // is chosen over the whole row and each painted piece keeps the
@@ -1990,7 +1993,7 @@ fn build_page_grid(
         let mut chars = Vec::new();
         let mut styles = Vec::new();
         for span in spans {
-            let style = page_span_style(span.style, theme);
+            let style = span_style(span.style, theme);
             for ch in span.text.chars() {
                 chars.push(ch);
                 styles.push(style);
@@ -2005,7 +2008,7 @@ fn build_page_grid(
             if line > 0 {
                 screen += 1;
                 if screen >= rows {
-                    break 'page;
+                    break 'tool;
                 }
                 col = indent;
                 if indent > 0 {
@@ -2035,7 +2038,7 @@ fn build_page_grid(
             break;
         }
     }
-    // A glyph is a real cell, so it goes into the grid the page just painted
+    // A glyph is a real cell, so it goes into the grid the tool just painted
     // and is selected, copied and themed like any other character. It keeps the
     // style already on the cell rather than imposing one, so the band on a
     // marked row runs through it unbroken.
@@ -2050,24 +2053,24 @@ fn build_page_grid(
             let style = grid
                 .cell(row, icon.col)
                 .map(|cell| cell.style)
-                .unwrap_or_else(|| page_span_style(PageStyle::Normal, theme));
+                .unwrap_or_else(|| span_style(paint::Style::Normal, theme));
             put(&mut grid, row, icon.col, &icon.glyph.to_string(), style);
         }
     }
     grid
 }
 
-/// Resolve a page's semantic style against the active theme. The diff styles
+/// Resolve a tool's semantic style against the active theme. The diff styles
 /// tint the background with the theme's palette the way a diff editor does,
 /// rather than carrying colors of their own, so every theme gets bands that
 /// belong to it.
-fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
+fn span_style(style: paint::Style, theme: &Theme) -> Style {
     match style {
-        PageStyle::Accent => Style {
+        paint::Style::Accent => Style {
             foreground: theme_rgb(theme.cursor_bg),
             ..Style::default()
         },
-        PageStyle::Added => Style {
+        paint::Style::Added => Style {
             background: git_band(
                 theme,
                 theme.git.inserted_line,
@@ -2077,7 +2080,7 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
-        PageStyle::AddedEdit => Style {
+        paint::Style::AddedEdit => Style {
             background: git_band(
                 theme,
                 theme.git.inserted_text,
@@ -2093,12 +2096,12 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // own palette rather than pinned to its hex: green for what arrived,
         // red for what left, blue for what was edited where it stands, yellow
         // for what moved, magenta for what is still contested.
-        PageStyle::ChangeAdded => change_style(theme, theme.git.added, ANSI_GREEN),
-        PageStyle::ChangeConflict => change_style(theme, theme.git.unmerged, ANSI_MAGENTA),
-        PageStyle::ChangeDeleted => change_style(theme, theme.git.deleted, ANSI_RED),
-        PageStyle::ChangeModified => change_style(theme, theme.git.modified, ANSI_BLUE),
-        PageStyle::ChangeRenamed => change_style(theme, theme.git.renamed, ANSI_YELLOW),
-        PageStyle::Dim => Style {
+        paint::Style::ChangeAdded => change_style(theme, theme.git.added, ANSI_GREEN),
+        paint::Style::ChangeConflict => change_style(theme, theme.git.unmerged, ANSI_MAGENTA),
+        paint::Style::ChangeDeleted => change_style(theme, theme.git.deleted, ANSI_RED),
+        paint::Style::ChangeModified => change_style(theme, theme.git.modified, ANSI_BLUE),
+        paint::Style::ChangeRenamed => change_style(theme, theme.git.renamed, ANSI_YELLOW),
+        paint::Style::Dim => Style {
             foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
             ..Style::default()
         },
@@ -2106,16 +2109,16 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // magic-vscode's semantic tokens give staged, unstaged, untracked and
         // conflicted files, with the theme's own cyan, yellow, green and red
         // where it sets none.
-        PageStyle::FileConflict => file_path_style(theme, theme.git.file_conflict, ANSI_RED),
-        PageStyle::FileStaged => file_path_style(theme, theme.git.file_staged, ANSI_CYAN),
-        PageStyle::FileUnstaged => file_path_style(theme, theme.git.file_unstaged, ANSI_YELLOW),
-        PageStyle::FileUntracked => file_path_style(theme, theme.git.file_untracked, ANSI_GREEN),
-        PageStyle::Header => Style {
+        paint::Style::FileConflict => file_path_style(theme, theme.git.file_conflict, ANSI_RED),
+        paint::Style::FileStaged => file_path_style(theme, theme.git.file_staged, ANSI_CYAN),
+        paint::Style::FileUnstaged => file_path_style(theme, theme.git.file_unstaged, ANSI_YELLOW),
+        paint::Style::FileUntracked => file_path_style(theme, theme.git.file_untracked, ANSI_GREEN),
+        paint::Style::Header => Style {
             bold: true,
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
-        PageStyle::HeaderAccent => Style {
+        paint::Style::HeaderAccent => Style {
             bold: true,
             foreground: theme_rgb(theme.cursor_bg),
             ..Style::default()
@@ -2125,36 +2128,40 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // what is not, green for what is untracked, red for what a merge left
         // contested. The count beside it stays receded, so the color says
         // which section without the row shouting.
-        PageStyle::HeadingConflict => heading_style(theme, None, ANSI_RED),
-        PageStyle::HeadingStaged => heading_style(theme, theme.git.header_staged, ANSI_CYAN),
-        PageStyle::HeadingUnstaged => heading_style(theme, theme.git.header_unstaged, ANSI_YELLOW),
-        PageStyle::HeadingUntracked => heading_style(theme, theme.git.header_untracked, ANSI_GREEN),
+        paint::Style::HeadingConflict => heading_style(theme, None, ANSI_RED),
+        paint::Style::HeadingStaged => heading_style(theme, theme.git.header_staged, ANSI_CYAN),
+        paint::Style::HeadingUnstaged => {
+            heading_style(theme, theme.git.header_unstaged, ANSI_YELLOW)
+        }
+        paint::Style::HeadingUntracked => {
+            heading_style(theme, theme.git.header_untracked, ANSI_GREEN)
+        }
         // Everything else a git view heads a block with — the recent commits,
         // a log's title, and the labels the header block is read down — is
         // blue, which is where magic-vscode's grammar sends every heading it
         // has no change color for.
-        PageStyle::HeadingPlain => heading_style(theme, theme.git.header, ANSI_BLUE),
-        PageStyle::Hunk => Style {
+        paint::Style::HeadingPlain => heading_style(theme, theme.git.header, ANSI_BLUE),
+        paint::Style::Hunk => Style {
             background: git_band(theme, theme.git.hunk_band, ANSI_BLUE, PAGE_HUNK_MIX),
             foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
             ..Style::default()
         },
-        PageStyle::Marked => Style {
+        paint::Style::Marked => Style {
             background: theme_rgb(theme.selection_bg),
             bold: true,
             foreground: theme_rgb(theme.selection_fg),
             ..Style::default()
         },
-        PageStyle::Normal => Style {
+        paint::Style::Normal => Style {
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
-        PageStyle::Removed => Style {
+        paint::Style::Removed => Style {
             background: git_band(theme, theme.git.removed_line, ANSI_RED, PAGE_DIFF_LINE_MIX),
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
         },
-        PageStyle::RemovedEdit => Style {
+        paint::Style::RemovedEdit => Style {
             background: git_band(theme, theme.git.removed_text, ANSI_RED, PAGE_DIFF_EDIT_MIX),
             bold: true,
             foreground: theme_rgb(theme.foreground),
@@ -2165,24 +2172,24 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // on it first. The hues are magic-vscode's: a branch here is magenta,
         // one on a remote green, and a tag cyan, which keeps a local name and
         // the remote one beside it from reading as the same thing.
-        PageStyle::RefHead => Style {
+        paint::Style::RefHead => Style {
             bold: true,
             foreground: color_or(theme, theme.git.ref_head, theme.ansi[ANSI_MAGENTA]),
             ..Style::default()
         },
-        PageStyle::RefLocal => Style {
+        paint::Style::RefLocal => Style {
             foreground: color_or(theme, theme.git.ref_local, theme.ansi[ANSI_MAGENTA]),
             ..Style::default()
         },
-        PageStyle::RefRemote => Style {
+        paint::Style::RefRemote => Style {
             foreground: color_or(theme, theme.git.ref_remote, theme.ansi[ANSI_GREEN]),
             ..Style::default()
         },
-        PageStyle::RefTag => Style {
+        paint::Style::RefTag => Style {
             foreground: color_or(theme, theme.git.ref_tag, theme.ansi[ANSI_CYAN]),
             ..Style::default()
         },
-        PageStyle::Section => Style {
+        paint::Style::Section => Style {
             background: section_band(theme),
             foreground: theme_rgb(theme.foreground),
             ..Style::default()
@@ -2191,32 +2198,32 @@ fn page_span_style(style: PageStyle, theme: &Theme) -> Style {
         // a scheme of its own, so a file reads as the terminal beside it does:
         // the comment hue the shells and the pagers already use, and one hue
         // per kind of thing after that.
-        PageStyle::SyntaxComment => Style {
+        paint::Style::SyntaxComment => Style {
             foreground: color_or(theme, theme.syntax.comment, theme.ansi[ANSI_BRIGHT_BLACK]),
             ..Style::default()
         },
-        PageStyle::SyntaxKeyword => Style {
+        paint::Style::SyntaxKeyword => Style {
             foreground: color_or(theme, theme.syntax.keyword, theme.ansi[ANSI_MAGENTA]),
             ..Style::default()
         },
-        PageStyle::SyntaxNumber => Style {
+        paint::Style::SyntaxNumber => Style {
             foreground: color_or(theme, theme.syntax.number, theme.ansi[ANSI_YELLOW]),
             ..Style::default()
         },
-        PageStyle::SyntaxString => Style {
+        paint::Style::SyntaxString => Style {
             foreground: color_or(theme, theme.syntax.string, theme.ansi[ANSI_GREEN]),
             ..Style::default()
         },
-        PageStyle::SyntaxType => Style {
+        paint::Style::SyntaxType => Style {
             foreground: color_or(theme, theme.syntax.type_name, theme.ansi[ANSI_CYAN]),
             ..Style::default()
         },
-        PageStyle::Unpushed => Style {
+        paint::Style::Unpushed => Style {
             bold: true,
             foreground: color_or(theme, theme.git.unpushed, theme.ansi[ANSI_RED]),
             ..Style::default()
         },
-        PageStyle::SectionFolded => Style {
+        paint::Style::SectionFolded => Style {
             background: section_band(theme),
             foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
             ..Style::default()
@@ -2614,15 +2621,15 @@ fn json_to_text(value: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::page::{PageRow, PageSpan};
+    use crate::model::paint::{Row, Span};
 
     #[test]
-    fn test_page_grid_lays_spans_out_left_to_right() {
-        let content = PageContent::new(vec![vec![
-            PageSpan::plain("Zoom Pane"),
-            PageSpan::new(PageStyle::Accent, "Shift-Alt-="),
+    fn test_frame_grid_lays_spans_out_left_to_right() {
+        let content = Frame::new(vec![vec![
+            Span::plain("Zoom Pane"),
+            Span::new(paint::Style::Accent, "Shift-Alt-="),
         ]]);
-        let grid = build_page_grid(&content, &Theme::dark(), 40, 4, IconStyle::None, false);
+        let grid = build_frame_grid(&content, &Theme::dark(), 40, 4, IconStyle::None, false);
         let first = grid
             .to_text()
             .lines()
@@ -2633,22 +2640,21 @@ mod tests {
     }
 
     #[test]
-    fn test_page_grid_draws_a_font_icon_into_the_reserved_columns() {
-        // The page leaves the icon's columns blank whatever the setting is, so
+    fn test_frame_grid_draws_a_font_icon_into_the_reserved_columns() {
+        // The tool leaves the icon's columns blank whatever the setting is, so
         // a glyph style has to paint the glyph in, and only then: painting it
         // under `Svg` would leave a glyph showing through the artwork, and
         // under `None` would put back the column the setting removes.
-        let content =
-            PageContent::new(vec![vec![PageSpan::plain("   name")]]).with_icons(vec![PageIcon {
-                col: 0,
-                glyph: 'X',
-                kind: crate::model::page::PageIconKind::File {
-                    name: "name".to_string(),
-                },
-                row: 0,
-            }]);
+        let content = Frame::new(vec![vec![Span::plain("   name")]]).with_icons(vec![Icon {
+            col: 0,
+            glyph: 'X',
+            kind: crate::model::paint::IconKind::File {
+                name: "name".to_string(),
+            },
+            row: 0,
+        }]);
         let painted = |style| {
-            build_page_grid(&content, &Theme::dark(), 20, 2, style, false)
+            build_frame_grid(&content, &Theme::dark(), 20, 2, style, false)
                 .to_text()
                 .lines()
                 .next()
@@ -2661,14 +2667,14 @@ mod tests {
     }
 
     #[test]
-    fn test_page_grid_clips_rows_past_the_pane_height() {
-        // A page longer than its pane must lose the overflow, not write past
+    fn test_frame_grid_clips_rows_past_the_pane_height() {
+        // A tool longer than its pane must lose the overflow, not write past
         // the grid's last row.
-        let rows: Vec<PageRow> = (0..10)
-            .map(|i| vec![PageSpan::plain(format!("row{i}"))])
+        let rows: Vec<Row> = (0..10)
+            .map(|i| vec![Span::plain(format!("row{i}"))])
             .collect();
-        let grid = build_page_grid(
-            &PageContent::new(rows),
+        let grid = build_frame_grid(
+            &Frame::new(rows),
             &Theme::dark(),
             20,
             3,
@@ -2685,14 +2691,14 @@ mod tests {
 
     #[test]
     fn test_a_row_wider_than_the_pane_wraps_onto_the_next_screen_row() {
-        let content = PageContent::new(vec![vec![PageSpan::plain("abcdefghij")]]);
-        let wrapped = build_page_grid(&content, &Theme::dark(), 5, 2, IconStyle::None, true);
+        let content = Frame::new(vec![vec![Span::plain("abcdefghij")]]);
+        let wrapped = build_frame_grid(&content, &Theme::dark(), 5, 2, IconStyle::None, true);
         let text = wrapped.to_text();
         // Five cells a line: the row's text spills onto the screen row under
         // it rather than being lost at the pane's edge.
         assert!(text.contains("abcde"), "the first line, got {text:?}");
         assert!(text.contains("fghij"), "the wrapped rest, got {text:?}");
-        let clipped = build_page_grid(&content, &Theme::dark(), 5, 2, IconStyle::None, false);
+        let clipped = build_frame_grid(&content, &Theme::dark(), 5, 2, IconStyle::None, false);
         let text = clipped.to_text();
         assert!(text.contains("abcde"), "the first line, got {text:?}");
         assert!(!text.contains("fghij"), "the edge clips the rest");
@@ -2702,8 +2708,8 @@ mod tests {
     fn test_a_wrapped_row_folds_at_its_last_word_boundary() {
         // "the quick brown fox" in ten cells folds after "quick", the last
         // word that fits, and the space the fold lands on vanishes with it.
-        let content = PageContent::new(vec![vec![PageSpan::plain("the quick brown fox")]]);
-        let grid = build_page_grid(&content, &Theme::dark(), 10, 2, IconStyle::None, true);
+        let content = Frame::new(vec![vec![Span::plain("the quick brown fox")]]);
+        let grid = build_frame_grid(&content, &Theme::dark(), 10, 2, IconStyle::None, true);
         let text = grid.to_text();
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0].trim_end(), "the quick", "folds at the space");
@@ -2716,18 +2722,18 @@ mod tests {
         // the span's color: words wrap, colors follow the words. The break
         // lands before "bbb", not after it — the space past the margin belongs
         // to the fold, exactly where the grid's own wrap would take it.
-        let content = PageContent::new(vec![vec![
-            PageSpan::plain("aaa "),
-            PageSpan::new(PageStyle::Accent, "bbb ccc"),
+        let content = Frame::new(vec![vec![
+            Span::plain("aaa "),
+            Span::new(paint::Style::Accent, "bbb ccc"),
         ]]);
         let theme = Theme::dark();
-        let grid = build_page_grid(&content, &theme, 7, 2, IconStyle::None, true);
+        let grid = build_frame_grid(&content, &theme, 7, 2, IconStyle::None, true);
         let text = grid.to_text();
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0].trim_end(), "aaa");
         assert_eq!(lines[1].trim_end(), "bbb ccc");
-        let plain = page_span_style(PageStyle::Normal, &theme);
-        let accent = page_span_style(PageStyle::Accent, &theme);
+        let plain = span_style(paint::Style::Normal, &theme);
+        let accent = span_style(paint::Style::Accent, &theme);
         assert_eq!(grid.cell(0, 0).map(|c| c.style), Some(plain));
         assert_eq!(
             grid.cell(0, 3).map(|c| c.style),
@@ -2751,11 +2757,11 @@ mod tests {
         // Two spans in one row: the second must follow the first onto its
         // wrapped line, and a whole second row must land below the lines the
         // first took, not on top of them.
-        let content = PageContent::new(vec![
-            vec![PageSpan::plain("aaa"), PageSpan::plain("bbb")],
-            vec![PageSpan::plain("zz")],
+        let content = Frame::new(vec![
+            vec![Span::plain("aaa"), Span::plain("bbb")],
+            vec![Span::plain("zz")],
         ]);
-        let grid = build_page_grid(&content, &Theme::dark(), 4, 3, IconStyle::None, true);
+        let grid = build_frame_grid(&content, &Theme::dark(), 4, 3, IconStyle::None, true);
         let text = grid.to_text();
         assert!(text.contains("aaab"), "the spans share the wrapped line");
         assert!(text.contains("bb"), "the row's wrapped tail");
@@ -2775,11 +2781,11 @@ mod tests {
         // With wrapping off, a row wider than the pane loses its tail — but it
         // still occupies one screen row, and the row under it must paint on
         // the next screen row rather than over the clipped one.
-        let content = PageContent::new(vec![
-            vec![PageSpan::plain("0123456789")],
-            vec![PageSpan::plain("next")],
+        let content = Frame::new(vec![
+            vec![Span::plain("0123456789")],
+            vec![Span::plain("next")],
         ]);
-        let grid = build_page_grid(&content, &Theme::dark(), 5, 2, IconStyle::None, false);
+        let grid = build_frame_grid(&content, &Theme::dark(), 5, 2, IconStyle::None, false);
         let text = grid.to_text();
         assert!(text.contains("01234"), "the clipped row keeps its start");
         assert!(text.contains("next"), "the next row paints under it");
@@ -2792,13 +2798,13 @@ mod tests {
         // under the marker — and the room it leaves keeps the line's own
         // tint, so a wrapped line reads as one tinted line rather than one
         // that loses its color at the fold.
-        let content = PageContent::new(vec![vec![
-            PageSpan::new(PageStyle::Removed, "    -"),
-            PageSpan::new(PageStyle::RemovedEdit, "old".repeat(4)),
+        let content = Frame::new(vec![vec![
+            Span::new(paint::Style::Removed, "    -"),
+            Span::new(paint::Style::RemovedEdit, "old".repeat(4)),
         ]])
         .with_wrap_indents(vec![5]);
         let theme = Theme::dark();
-        let grid = build_page_grid(&content, &theme, 10, 3, IconStyle::None, true);
+        let grid = build_frame_grid(&content, &theme, 10, 3, IconStyle::None, true);
         let text = grid.to_text();
         let lines: Vec<&str> = text.lines().collect();
         assert_eq!(lines[0], "    -oldol", "the marker and the first cells");
@@ -2809,12 +2815,12 @@ mod tests {
         assert_eq!(lines[2], "     ld", "the last of the spilled text");
         assert_eq!(
             grid.cell(1, 0).map(|cell| cell.style),
-            Some(page_span_style(PageStyle::Removed, &theme)),
+            Some(span_style(paint::Style::Removed, &theme)),
             "the gutter keeps the line's tint"
         );
         assert_eq!(
             grid.cell(1, 5).map(|cell| cell.style),
-            Some(page_span_style(PageStyle::RemovedEdit, &theme)),
+            Some(span_style(paint::Style::RemovedEdit, &theme)),
             "the spilled text keeps its own style"
         );
     }
@@ -2825,18 +2831,18 @@ mod tests {
         // clipped, with the added line under it. Before the fix the added
         // line painted over the removed one's screen row, so the decorator
         // showed one line wearing the wrong side's tint.
-        let content = PageContent::new(vec![
+        let content = Frame::new(vec![
             vec![
-                PageSpan::new(PageStyle::Removed, "-"),
-                PageSpan::new(PageStyle::RemovedEdit, "old".repeat(10)),
+                Span::new(paint::Style::Removed, "-"),
+                Span::new(paint::Style::RemovedEdit, "old".repeat(10)),
             ],
             vec![
-                PageSpan::new(PageStyle::Added, "+"),
-                PageSpan::new(PageStyle::AddedEdit, "new"),
+                Span::new(paint::Style::Added, "+"),
+                Span::new(paint::Style::AddedEdit, "new"),
             ],
         ]);
         let theme = Theme::dark();
-        let grid = build_page_grid(&content, &theme, 6, 2, IconStyle::None, false);
+        let grid = build_frame_grid(&content, &theme, 6, 2, IconStyle::None, false);
         let text = grid.to_text();
         assert!(
             text.contains("-oldol"),
@@ -2848,12 +2854,12 @@ mod tests {
         );
         assert_eq!(
             grid.cell(0, 0).map(|cell| cell.style),
-            Some(page_span_style(PageStyle::Removed, &theme)),
+            Some(span_style(paint::Style::Removed, &theme)),
             "the removed row's cells keep the removed tint"
         );
         assert_eq!(
             grid.cell(1, 0).map(|cell| cell.style),
-            Some(page_span_style(PageStyle::Added, &theme)),
+            Some(span_style(paint::Style::Added, &theme)),
             "the added row's cells carry the added tint"
         );
     }
@@ -2875,9 +2881,9 @@ mod tests {
     }
 
     #[test]
-    fn test_a_page_caret_without_the_keyboard_is_a_hollow_block() {
+    fn test_a_tool_caret_without_the_keyboard_is_a_hollow_block() {
         let grid = Grid::new(10, 3);
-        let paint = PagePaint {
+        let paint = ToolPaint {
             cursor_line: Some(0),
             icons: Vec::new(),
             tab: TabId(1),
@@ -2891,7 +2897,7 @@ mod tests {
             row: 0,
         });
         let view = |focused: bool, window_focused: bool, caret: Option<PaneCaret>| {
-            let view = page_pane_view(
+            let view = tool_pane_view(
                 &paint,
                 &grid,
                 rect,
@@ -2929,9 +2935,9 @@ mod tests {
     }
 
     #[test]
-    fn test_a_page_caret_blinks_with_the_global_setting() {
+    fn test_a_tool_caret_blinks_with_the_global_setting() {
         let grid = Grid::new(10, 3);
-        let paint = PagePaint {
+        let paint = ToolPaint {
             cursor_line: Some(0),
             icons: Vec::new(),
             tab: TabId(1),
@@ -2940,7 +2946,7 @@ mod tests {
         let caret = Some(PaneCaret::at(0, 1));
         let mut config = crate::config::Config::default();
         let shown = |config: &crate::config::Config, focused, phase, caret| {
-            page_pane_view(
+            tool_pane_view(
                 &paint,
                 &grid,
                 rect,

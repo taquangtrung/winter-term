@@ -89,7 +89,7 @@ impl VimNav {
 // ========================================================================
 
 /// Emacs' `M-<` and `M->` — beginning and end of the buffer — as the two Alt
-/// chords every surface answers to beside its Vim motions, since the pages
+/// chords every surface answers to beside its Vim motions, since the tools
 /// are read with both sets of habits and `gg`/`G` are the only way there
 /// otherwise.
 ///
@@ -231,7 +231,7 @@ mod tests {
     }
 
     #[test]
-    fn test_the_page_chords_and_the_window_chords_fall_through() {
+    fn test_the_tool_chords_and_the_window_chords_fall_through() {
         let mut nav = VimNav::new();
         assert_eq!(
             nav.key(&ctrl('d')),

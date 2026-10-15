@@ -34,18 +34,18 @@ pub enum PaletteMode {
     Files,
     /// Recalling an earlier query.
     History,
-    /// Every page tab: the ones open somewhere, then what was closed recently.
+    /// Every tool tab: the ones open somewhere, then what was closed recently.
     /// Selecting an open one goes to it, and a closed one comes back as the
-    /// page it was rather than as a fresh page of its kind.
+    /// tool it was rather than as a fresh tool of its kind.
     TabList,
     /// Pane switcher: selecting an entry focuses that pane.
     Panes,
     /// `cd` target picker: selecting an entry executes `cd <dir>` immediately.
     RecentDirs,
-    /// A page's own list: the branches to check out, the tags to delete.
-    /// Selecting an entry answers the page's question rather than running a
+    /// A tool's own list: the branches to check out, the tags to delete.
+    /// Selecting an entry answers the tool's question rather than running a
     /// command of the host's.
-    PagePick,
+    ToolPick,
     /// Buffer swoop: fuzzy line search over the active pane's scrollback and grid.
     Swoop,
     /// Jump to target in current buffer view (fuzzy completion dialog).
@@ -180,7 +180,7 @@ impl Palette {
         }
     }
 
-    /// Open the palette over every page tab: the ones open somewhere first,
+    /// Open the palette over every tool tab: the ones open somewhere first,
     /// then what was closed recently, newest first.
     ///
     /// Each entry is `(action, label, hint)`. The action says which pane a
@@ -242,7 +242,7 @@ impl Palette {
         }
     }
 
-    /// Open the palette over a page's own list, where each entry stands
+    /// Open the palette over a tool's own list, where each entry stands
     /// for itself: what is chosen is the text of the row.
     pub fn open_pick(items: Vec<String>) -> Self {
         let entries = items
@@ -263,7 +263,7 @@ impl Palette {
             history: EditHistory::new(String::new()),
             history_index: None,
             live_query: String::new(),
-            mode: PaletteMode::PagePick,
+            mode: PaletteMode::ToolPick,
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
@@ -866,7 +866,7 @@ fn home_dir() -> Option<PathBuf> {
 // ========================================================================
 
 /// Every built-in command, labelled and annotated with the chord `keymap`
-/// binds it to. The one list the palette and the keys page both read.
+/// binds it to. The one list the palette and the keys tool both read.
 pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
     // (action, label, static shortcut hint: empty means look up from keymap)
     let entries: &[(&str, &str, &str)] = &[

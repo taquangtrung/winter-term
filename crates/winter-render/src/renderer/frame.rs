@@ -30,6 +30,15 @@ use wgpu::{LoadOp, RenderPassColorAttachment, RenderPassDescriptor, StoreOp};
 /// color toward the background.
 const SPLIT_DIVIDER_DIM: f32 = 0.5;
 
+/// Cells left empty after the status bar's last glyph, at its right edge.
+const RIGHT_MARGIN: usize = 1;
+
+/// The fewest cells kept between the status bar's left text and its right.
+const RIGHT_GAP: usize = 2;
+
+/// What stands between the right-hand segments of the status bar.
+const SEGMENT_SEPARATOR: &str = "  ";
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -1219,17 +1228,22 @@ impl GpuRenderer {
             }
         }
 
-        // The page's glyph sits one cell in from the right edge: the line is
-        // monospace, so padding with spaces to the column count lands it there.
-        if let Some(icon) = status.page_icon {
+        // The tool's segments, then its glyph one cell in from the right
+        // edge: the line is monospace, so padding with spaces to the column
+        // count lands them there. Segments that would run into the left side
+        // are dropped from the front, keeping the ones nearest the edge.
+        let right = right_segments(&status.segments, status.tool_icon);
+        if !right.is_empty() {
             let columns = (surface_width / self.cell_width).floor() as usize;
             let used = status_text.chars().count();
-            let padding = columns.saturating_sub(used + 2);
+            let room = columns.saturating_sub(used + RIGHT_MARGIN + RIGHT_GAP);
+            let shown = fit_from_end(&right, room);
+            let padding = columns.saturating_sub(used + shown.chars().count() + RIGHT_MARGIN);
             status_text.extend(std::iter::repeat_n(' ', padding));
-            let icon_start = status_text.len();
-            status_text.push(icon);
-            let icon_end = status_text.len();
-            spans.push((icon_start..icon_end, muted_attrs.clone()));
+            let right_start = status_text.len();
+            status_text.push_str(&shown);
+            let right_end = status_text.len();
+            spans.push((right_start..right_end, muted_attrs.clone()));
         }
 
         // Apply attributes to the text buffer line
@@ -1527,6 +1541,23 @@ fn window_border_verts(
     border_verts
 }
 
+/// The status bar's right side, in order: the tool's segments, then its
+/// glyph.
+fn right_segments(segments: &[String], icon: Option<char>) -> Vec<String> {
+    let mut parts = segments.to_vec();
+    parts.extend(icon.map(String::from));
+    parts
+}
+
+/// `parts` joined, dropping from the front until what is left fits in `room`
+/// cells: the last part, nearest the edge, is the one kept longest.
+fn fit_from_end(parts: &[String], room: usize) -> String {
+    (0..parts.len())
+        .map(|start| parts[start..].join(SEGMENT_SEPARATOR))
+        .find(|joined| joined.chars().count() <= room)
+        .unwrap_or_default()
+}
+
 // ========================================================================
 // Text placement
 // ========================================================================
@@ -1614,6 +1645,16 @@ mod tests {
             x: 0.0,
             y: 0.0,
         }
+    }
+
+    #[test]
+    fn test_the_right_side_drops_its_first_segments_when_short_of_room() {
+        // The glyph and the position nearest it say the most; a long count
+        // further left is the first to go when the notice needs the room.
+        let parts = right_segments(&["340 lines".to_string(), "12:5".to_string()], Some('E'));
+        assert_eq!(fit_from_end(&parts, 80), "340 lines  12:5  E");
+        assert_eq!(fit_from_end(&parts, 8), "12:5  E");
+        assert_eq!(fit_from_end(&parts, 0), "");
     }
 
     #[test]

@@ -118,10 +118,10 @@ impl App {
                 (grid.to_absolute_row(row), col)
             })
             .or_else(|| {
-                self.open_tabs.page(&focused).and_then(|slot| {
+                self.open_tabs.tool(&focused).and_then(|slot| {
                     let grid = slot.painted.as_ref()?;
                     let row = slot.cursor_line.unwrap_or(0);
-                    let col = slot.page.caret().map(|c| c.col).unwrap_or(0);
+                    let col = slot.tool.caret().map(|c| c.col).unwrap_or(0);
                     Some((grid.to_absolute_row(row), col))
                 })
             });
@@ -225,7 +225,7 @@ impl App {
         let query = match &self.search.query {
             Some(q) if !q.is_empty() => q.clone(),
             _ => {
-                if let Some(prompt) = self.page_prompt.as_ref() {
+                if let Some(prompt) = self.tool_prompt.as_ref() {
                     if prompt.request.tag == "search" || prompt.request.tag == "search-back" {
                         let text = prompt.field.text();
                         if !text.is_empty() {
@@ -253,7 +253,7 @@ impl App {
 
         let is_reverse = self.search.reverse
             || self
-                .page_prompt
+                .tool_prompt
                 .as_ref()
                 .is_some_and(|p| p.request.tag == "search-back");
 
@@ -263,10 +263,10 @@ impl App {
                 buffer_match_starts(grid, &query),
                 self.search_start_pos(focused, SearchFrom::Origin, grid),
             )
-        } else if let Some(slot) = self.open_tabs.page(&focused) {
+        } else if let Some(slot) = self.open_tabs.tool(&focused) {
             if let Some(grid) = slot.painted.as_ref() {
                 let start_row = slot.cursor_line.unwrap_or(0);
-                let start_col = slot.page.caret().map(|c| c.col).unwrap_or(0);
+                let start_col = slot.tool.caret().map(|c| c.col).unwrap_or(0);
                 (
                     buffer_match_starts(grid, &query),
                     (grid.to_absolute_row(start_row), start_col),

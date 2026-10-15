@@ -6,7 +6,7 @@ use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
 use winit::keyboard::{Key, PhysicalKey};
 
-use crate::model::page::PagePoint;
+use crate::model::paint::Point;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::CursorIcon;
 
@@ -105,9 +105,9 @@ impl App {
             self.blink_next_flip = Instant::now() + CURSOR_BLINK_PERIOD;
         }
 
-        // A page tab takes its own keys rather than being in a mode; `mode` is
+        // A tool tab takes its own keys rather than being in a mode; `mode` is
         // the terminal's, and only means anything when the tab is not a page.
-        let page_focused = self.open_tabs.is_page(&focused);
+        let tool_focused = self.open_tabs.is_tool(&focused);
         let mode = self.open_tabs.mode(&focused).unwrap_or_default();
 
         // While a tab rename is in progress, intercept all keyboard
@@ -145,9 +145,9 @@ impl App {
             return false;
         }
 
-        // A page's prompt owns the keyboard while it is up, ahead of the
+        // A tool's prompt owns the keyboard while it is up, ahead of the
         // window chords: a filename being typed must not trigger one.
-        if self.page_prompt.is_some() {
+        if self.tool_prompt.is_some() {
             self.handle_prompt_key(&key);
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -180,9 +180,9 @@ impl App {
         // reaches the PTY.
         if self.settings_page.is_some() {
             let logical = logical_key.clone();
-            let mut page = self.settings_page.take().unwrap();
-            if self.handle_settings_input(&mut page, &logical) {
-                self.settings_page = Some(page);
+            let mut tool = self.settings_page.take().unwrap();
+            if self.handle_settings_input(&mut tool, &logical) {
+                self.settings_page = Some(tool);
             } else {
                 self.on_settings_closed();
             }
@@ -220,7 +220,7 @@ impl App {
         let global = self
             .window_keymap
             .global_action(&key)
-            .filter(|action| !self.is_copy_yielded_to_page(action, focused));
+            .filter(|action| !self.is_copy_yielded_to_tool(action, focused));
         if let Some(action) = global {
             self.handle_action(action, focused);
             if self.exit_requested {
@@ -247,10 +247,10 @@ impl App {
             return false;
         }
 
-        // The page text cursor takes every key while it is up, ahead of the
-        // page itself: sharing keys would move the selection and the listing
-        // at once. See `page_cursor`.
-        if self.handle_page_cursor_key(&key) {
+        // The tool text cursor takes every key while it is up, ahead of the
+        // tool itself: sharing keys would move the selection and the listing
+        // at once. See `tool_cursor`.
+        if self.handle_tool_cursor_key(&key) {
             self.update_window_title();
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -258,10 +258,10 @@ impl App {
             return false;
         }
 
-        // A page owns the keys it binds, and only those: anything it declines
+        // A tool owns the keys it binds, and only those: anything it declines
         // falls through to the window chords below, so the vim vocabulary
-        // reads the same in a page as in a terminal.
-        if self.offer_key_to_page(focused, &key) {
+        // reads the same in a tool as in a terminal.
+        if self.offer_key_to_tool(focused, &key) {
             self.update_window_title();
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -269,10 +269,10 @@ impl App {
             return false;
         }
 
-        // `v` in a page that did not bind it starts a text cursor, the way it
+        // `v` in a tool that did not bind it starts a text cursor, the way it
         // starts a Visual selection in a terminal.
-        if page_focused && key.code == KeyCode::Char('v') && !key.alt && !key.ctrl && !key.shift {
-            self.start_page_cursor(focused);
+        if tool_focused && key.code == KeyCode::Char('v') && !key.alt && !key.ctrl && !key.shift {
+            self.start_tool_cursor(focused);
             if let Some(window) = &self.window {
                 window.request_redraw();
             }
@@ -322,8 +322,8 @@ impl App {
             .map(|p| p.grid().is_alt_screen())
             .unwrap_or(false);
         let prev_pending = self.pending;
-        let action = match page_focused {
-            true => input::resolve_page(&key, &self.window_keymap),
+        let action = match tool_focused {
+            true => input::resolve_tool(&key, &self.window_keymap),
             false => input::resolve_with(
                 mode,
                 &key,
@@ -349,7 +349,7 @@ impl App {
         // unmodeled ones); `Edit`/undo/redo update it in their handlers.
         // Mode switches, focus and tab commands leave this line untouched,
         // so the shadow is preserved (undo still works in Normal mode).
-        if !page_focused && mode == Mode::Insert && forwarded_to_pty(&action) {
+        if !tool_focused && mode == Mode::Insert && forwarded_to_pty(&action) {
             self.record_insert_key(focused, &key, &action, at_prompt);
             // Deliberately does NOT queue an automatic switch to
             // Normal mode once a submitted command's new prompt
@@ -372,14 +372,14 @@ impl App {
     /// take precedence over the panes, so a click on chrome never reaches a
     /// pane underneath it.
     /// Whether the global copy chord, with nothing selected, should pass to
-    /// the page in tab `focused` instead: with nothing to copy it
-    /// would do nothing, and a page may bind the same chord (the Git page
-    /// commits on `Ctrl-Shift-c`). A page that declines it still reaches the
+    /// the tool in tab `focused` instead: with nothing to copy it
+    /// would do nothing, and a tool may bind the same chord (the Git tool
+    /// commits on `Ctrl-Shift-c`). A tool that declines it still reaches the
     /// ordinary keymap, where it resolves to the same harmless copy.
-    fn is_copy_yielded_to_page(&self, action: &input::Action, focused: TabId) -> bool {
+    fn is_copy_yielded_to_tool(&self, action: &input::Action, focused: TabId) -> bool {
         *action == input::Action::Copy
             && self.palette.is_none()
-            && self.open_tabs.is_page(&focused)
+            && self.open_tabs.is_tool(&focused)
             && self.selected_text().is_none()
     }
 
@@ -559,14 +559,14 @@ impl App {
                     if let Some((tab_id, pane_rect)) = self.pane_at_pixel(x, y) {
                         self.layout_mut().focus(tab_id);
                         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
-                        // A page tab owns what is drawn there, so the click is
+                        // A tool tab owns what is drawn there, so the click is
                         // its to answer before the grid's.
-                        let at = PagePoint {
+                        let at = Point {
                             col,
                             drag: false,
                             row,
                         };
-                        if self.offer_mouse_to_page(tab_id, at) {
+                        if self.offer_mouse_to_tool(tab_id, at) {
                             self.pointer.press_cell = None;
                             self.dirty = true;
                             if let Some(window) = &self.window {
@@ -735,12 +735,12 @@ impl App {
             // Resolved against the pane the drag started in, not just the one
             // under the pointer, so running off an edge keeps selecting.
             if let Some((tab_id, row, col)) = self.drag_cell_at(x, y) {
-                let at = PagePoint {
+                let at = Point {
                     col,
                     drag: true,
                     row,
                 };
-                if self.offer_mouse_to_page(tab_id, at) {
+                if self.offer_mouse_to_tool(tab_id, at) {
                     self.dirty = true;
                     if let Some(window) = &self.window {
                         window.request_redraw();
@@ -828,7 +828,7 @@ impl App {
             .pane_at_pixel(x, y)
             .map(|(id, _)| id)
             .unwrap_or_else(|| self.layout().focused());
-        if scroll_lines != 0 && self.offer_scroll_to_page(focused, scroll_lines) {
+        if scroll_lines != 0 && self.offer_scroll_to_tool(focused, scroll_lines) {
             self.dirty = true;
             if let Some(window) = &self.window {
                 window.request_redraw();

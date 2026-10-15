@@ -128,9 +128,12 @@ pub struct StatusBar {
     /// The in-progress or last-run `/` search query, shown after the mode
     /// label while a search is active and cleared once it's cancelled.
     pub search: Option<StatusSearch>,
-    /// A glyph for the kind of page that owns the keyboard, drawn at the
+    /// A glyph for the kind of tool that owns the keyboard, drawn at the
     /// bar's right edge.
-    pub page_icon: Option<char>,
+    pub tool_icon: Option<char>,
+    /// What the focused tool says about where its keys stand (`12:5`,
+    /// `340 lines`), drawn right-aligned before `tool_icon`.
+    pub segments: Vec<String>,
 }
 /// The live `/`/`?` search state shown in the status bar: the query text as
 /// typed, plus the current match position out of the total found (both zero

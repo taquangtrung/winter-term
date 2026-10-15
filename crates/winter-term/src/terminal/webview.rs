@@ -17,7 +17,7 @@ use wry::{Rect, WebView, WebViewBuilder};
 
 use crate::model::input::{Key, KeyCode};
 use crate::model::layout::TabId;
-use crate::model::page::{PageSurface, SurfaceAsset};
+use crate::model::tool::{SurfaceAsset, ToolSurface};
 
 use super::block_queue::BlockEntry;
 
@@ -44,7 +44,7 @@ const VEGA_CDN_SCRIPTS: &[&str] = &[
     "https://cdn.jsdelivr.net/npm/vega-embed@6",
 ];
 
-/// Scheme the page-surface protocol answers on. Everything a surface loads
+/// Scheme the tool-surface protocol answers on. Everything a surface loads
 /// comes through it and nothing else resolves, so a document opened in one
 /// reaches neither the network nor the rest of the filesystem.
 const SURFACE_SCHEME: &str = "winter";
@@ -134,7 +134,7 @@ pub struct PaneViewport {
     pub y: f32,
 }
 
-/// Everything a page surface needs in order to be created.
+/// Everything a tool surface needs in order to be created.
 pub struct SurfaceParams {
     /// Script run in the surface before its document loads, which is how the
     /// host hands it what only the host knows: the theme it has to match.
@@ -142,15 +142,15 @@ pub struct SurfaceParams {
     /// Where the surface sits in the window, in physical pixels.
     pub rect: TilePlacement,
     /// What the surface serves and loads.
-    pub surface: PageSurface,
+    pub surface: ToolSurface,
 }
 
-/// Something a page's surface posted back out of its WebView.
+/// Something a tool's surface posted back out of its WebView.
 pub enum SurfaceMessage {
     /// A key the surface saw. The WebView holds the window's keyboard while
     /// it is up, so this is how a key typed over a document reaches Winter.
     Key(SurfaceKey),
-    /// What the surface said, for its own page to read.
+    /// What the surface said, for its own tool to read.
     Text(SurfaceText),
 }
 
@@ -174,15 +174,15 @@ struct RelayedKeyBody {
 pub struct SurfaceKey {
     /// The key, in the same terms the windowing layer would have given it.
     pub key: Key,
-    /// The pane whose page owns the surface.
+    /// The pane whose tool owns the surface.
     pub tab_id: TabId,
 }
 
-/// What a surface said, for the page that owns it.
+/// What a surface said, for the tool that owns it.
 pub struct SurfaceText {
     /// What the surface said, verbatim.
     pub body: String,
-    /// The pane whose page owns the surface.
+    /// The pane whose tool owns the surface.
     pub tab_id: TabId,
 }
 
@@ -241,10 +241,10 @@ struct PendingUpdate {
     html: String,
 }
 
-/// A page's own WebView, covering the pane its page is open in.
+/// A tool's own WebView, covering the pane its tool is open in.
 ///
 /// Unlike a block tile it is anchored to nothing in the scrollback: it fills
-/// the rect its page leaves for it and lives exactly as long as the page
+/// the rect its tool leaves for it and lives exactly as long as the tool
 /// does.
 struct SurfaceSlot {
     view: PlacedWebView,
@@ -283,7 +283,7 @@ struct TileClip {
 }
 
 /// A WebView the host positions, together with the geometry it was last
-/// given. Shared by block tiles and page surfaces: both are child views the
+/// given. Shared by block tiles and tool surfaces: both are child views the
 /// host moves every frame, and both want the same round-trips skipped.
 struct PlacedWebView {
     /// The geometry the view was last given, or `None` while it is hidden.
@@ -299,7 +299,7 @@ pub struct TilePlacement {
     /// Height in physical pixels.
     pub height: u32,
     /// Pixels of content hidden above the view's top edge, which it slides
-    /// past. Always zero for a page surface, which is never clipped.
+    /// past. Always zero for a tool surface, which is never clipped.
     pub scroll_top: i32,
     /// Width in physical pixels.
     pub width: u32,
@@ -414,7 +414,7 @@ impl WebViewManager {
     ///
     /// A tile whose pane is absent from `viewports` is hidden. That covers a
     /// pane in a background tab, a pane an alternate-screen app owns, and a
-    /// page tab: none of them paints the grid the tile is
+    /// tool tab: none of them paints the grid the tile is
     /// anchored to, and a block left over it hides what does.
     ///
     /// A tile straddling a pane edge is clipped to the pane rather than
@@ -683,14 +683,14 @@ impl WebViewManager {
 }
 
 // ========================================================================
-// WebViewManager: page surfaces
+// WebViewManager: tool surfaces
 // ========================================================================
 
 impl WebViewManager {
-    /// Give `tab_id`'s page a WebView of its own at `params.rect`, unless it
+    /// Give `tab_id`'s tool a WebView of its own at `params.rect`, unless it
     /// already has one.
     ///
-    /// The view resolves nothing but the page's own assets and the one
+    /// The view resolves nothing but the tool's own assets and the one
     /// document it named, both over [`SURFACE_SCHEME`], and it refuses every
     /// navigation: a document opened in it can reach neither the network nor
     /// anything else on disk.
@@ -708,7 +708,7 @@ impl WebViewManager {
             rect,
             surface,
         } = params;
-        let PageSurface {
+        let ToolSurface {
             assets,
             document,
             entry,
@@ -754,7 +754,7 @@ impl WebViewManager {
     }
 
     /// Hide every surface but the ones belonging to `showing`, e.g. because
-    /// their tab went to the background or their page closed.
+    /// their tab went to the background or their tool closed.
     pub fn hide_surfaces_except(&mut self, showing: &[TabId]) {
         for (tab_id, slot) in self.surfaces.iter_mut() {
             if !showing.contains(tab_id) {
@@ -763,7 +763,7 @@ impl WebViewManager {
         }
     }
 
-    /// Run `js` inside `tab_id`'s surface, which is how a key its page bound
+    /// Run `js` inside `tab_id`'s surface, which is how a key its tool bound
     /// reaches the document the engine is drawing.
     pub fn run_surface_script(&self, tab_id: TabId, js: &str) {
         if let Some(slot) = self.surfaces.get(&tab_id) {
@@ -776,7 +776,7 @@ impl WebViewManager {
         self.surface_rx.try_iter().collect()
     }
 
-    /// Drop `tab_id`'s surface, because its page closed or its pane did.
+    /// Drop `tab_id`'s surface, because its tool closed or its pane did.
     pub fn remove_surface(&mut self, tab_id: TabId) {
         self.surfaces.remove(&tab_id);
     }
@@ -866,10 +866,10 @@ impl PlacedWebView {
 // Tile geometry
 // ========================================================================
 
-/// Read what a surface posted: a key it relayed, or something for its page.
+/// Read what a surface posted: a key it relayed, or something for its tool.
 ///
-/// Anything that does not parse as a relayed key is the page's, malformed
-/// JSON included: a page reads its own surface's output and is the only thing
+/// Anything that does not parse as a relayed key is the tool's, malformed
+/// JSON included: a tool reads its own surface's output and is the only thing
 /// that can say whether it makes sense.
 fn read_surface_message(body: &str, tab_id: TabId) -> SurfaceMessage {
     let Ok(relayed) = serde_json::from_str::<RelayedKey>(body) else {
@@ -879,7 +879,7 @@ fn read_surface_message(body: &str, tab_id: TabId) -> SurfaceMessage {
         });
     };
     // A key Winter has no code for is dropped rather than handed on as text,
-    // which the page would try to read as its own output.
+    // which the tool would try to read as its own output.
     let code = KeyCode::from_web_name(&relayed.winter_key.name);
     match code {
         Some(code) => SurfaceMessage::Key(SurfaceKey {
@@ -898,8 +898,8 @@ fn read_surface_message(body: &str, tab_id: TabId) -> SurfaceMessage {
     }
 }
 
-/// Serve one request out of a page surface, which can only ever be for the
-/// page's own assets or for the single document it named.
+/// Serve one request out of a tool surface, which can only ever be for the
+/// tool's own assets or for the single document it named.
 ///
 /// `path` is the request's path with its leading slash, the same shape on
 /// every platform because every surface URL carries [`SURFACE_HOST`].
@@ -1298,8 +1298,8 @@ mod tests {
     }
 
     #[test]
-    fn test_what_a_page_says_is_not_read_as_a_key() {
-        // A page's own output shares the channel with the relay, and reading
+    fn test_what_a_tool_says_is_not_read_as_a_key() {
+        // A tool's own output shares the channel with the relay, and reading
         // one as the other would both lose the report and inject a keystroke.
         let body = r#"{"page":3,"pages":18}"#;
         let SurfaceMessage::Text(said) = read_surface_message(body, TabId(0)) else {
@@ -1310,7 +1310,7 @@ mod tests {
 
     #[test]
     fn test_a_key_winter_has_no_code_for_is_dropped_rather_than_passed_on() {
-        // Handing it on as text would have the page try to read a keystroke
+        // Handing it on as text would have the tool try to read a keystroke
         // as its own output.
         let body =
             r#"{"winterKey":{"alt":false,"ctrl":false,"name":"BrightnessUp","shift":false}}"#;

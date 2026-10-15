@@ -555,11 +555,11 @@ pub fn resolve_with(
     }
 }
 
-/// Resolve a key a page tab was offered and declined. Only the window-layout
+/// Resolve a key a tool tab was offered and declined. Only the window-layout
 /// chords are left to honor: splitting, closing, zooming, and moving focus
-/// all still have to work from a page tab. Anything else would act on a
+/// all still have to work from a tool tab. Anything else would act on a
 /// terminal the tab does not have.
-pub fn resolve_page(key: &Key, window: &WindowKeymap) -> Action {
+pub fn resolve_tool(key: &Key, window: &WindowKeymap) -> Action {
     window.direct_action(key, false).unwrap_or(Action::Ignore)
 }
 
@@ -630,7 +630,7 @@ mod tests {
     #[test]
     fn test_a_bare_modifier_is_not_a_key() {
         // Holding Shift fires a keydown of its own; routing it as a key would
-        // send a stray press to the page on every chord typed.
+        // send a stray press to the tool on every chord typed.
         assert_eq!(KeyCode::from_web_name("Shift"), None);
         assert_eq!(KeyCode::from_web_name("Control"), None);
         assert_eq!(KeyCode::from_web_name("Unidentified"), None);
@@ -665,8 +665,8 @@ mod tests {
     }
 
     #[test]
-    fn test_a_page_tab_still_honors_the_window_layout_chords() {
-        // A page tab has to stay manageable: `Alt-h` moves focus off it and
+    fn test_a_tool_tab_still_honors_the_window_layout_chords() {
+        // A tool tab has to stay manageable: `Alt-h` moves focus off it and
         // `Shift-Alt-\\` splits beside it, exactly as from a terminal tab.
         let focus_left = Key {
             alt: true,
@@ -675,13 +675,13 @@ mod tests {
             shift: false,
         };
         assert_eq!(
-            resolve_page(&focus_left, &WindowKeymap::default()),
+            resolve_tool(&focus_left, &WindowKeymap::default()),
             Action::FocusPane(FocusDir::Left)
         );
     }
 
     #[test]
-    fn test_ctrl_shift_d_opens_the_dir_page_from_any_mode() {
+    fn test_ctrl_shift_d_opens_the_dir_tool_from_any_mode() {
         // The chord is a named-command binding, not a built-in window action,
         // so it has to resolve through every mode's window-chord lookup.
         let chord = Key {
@@ -694,7 +694,7 @@ mod tests {
         for mode in [Mode::Insert, Mode::Normal, Mode::Visual] {
             assert_eq!(resolve_simple(mode, &chord), expected, "mode {mode:?}");
         }
-        assert_eq!(resolve_page(&chord, &WindowKeymap::default()), expected);
+        assert_eq!(resolve_tool(&chord, &WindowKeymap::default()), expected);
     }
 
     #[test]
@@ -730,7 +730,7 @@ mod tests {
                 assert_eq!(resolve_simple(mode, &chord), expected, "{key} in {mode:?}");
             }
             assert_eq!(
-                resolve_page(&chord, &WindowKeymap::default()),
+                resolve_tool(&chord, &WindowKeymap::default()),
                 expected,
                 "{key} in a page"
             );
@@ -738,9 +738,9 @@ mod tests {
     }
 
     #[test]
-    fn test_a_page_tab_swallows_keys_the_page_declined() {
-        // `i` in a page tab must not reach the Normal-mode resolver: switching
-        // a page tab to Insert would leave its keystrokes with nowhere to go.
+    fn test_a_tool_tab_swallows_keys_the_tool_declined() {
+        // `i` in a tool tab must not reach the Normal-mode resolver: switching
+        // a tool tab to Insert would leave its keystrokes with nowhere to go.
         let insert = Key {
             alt: false,
             code: KeyCode::Char('i'),
@@ -748,7 +748,7 @@ mod tests {
             shift: false,
         };
         assert_eq!(
-            resolve_page(&insert, &WindowKeymap::default()),
+            resolve_tool(&insert, &WindowKeymap::default()),
             Action::Ignore
         );
     }

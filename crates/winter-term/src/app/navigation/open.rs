@@ -15,9 +15,9 @@ use std::path::{Path, PathBuf};
 use winter_render::Grid;
 
 use crate::model::layout::TabId;
-use crate::model::page;
 use crate::model::palette::Palette;
 use crate::model::path::{clean_path, expand_home};
+use crate::model::tool;
 use crate::terminal::session::Terminal;
 
 use super::vim::line_chars;
@@ -391,10 +391,10 @@ impl App {
     /// 4. The rightmost reference on the last non-blank line above it.
     ///
     /// URLs count wherever a cursor rests; the last-line scan finds files and
-    /// directories only. A page tab points at nothing:
+    /// directories only. A tool tab points at nothing:
     /// the terminal text underneath is not what the user is looking at.
     pub(crate) fn target_at_point(&self, focused: TabId) -> Option<OpenTarget> {
-        if self.open_tabs.is_page(&focused) {
+        if self.open_tabs.is_tool(&focused) {
             return None;
         }
         let terminal = self.open_tabs.terminal(&focused)?;
@@ -430,8 +430,8 @@ impl App {
 
     /// The file browser Find File opens: rooted where the focused terminal
     /// points (see [`Self::target_at_point`]), on the file itself when it
-    /// names one, else at the working directory (a page's own, when the
-    /// focused tab is a page).
+    /// names one, else at the working directory (a tool's own, when the
+    /// focused tab is a tool).
     pub(crate) fn files_palette_at_point(&self) -> Palette {
         match self.target_at_point(self.layout().focused()) {
             Some(OpenTarget::File { path, .. }) if path.is_dir() => Palette::open_files(path),
@@ -449,7 +449,7 @@ impl App {
 
     /// `gx` and `Alt+.`: open what the focused terminal points at (see
     /// [`Self::target_at_point`]). A URL goes to the system opener, a
-    /// directory to the dir page, and a file to the editor at the referenced
+    /// directory to the dir tool, and a file to the editor at the referenced
     /// line, each over this pane.
     pub(crate) fn open_under_cursor(&mut self, focused: TabId) {
         match self.target_at_point(focused) {
@@ -459,7 +459,7 @@ impl App {
     }
 
     /// Open a resolved target: a URL in the system opener, a directory in the
-    /// dir page, a file in the editor at its referenced line.
+    /// dir tool, a file in the editor at its referenced line.
     fn open_target(&mut self, target: OpenTarget) {
         match target {
             OpenTarget::Url(url) => match ::open::that(&url) {
@@ -469,13 +469,13 @@ impl App {
             // Over the pane rather than in a tab of its own: the reference was
             // printed by whatever is running here, and closing the file puts
             // the user back in front of it with their place kept.
-            OpenTarget::File { path, .. } if path.is_dir() => self.open_dir_page_at(path),
+            OpenTarget::File { path, .. } if path.is_dir() => self.open_dir_tool_at(path),
             OpenTarget::File { path, line } => {
                 let target = match line {
-                    Some(line) => page::OpenTarget::at_line(path, line),
-                    None => page::OpenTarget::file(path),
+                    Some(line) => tool::OpenTarget::at_line(path, line),
+                    None => tool::OpenTarget::file(path),
                 };
-                self.open_path_page(target);
+                self.open_path_tool(target);
             }
         }
     }
@@ -486,8 +486,8 @@ impl App {
         let Some((tab_id, rect)) = self.pane_at_pixel(x, y) else {
             return false;
         };
-        // A page tab has no terminal text to point at.
-        if self.open_tabs.is_page(&tab_id) {
+        // A tool tab has no terminal text to point at.
+        if self.open_tabs.is_tool(&tab_id) {
             return false;
         }
         let Some(terminal) = self.open_tabs.terminal(&tab_id) else {
@@ -497,7 +497,7 @@ impl App {
         let cwd = terminal.cwd();
         match resolve_open_target(terminal.grid(), row, col, cwd.as_deref()) {
             Some(target) => {
-                // The page opens over the focused pane, which the click makes
+                // The tool opens over the focused pane, which the click makes
                 // the one it landed in.
                 self.layout_mut().focus(tab_id);
                 self.open_target(target);
@@ -509,7 +509,7 @@ impl App {
 
     /// Run a command in a new tab with a real PTY, for work that needs a
     /// terminal: an editor, or a git command that prompts.
-    pub(crate) fn spawn_in_tab(&mut self, request: crate::model::page::SpawnRequest) {
+    pub(crate) fn spawn_in_tab(&mut self, request: crate::model::tool::SpawnRequest) {
         let mut command = portable_pty::CommandBuilder::new(&request.program);
         for arg in &request.args {
             command.arg(arg);
@@ -560,8 +560,8 @@ impl App {
     pub(crate) fn copy_pane_cwd(&mut self, focused: TabId) {
         let reference = self
             .open_tabs
-            .page(&focused)
-            .and_then(|slot| slot.page.file_reference())
+            .tool(&focused)
+            .and_then(|slot| slot.tool.file_reference())
             .or_else(|| {
                 self.open_tabs
                     .terminal(&focused)

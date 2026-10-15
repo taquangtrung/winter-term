@@ -251,9 +251,9 @@ impl App {
             .collect()
     }
 
-    /// The SVG naming what `pane` holds: a terminal's, or its page's.
+    /// The SVG naming what `pane` holds: a terminal's, or its tool's.
     fn tab_icon(&self, tab: TabId) -> Option<Vec<u8>> {
-        let name = match self.open_tabs.page(&tab) {
+        let name = match self.open_tabs.tool(&tab) {
             Some(slot) => slot.tab_icon(),
             None => crate::icons::terminal_icon(),
         };

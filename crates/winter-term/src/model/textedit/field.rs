@@ -3,9 +3,9 @@
 //! names, one per listed entry, being renamed in place.
 
 use crate::model::input::Key;
-use crate::model::page::PageNotice;
 use crate::model::textedit::buffer::TextBuffer;
 use crate::model::textedit::modal::{EditMode, EditOutcome, EditView, Marks, ModalEditor};
+use crate::model::tool::ToolNotice;
 
 // ========================================================================
 // Data Structures
@@ -88,7 +88,7 @@ impl TextField {
     }
 
     /// Take what the last command reported, for the status bar.
-    pub fn take_notice(&mut self) -> Option<PageNotice> {
+    pub fn take_notice(&mut self) -> Option<ToolNotice> {
         self.modal.take_notice()
     }
 

@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use crate::model::layout::{FocusDir, Layout, Rect, TabId};
 use crate::terminal::session::Terminal;
 
-use super::page::{Closing, PageKind};
 use super::strip::StripHit;
+use super::tool::{Closing, ToolKind};
 use super::App;
 use super::{DEFAULT_COLS, DEFAULT_ROWS};
 use winter_render::TabbarHit;
@@ -90,8 +90,8 @@ impl App {
     pub(crate) fn new_tab(&mut self) {
         let id = self.alloc_tab_id();
         // Open the new tab where the focused tab was being used rather than
-        // at the process default (usually `$HOME`): beside a page that is the
-        // directory the page is looking at, not a shell's own.
+        // at the process default (usually `$HOME`): beside a tool that is the
+        // directory the tool is looking at, not a shell's own.
         let cwd = self.focused_start_cwd();
         let (cols, rows) = self.focused_grid_size();
         let shell = self.config.active_shell().map(String::from);
@@ -210,7 +210,7 @@ impl App {
     }
 
     /// Show the most recently shown terminal of the focused pane, for the way
-    /// back from a page tab to the shell it was opened from. A terminal that
+    /// back from a tool tab to the shell it was opened from. A terminal that
     /// is already showing stays showing; a pane with none says so.
     pub(crate) fn reveal_recent_terminal(&mut self) {
         let focused = self.layout().focused();
@@ -218,7 +218,7 @@ impl App {
             .layout()
             .recent_in_pane(focused)
             .into_iter()
-            .find(|tab| self.open_tabs.is_terminal(tab) && !self.open_tabs.is_page(tab));
+            .find(|tab| self.open_tabs.is_terminal(tab) && !self.open_tabs.is_tool(tab));
         match terminal {
             Some(tab) => self.show_tab(tab),
             None => self.set_notice("no terminal in this pane"),
@@ -314,7 +314,7 @@ impl App {
     /// Close one tab. Closing the last tab of the window asks for the app to
     /// exit instead.
     ///
-    /// Unwritten edits in a page tab are asked about first, and the tab
+    /// Unwritten edits in a tool tab are asked about first, and the tab
     /// closes on the answer rather than here.
     pub(crate) fn close_tab(&mut self, tab: TabId) {
         if self.ask_before_closing_tab(tab) {
@@ -357,13 +357,13 @@ impl App {
         let snapshot = self.layout().export_tree();
         let pane_gone = self.layout().tabs_in_pane(tab).len() <= 1;
         let is_commit_editor = self.commit_companions.contains_key(&tab)
-            || self.open_tabs.page(&tab).is_some_and(|slot| {
-                slot.kind() == PageKind::Editor && slot.page.is_commit_editor()
+            || self.open_tabs.tool(&tab).is_some_and(|slot| {
+                slot.kind() == ToolKind::Editor && slot.tool.is_commit_editor()
             });
         let commit_repo = if is_commit_editor {
             self.open_tabs
-                .page(&tab)
-                .and_then(|slot| slot.page.cwd())
+                .tool(&tab)
+                .and_then(|slot| slot.tool.cwd())
                 .map(|p| {
                     if p.file_name().is_some_and(|n| n == ".git") {
                         p.parent().unwrap_or(&p).to_path_buf()
@@ -374,9 +374,9 @@ impl App {
         } else {
             None
         };
-        if let Some(slot) = self.open_tabs.remove_page(&tab) {
+        if let Some(slot) = self.open_tabs.remove_tool(&tab) {
             if closing == Closing::Keep {
-                self.stash_closed_page(tab, slot);
+                self.stash_closed_tool(tab, slot);
             }
         } else if closing == Closing::Keep {
             self.stash_closed_pane(&[tab], snapshot, Vec::new(), pane_gone);
@@ -393,11 +393,11 @@ impl App {
             self.close_tab_now(companion, Closing::Forget);
         }
         if let Some(repo) = commit_repo {
-            self.focus_or_open_git_page(repo);
+            self.focus_or_open_git_tool(repo);
         }
     }
 
-    /// Forget everything kept about one tab: its terminal or its page, and
+    /// Forget everything kept about one tab: its terminal or its tool, and
     /// every per-tab record the rest of the app holds under its id.
     pub(crate) fn drop_tab_state(&mut self, tab: TabId) {
         // Work the tab asked for would come back to a tab that is gone, and
@@ -405,9 +405,9 @@ impl App {
         self.jobs.cancel_for(tab);
         self.commit_companions
             .retain(|_, companion| *companion != tab);
-        self.open_tabs.remove_page(&tab);
-        if self.page_prompt.as_ref().is_some_and(|p| p.tab == tab) {
-            self.page_prompt = None;
+        self.open_tabs.remove_tool(&tab);
+        if self.tool_prompt.as_ref().is_some_and(|p| p.tab == tab) {
+            self.tool_prompt = None;
             self.prompt_debounce = None;
         }
         if self
@@ -417,8 +417,8 @@ impl App {
         {
             self.search_debounce = None;
         }
-        if self.page_cursor.as_ref().is_some_and(|c| c.tab == tab) {
-            self.stop_page_cursor();
+        if self.tool_cursor.as_ref().is_some_and(|c| c.tab == tab) {
+            self.stop_tool_cursor();
         }
         self.webview_mgr.remove_surface(tab);
         self.open_tabs.remove(&tab);

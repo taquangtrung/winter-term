@@ -33,21 +33,21 @@ fn copy_confirmation(text: &str) -> String {
 // ========================================================================
 
 impl App {
-    /// The grid a selection over `tab` reads: the rows a page last painted,
+    /// The grid a selection over `tab` reads: the rows a tool last painted,
     /// else the terminal's own grid.
     ///
-    /// A page draws over a pane whose shell keeps running underneath, so the
+    /// A tool draws over a pane whose shell keeps running underneath, so the
     /// two grids hold different text. Resolving against the terminal's meant a
     /// drag over a listing highlighted nothing and copied whatever output was
     /// hidden behind it.
     ///
-    /// Both are addressed the same way afterwards: a page's grid has no
+    /// Both are addressed the same way afterwards: a tool's grid has no
     /// scrollback, so `to_absolute_row` over it is the identity and
     /// `absolute_cell` is an ordinary cell lookup.
     pub(crate) fn selection_grid(&self, tab: TabId) -> Option<&winter_render::Grid> {
         match self
             .open_tabs
-            .page(&tab)
+            .tool(&tab)
             .and_then(|slot| slot.painted.as_ref())
         {
             Some(painted) => Some(painted),

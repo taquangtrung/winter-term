@@ -71,14 +71,14 @@ impl App {
             icon_textures: HashMap::new(),
             icon_texture_box: (0, 0),
             jobs: crate::app::jobs::Jobs::new(),
-            page_prompt: None,
+            tool_prompt: None,
             prompt_debounce: None,
             search_debounce: None,
             prompt_answers: Answers::default(),
             error_walk: None,
-            page_pick: None,
-            page_cursor: None,
-            page_wrap: false,
+            tool_pick: None,
+            tool_cursor: None,
+            tool_wrap: false,
             commit_companions: HashMap::new(),
             open_tabs: OpenTabs::default(),
             closed: Vec::new(),
@@ -169,7 +169,7 @@ impl App {
                 self.reveal_recent_terminal();
             }
             "toggle_mode" => {
-                // A page tab has no mode to toggle, and is left as it is.
+                // A tool tab has no mode to toggle, and is left as it is.
                 if let Some(mode) = self.open_tabs.mode(&focused) {
                     let new_mode = match mode {
                         Mode::Insert => Mode::Normal,
@@ -188,25 +188,25 @@ impl App {
                 self.close_pane(focused);
             }
             "dir_page" => {
-                self.open_dir_page();
+                self.open_dir_tool();
             }
             "file_browser" => {
                 self.open_file_browser();
             }
             "git_page" => {
-                self.open_git_page();
+                self.open_git_tool();
             }
             "grep_page" => {
-                self.open_grep_page();
+                self.open_grep_tool();
             }
             "proc_page" => {
-                self.open_proc_page();
+                self.open_proc_tool();
             }
             "sys_page" => {
-                self.open_sys_page();
+                self.open_sys_tool();
             }
             "keys_page" | "keys_view" => {
-                self.open_keys_page();
+                self.open_keys_tool();
             }
             "reopen_page" => {
                 self.reopen_last_closed();
@@ -454,7 +454,7 @@ impl App {
             Session::save(
                 &self.tabs.layout,
                 &self.open_tabs.terminal_map(),
-                self.page_sessions(),
+                self.tool_sessions(),
             );
         }
         self.save_app_state();
@@ -482,7 +482,7 @@ impl App {
             Session::save(
                 &self.tabs.layout,
                 &self.open_tabs.terminal_map(),
-                self.page_sessions(),
+                self.tool_sessions(),
             );
             if let Ok(exe) = std::env::current_exe() {
                 let _ = std::process::Command::new(exe).spawn();
@@ -510,7 +510,7 @@ impl App {
         Session::save_handover(
             &self.tabs.layout,
             &self.open_tabs.terminal_map(),
-            self.page_sessions(),
+            self.tool_sessions(),
         );
         crate::session::announce_handover();
         let error = std::process::Command::new(&exe)

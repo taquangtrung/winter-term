@@ -8,10 +8,10 @@
 use winter_render::{ContextMenu, Menu, MenuItem, MenuStyle, TabbarHit, TopTabbar};
 
 use crate::model::layout::TabId;
-use crate::model::page::PagePoint;
+use crate::model::paint::Point;
 
 use super::strip::StripHit;
-use super::{App, ContextAction, PageKeyAction};
+use super::{App, ContextAction, ToolKeyAction};
 use crate::config::TitleBarStyle;
 
 // ========================================================================
@@ -185,13 +185,13 @@ fn menu_item(item: &ItemDef) -> MenuItem {
 // ========================================================================
 
 impl App {
-    /// How a strip names one tab: a name the user gave it, a page's own
+    /// How a strip names one tab: a name the user gave it, a tool's own
     /// label, else what the terminal says about itself.
     pub(crate) fn tab_title(&self, focused: TabId) -> String {
         if let Some(name) = self.tabs.names.get(&focused) {
             return name.clone();
         }
-        if let Some(slot) = self.open_tabs.page(&focused) {
+        if let Some(slot) = self.open_tabs.tool(&focused) {
             return slot.tab_label();
         }
         // An OSC 0/2 title is the app's own presentation of itself (butterfly,
@@ -319,7 +319,7 @@ impl App {
                         super::ContextAction::Copy => "Copy".into(),
                         super::ContextAction::Paste => "Paste".into(),
                         super::ContextAction::OpenLink(_) => "Open Link".into(),
-                        super::ContextAction::PageKey(action) => action.label.clone(),
+                        super::ContextAction::ToolKey(action) => action.label.clone(),
                     },
                     shortcut: String::new(),
                 })
@@ -363,9 +363,9 @@ impl App {
     /// abbreviated to `~`.
     fn titlebar_path(&self) -> String {
         let focused = self.layout().focused();
-        if let Some(slot) = self.open_tabs.page(&focused) {
+        if let Some(slot) = self.open_tabs.tool(&focused) {
             let kind = slot.kind().title();
-            let target = slot.page.address();
+            let target = slot.tool.address();
             return match target {
                 Some(tgt) if !tgt.is_empty() => format!("{kind}: {tgt}"),
                 _ => kind.to_string(),
@@ -408,16 +408,16 @@ impl App {
 
     /// Open a right-click context menu at `(x, y)`.
     ///
-    /// Over a page the menu is the page's own, because the terminal's
+    /// Over a tool the menu is the tool's own, because the terminal's
     /// entries mean nothing there: a paste would go to the shell running
     /// underneath the listing, which is not what was clicked on.
     pub(crate) fn open_context_menu(&mut self, x: f32, y: f32) {
         use super::ContextAction;
         let over_page = self
             .pane_at_pixel(x, y)
-            .is_some_and(|(tab_id, _)| self.open_tabs.is_page(&tab_id));
+            .is_some_and(|(tab_id, _)| self.open_tabs.is_tool(&tab_id));
         let mut actions: Vec<ContextAction> = match over_page {
-            true => self.page_context_actions(x, y),
+            true => self.tool_context_actions(x, y),
             false => Vec::new(),
         };
         if self.selection.span.is_some() {
@@ -429,7 +429,7 @@ impl App {
                 actions.push(ContextAction::OpenLink(url.clone()));
             }
         }
-        // A page with nothing to offer over this row gets no empty card.
+        // A tool with nothing to offer over this row gets no empty card.
         if actions.is_empty() {
             self.close_context_menu();
             return;
@@ -442,34 +442,34 @@ impl App {
         self.dirty = true;
     }
 
-    /// What the page under `(x, y)` offers over the row that was
+    /// What the tool under `(x, y)` offers over the row that was
     /// clicked.
     ///
-    /// The pointer moves the page's cursor first, so the menu acts on the row
+    /// The pointer moves the tool's cursor first, so the menu acts on the row
     /// it was opened over rather than wherever the keyboard last left the
     /// cursor: right-clicking a file in Git and choosing "stage it" stages
     /// that file, not the one that happened to be under the cursor.
-    fn page_context_actions(&mut self, x: f32, y: f32) -> Vec<super::ContextAction> {
+    fn tool_context_actions(&mut self, x: f32, y: f32) -> Vec<super::ContextAction> {
         let Some((tab_id, pane_rect)) = self.pane_at_pixel(x, y) else {
             return Vec::new();
         };
         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
-        self.offer_mouse_to_page(
+        self.offer_mouse_to_tool(
             tab_id,
-            PagePoint {
+            Point {
                 col,
                 drag: false,
                 row,
             },
         );
-        let Some(slot) = self.open_tabs.page(&tab_id) else {
+        let Some(slot) = self.open_tabs.tool(&tab_id) else {
             return Vec::new();
         };
-        slot.page
+        slot.tool
             .context_items()
             .into_iter()
             .map(|item| {
-                super::ContextAction::PageKey(PageKeyAction {
+                super::ContextAction::ToolKey(ToolKeyAction {
                     key: item.key,
                     label: item.label,
                     tab: tab_id,
@@ -491,8 +491,8 @@ impl App {
                     let _ = open::that(&url);
                 }
             }
-            super::ContextAction::PageKey(action) => {
-                self.offer_key_to_page(action.tab, &action.key);
+            super::ContextAction::ToolKey(action) => {
+                self.offer_key_to_tool(action.tab, &action.key);
             }
         }
     }
@@ -713,10 +713,11 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::page::PageKind;
+    use crate::app::tool::ToolKind;
     use crate::model::input::{Key, WindowKeymap};
-    use crate::model::page::{Page, PageContent, PageOutcome};
-    use crate::pages::keys::KeysPage;
+    use crate::model::paint::Frame;
+    use crate::model::tool::{Tool, ToolOutcome};
+    use crate::tools::keys::KeysTool;
 
     #[test]
     fn test_modern_has_one_menu_classic_has_several() {
@@ -828,11 +829,11 @@ mod tests {
     }
 
     #[test]
-    fn test_a_page_tab_is_named_after_its_kind() {
+    fn test_a_tool_tab_is_named_after_its_kind() {
         let mut app = App::new();
-        let keys = app.show_page(
-            PageKind::Keys,
-            Box::new(KeysPage::new(&WindowKeymap::default())),
+        let keys = app.show_tool(
+            ToolKind::Keys,
+            Box::new(KeysTool::new(&WindowKeymap::default())),
         );
         assert_eq!(
             app.tab_title(keys),
@@ -840,23 +841,23 @@ mod tests {
             "a title restating the kind is not doubled up"
         );
 
-        // A page whose icon names it shows just its title; one on the default
+        // A tool whose icon names it shows just its title; one on the default
         // file icon names both, so the tab still says which kind it is.
         struct Titled(&'static str);
-        impl Page for Titled {
+        impl Tool for Titled {
             fn title(&self) -> String {
                 self.0.to_string()
             }
-            fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> PageContent {
-                PageContent::default()
+            fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> Frame {
+                Frame::default()
             }
-            fn on_key(&mut self, _key: &Key) -> PageOutcome {
-                PageOutcome::Consumed
+            fn on_key(&mut self, _key: &Key) -> ToolOutcome {
+                ToolOutcome::Consumed
             }
         }
-        let dir = app.show_page(PageKind::Dir, Box::new(Titled("winter-term")));
+        let dir = app.show_tool(ToolKind::Dir, Box::new(Titled("winter-term")));
         assert_eq!(app.tab_title(dir), "winter-term");
-        let proc = app.show_page(PageKind::Proc, Box::new(Titled("firefox")));
+        let proc = app.show_tool(ToolKind::Proc, Box::new(Titled("firefox")));
         assert_eq!(app.tab_title(proc), "proc: firefox");
     }
 
@@ -874,13 +875,13 @@ mod tests {
     }
 
     #[test]
-    fn test_a_renamed_tab_keeps_its_name_over_a_page_label() {
-        // An explicit name is the user's own act; the page's label must not
+    fn test_a_renamed_tab_keeps_its_name_over_a_tool_label() {
+        // An explicit name is the user's own act; the tool's label must not
         // overwrite it.
         let mut app = App::new();
-        let keys = app.show_page(
-            PageKind::Keys,
-            Box::new(KeysPage::new(&WindowKeymap::default())),
+        let keys = app.show_tool(
+            ToolKind::Keys,
+            Box::new(KeysTool::new(&WindowKeymap::default())),
         );
         app.tabs.names.insert(keys, "work".to_string());
         assert_eq!(app.tab_title(keys), "work");
@@ -931,22 +932,22 @@ mod tests {
         // With no cwd or foreground process, the terminal shows its name.
         assert_eq!(app.titlebar_path(), "Terminal");
 
-        // When a page with file reference / cwd is focused:
-        struct MockPage {
+        // When a tool with file reference / cwd is focused:
+        struct MockTool {
             cwd: Option<std::path::PathBuf>,
             root_dir: Option<std::path::PathBuf>,
             file_ref: Option<String>,
             address: Option<String>,
         }
-        impl Page for MockPage {
+        impl Tool for MockTool {
             fn title(&self) -> String {
                 "sample.rs".to_string()
             }
-            fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> PageContent {
-                PageContent::default()
+            fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> Frame {
+                Frame::default()
             }
-            fn on_key(&mut self, _key: &Key) -> PageOutcome {
-                PageOutcome::Consumed
+            fn on_key(&mut self, _key: &Key) -> ToolOutcome {
+                ToolOutcome::Consumed
             }
             fn cwd(&self) -> Option<std::path::PathBuf> {
                 self.cwd.clone()
@@ -962,9 +963,9 @@ mod tests {
             }
         }
 
-        let _editor = app.show_page(
-            PageKind::Editor,
-            Box::new(MockPage {
+        let _editor = app.show_tool(
+            ToolKind::Editor,
+            Box::new(MockTool {
                 cwd: Some(std::path::PathBuf::from("/home/user/project")),
                 root_dir: None,
                 file_ref: Some("~/project/src/lib.rs:42".to_string()),
@@ -974,9 +975,9 @@ mod tests {
         assert_eq!(app.titlebar_path(), "Editor: ~/project/src/lib.rs");
 
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
-        let _files = app.show_page(
-            PageKind::Dir,
-            Box::new(MockPage {
+        let _files = app.show_tool(
+            ToolKind::Dir,
+            Box::new(MockTool {
                 cwd: Some(std::path::PathBuf::from(format!("{home}/docs/subfolder"))),
                 root_dir: Some(std::path::PathBuf::from(format!("{home}/docs"))),
                 file_ref: Some("~/docs/subfolder/active_file.txt".to_string()),
@@ -985,9 +986,9 @@ mod tests {
         );
         assert_eq!(app.titlebar_path(), "Dir: ~/docs");
 
-        let _keys = app.show_page(
-            PageKind::Keys,
-            Box::new(MockPage {
+        let _keys = app.show_tool(
+            ToolKind::Keys,
+            Box::new(MockTool {
                 cwd: None,
                 root_dir: None,
                 file_ref: None,
@@ -996,11 +997,11 @@ mod tests {
         );
         assert_eq!(app.titlebar_path(), "Keys");
 
-        // The bar names the page's address, not wherever its cursor has
+        // The bar names the tool's address, not wherever its cursor has
         // wandered: the folder or reference it follows is ignored.
-        let _git = app.show_page(
-            PageKind::Git,
-            Box::new(MockPage {
+        let _git = app.show_tool(
+            ToolKind::Git,
+            Box::new(MockTool {
                 cwd: Some(std::path::PathBuf::from("/home/user/repo/src")),
                 root_dir: None,
                 file_ref: Some("~/repo/src".to_string()),
@@ -1009,11 +1010,11 @@ mod tests {
         );
         assert_eq!(app.titlebar_path(), "Git: ~/repo");
 
-        // A page with no address of its own is named by its kind alone, even
+        // A tool with no address of its own is named by its kind alone, even
         // when it has a cursor-following folder to offer.
-        let _procs = app.show_page(
-            PageKind::Proc,
-            Box::new(MockPage {
+        let _procs = app.show_tool(
+            ToolKind::Proc,
+            Box::new(MockTool {
                 cwd: Some(std::path::PathBuf::from("/home/user/work")),
                 root_dir: None,
                 file_ref: Some("~/work".to_string()),

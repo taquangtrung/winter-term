@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 
 use crate::model::layout::TabId;
-use crate::model::page::OpenTarget;
+use crate::model::tool::OpenTarget;
 
 use super::navigation::resolve_existing_path;
 use super::App;
@@ -89,7 +89,7 @@ impl App {
             tab,
             targets,
         });
-        self.open_path_page(target);
+        self.open_path_tool(target);
         self.set_notice(note);
     }
 

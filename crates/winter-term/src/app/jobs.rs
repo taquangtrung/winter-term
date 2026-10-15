@@ -1,4 +1,4 @@
-//! Slow work off the event-loop thread: a page asks for it, a worker thread
+//! Slow work off the event-loop thread: a tool asks for it, a worker thread
 //! does it, and the answer is collected on the next poll.
 
 use std::collections::{HashMap, HashSet};
@@ -11,12 +11,12 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::model::layout::TabId;
-use crate::model::page::{
+use crate::model::tool::{
     CommandOutput, CommandRequest, JobReply, JobRequest, SearchHit, SearchRequest, SearchResult,
 };
 
-use crate::pages::proc::collect;
-use crate::pages::sys;
+use crate::tools::proc::collect;
+use crate::tools::sys;
 
 use super::App;
 
@@ -29,7 +29,7 @@ use super::App;
 /// that waited long enough to run would be answering a stale question.
 const MAX_IN_FLIGHT: usize = 16;
 
-/// Matches a search reports before it stops. A page shows a screenful at a
+/// Matches a search reports before it stops. A tool shows a screenful at a
 /// time, and a query loose enough to pass this is one to narrow, not to hold
 /// every answer to.
 const SEARCH_MAX_HITS: usize = 500;
@@ -88,7 +88,7 @@ struct RunningJob {
     started: Instant,
 }
 
-/// A finished job: which page asked, and what came back.
+/// A finished job: which tool asked, and what came back.
 struct Finished {
     id: u64,
     tab: TabId,
@@ -190,20 +190,20 @@ impl Jobs {
 }
 
 // ========================================================================
-// App: page jobs
+// App: tool jobs
 // ========================================================================
 
 impl App {
-    /// Hand each finished job's answer to the page that asked for it.
+    /// Hand each finished job's answer to the tool that asked for it.
     pub(crate) fn deliver_finished_jobs(&mut self) -> bool {
         let finished = self.jobs.drain();
         let mut any = false;
         for (tab_id, reply) in finished {
-            let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
+            let Some(slot) = self.open_tabs.tool_mut(&tab_id) else {
                 continue;
             };
-            let outcome = slot.page.on_job(reply);
-            self.act_on_page_outcome(tab_id, outcome);
+            let outcome = slot.tool.on_job(reply);
+            self.act_on_tool_outcome(tab_id, outcome);
             any = true;
         }
         any

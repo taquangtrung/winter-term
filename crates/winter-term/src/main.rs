@@ -253,7 +253,7 @@ fn run_reload() -> ExitCode {
 
 /// Stand in for `$EDITOR` under a program that blocks on it, such as
 /// `git commit`: have the running instance edit `file` and return once that
-/// page closes, failing when the edit was discarded. With no instance to ask,
+/// tool closes, failing when the edit was discarded. With no instance to ask,
 /// run the user's own editor so the program is never left without one.
 fn run_edit_wait(args: &[String]) -> ExitCode {
     let Some(file) = args.first() else {

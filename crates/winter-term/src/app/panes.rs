@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use crate::model::layout::{Direction, Layout, TabId};
 use crate::terminal::session::Terminal;
 
-use super::page::{ClosedPane, ClosedTerminal, Closing};
+use super::tool::{ClosedPane, ClosedTerminal, Closing};
 use super::App;
 use super::{DEFAULT_COLS, DEFAULT_ROWS, SPLIT_RATIO};
 
@@ -62,15 +62,15 @@ impl App {
                 .and_then(|terminal| terminal.cwd())
         })
     }
-    /// Where an action launched from the focused tab starts: a page tab knows
+    /// Where an action launched from the focused tab starts: a tool tab knows
     /// what is being looked at and answers first, and only without one does
     /// a shell's own directory decide.
     pub(crate) fn focused_start_dir(&self) -> PathBuf {
         let focused = self.layout().focused();
         let dir = self
             .open_tabs
-            .page(&focused)
-            .and_then(|slot| slot.page.cwd())
+            .tool(&focused)
+            .and_then(|slot| slot.tool.cwd())
             .or_else(|| self.focused_cwd().map(PathBuf::from))
             .or_else(|| {
                 let cur = std::env::current_dir().ok()?;
@@ -94,8 +94,8 @@ impl App {
     }
     pub(crate) fn split_pane(&mut self, direction: Direction) {
         // Captured before the layout split so the new pane opens where the
-        // focused one was being used, which for a page tab is the directory
-        // that page is looking at rather than a shell's own.
+        // focused one was being used, which for a tool tab is the directory
+        // that tool is looking at rather than a shell's own.
         let cwd = self.focused_start_cwd();
         self.split_pane_at(direction, cwd);
     }
@@ -184,7 +184,7 @@ impl App {
     /// Close the pane holding `tab_id`, every tab in it. The last pane of
     /// the window is never closed this way.
     pub(crate) fn close_pane(&mut self, tab_id: TabId) {
-        // Edits nowhere but in a page tab of this pane are the one thing
+        // Edits nowhere but in a tool tab of this pane are the one thing
         // closing it cannot give back on its own, so they are asked about
         // first. The pane closes on the answer, not here.
         if self.ask_before_closing_pane(tab_id) {
@@ -196,7 +196,7 @@ impl App {
     /// Close the pane holding `tab_id` without asking, which is what an
     /// answered question and a pane with nothing to lose both come down to.
     ///
-    /// The pane is kept, not just its pages: where it sat and what its
+    /// The pane is kept, not just its tools: where it sat and what its
     /// shells were running in are what a split merged back by accident
     /// costs, and one key puts all of it back.
     pub(crate) fn close_pane_now(&mut self, tab_id: TabId) {
@@ -205,15 +205,15 @@ impl App {
             return;
         }
         let snapshot = self.layout().export_tree();
-        let mut pages = Vec::new();
+        let mut tools = Vec::new();
         let mut terminals = Vec::new();
         for &tab in &tabs {
-            match self.open_tabs.remove_page(&tab) {
-                Some(slot) => pages.push(self.stash_closed_page(tab, slot)),
+            match self.open_tabs.remove_tool(&tab) {
+                Some(slot) => tools.push(self.stash_closed_tool(tab, slot)),
                 None => terminals.push(tab),
             }
         }
-        self.stash_closed_pane(&terminals, snapshot, pages, true);
+        self.stash_closed_pane(&terminals, snapshot, tools, true);
         for &tab in &tabs {
             self.drop_tab_state(tab);
             self.layout_mut().close(tab);
@@ -225,7 +225,7 @@ impl App {
         self.after_tab_change();
     }
 
-    /// Put closed terminals back: shells where their own were, the page tabs
+    /// Put closed terminals back: shells where their own were, the tool tabs
     /// that went with them, and the split they sat in.
     ///
     /// The shells themselves cannot come back, since closing them dropped
@@ -244,13 +244,13 @@ impl App {
                 restored.push(tab);
             }
         }
-        // No shell could be started, so there is nowhere to put the pages:
+        // No shell could be started, so there is nowhere to put the tools:
         // they stay in the stash rather than going down with the failure,
         // which `spawn_terminal_or_notify` has already reported.
         if restored.is_empty() {
             return;
         }
-        let pages = self.take_closed_pages(&closed.page_ids());
+        let tools = self.take_closed_tools(&closed.tool_ids());
         let first = restored[0];
         if closed.is_whole_pane() {
             self.split_layout_for(first);
@@ -260,8 +260,8 @@ impl App {
         for &tab in &restored[1..] {
             self.layout_mut().add_tab(tab);
         }
-        for page in pages {
-            self.restore_closed_page(page);
+        for tool in tools {
+            self.restore_closed_tool(tool);
         }
         self.reapply_snapshot(&closed, &before);
         self.layout_mut().focus(first);

@@ -1,4 +1,4 @@
-//! Every open tab and what it holds: a terminal, or a page Winter paints
+//! Every open tab and what it holds: a terminal, or a tool Winter paints
 //! itself. The layout says where a tab sits; this says what it is.
 
 use std::collections::{HashMap, HashSet};
@@ -7,14 +7,14 @@ use crate::model::layout::TabId;
 use crate::model::mode::Mode;
 use crate::terminal::session::Terminal;
 
-use super::page::PageSlot;
 use super::prompt_edit::PromptShadow;
+use super::tool::ToolSlot;
 
 // ========================================================================
 // Data Structures
 // ========================================================================
 
-/// The tabs of the window, by id. A tab is a terminal or a page and never
+/// The tabs of the window, by id. A tab is a terminal or a tool and never
 /// both, so asking for one kind of a tab of the other answers `None`.
 #[derive(Default)]
 pub(crate) struct OpenTabs {
@@ -24,8 +24,8 @@ pub(crate) struct OpenTabs {
 /// What one tab holds. Both kinds are boxed: each is several hundred bytes
 /// or more, and a tab is only ever reached through the map.
 pub(crate) enum Tab {
-    /// A page Winter paints itself: a listing, the git view, an editor.
-    Page(Box<PageSlot>),
+    /// A tool Winter paints itself: a listing, the git view, an editor.
+    Tool(Box<ToolSlot>),
     /// A shell or another program on a pseudo-terminal.
     Terminal(Box<TerminalTab>),
 }
@@ -86,7 +86,7 @@ impl OpenTabs {
     pub(crate) fn terminal_tab(&self, id: &TabId) -> Option<&TerminalTab> {
         match self.tabs.get(id) {
             Some(Tab::Terminal(tab)) => Some(tab.as_ref()),
-            Some(Tab::Page(_)) | None => None,
+            Some(Tab::Tool(_)) | None => None,
         }
     }
 
@@ -94,7 +94,7 @@ impl OpenTabs {
     pub(crate) fn terminal_tab_mut(&mut self, id: &TabId) -> Option<&mut TerminalTab> {
         match self.tabs.get_mut(id) {
             Some(Tab::Terminal(tab)) => Some(tab.as_mut()),
-            Some(Tab::Page(_)) | None => None,
+            Some(Tab::Tool(_)) | None => None,
         }
     }
 
@@ -107,7 +107,7 @@ impl OpenTabs {
     pub(crate) fn terminals(&self) -> impl Iterator<Item = (&TabId, &Terminal)> {
         self.tabs.iter().filter_map(|(id, tab)| match tab {
             Tab::Terminal(tab) => Some((id, &tab.terminal)),
-            Tab::Page(_) => None,
+            Tab::Tool(_) => None,
         })
     }
 
@@ -115,7 +115,7 @@ impl OpenTabs {
     pub(crate) fn terminals_mut(&mut self) -> impl Iterator<Item = (&TabId, &mut Terminal)> {
         self.tabs.iter_mut().filter_map(|(id, tab)| match tab {
             Tab::Terminal(tab) => Some((id, &mut tab.terminal)),
-            Tab::Page(_) => None,
+            Tab::Tool(_) => None,
         })
     }
 
@@ -126,18 +126,18 @@ impl OpenTabs {
             .collect()
     }
 
-    /// Close every terminal tab, leaving the pages.
+    /// Close every terminal tab, leaving the tools.
     pub(crate) fn clear_terminals(&mut self) {
-        self.tabs.retain(|_, tab| matches!(tab, Tab::Page(_)));
+        self.tabs.retain(|_, tab| matches!(tab, Tab::Tool(_)));
     }
 
-    /// Where tab `id`'s keystrokes go, or `None` for a page, which takes
+    /// Where tab `id`'s keystrokes go, or `None` for a tool, which takes
     /// its own keys rather than being in a mode.
     pub(crate) fn mode(&self, id: &TabId) -> Option<Mode> {
         self.terminal_tab(id).map(|tab| tab.mode)
     }
 
-    /// Put terminal tab `id` in `mode`. A page has no mode to set.
+    /// Put terminal tab `id` in `mode`. A tool has no mode to set.
     pub(crate) fn set_mode(&mut self, id: &TabId, mode: Mode) {
         if let Some(tab) = self.terminal_tab_mut(id) {
             tab.mode = mode;
@@ -149,7 +149,7 @@ impl OpenTabs {
         self.terminal_tab(id).and_then(|tab| tab.nav_cursor)
     }
 
-    /// Set or drop terminal tab `id`'s traversal cursor. A page keeps a
+    /// Set or drop terminal tab `id`'s traversal cursor. A tool keeps a
     /// cursor of its own.
     pub(crate) fn set_nav_cursor(&mut self, id: &TabId, cursor: Option<(usize, usize)>) {
         if let Some(tab) = self.terminal_tab_mut(id) {
@@ -164,58 +164,58 @@ impl OpenTabs {
     }
 
     // --------------------------------------------------------------------
-    // Pages
+    // Tools
     // --------------------------------------------------------------------
 
     /// Open `slot` as tab `id`.
-    pub(crate) fn insert_page(&mut self, id: TabId, slot: PageSlot) {
-        self.tabs.insert(id, Tab::Page(Box::new(slot)));
+    pub(crate) fn insert_tool(&mut self, id: TabId, slot: ToolSlot) {
+        self.tabs.insert(id, Tab::Tool(Box::new(slot)));
     }
 
-    /// The page of tab `id`.
-    pub(crate) fn page(&self, id: &TabId) -> Option<&PageSlot> {
+    /// The tool of tab `id`.
+    pub(crate) fn tool(&self, id: &TabId) -> Option<&ToolSlot> {
         match self.tabs.get(id) {
-            Some(Tab::Page(slot)) => Some(slot.as_ref()),
+            Some(Tab::Tool(slot)) => Some(slot.as_ref()),
             Some(Tab::Terminal(_)) | None => None,
         }
     }
 
-    /// The page of tab `id`, to change.
-    pub(crate) fn page_mut(&mut self, id: &TabId) -> Option<&mut PageSlot> {
+    /// The tool of tab `id`, to change.
+    pub(crate) fn tool_mut(&mut self, id: &TabId) -> Option<&mut ToolSlot> {
         match self.tabs.get_mut(id) {
-            Some(Tab::Page(slot)) => Some(slot.as_mut()),
+            Some(Tab::Tool(slot)) => Some(slot.as_mut()),
             Some(Tab::Terminal(_)) | None => None,
         }
     }
 
-    /// Whether tab `id` is a page.
-    pub(crate) fn is_page(&self, id: &TabId) -> bool {
-        self.page(id).is_some()
+    /// Whether tab `id` is a tool.
+    pub(crate) fn is_tool(&self, id: &TabId) -> bool {
+        self.tool(id).is_some()
     }
 
-    /// Take tab `id`'s page out, leaving a terminal tab where it is.
-    pub(crate) fn remove_page(&mut self, id: &TabId) -> Option<PageSlot> {
-        if !self.is_page(id) {
+    /// Take tab `id`'s tool out, leaving a terminal tab where it is.
+    pub(crate) fn remove_tool(&mut self, id: &TabId) -> Option<ToolSlot> {
+        if !self.is_tool(id) {
             return None;
         }
         match self.tabs.remove(id) {
-            Some(Tab::Page(slot)) => Some(*slot),
+            Some(Tab::Tool(slot)) => Some(*slot),
             Some(Tab::Terminal(_)) | None => None,
         }
     }
 
-    /// Every page tab's page, in no particular order.
-    pub(crate) fn pages(&self) -> impl Iterator<Item = (&TabId, &PageSlot)> {
+    /// Every tool tab's tool, in no particular order.
+    pub(crate) fn tools(&self) -> impl Iterator<Item = (&TabId, &ToolSlot)> {
         self.tabs.iter().filter_map(|(id, tab)| match tab {
-            Tab::Page(slot) => Some((id, slot.as_ref())),
+            Tab::Tool(slot) => Some((id, slot.as_ref())),
             Tab::Terminal(_) => None,
         })
     }
 
-    /// Every page tab's page, to change.
-    pub(crate) fn pages_mut(&mut self) -> impl Iterator<Item = (&TabId, &mut PageSlot)> {
+    /// Every tool tab's tool, to change.
+    pub(crate) fn tools_mut(&mut self) -> impl Iterator<Item = (&TabId, &mut ToolSlot)> {
         self.tabs.iter_mut().filter_map(|(id, tab)| match tab {
-            Tab::Page(slot) => Some((id, slot.as_mut())),
+            Tab::Tool(slot) => Some((id, slot.as_mut())),
             Tab::Terminal(_) => None,
         })
     }

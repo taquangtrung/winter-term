@@ -2993,9 +2993,9 @@ mod tests {
     }
 
     #[test]
-    fn test_buffer_jump_on_page_previews_confirms_and_cancels() {
-        use crate::app::page::PageKind;
-        use crate::pages::dir::DirPage;
+    fn test_buffer_jump_on_a_tool_previews_confirms_and_cancels() {
+        use crate::app::tool::ToolKind;
+        use crate::tools::dir::DirTool;
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
@@ -3004,10 +3004,10 @@ mod tests {
         let _ = std::fs::write(dir.join("a.txt"), "hello");
         let _ = std::fs::write(dir.join("b.txt"), "world");
 
-        let page = Box::new(DirPage::new(dir.clone()));
-        let id = app.show_page(PageKind::Dir, page);
+        let tool = Box::new(DirTool::new(dir.clone()));
+        let id = app.show_tool(ToolKind::Dir, tool);
 
-        // Open Jump over the page
+        // Open Jump over the tool
         app.open_jump(id);
         let palette = app.palette.as_ref().expect("palette active");
         assert_eq!(palette.mode, crate::model::palette::PaletteMode::Jump);
@@ -3020,14 +3020,14 @@ mod tests {
         app.handle_palette_input(&mut pal, &key_down, &phys, id);
         app.palette = Some(pal);
 
-        assert_eq!(app.open_tabs.page(&id).unwrap().page.jump_cursor(), Some(1));
+        assert_eq!(app.open_tabs.tool(&id).unwrap().tool.jump_cursor(), Some(1));
 
         // Escape cancels and restores to 0
         let key_esc = Key::Named(NamedKey::Escape);
         let mut pal = app.palette.take().unwrap();
         app.handle_palette_input(&mut pal, &key_esc, &phys, id);
         assert!(app.palette.is_none());
-        assert_eq!(app.open_tabs.page(&id).unwrap().page.jump_cursor(), Some(0));
+        assert_eq!(app.open_tabs.tool(&id).unwrap().tool.jump_cursor(), Some(0));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -21,10 +21,10 @@ use crate::terminal::session::Terminal;
 pub type TerminalMetaMap = HashMap<TabId, (Option<String>, Option<String>)>;
 
 /// A restart snapshot: the window's split layout, the terminals inside it,
-/// and the page tabs that can be opened again from where they were (a
+/// and the tool tabs that can be opened again from where they were (a
 /// listing, the git view, a search, a file in the editor).
 ///
-/// A page that cannot say where it was is not saved, and a pane that held
+/// A tool that cannot say where it was is not saved, and a pane that held
 /// nothing else is dropped from the snapshot. A file written before tabs
 /// moved into panes also carries a `tabs` list; it is ignored, and the layout
 /// of the tab that was active is the one restored.
@@ -37,26 +37,26 @@ pub struct Session {
     pub focused: usize,
     /// The split tree, its leaves the panes.
     pub layout: SessionTree,
-    /// Every page tab in the snapshot. Absent from files written before pages
+    /// Every tool tab in the snapshot. Absent from files written before tools
     /// were saved, which restore with terminals only.
     #[serde(default, rename = "extensions", alias = "tools")]
-    pub pages: Vec<PageSession>,
+    pub tools: Vec<ToolSession>,
     /// Every terminal in the snapshot.
     #[serde(rename = "panes")]
     pub terminals: Vec<TerminalSession>,
 }
 
-/// One page tab's snapshot: which kind of page, and where it was looking.
+/// One tool tab's snapshot: which kind of tool, and where it was looking.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct PageSession {
+pub struct ToolSession {
     /// Identifier tying this tab to a leaf of the layout tree.
     pub id: usize,
-    /// Which kind of page: `dir`, `git`, `grep`, or `editor`.
+    /// Which kind of tool: `dir`, `git`, `grep`, or `editor`.
     pub kind: String,
     /// The line an editor had its cursor on, counting from one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
-    /// The directory the page was rooted in, or the file the editor had open.
+    /// The directory the tool was rooted in, or the file the editor had open.
     pub path: String,
 }
 
@@ -128,8 +128,8 @@ pub enum SessionTree {
 
 impl Session {
     /// Write a snapshot of the current layout to the state directory.
-    pub fn save(layout: &Layout, terminals: &HashMap<TabId, &Terminal>, pages: Vec<PageSession>) {
-        Self::write(&Self::capture(layout, terminals, pages));
+    pub fn save(layout: &Layout, terminals: &HashMap<TabId, &Terminal>, tools: Vec<ToolSession>) {
+        Self::write(&Self::capture(layout, terminals, tools));
     }
 
     fn write(session: &Self) {
@@ -150,9 +150,9 @@ impl Session {
     pub fn save_handover(
         layout: &Layout,
         terminals: &HashMap<TabId, &Terminal>,
-        pages: Vec<PageSession>,
+        tools: Vec<ToolSession>,
     ) {
-        let mut session = Self::capture(layout, terminals, pages);
+        let mut session = Self::capture(layout, terminals, tools);
         for entry in &mut session.terminals {
             let Some(tab) = terminals.get(&TabId(entry.id as u64)) else {
                 continue;
@@ -203,10 +203,10 @@ impl Session {
     fn capture(
         layout: &Layout,
         terminals: &HashMap<TabId, &Terminal>,
-        pages: Vec<PageSession>,
+        tools: Vec<ToolSession>,
     ) -> Self {
         let kept = |id: TabId| {
-            terminals.contains_key(&id) || pages.iter().any(|page| page.id == id.0 as usize)
+            terminals.contains_key(&id) || tools.iter().any(|tool| tool.id == id.0 as usize)
         };
         let tree = layout.export_tree().retain(&kept);
         let terminal_sessions: Vec<TerminalSession> = terminals
@@ -221,14 +221,14 @@ impl Session {
         Session {
             focused: layout.focused().0 as usize,
             layout: layout_tree_to_session(&tree),
-            pages,
+            tools,
             terminals: terminal_sessions,
         }
     }
 
-    /// Take the page tabs out of this snapshot, to be opened again.
-    pub fn take_pages(&mut self) -> Vec<PageSession> {
-        std::mem::take(&mut self.pages)
+    /// Take the tool tabs out of this snapshot, to be opened again.
+    pub fn take_tools(&mut self) -> Vec<ToolSession> {
+        std::mem::take(&mut self.tools)
     }
 
     /// Split this snapshot into the layout to rebuild, the tab to focus, and a
@@ -359,19 +359,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_a_file_from_before_pages_were_saved_still_loads() {
+    fn test_a_file_from_before_tools_were_saved_still_loads() {
         let old = r#"{"focused":0,"layout":{"t":"Pane","id":0},"panes":[{"command":null,"cwd":null,"id":0}]}"#;
         let session: Session = serde_json::from_str(old).expect("loads");
-        assert!(session.pages.is_empty());
+        assert!(session.tools.is_empty());
     }
 
     #[test]
-    fn test_an_old_tools_key_loads_into_pages() {
+    fn test_an_old_tools_key_loads_into_tools() {
         let old = r#"{"focused":0,"layout":{"t":"Pane","id":0},"panes":[],"tools":[{"id":1,"kind":"git","path":"/repo"}]}"#;
         let mut session: Session = serde_json::from_str(old).expect("loads");
-        assert_eq!(session.pages.len(), 1);
-        assert_eq!(session.pages[0].kind, "git");
-        let taken = session.take_pages();
+        assert_eq!(session.tools.len(), 1);
+        assert_eq!(session.tools[0].kind, "git");
+        let taken = session.take_tools();
         assert_eq!(taken.len(), 1);
     }
 
@@ -402,7 +402,7 @@ mod tests {
                     ids: vec![1, 2],
                 }),
             },
-            pages: vec![PageSession {
+            tools: vec![ToolSession {
                 id: 2,
                 kind: "editor".into(),
                 line: Some(40),
@@ -412,7 +412,7 @@ mod tests {
         let json = serde_json::to_string_pretty(&session).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
         assert_eq!(
-            restored.pages, session.pages,
+            restored.tools, session.tools,
             "the page tab comes back where it was"
         );
         assert_eq!(restored.focused, 1);

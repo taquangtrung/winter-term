@@ -11,12 +11,12 @@
 //! - [`blocks`]: block fold, yank, and focus operations.
 //! - [`geometry`]: chrome insets, viewports, pane hit-testing.
 //! - [`init`]: GPU and window bootstrap on `resumed`.
-//! - [`jobs`]: slow work a page asked for, run off the event-loop thread.
+//! - [`jobs`]: slow work a tool asked for, run off the event-loop thread.
 //! - [`lifecycle`]: construction, state persistence, quit and reload.
 //! - [`navigation`]: vim-style cursor motions, search, quick-select.
 //! - [`notice`]: window title and transient status notices.
-//! - [`open_tabs`]: every open tab, terminal or page, and what it holds.
-//! - [`page`]: page tabs: opening, closing, and reopening them, and their keys.
+//! - [`open_tabs`]: every open tab, terminal or tool, and what it holds.
+//! - [`tool`]: tool tabs: opening, closing, and reopening them, and their keys.
 //! - [`palette`]: command palette and the pickers built on it.
 //! - [`panes`]: pane creation, splitting, closing, per-frame upkeep.
 //! - [`pointer`]: mouse hit-testing, selection, clipboard, PTY mouse forwarding.
@@ -37,8 +37,6 @@ mod lifecycle;
 pub(crate) mod navigation;
 mod notice;
 mod open_tabs;
-mod page;
-mod page_cursor;
 mod palette;
 mod panes;
 mod pointer;
@@ -49,6 +47,8 @@ mod settings;
 mod strip;
 mod tabbar;
 mod tabs;
+mod tool;
+mod tool_cursor;
 mod window_event;
 
 use navigation::{SearchFrom, SearchState, VimState};
@@ -78,7 +78,9 @@ use crate::model::mode::Mode;
 use crate::model::palette::Palette;
 use crate::model::settings_page::{ChoiceOption, SettingsPage};
 use crate::model::textedit::field::TextField;
+use crate::model::textedit::modal::EditMode;
 use crate::model::textedit::recall::Answers;
+use crate::model::tool::ToolStatus;
 use crate::terminal::webview::{PaneViewport, WebViewManager};
 use winter_render::renderer::GpuRenderer;
 use winter_render::{NoticeKind, StatusBar, StatusNotice, StatusPrompt, StatusSearch, Theme};
@@ -211,7 +213,9 @@ pub(crate) fn edge_resize_direction_at(
 }
 
 /// The status bar for the focused tab. `mode` is the terminal's, or `None`
-/// for a page, which is shown as `P` since it takes its own keys.
+/// for a tool, which shows its own mode when it has one and `P` when not.
+/// The letters and colors are shared, so a tool in Insert reads as a terminal
+/// in Insert does.
 fn status_bar(
     mode: Option<Mode>,
     theme: &Theme,
@@ -219,14 +223,16 @@ fn status_bar(
     search: Option<StatusSearch>,
     notice: Option<StatusNotice>,
     config: &StatusBarConfig,
-    page_icon: Option<char>,
+    tool: Option<FocusedTool>,
 ) -> StatusBar {
-    let (mode_name, accent) = match mode {
-        Some(Mode::Insert) => ("I", theme.ansi[12]),
-        Some(Mode::Normal) => ("N", theme.ansi[4]),
-        Some(Mode::Visual) => ("V", theme.ansi[6]),
-        Some(Mode::BlockFocus) => ("B", theme.ansi[5]),
-        None => ("P", theme.ansi[2]),
+    let tool_mode = tool.as_ref().and_then(|tool| tool.status.mode);
+    let (mode_name, accent) = match (mode, tool_mode) {
+        (Some(Mode::Insert), _) | (None, Some(EditMode::Insert)) => ("I", theme.ansi[12]),
+        (Some(Mode::Normal), _) | (None, Some(EditMode::Normal)) => ("N", theme.ansi[4]),
+        (Some(Mode::Visual), _) | (None, Some(EditMode::Visual)) => ("V", theme.ansi[6]),
+        (Some(Mode::BlockFocus), _) => ("B", theme.ansi[5]),
+        (None, Some(EditMode::Replace)) => ("R", theme.ansi[12]),
+        (None, None) => ("P", theme.ansi[2]),
     };
     let mode_label = if config.show_mode && prompt.is_none() {
         format!(" {mode_name}")
@@ -239,7 +245,8 @@ fn status_bar(
         notice,
         prompt,
         search,
-        page_icon,
+        tool_icon: tool.as_ref().map(|tool| tool.icon),
+        segments: tool.map(|tool| tool.status.segments).unwrap_or_default(),
     }
 }
 
@@ -552,7 +559,7 @@ pub struct App {
     /// Placing them again is a round-trip to the platform WebView per tile, so
     /// a frame that moved nothing (plain typing) skips it. Cleared to `None`
     /// by anything that changes a tile without moving a pane: a new tile, a
-    /// fold, a band that grew, a page covering the grid.
+    /// fold, a band that grew, a tool covering the grid.
     pub(crate) last_tile_layout: Option<HashMap<TabId, PaneViewport>>,
     pub(crate) modifiers: winit::event::Modifiers,
     /// Set when the custom window-close control is clicked, drained by the mouse
@@ -581,18 +588,18 @@ pub struct App {
     pub(crate) icon_textures: HashMap<(String, u32, u32), Option<u64>>,
     /// The pixel box `icon_textures` was filled for.
     pub(crate) icon_texture_box: (u32, u32),
-    /// Every open tab, terminal or page, by id.
+    /// Every open tab, terminal or tool, by id.
     pub(crate) open_tabs: OpenTabs,
     /// For each commit-message editor tab, the pane beside it showing what is
     /// staged, which closes with it.
     pub(crate) commit_companions: HashMap<TabId, TabId>,
-    /// Panes and pages that were closed, oldest first, for reopening. A pane
-    /// or a tab closed with a page on it used to drop the page with no way
+    /// Panes and tools that were closed, oldest first, for reopening. A pane
+    /// or a tab closed with a tool on it used to drop the tool with no way
     /// back, which for an editor meant dropping edits nothing had asked
     /// about.
-    pub(crate) closed: Vec<page::Closed>,
+    pub(crate) closed: Vec<tool::Closed>,
     /// The id the next closed thing is given, so a row of the list of them
-    /// stands for one page or pane rather than for a position in a list that
+    /// stands for one tool or pane rather than for a position in a list that
     /// moves.
     pub(crate) next_closed_id: u64,
     /// Whether this session has said yet that a closed tab can be brought
@@ -600,28 +607,28 @@ pub struct App {
     pub(crate) reopen_hint_shown: bool,
     /// What the host is waiting to close, while it asks whether the unwritten
     /// edits over there are meant to go with it.
-    pub(crate) pending_close: Option<page::PendingClose>,
-    /// Whether pages wrap rows wider than their pane onto the next screen
-    /// row, toggled by `Alt+Z` in every page at once.
-    pub(crate) page_wrap: bool,
-    /// Slow work pages have asked for, and the answers coming back.
+    pub(crate) pending_close: Option<tool::PendingClose>,
+    /// Whether tools wrap rows wider than their pane onto the next screen
+    /// row, toggled by `Alt+Z` in every tool at once.
+    pub(crate) tool_wrap: bool,
+    /// Slow work tools have asked for, and the answers coming back.
     pub(crate) jobs: jobs::Jobs,
-    /// The question a page is waiting on an answer to, if any.
-    pub(crate) page_prompt: Option<page::ActivePrompt>,
+    /// The question a tool is waiting on an answer to, if any.
+    pub(crate) tool_prompt: Option<tool::ActivePrompt>,
     /// Debounce timer for active prompt input changes.
     pub(crate) prompt_debounce: Option<(Instant, TabId)>,
     /// Debounce timer for live search query input.
     pub(crate) search_debounce: Option<(Instant, TabId)>,
     /// Where next-error has got to in the last command's file references.
     pub(crate) error_walk: Option<errors::ErrorWalk>,
-    /// What each page question was answered with before, for the arrow keys.
+    /// What each tool question was answered with before, for the arrow keys.
     pub(crate) prompt_answers: Answers,
-    /// The page question the open palette is collecting an answer to, while
-    /// it is showing a page's own list.
-    pub(crate) page_pick: Option<page::ActivePick>,
-    /// The Vim-style text cursor over a page, while one is up. At most one
-    /// exists: it belongs to whichever page tab `v` was pressed in.
-    pub(crate) page_cursor: Option<page_cursor::PageCursor>,
+    /// The tool question the open palette is collecting an answer to, while
+    /// it is showing a tool's own list.
+    pub(crate) tool_pick: Option<tool::ActivePick>,
+    /// The Vim-style text cursor over a tool, while one is up. At most one
+    /// exists: it belongs to whichever tool tab `v` was pressed in.
+    pub(crate) tool_cursor: Option<tool_cursor::ToolCursor>,
     pub(crate) palette: Option<Palette>,
     pub(crate) tab_titles: HashMap<TabId, String>,
     /// In-progress "create new theme" name input, set while the user is
@@ -685,21 +692,28 @@ pub struct App {
 pub(crate) enum ContextAction {
     Copy,
     OpenLink(String),
-    /// An entry a page offered, standing for a key that page binds.
-    PageKey(PageKeyAction),
     Paste,
+    /// An entry a tool offered, standing for a key that tool binds.
+    ToolKey(ToolKeyAction),
 }
 
-/// A menu entry a page offered: what it is called, and the key of its
-/// own the page runs when it is chosen.
+/// A menu entry a tool offered: what it is called, and the key of its
+/// own the tool runs when it is chosen.
 #[derive(Clone)]
-pub(crate) struct PageKeyAction {
+pub(crate) struct ToolKeyAction {
     /// Qualified: `winit::keyboard::Key` is also in scope in this module.
     pub(crate) key: input::Key,
     pub(crate) label: String,
-    /// The pane whose page offered it, since the menu outlives the click and
+    /// The pane whose tool offered it, since the menu outlives the click and
     /// the focus could move under it.
     pub(crate) tab: TabId,
+}
+
+/// What the focused tool gives the status bar: the glyph for its kind, and
+/// where its keys stand.
+pub(crate) struct FocusedTool {
+    pub(crate) icon: char,
+    pub(crate) status: ToolStatus,
 }
 
 /// A block drawn natively via the GPU. `id` keys the renderer's texture cache;
@@ -1114,7 +1128,7 @@ impl ApplicationHandler for App {
             None => {}
         }
         self.process_webview_height_reports();
-        self.pump_page_surfaces();
+        self.pump_tool_surfaces();
         self.webview_mgr.flush_due_tile_updates();
         if self.pending_reload {
             self.pending_reload = false;
@@ -1182,7 +1196,7 @@ impl ApplicationHandler for App {
 
         self.auto_scroll_selection();
 
-        // Answers from page jobs, and a poll that stays awake while any are
+        // Answers from tool jobs, and a poll that stays awake while any are
         // still running so a finished one is not left sitting in the channel.
         if self.deliver_finished_jobs() {
             self.dirty = true;
@@ -1193,9 +1207,9 @@ impl ApplicationHandler for App {
         if self.jobs.is_busy() {
             self.last_activity = Instant::now();
         }
-        // Pages that keep themselves current (the process monitor) ask for
+        // Tools that keep themselves current (the process monitor) ask for
         // their next refresh here, and the loop wakes for the earliest.
-        let page_tick = self.tick_pages(Instant::now());
+        let tool_tick = self.tick_tools(Instant::now());
         let progress = self.jobs.progress();
         if progress != self.job_progress {
             self.job_progress = progress;
@@ -1215,12 +1229,12 @@ impl ApplicationHandler for App {
             let now = Instant::now();
             if now >= deadline {
                 self.prompt_debounce = None;
-                if let Some(prompt) = self.page_prompt.as_ref() {
+                if let Some(prompt) = self.tool_prompt.as_ref() {
                     let query = prompt.field.text().to_string();
                     let tag = prompt.request.tag;
-                    if let Some(slot) = self.open_tabs.page_mut(&tab) {
-                        let outcome = slot.page.on_prompt_input(&query, tag);
-                        self.act_on_page_outcome(tab, outcome);
+                    if let Some(slot) = self.open_tabs.tool_mut(&tab) {
+                        let outcome = slot.tool.on_prompt_input(&query, tag);
+                        self.act_on_tool_outcome(tab, outcome);
                     }
                 }
                 self.dirty = true;
@@ -1258,7 +1272,7 @@ impl ApplicationHandler for App {
         if let Some((deadline, _)) = self.prompt_debounce {
             wakeup = wakeup.min(deadline);
         }
-        if let Some(deadline) = page_tick {
+        if let Some(deadline) = tool_tick {
             wakeup = wakeup.min(deadline);
         }
         if let Some(deadline) = spinner_tick {
@@ -1708,6 +1722,42 @@ mod tests {
     }
 
     #[test]
+    fn test_a_focused_tool_puts_its_own_mode_and_position_in_the_bar() {
+        // A tool in Insert reads as a terminal in Insert does, and only a
+        // tool with no mode of its own falls back to `P`.
+        let theme = Theme::dark();
+        let cfg = StatusBarConfig {
+            show_mode: true,
+            ..StatusBarConfig::default()
+        };
+        let tool = |mode| FocusedTool {
+            icon: 'E',
+            status: ToolStatus {
+                mode,
+                segments: vec!["12:5".to_string()],
+            },
+        };
+        let insert = status_bar(
+            None,
+            &theme,
+            None,
+            None,
+            None,
+            &cfg,
+            Some(tool(Some(EditMode::Insert))),
+        );
+        assert_eq!(insert.mode, " I");
+        assert_eq!(
+            insert.accent,
+            status_bar(Some(Mode::Insert), &theme, None, None, None, &cfg, None).accent
+        );
+        assert_eq!(insert.segments, ["12:5"]);
+        assert_eq!(insert.tool_icon, Some('E'));
+        let plain = status_bar(None, &theme, None, None, None, &cfg, Some(tool(None)));
+        assert_eq!(plain.mode, " P");
+    }
+
+    #[test]
     fn test_status_bar_show_mode_toggle_hides_mode_label() {
         let theme = Theme::dark();
         let default_cfg = StatusBarConfig::default();
@@ -1799,21 +1849,21 @@ mod tests {
         app.theme_name_input = None;
         assert!(!app.status_bar_visible());
 
-        let prompt = page::ActivePrompt {
+        let prompt = tool::ActivePrompt {
             field: crate::model::textedit::field::TextField::line("query"),
             recall: crate::model::textedit::recall::Recall::default(),
             tab: TabId(0),
-            request: crate::model::page::PromptRequest {
+            request: crate::model::tool::PromptRequest {
                 initial: String::new(),
                 label: "search: ".to_string(),
-                mode: crate::model::page::PromptMode::Text,
+                mode: crate::model::tool::PromptMode::Text,
                 tag: "search",
             },
         };
-        app.page_prompt = Some(prompt);
+        app.tool_prompt = Some(prompt);
         assert!(app.status_bar_visible());
 
-        app.page_prompt = None;
+        app.tool_prompt = None;
         assert!(!app.status_bar_visible());
     }
 
@@ -1824,26 +1874,26 @@ mod tests {
         // 1. None by default
         assert!(app.active_status_prompt().is_none());
 
-        // 2. PagePrompt
-        let prompt = page::ActivePrompt {
+        // 2. ToolPrompt
+        let prompt = tool::ActivePrompt {
             field: crate::model::textedit::field::TextField::line("hello"),
             recall: crate::model::textedit::recall::Recall::default(),
             tab: TabId(0),
-            request: crate::model::page::PromptRequest {
+            request: crate::model::tool::PromptRequest {
                 initial: String::new(),
                 label: "find".to_string(),
-                mode: crate::model::page::PromptMode::Text,
+                mode: crate::model::tool::PromptMode::Text,
                 tag: "search",
             },
         };
-        app.page_prompt = Some(prompt);
+        app.tool_prompt = Some(prompt);
         let status_prompt = app.active_status_prompt().expect("page prompt");
         assert_eq!(status_prompt.label, "find: ");
         assert_eq!(status_prompt.value, "hello");
         assert_eq!(status_prompt.caret, 5);
 
-        // 3. ThemeNameInput takes precedence if no page_prompt
-        app.page_prompt = None;
+        // 3. ThemeNameInput takes precedence if no tool_prompt
+        app.tool_prompt = None;
         app.theme_name_input = Some(crate::model::textedit::field::TextField::line("dracula"));
         let status_prompt = app.active_status_prompt().expect("theme name prompt");
         assert_eq!(status_prompt.label, "New theme name: ");
@@ -2610,9 +2660,9 @@ mod tests {
     #[test]
     fn test_selected_text_covers_every_line_after_auto_scrolling_past_one_page() {
         // Regression: `selected_text` used to read rows via `visible_cell`,
-        // which only resolves the currently-visible page (`0..rows`). Once a
+        // which only resolves the currently-visible tool (`0..rows`). Once a
         // drag's absolute span grew past one page via auto-scroll, rows
-        // outside that page read back as blanks instead of the real
+        // outside that tool read back as blanks instead of the real
         // scrolled-past text. `absolute_cell` fixes this by addressing the
         // scrollback/live buffer directly, independent of scroll position.
         //
@@ -2679,7 +2729,7 @@ mod tests {
         );
         // The oldest scrolled-into row is "0" (the first line printed), not
         // a blank filler row `visible_cell` would have produced past the
-        // live page's bound.
+        // live tool's bound.
         assert_eq!(lines[0].trim(), "0");
     }
 

@@ -11,10 +11,10 @@
 use std::collections::HashMap;
 
 use crate::model::input::{Key, KeyCode, TextObject};
-use crate::model::page::PageNotice;
 use crate::model::textedit::buffer::{Register, TextBuffer, WordCase};
 use crate::model::textedit::kill::{KillRing, Merge};
 use crate::model::textedit::search::Search;
+use crate::model::tool::{ToolNotice, ToolStatus};
 use crate::model::vim::motion::{CursorMove, FindChar};
 use crate::model::vim::nav::{bare_motion, VimKey, VimNav};
 use crate::model::vim::objects::{
@@ -185,7 +185,7 @@ pub struct ModalEditor {
     last_change: Vec<Key>,
     mode: EditMode,
     /// What the last command reported, until the host takes it.
-    notice: Option<PageNotice>,
+    notice: Option<ToolNotice>,
     nav: VimNav,
     /// An operator waiting for the motion or object that says how far it
     /// reaches.
@@ -527,14 +527,26 @@ impl ModalEditor {
         self.register
     }
 
+    /// What a tool editing `buffer` with these keys puts in the status bar:
+    /// the mode, where the cursor is, `total` saying how much there is, and
+    /// the register a `"` named for the next command.
+    pub fn tool_status(&self, buffer: &TextBuffer, total: String) -> ToolStatus {
+        let mut segments = vec![format!("{}:{}", buffer.row() + 1, buffer.col() + 1), total];
+        segments.extend(self.register.map(|register| format!("\"{register}")));
+        ToolStatus {
+            mode: Some(self.mode),
+            segments,
+        }
+    }
+
     /// Report `notice`, as the host does for what it carried out itself.
-    pub fn report(&mut self, notice: PageNotice) {
+    pub fn report(&mut self, notice: ToolNotice) {
         self.notice = Some(notice);
     }
 
     /// Take what the last command reported, for the status bar, leaving
     /// nothing reported.
-    pub fn take_notice(&mut self) -> Option<PageNotice> {
+    pub fn take_notice(&mut self) -> Option<ToolNotice> {
         self.notice.take()
     }
 
@@ -618,7 +630,7 @@ impl ModalEditor {
     /// answer to an [`EditOutcome::Paste`], and what a pasted chord brings.
     pub fn paste_text(&mut self, view: EditView<'_>, text: String) {
         if self.read_only {
-            self.notice = Some(PageNotice::error(READ_ONLY_MESSAGE));
+            self.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
             return;
         }
         Session::new(self, view).paste_text(text);
@@ -688,7 +700,7 @@ impl Session<'_> {
     /// Type the last command that changed the text again (`.`).
     fn repeat_change(&mut self) -> EditOutcome {
         if self.ed.last_change.is_empty() {
-            self.ed.notice = Some(PageNotice::error("nothing to repeat"));
+            self.ed.notice = Some(ToolNotice::error("nothing to repeat"));
             return EditOutcome::Consumed;
         }
         let keys = self.ed.last_change.clone();
@@ -742,7 +754,7 @@ impl Session<'_> {
                     'i' | 'a' | 'I' | 'A' | 'o' | 'O' | 'R' | 's' | 'S' | 'x' | 'X' | 'C' | 'D'
                     | 'r' | '~' | 'J' | 'p' | 'P' | 'u' | '.' | 'd' | 'c' | '>' | '<',
                 ) => {
-                    self.ed.notice = Some(PageNotice::error(READ_ONLY_MESSAGE));
+                    self.ed.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
                     return EditOutcome::Consumed;
                 }
                 _ => {}
@@ -831,7 +843,7 @@ impl Session<'_> {
             }
             KeyCode::Char('u') => {
                 if !self.buffer_mut().undo() {
-                    self.ed.notice = Some(PageNotice::error("nothing to undo"));
+                    self.ed.notice = Some(ToolNotice::error("nothing to undo"));
                 }
                 // An undo is not a change to be done again: `.` still means
                 // whatever changed the text last.
@@ -903,14 +915,14 @@ impl Session<'_> {
     /// The Ctrl chords: saving, redo, the number keys, and the paging motions.
     fn on_ctrl_key(&mut self, key: &Key) -> EditOutcome {
         if self.ed.read_only && matches!(key.code, KeyCode::Char('s' | 'r' | 'a' | 'x')) {
-            self.ed.notice = Some(PageNotice::error(READ_ONLY_MESSAGE));
+            self.ed.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
             return EditOutcome::Consumed;
         }
         match key.code {
             KeyCode::Char('s') => EditOutcome::Save,
             KeyCode::Char('r') => {
                 if !self.buffer_mut().redo() {
-                    self.ed.notice = Some(PageNotice::error("nothing to redo"));
+                    self.ed.notice = Some(ToolNotice::error("nothing to redo"));
                 }
                 self.ed.revision = self.buffer().revision();
                 EditOutcome::Consumed
@@ -923,7 +935,7 @@ impl Session<'_> {
                 };
                 self.buffer_mut().snapshot();
                 if !self.buffer_mut().add_to_number(by) {
-                    self.ed.notice = Some(PageNotice::error("no number here"));
+                    self.ed.notice = Some(ToolNotice::error("no number here"));
                 }
                 EditOutcome::Consumed
             }
@@ -1061,8 +1073,8 @@ impl Session<'_> {
             't' => self.buffer_mut().transpose_chars(),
             'y' => self.yank_kill(),
             'v' => {
-                let page = self.insert_page();
-                self.buffer_mut().move_down(page, true);
+                let tool = self.insert_tool();
+                self.buffer_mut().move_down(tool, true);
             }
             'l' => self.center_on_cursor(),
             'u' => self.kill(false, |buffer| buffer.take_to(0, false)),
@@ -1092,8 +1104,8 @@ impl Session<'_> {
             KeyCode::Char('c') => self.buffer_mut().change_word_case(WordCase::Capitalize),
             KeyCode::Char('m') => self.buffer_mut().move_first_non_blank(),
             KeyCode::Char('v') => {
-                let page = self.insert_page();
-                self.buffer_mut().move_up(page, true);
+                let tool = self.insert_tool();
+                self.buffer_mut().move_up(tool, true);
             }
             KeyCode::Char('<') => self.buffer_mut().move_text_start(),
             KeyCode::Char('>') => self.buffer_mut().move_text_end(),
@@ -1104,7 +1116,7 @@ impl Session<'_> {
 
     /// How far a screen-wise Emacs scroll moves: a page, less the lines that
     /// stay in view to keep the place.
-    fn insert_page(&self) -> usize {
+    fn insert_tool(&self) -> usize {
         self.view.viewport.saturating_sub(PAGE_OVERLAP).max(1)
     }
 
@@ -1161,7 +1173,7 @@ impl Session<'_> {
     /// `M-y` straight after a yank: swap what it put in for the kill before.
     fn yank_pop(&mut self) {
         let Some(yanked) = self.yanked else {
-            self.ed.notice = Some(PageNotice::error("the last command was not a yank"));
+            self.ed.notice = Some(ToolNotice::error("the last command was not a yank"));
             return;
         };
         let Some(older) = self.ed.kills.yank_pop() else {
@@ -1204,7 +1216,7 @@ impl Session<'_> {
                 );
                 if candidates.is_empty() {
                     self.ed.notice =
-                        Some(PageNotice::error(format!("nothing completes `{typed}`")));
+                        Some(ToolNotice::error(format!("nothing completes `{typed}`")));
                     return;
                 }
                 Completion {
@@ -1314,7 +1326,7 @@ impl Session<'_> {
         if self.ed.read_only {
             match key.code {
                 KeyCode::Char('d' | 'x' | 'c' | 's' | '>' | '<' | 'J' | '~' | 'p' | 'P' | 'r') => {
-                    self.ed.notice = Some(PageNotice::error(READ_ONLY_MESSAGE));
+                    self.ed.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
                     return EditOutcome::Consumed;
                 }
                 _ => {}
@@ -1647,7 +1659,7 @@ impl Session<'_> {
         let operator = self.ed.operator.take();
         let mut probe = self.buffer().clone();
         if !probe.move_to_char(find, count) {
-            self.ed.notice = Some(PageNotice::error(format!("no `{}` on this line", find.ch)));
+            self.ed.notice = Some(ToolNotice::error(format!("no `{}` on this line", find.ch)));
             return EditOutcome::Consumed;
         }
         let to = (probe.row(), probe.col());
@@ -1680,7 +1692,7 @@ impl Session<'_> {
             _ => self.view.marks.named.get(&c).copied(),
         };
         let Some((row, col)) = at else {
-            self.ed.notice = Some(PageNotice::error(format!("mark `{c}` is not set")));
+            self.ed.notice = Some(ToolNotice::error(format!("mark `{c}` is not set")));
             return EditOutcome::Consumed;
         };
         self.push_jump();
@@ -1968,7 +1980,7 @@ impl Session<'_> {
             Some(c) => match self.ed.registers.get(&c.to_ascii_lowercase()).cloned() {
                 Some(register) => self.buffer_mut().set_register(register),
                 None => {
-                    self.ed.notice = Some(PageNotice::error(format!("register `{c}` is empty")));
+                    self.ed.notice = Some(ToolNotice::error(format!("register `{c}` is empty")));
                     return EditOutcome::Consumed;
                 }
             },
@@ -2020,7 +2032,7 @@ impl Session<'_> {
             return EditOutcome::Consumed;
         };
         let Some((span, linewise)) = self.object_span(object, wait.around) else {
-            self.ed.notice = Some(PageNotice::error("no object here"));
+            self.ed.notice = Some(ToolNotice::error("no object here"));
             return EditOutcome::Consumed;
         };
         if let Some(operator) = operator {
@@ -2092,7 +2104,7 @@ impl Session<'_> {
     /// (`N`).
     fn search_step(&mut self, reverse: bool) -> EditOutcome {
         let Some(search) = self.ed.search.clone() else {
-            self.ed.notice = Some(PageNotice::error("nothing has been searched for"));
+            self.ed.notice = Some(ToolNotice::error("nothing has been searched for"));
             return EditOutcome::Consumed;
         };
         let forward = search.forward != reverse;
@@ -2103,7 +2115,7 @@ impl Session<'_> {
                 self.buffer_mut().move_to(row, col);
             }
             None => {
-                self.ed.notice = Some(PageNotice::error(format!(
+                self.ed.notice = Some(ToolNotice::error(format!(
                     "`{}` is not in the file",
                     search.pattern
                 )))
@@ -2147,8 +2159,8 @@ impl Session<'_> {
                 *self.view.scroll = row.saturating_sub(viewport.saturating_sub(1));
             }
             _ => {
-                let (page, scroll) = (viewport.max(1), *self.view.scroll);
-                move_cursor(self.view.buffer, motion, typed, page, scroll);
+                let (tool, scroll) = (viewport.max(1), *self.view.scroll);
+                move_cursor(self.view.buffer, motion, typed, tool, scroll);
             }
         }
     }
@@ -2188,7 +2200,7 @@ fn move_cursor(
     buffer: &mut TextBuffer,
     motion: CursorMove,
     typed: Option<usize>,
-    page: usize,
+    tool: usize,
     scroll: usize,
 ) {
     let count = typed.unwrap_or(1);
@@ -2213,13 +2225,13 @@ fn move_cursor(
             Some(line) => buffer.move_to_line(line.saturating_sub(1)),
             None => buffer.move_bottom(),
         },
-        CursorMove::PageDown => buffer.move_down(page, false),
-        CursorMove::PageUp => buffer.move_up(page, false),
-        CursorMove::HalfPageDown => buffer.move_down(page / HALF_PAGE, false),
-        CursorMove::HalfPageUp => buffer.move_up(page / HALF_PAGE, false),
+        CursorMove::PageDown => buffer.move_down(tool, false),
+        CursorMove::PageUp => buffer.move_up(tool, false),
+        CursorMove::HalfPageDown => buffer.move_down(tool / HALF_PAGE, false),
+        CursorMove::HalfPageUp => buffer.move_up(tool / HALF_PAGE, false),
         CursorMove::ScreenTop => buffer.move_to_line(scroll),
-        CursorMove::ScreenMiddle => buffer.move_to_line(scroll + page / HALF_PAGE),
-        CursorMove::ScreenBottom => buffer.move_to_line(scroll + page.saturating_sub(1)),
+        CursorMove::ScreenMiddle => buffer.move_to_line(scroll + tool / HALF_PAGE),
+        CursorMove::ScreenBottom => buffer.move_to_line(scroll + tool.saturating_sub(1)),
         CursorMove::ParagraphBack => buffer.move_paragraph(count, false),
         CursorMove::ParagraphForward => buffer.move_paragraph(count, true),
         CursorMove::MatchingBracket => buffer.move_matching_bracket(),
@@ -2578,13 +2590,13 @@ mod tests {
         ed.keys("x");
         assert_eq!(
             ed.modal.take_notice(),
-            Some(PageNotice::error(READ_ONLY_MESSAGE))
+            Some(ToolNotice::error(READ_ONLY_MESSAGE))
         );
         ed.assert("hello |world");
         ed.keys("i");
         assert_eq!(
             ed.modal.take_notice(),
-            Some(PageNotice::error(READ_ONLY_MESSAGE))
+            Some(ToolNotice::error(READ_ONLY_MESSAGE))
         );
         assert_eq!(ed.modal.mode(), EditMode::Normal);
         ed.keys("y $");

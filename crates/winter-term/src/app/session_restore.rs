@@ -23,7 +23,7 @@ impl App {
         // Programs the previous process image left running and handed on are
         // taken over as they are, ahead of anything that would start a new one.
         let mut handovers = session.take_handovers();
-        let pages = session.take_pages();
+        let tools = session.take_tools();
         let (tree, focused, terminal_map) = session.into_parts();
 
         let (cols, rows) = if let Some(r) = &self.renderer {
@@ -125,13 +125,13 @@ impl App {
                 None => failed_ids.push(*id),
             }
         }
-        // The page tabs come back where they were looking; one that cannot
+        // The tool tabs come back where they were looking; one that cannot
         // (its file gone, say) is dropped like a terminal that would not spawn.
-        let restored: Vec<TabId> = pages
+        let restored: Vec<TabId> = tools
             .iter()
             .filter_map(|saved| {
                 let id = TabId(saved.id as u64);
-                self.restore_page(id, saved).then_some(id)
+                self.restore_tool(id, saved).then_some(id)
             })
             .collect();
         // A terminal that could not be respawned is dropped from the layout,
@@ -148,7 +148,7 @@ impl App {
         }
         for id in &restored {
             if !layout.as_ref().is_some_and(|l| l.contains(*id)) {
-                self.open_tabs.remove_page(id);
+                self.open_tabs.remove_tool(id);
             }
         }
         let Some(layout) = layout else {
