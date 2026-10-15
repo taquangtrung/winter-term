@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Instant, SystemTime};
 
 use crate::model::input::CursorMove;
-use crate::model::input::{Key, KeyCode};
+use crate::model::input::{Key, KeyCode, Mods};
 use crate::model::paint::{
     row_height, row_text, wheel_scroll, window_anchor, wrap_window, Frame, Icon, RowWindow, Span,
     Style,
@@ -101,10 +101,10 @@ const LABEL_UNMARK: &str = "Unmark";
 /// The first key of a two-key sequence, waiting for its second.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Leader {
-    /// `Ctrl-X`, followed by `Ctrl-Q`: toggle editing the names, the chord
+    /// `C-x`, followed by `C-q`: toggle editing the names, the chord
     /// Emacs' own `wdired` uses.
     Edit,
-    /// `Ctrl-c`, followed by a digit: expand the tree to that depth.
+    /// `C-c`, followed by a digit: expand the tree to that depth.
     Depth,
     /// `z`, followed by a fold command.
     Fold,
@@ -549,7 +549,7 @@ impl DirTool {
         }
     }
 
-    /// `Ctrl-d`/`Ctrl-u` and the tool motions: `rows` rows down or up,
+    /// `C-d`/`C-u` and the tool motions: `rows` rows down or up,
     /// clamped to the listing.
     fn page_by(&mut self, rows: usize, down: bool) {
         let step = rows.max(1) as isize;
@@ -955,8 +955,8 @@ impl DirTool {
     /// abandons the sequence rather than holding it for the next keystroke.
     fn resolve_pending(&mut self, leader: Leader, key: &Key) -> ToolOutcome {
         self.pending = None;
-        match (leader, key.code) {
-            (Leader::Edit, KeyCode::Char('q')) if key.ctrl => {
+        match (leader, key.glyph()) {
+            (Leader::Edit, KeyCode::Char('q')) if key.mods() == Mods::CTRL => {
                 self.enter_edit();
             }
             (Leader::Fold, KeyCode::Char('a')) | (Leader::Fold, KeyCode::Char('A')) => {
@@ -1231,7 +1231,7 @@ impl Tool for DirTool {
         if key.ctrl {
             return self.on_ctrl_key(key);
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('z') => {
                 self.pending = Some(Leader::Fold);
                 ToolOutcome::Consumed
@@ -1472,57 +1472,57 @@ impl DirTool {
             self.apply_motion(motion);
             return ToolOutcome::Consumed;
         }
-        match key.code {
-            KeyCode::Char('n') => {
+        match (key.mods(), key.glyph()) {
+            (Mods::ALT, KeyCode::Char('n')) => {
                 if let Some(next) = self.sibling_after(self.cursor) {
                     self.cursor = next;
                 }
                 ToolOutcome::Consumed
             }
-            KeyCode::Char('p') => {
+            (Mods::ALT, KeyCode::Char('p')) => {
                 if let Some(previous) = self.sibling_before(self.cursor) {
                     self.cursor = previous;
                 }
                 ToolOutcome::Consumed
             }
-            KeyCode::Char('u') => {
+            (Mods::ALT, KeyCode::Char('u')) => {
                 if let Some(parent) = self.parent_row(self.cursor) {
                     self.cursor = parent;
                 }
                 ToolOutcome::Consumed
             }
-            KeyCode::Char('d') => {
+            (Mods::ALT, KeyCode::Char('d')) => {
                 if let Some(child) = self.first_child(self.cursor) {
                     self.cursor = child;
                 }
                 ToolOutcome::Consumed
             }
-            KeyCode::Char('m') => self.ask_destination(ASK_MOVE, "Move"),
+            (Mods::ALT, KeyCode::Char('m')) => self.ask_destination(ASK_MOVE, "Move"),
             // Shift-Alt pairs: history, and the size walk.
-            KeyCode::Char('B') => {
+            (Mods::ALT_SHIFT, KeyCode::Char('b')) => {
                 self.go_back();
                 ToolOutcome::Consumed
             }
-            KeyCode::Char('F') => {
+            (Mods::ALT_SHIFT, KeyCode::Char('f')) => {
                 self.go_forward();
                 ToolOutcome::Consumed
             }
-            KeyCode::Char('S') => self.toggle_sizes(),
+            (Mods::ALT_SHIFT, KeyCode::Char('s')) => self.toggle_sizes(),
             _ => ToolOutcome::Ignored,
         }
     }
 
     fn on_ctrl_key(&mut self, key: &Key) -> ToolOutcome {
-        match key.code {
-            KeyCode::Char('c') => {
+        match (key.mods(), key.glyph()) {
+            (Mods::CTRL, KeyCode::Char('c')) => {
                 self.pending = Some(Leader::Depth);
                 ToolOutcome::Consumed
             }
-            KeyCode::Char('x') => {
+            (Mods::CTRL, KeyCode::Char('x')) => {
                 self.pending = Some(Leader::Edit);
                 ToolOutcome::Consumed
             }
-            KeyCode::Char('o') => self.open_external(),
+            (Mods::CTRL, KeyCode::Char('o')) => self.open_external(),
             // The paging chords the shared layer binds fall through to it;
             // the rest stay with the window.
             _ => match self.nav.key(key) {
@@ -1552,28 +1552,28 @@ impl DirTool {
         self.edit = Some(TextField::rows(names, self.cursor));
     }
 
-    /// Keys while the names are editable text. `Ctrl-X Ctrl-Q` toggles the
+    /// Keys while the names are editable text. `C-x C-q` toggles the
     /// session off from either mode, and `q` with nothing part-typed leaves
     /// it as it leaves the listing; everything else goes to the modal keys,
     /// whose lines are the listing's rows, so the cursor follows the line.
-    /// `ZZ`, `Ctrl-S`, or `Enter` while typing applies the renames, and `ZQ`
+    /// `ZZ`, `C-s`, or `Enter` while typing applies the renames, and `ZQ`
     /// throws them away.
     fn on_edit_key(&mut self, key: &Key) -> ToolOutcome {
         if self.pending == Some(Leader::Edit) {
             self.pending = None;
-            if key.ctrl && key.code == KeyCode::Char('q') {
+            if key.mods() == Mods::CTRL && key.glyph() == KeyCode::Char('q') {
                 self.discard_edit();
             }
             return ToolOutcome::Consumed;
         }
-        if key.ctrl && key.code == KeyCode::Char('x') {
+        if key.mods() == Mods::CTRL && key.glyph() == KeyCode::Char('x') {
             self.pending = Some(Leader::Edit);
             return ToolOutcome::Consumed;
         }
         let Some(edit) = self.edit.as_mut() else {
             return ToolOutcome::Ignored;
         };
-        if edit.modal().is_idle() && key.code == KeyCode::Char('q') && !key.ctrl && !key.alt {
+        if edit.modal().is_idle() && key.glyph() == KeyCode::Char('q') && !key.ctrl && !key.alt {
             self.discard_edit();
             return ToolOutcome::Consumed;
         }
@@ -1595,7 +1595,7 @@ impl DirTool {
             EditOutcome::Paste => ToolOutcome::Paste,
             // A second `Esc` in Normal is inert rather than the window's, so
             // mashing it cannot close the listing over unapplied edits.
-            EditOutcome::Ignored if key.code == KeyCode::Escape => ToolOutcome::Consumed,
+            EditOutcome::Ignored if key.glyph() == KeyCode::Escape => ToolOutcome::Consumed,
             EditOutcome::Ignored => ToolOutcome::Ignored,
             // The listing has no other files, searches, or fuller editor for
             // the names, so these are spent with nothing to do.
@@ -1778,6 +1778,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -1787,6 +1788,15 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
+        }
+    }
+
+    fn alt_shift(code: KeyCode) -> Key {
+        Key {
+            shift: true,
+            sup: false,
+            ..alt(code)
         }
     }
 
@@ -1796,10 +1806,11 @@ mod tests {
             code,
             ctrl: true,
             shift: false,
+            sup: false,
         }
     }
 
-    /// Toggle the name editor with its `Ctrl-X Ctrl-Q` chord.
+    /// Toggle the name editor with its `C-x C-q` chord.
     fn toggle_edit(tool: &mut DirTool) {
         tool.on_key(&ctrl(KeyCode::Char('x')));
         tool.on_key(&ctrl(KeyCode::Char('q')));
@@ -1869,9 +1880,15 @@ mod tests {
         tree.touch("c.txt");
         let mut tool = DirTool::new(tree.0.clone());
 
-        tool.on_key(&alt(KeyCode::Char('>')));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt(KeyCode::Char('>'))
+        });
         assert_eq!(selected_name(&tool), "c.txt");
-        tool.on_key(&alt(KeyCode::Char('<')));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt(KeyCode::Char('<'))
+        });
         assert_eq!(selected_name(&tool), "a.txt");
     }
 
@@ -2120,9 +2137,9 @@ mod tests {
         tool.on_key(&press(KeyCode::Enter));
         assert_eq!(tool.root, nested);
 
-        tool.on_key(&alt(KeyCode::Char('B')));
+        tool.on_key(&alt_shift(KeyCode::Char('b')));
         assert_eq!(tool.root, tree.0, "back returns to where it came from");
-        tool.on_key(&alt(KeyCode::Char('F')));
+        tool.on_key(&alt_shift(KeyCode::Char('f')));
         assert_eq!(tool.root, nested, "forward undoes the step back");
     }
 
@@ -2131,25 +2148,25 @@ mod tests {
         let (tree, _) = tree_with_nested_children("history-ends");
         let mut tool = DirTool::new(tree.0.clone());
 
-        tool.on_key(&alt(KeyCode::Char('B')));
+        tool.on_key(&alt_shift(KeyCode::Char('b')));
         assert_eq!(tool.root, tree.0);
-        tool.on_key(&alt(KeyCode::Char('F')));
+        tool.on_key(&alt_shift(KeyCode::Char('f')));
         assert_eq!(tool.root, tree.0);
     }
 
     #[test]
     fn test_moving_somewhere_new_drops_the_forward_history() {
         // Otherwise `forward` points at a branch the user has left, and
-        // Ctrl-i teleports somewhere unrelated.
+        // C-i teleports somewhere unrelated.
         let (tree, nested) = tree_with_nested_children("history-branch");
         let mut tool = DirTool::new(tree.0.clone());
         tool.on_key(&press(KeyCode::Enter));
-        tool.on_key(&alt(KeyCode::Char('B')));
+        tool.on_key(&alt_shift(KeyCode::Char('b')));
         assert!(!tool.forward.is_empty());
 
         tool.on_key(&press(KeyCode::Backspace));
         assert!(tool.forward.is_empty());
-        tool.on_key(&alt(KeyCode::Char('F')));
+        tool.on_key(&alt_shift(KeyCode::Char('f')));
         assert_ne!(tool.root, nested);
     }
 
@@ -2565,7 +2582,7 @@ mod tests {
         let second = tree.dir("bbb");
         let mut tool = DirTool::new(tree.0.clone());
 
-        let outcome = tool.on_key(&alt(KeyCode::Char('S')));
+        let outcome = tool.on_key(&alt_shift(KeyCode::Char('s')));
         assert_eq!(
             outcome,
             ToolOutcome::Job(JobRequest::DirSize(first.clone()))
@@ -2590,9 +2607,9 @@ mod tests {
         tree.dir("aaa");
         let mut tool = DirTool::new(tree.0.clone());
 
-        tool.on_key(&alt(KeyCode::Char('S')));
+        tool.on_key(&alt_shift(KeyCode::Char('s')));
         assert_eq!(
-            tool.on_key(&alt(KeyCode::Char('S'))),
+            tool.on_key(&alt_shift(KeyCode::Char('s'))),
             ToolOutcome::CancelJobs
         );
     }
@@ -2604,8 +2621,8 @@ mod tests {
         let tree = TempTree::new("sizes-late");
         let dir = tree.dir("aaa");
         let mut tool = DirTool::new(tree.0.clone());
-        tool.on_key(&alt(KeyCode::Char('S')));
-        tool.on_key(&alt(KeyCode::Char('S')));
+        tool.on_key(&alt_shift(KeyCode::Char('s')));
+        tool.on_key(&alt_shift(KeyCode::Char('s')));
 
         let outcome = tool.on_job(JobReply::DirSize {
             bytes: 1,
@@ -2620,7 +2637,7 @@ mod tests {
         // total into a different directory is the wrong one.
         let (tree, nested) = tree_with_nested_children("sizes-cache");
         let mut tool = DirTool::new(tree.0.clone());
-        tool.on_key(&alt(KeyCode::Char('S')));
+        tool.on_key(&alt_shift(KeyCode::Char('s')));
         tool.on_job(JobReply::DirSize {
             bytes: 64,
             path: nested.clone(),
@@ -2974,7 +2991,7 @@ mod tests {
 
     #[test]
     fn test_a_stray_follow_key_abandons_the_chord_instead_of_leaking() {
-        // `Ctrl-X` followed by anything but `Ctrl-Q` must not leave the
+        // `C-x` followed by anything but `C-q` must not leave the
         // leader pending, swallowing the next keystroke.
         let tree = TempTree::new("edit-stray-chord");
         tree.touch("a.txt");

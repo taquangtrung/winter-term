@@ -480,7 +480,7 @@ impl App {
     /// selection, and the live search.
     fn leave_mode(&mut self, old_mode: Mode, new_mode: Mode, focused: TabId) {
         // Leaving Normal altogether (back to Insert, into a block) is one of
-        // vim's jumplist jumps: the browsing position is recorded so `Ctrl+O`
+        // vim's jumplist jumps: the browsing position is recorded so `C-o`
         // after the next Escape returns to it. Recorded before the nav cursor is
         // cleared in `enter_mode`.
         if old_mode == Mode::Normal && new_mode != Mode::Normal {
@@ -668,9 +668,9 @@ impl App {
     /// Whether Vim operators may edit the shell's prompt line right now.
     ///
     /// False when the user has told us their shell is not in emacs mode: the
-    /// operators are realized as readline chords (`Ctrl-A`, `Ctrl-K`, ...), and
+    /// operators are realized as readline chords (`C-a`, `C-k`, ...), and
     /// a shell in vi mode has those bound to something else entirely, so
-    /// "delete a word" would run whatever `Ctrl-W` means there instead. A shell
+    /// "delete a word" would run whatever `C-w` means there instead. A shell
     /// in vi mode already provides its own Vim line editing, so declining here
     /// leaves the user with working editing rather than none.
     pub(crate) fn prompt_editing_enabled(&self) -> bool {
@@ -834,7 +834,7 @@ impl App {
         }
     }
 
-    /// Perform a configurable Insert-mode line edit (e.g. `Ctrl-Backspace` to
+    /// Perform a configurable Insert-mode line edit (e.g. `C-DEL` to
     /// delete the word before the cursor): fold it into the undo shadow and send
     /// the equivalent readline keystrokes to the shell.
     fn edit_on_prompt(&mut self, action: EditAction, focused: TabId) {
@@ -856,9 +856,9 @@ impl App {
         self.dirty = true;
     }
 
-    /// Apply a prompt undo (`undo == true`, `Ctrl-/`) or redo (`Ctrl-\`).
+    /// Apply a prompt undo (`undo == true`, `C-/`) or redo (`C-\`).
     ///
-    /// Undo is delegated to the shell's own undo (`Ctrl-_`), the WezTerm approach:
+    /// Undo is delegated to the shell's own undo (`C-_`), the WezTerm approach:
     /// a single readline/ZLE operation, so the line repaints once instead of
     /// flashing through a multi-keystroke rebuild (which syntax-highlight /
     /// autosuggest plugins re-render at every step). The shadow pointer is advanced

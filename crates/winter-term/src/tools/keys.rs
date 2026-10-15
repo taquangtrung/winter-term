@@ -322,7 +322,7 @@ impl Tool for KeysTool {
 
         // Enter on a command line in Normal mode runs the action.
         if self.modal.mode() == EditMode::Normal
-            && key.code == KeyCode::Enter
+            && key.glyph() == KeyCode::Enter
             && !key.ctrl
             && !key.alt
         {
@@ -334,7 +334,7 @@ impl Tool for KeysTool {
         }
 
         // 'q' in Normal mode when idle closes the tool.
-        if self.modal.is_idle() && key.code == KeyCode::Char('q') && !key.ctrl && !key.alt {
+        if self.modal.is_idle() && key.glyph() == KeyCode::Char('q') && !key.ctrl && !key.alt {
             return ToolOutcome::Close;
         }
 
@@ -457,6 +457,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -467,11 +468,18 @@ mod tests {
             code: KeyCode::Char(c),
             ctrl: false,
             shift: false,
+            sup: false,
         };
         let mut tool = tool_with_rows(5);
-        tool.on_key(&alt('>'));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt('>')
+        });
         assert_eq!(tool.selected(), 4);
-        tool.on_key(&alt('<'));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt('<')
+        });
         assert_eq!(tool.selected(), 0);
     }
 

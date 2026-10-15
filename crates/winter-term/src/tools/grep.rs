@@ -1,11 +1,11 @@
 //! Grep: the lines under a directory that hold some text, grouped by file and
 //! opened straight from the list, or edited in place and written back to the
-//! files they came from (`Ctrl-X Ctrl-Q`), in the manner of Emacs' `wgrep`.
+//! files they came from (`C-x C-q`), in the manner of Emacs' `wgrep`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use crate::model::input::{CursorMove, Key, KeyCode};
+use crate::model::input::{CursorMove, Key, KeyCode, Mods};
 use crate::model::paint::{
     row_height, row_text, wheel_scroll, window_anchor, wrap_window, Caret, Frame, Row, Span, Style,
 };
@@ -58,7 +58,7 @@ pub struct GrepTool {
     /// The matched lines as editable text while they are being rewritten in
     /// place, one line per hit.
     edit: Option<TextField>,
-    /// Whether `Ctrl-X` has just been pressed, which `Ctrl-Q` completes into
+    /// Whether `C-x` has just been pressed, which `C-q` completes into
     /// the chord that starts or ends editing.
     edit_chord: bool,
     hits: Vec<SearchHit>,
@@ -361,7 +361,7 @@ impl GrepTool {
     }
 
     /// Keys while the matches are editable text: the editor's keys, the cursor
-    /// following the line being edited. `ZZ`, `Ctrl-S`, or `Enter` while
+    /// following the line being edited. `ZZ`, `C-s`, or `Enter` while
     /// typing writes; `ZQ`, or `q` with nothing part-typed, throws it away.
     fn on_edit_key(&mut self, key: &Key) -> ToolOutcome {
         let at = self.rows.get(self.cursor).map(|row| row.hit);
@@ -369,7 +369,7 @@ impl GrepTool {
         let Some(edit) = self.edit.as_mut() else {
             return ToolOutcome::Ignored;
         };
-        if edit.modal().is_idle() && key.code == KeyCode::Char('q') && !key.ctrl && !key.alt {
+        if edit.modal().is_idle() && key.glyph() == KeyCode::Char('q') && !key.ctrl && !key.alt {
             self.discard_edit();
             return ToolOutcome::Consumed;
         }
@@ -394,7 +394,7 @@ impl GrepTool {
             }
             EditOutcome::Yank(text) => ToolOutcome::Yank(text),
             EditOutcome::Paste => ToolOutcome::Paste,
-            EditOutcome::Ignored if key.code == KeyCode::Escape => ToolOutcome::Consumed,
+            EditOutcome::Ignored if key.glyph() == KeyCode::Escape => ToolOutcome::Consumed,
             EditOutcome::Ignored => ToolOutcome::Ignored,
             EditOutcome::Consumed
             | EditOutcome::Escalate
@@ -501,19 +501,19 @@ impl Tool for GrepTool {
     fn on_key(&mut self, key: &Key) -> ToolOutcome {
         self.wheel = false;
         if std::mem::take(&mut self.edit_chord) {
-            if key.ctrl && key.code == KeyCode::Char('q') {
+            if key.mods() == Mods::CTRL && key.glyph() == KeyCode::Char('q') {
                 self.toggle_edit();
             }
             return ToolOutcome::Consumed;
         }
-        if key.ctrl && key.code == KeyCode::Char('x') {
+        if key.mods() == Mods::CTRL && key.glyph() == KeyCode::Char('x') {
             self.edit_chord = true;
             return ToolOutcome::Consumed;
         }
         if self.edit.is_some() {
             return self.on_edit_key(&key.typed());
         }
-        if key.ctrl && key.code == KeyCode::Char('o') {
+        if key.mods() == Mods::CTRL && key.glyph() == KeyCode::Char('o') {
             return self.open_external();
         }
         if key.alt {
@@ -524,19 +524,19 @@ impl Tool for GrepTool {
                 };
                 return ToolOutcome::Consumed;
             }
-            return match key.code {
-                KeyCode::Char('n') => {
+            return match (key.mods(), key.glyph()) {
+                (Mods::ALT, KeyCode::Char('n')) => {
                     self.move_to_row(true, true);
                     ToolOutcome::Consumed
                 }
-                KeyCode::Char('p') => {
+                (Mods::ALT, KeyCode::Char('p')) => {
                     self.move_to_row(false, true);
                     ToolOutcome::Consumed
                 }
                 _ => ToolOutcome::Ignored,
             };
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('j') | KeyCode::Down => {
                 self.move_by(1);
                 ToolOutcome::Consumed
@@ -750,6 +750,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -759,6 +760,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -769,9 +771,15 @@ mod tests {
             hit("a.rs", 9, "thing again"),
             hit("b.rs", 3, "thing"),
         ]);
-        tool.on_key(&alt(KeyCode::Char('>')));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt(KeyCode::Char('>'))
+        });
         assert_eq!(tool.cursor, tool.rows.len() - 1);
-        tool.on_key(&alt(KeyCode::Char('<')));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt(KeyCode::Char('<'))
+        });
         assert_eq!(tool.cursor, 0);
     }
 

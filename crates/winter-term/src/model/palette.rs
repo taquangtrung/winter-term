@@ -1,5 +1,5 @@
 //! Native command palette: a lightweight text-mode overlay activated by
-//! `Alt-X` (or the configured key). Renders as GPU quads at the top
+//! `M-x` (or the configured key). Renders as GPU quads at the top
 //! of the focused pane, no WebView required.
 
 use std::collections::HashSet;
@@ -71,7 +71,7 @@ pub struct PaletteEntry {
     pub label: String,
     /// Char indices in `label` that matched the current query (for highlight).
     pub match_positions: Vec<usize>,
-    /// Keyboard shortcut hint shown on the right (e.g. `"Ctrl-Shift-T"`).
+    /// Keyboard shortcut hint shown on the right (e.g. `"C-S-t"`).
     pub shortcut: String,
 }
 
@@ -87,7 +87,7 @@ pub struct Palette {
     pub entries: Vec<PaletteEntry>,
     /// Indices into the entries that match the query, in match order.
     pub filtered: Vec<usize>,
-    /// Undo/redo stack over `query`, driven by `Ctrl-/` and `Ctrl-\`.
+    /// Undo/redo stack over `query`, driven by `C-/` and `C-\`.
     pub history: EditHistory<String>,
     /// Position in `query_history` currently recalled (`0` = most recent).
     /// `None` indicates the live, uncommitted query is displayed.
@@ -556,7 +556,7 @@ impl Palette {
         self.update_filter();
     }
 
-    /// Recall an older executed query (`Alt+P`). Replaces the current query
+    /// Recall an older executed query (`M-p`). Replaces the current query
     /// and updates filtering. No-op when query history is empty or already at
     /// the oldest entry.
     pub fn history_prev(&mut self) {
@@ -582,7 +582,7 @@ impl Palette {
         self.update_filter();
     }
 
-    /// Recall a newer executed query (`Alt+N`), returning to the live typed
+    /// Recall a newer executed query (`M-n`), returning to the live typed
     /// query once the newest entry is passed. No-op when not currently
     /// navigating history.
     pub fn history_next(&mut self) {
@@ -601,7 +601,7 @@ impl Palette {
         self.update_filter();
     }
 
-    /// Restore the previous query state (`Ctrl-/`). No-op when nothing to undo.
+    /// Restore the previous query state (`C-/`). No-op when nothing to undo.
     pub fn undo(&mut self) {
         self.history_index = None;
         if let Some(query) = self.history.undo() {
@@ -610,7 +610,7 @@ impl Palette {
         }
     }
 
-    /// Re-apply an undone query state (`Ctrl-\`). No-op when nothing to redo.
+    /// Re-apply an undone query state (`C-\`). No-op when nothing to redo.
     pub fn redo(&mut self) {
         self.history_index = None;
         if let Some(query) = self.history.redo() {

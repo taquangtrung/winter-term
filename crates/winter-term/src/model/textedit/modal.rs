@@ -10,7 +10,7 @@
 
 use std::collections::HashMap;
 
-use crate::model::input::{Key, KeyCode, TextObject};
+use crate::model::input::{Key, KeyCode, Mods, TextObject};
 use crate::model::textedit::buffer::{Register, TextBuffer, WordCase};
 use crate::model::textedit::kill::{KillRing, Merge};
 use crate::model::textedit::search::Search;
@@ -99,7 +99,7 @@ pub enum EditOutcome {
     Cancel,
     /// The key was spent on the text, the cursor, or a command part-typed.
     Consumed,
-    /// `Ctrl-O`: hand the text to a fuller editor.
+    /// `C-o`: hand the text to a fuller editor.
     Escalate,
     /// No binding here, so the host may have one.
     Ignored,
@@ -112,7 +112,7 @@ pub enum EditOutcome {
         /// Whether to write the text first (`ZZ`) rather than discard it.
         save: bool,
     },
-    /// `Ctrl-S`: write the text.
+    /// `C-s`: write the text.
     Save,
     /// `/` or `?`: ask what to look for, and hand it to [`ModalEditor::start_search`].
     Search {
@@ -148,7 +148,7 @@ pub struct EditView<'a> {
     pub buffer: &'a mut TextBuffer,
     /// Where `m` sets marks in it and `''` goes back to.
     pub marks: &'a mut Marks,
-    /// The lines of other texts open beside it, which `Alt-/` completes from
+    /// The lines of other texts open beside it, which `M-/` completes from
     /// after the text's own words.
     pub others: &'a [&'a [String]],
     /// The first line in view, which the scroll placements move.
@@ -164,7 +164,7 @@ pub struct EditView<'a> {
 pub struct ModalEditor {
     /// Where a Visual selection started, for as long as there is one.
     anchor: Option<Anchor>,
-    /// The `Alt-/` completion the last key put in, which the next one cycles.
+    /// The `M-/` completion the last key put in, which the next one cycles.
     completion: Option<Completion>,
     /// A count being typed ahead of a command, as digits so far.
     count: Option<usize>,
@@ -222,7 +222,7 @@ struct Anchor {
     row: usize,
 }
 
-/// An `Alt-/` completion in progress: the word typed, the words it could
+/// An `M-/` completion in progress: the word typed, the words it could
 /// become, and which of them is in.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 struct Completion {
@@ -730,7 +730,7 @@ impl Session<'_> {
         if let Some(pending) = self.ed.pending {
             return self.resolve_pending(pending, key);
         }
-        // An Alt chord belongs to the window: `Alt-p` moves focus rather than
+        // An Alt chord belongs to the window: `M-p` moves focus rather than
         // pasting. Only the two buffer ends the shared layer claims stay here.
         if key.alt {
             return self.shared_motion(key);
@@ -743,13 +743,14 @@ impl Session<'_> {
         }
         // A count or a register typed and then thought better of: `Esc` drops
         // it rather than closing a file over a half-typed command.
-        if key.code == KeyCode::Escape && (self.ed.count.is_some() || self.ed.register.is_some()) {
+        if key.glyph() == KeyCode::Escape && (self.ed.count.is_some() || self.ed.register.is_some())
+        {
             self.ed.count = None;
             self.ed.register = None;
             return EditOutcome::Consumed;
         }
         if self.ed.read_only {
-            match key.code {
+            match key.glyph() {
                 KeyCode::Char(
                     'i' | 'a' | 'I' | 'A' | 'o' | 'O' | 'R' | 's' | 'S' | 'x' | 'X' | 'C' | 'D'
                     | 'r' | '~' | 'J' | 'p' | 'P' | 'u' | '.' | 'd' | 'c' | '>' | '<',
@@ -760,7 +761,7 @@ impl Session<'_> {
                 _ => {}
             }
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('i') => self.enter_insert(),
             KeyCode::Char('a') => {
                 self.buffer_mut().move_right(1, true);
@@ -775,7 +776,7 @@ impl Session<'_> {
                 self.enter_insert()
             }
             KeyCode::Char('o') | KeyCode::Char('O') => {
-                let below = key.code == KeyCode::Char('o');
+                let below = key.glyph() == KeyCode::Char('o');
                 self.buffer_mut().snapshot();
                 self.buffer_mut().open_line(below);
                 self.ed.mode = EditMode::Insert;
@@ -838,7 +839,7 @@ impl Session<'_> {
                 EditOutcome::Consumed
             }
             KeyCode::Char('p') | KeyCode::Char('P') => {
-                let after = key.code == KeyCode::Char('p');
+                let after = key.glyph() == KeyCode::Char('p');
                 self.paste(after)
             }
             KeyCode::Char('u') => {
@@ -877,18 +878,18 @@ impl Session<'_> {
                 EditOutcome::Consumed
             }
             KeyCode::Char(';') | KeyCode::Char(',') => {
-                let reverse = key.code == KeyCode::Char(',');
+                let reverse = key.glyph() == KeyCode::Char(',');
                 self.repeat_find(reverse)
             }
             KeyCode::Char('/') | KeyCode::Char('?') => EditOutcome::Search {
-                forward: key.code == KeyCode::Char('/'),
+                forward: key.glyph() == KeyCode::Char('/'),
             },
             KeyCode::Char('n') | KeyCode::Char('N') => {
-                let reverse = key.code == KeyCode::Char('N');
+                let reverse = key.glyph() == KeyCode::Char('N');
                 self.search_step(reverse)
             }
             KeyCode::Char('*') | KeyCode::Char('#') => {
-                let forward = key.code == KeyCode::Char('*');
+                let forward = key.glyph() == KeyCode::Char('*');
                 self.search_word(forward)
             }
             KeyCode::Char('g') => {
@@ -896,7 +897,7 @@ impl Session<'_> {
                 EditOutcome::Consumed
             }
             KeyCode::Char('[') | KeyCode::Char(']') => {
-                let forward = key.code == KeyCode::Char(']');
+                let forward = key.glyph() == KeyCode::Char(']');
                 self.ed.pending = Some(Pending::Bracket(BracketWait { forward }));
                 EditOutcome::Consumed
             }
@@ -914,11 +915,15 @@ impl Session<'_> {
 
     /// The Ctrl chords: saving, redo, the number keys, and the paging motions.
     fn on_ctrl_key(&mut self, key: &Key) -> EditOutcome {
-        if self.ed.read_only && matches!(key.code, KeyCode::Char('s' | 'r' | 'a' | 'x')) {
+        // Only the bare Ctrl chords are these; `C-S-d` is the window's.
+        if key.mods() != Mods::CTRL {
+            return self.shared_motion(key);
+        }
+        if self.ed.read_only && matches!(key.glyph(), KeyCode::Char('s' | 'r' | 'a' | 'x')) {
             self.ed.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
             return EditOutcome::Consumed;
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('s') => EditOutcome::Save,
             KeyCode::Char('r') => {
                 if !self.buffer_mut().redo() {
@@ -929,7 +934,7 @@ impl Session<'_> {
             }
             KeyCode::Char('a') | KeyCode::Char('x') => {
                 let count = self.take_count() as i64;
-                let by = match key.code == KeyCode::Char('a') {
+                let by = match key.glyph() == KeyCode::Char('a') {
                     true => count,
                     false => -count,
                 };
@@ -962,7 +967,7 @@ impl Session<'_> {
     /// A digit typed before a command, which belongs to the command that
     /// follows it. A leading zero is the motion to column one instead.
     fn take_digit(&mut self, key: &Key) -> bool {
-        let KeyCode::Char(c) = key.code else {
+        let KeyCode::Char(c) = key.glyph() else {
             return false;
         };
         if !c.is_ascii_digit() || (c == '0' && self.ed.count.is_none()) {
@@ -982,9 +987,9 @@ impl Session<'_> {
     /// Insert mode: an Emacs-style field, since that is what the shell's own
     /// line is, with the chords that edit one.
     fn on_insert_key(&mut self, key: &Key) -> EditOutcome {
-        // Typing is no reason to lose the window chords: `Alt-h` moves focus,
+        // Typing is no reason to lose the window chords: `M-h` moves focus,
         // it does not type an `h`. The Emacs Alt chords below leave those, and
-        // `Alt-l` with them, alone.
+        // `M-l` with them, alone.
         if key.alt {
             return match key.ctrl {
                 true => EditOutcome::Ignored,
@@ -994,7 +999,7 @@ impl Session<'_> {
         if key.ctrl {
             return self.on_insert_ctrl_key(key);
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Escape if self.ed.insert_only => EditOutcome::Cancel,
             KeyCode::Escape => self.leave_insert(),
             // Text whose lines stand for something cannot take a new one, so
@@ -1055,7 +1060,10 @@ impl Session<'_> {
     /// The Ctrl chords of Insert mode: the Emacs ones for moving by character
     /// and line, for killing and yanking, and for editing around the cursor.
     fn on_insert_ctrl_key(&mut self, key: &Key) -> EditOutcome {
-        let KeyCode::Char(c) = key.code else {
+        if key.mods() != Mods::CTRL {
+            return EditOutcome::Ignored;
+        }
+        let KeyCode::Char(c) = key.glyph() else {
             return EditOutcome::Ignored;
         };
         match c {
@@ -1092,23 +1100,29 @@ impl Session<'_> {
     /// edits that work a word at a time. The letters the window keeps (`h`
     /// `j` `k` `l` and the digits) are not among them.
     fn on_insert_alt_key(&mut self, key: &Key) -> EditOutcome {
-        match key.code {
-            KeyCode::Char('b') => self.buffer_mut().move_emacs_word(false),
-            KeyCode::Char('f') => self.buffer_mut().move_emacs_word(true),
-            KeyCode::Char('d') => self.kill(true, |buffer| buffer.kill_emacs_word(true)),
-            KeyCode::Backspace => self.kill(false, |buffer| buffer.kill_emacs_word(false)),
-            KeyCode::Char('y') => self.yank_pop(),
-            KeyCode::Char('/') => self.complete(),
-            KeyCode::Char('t') => self.buffer_mut().transpose_words(),
-            KeyCode::Char('u') => self.buffer_mut().change_word_case(WordCase::Upper),
-            KeyCode::Char('c') => self.buffer_mut().change_word_case(WordCase::Capitalize),
-            KeyCode::Char('m') => self.buffer_mut().move_first_non_blank(),
-            KeyCode::Char('v') => {
+        match (key.mods(), key.glyph()) {
+            (Mods::ALT, KeyCode::Char('b')) => self.buffer_mut().move_emacs_word(false),
+            (Mods::ALT, KeyCode::Char('f')) => self.buffer_mut().move_emacs_word(true),
+            (Mods::ALT, KeyCode::Char('d')) => {
+                self.kill(true, |buffer| buffer.kill_emacs_word(true))
+            }
+            (Mods::ALT, KeyCode::Backspace) => {
+                self.kill(false, |buffer| buffer.kill_emacs_word(false))
+            }
+            (Mods::ALT, KeyCode::Char('y')) => self.yank_pop(),
+            (Mods::ALT, KeyCode::Char('/')) => self.complete(),
+            (Mods::ALT, KeyCode::Char('t')) => self.buffer_mut().transpose_words(),
+            (Mods::ALT, KeyCode::Char('u')) => self.buffer_mut().change_word_case(WordCase::Upper),
+            (Mods::ALT, KeyCode::Char('c')) => {
+                self.buffer_mut().change_word_case(WordCase::Capitalize)
+            }
+            (Mods::ALT, KeyCode::Char('m')) => self.buffer_mut().move_first_non_blank(),
+            (Mods::ALT, KeyCode::Char('v')) => {
                 let tool = self.insert_tool();
                 self.buffer_mut().move_up(tool, true);
             }
-            KeyCode::Char('<') => self.buffer_mut().move_text_start(),
-            KeyCode::Char('>') => self.buffer_mut().move_text_end(),
+            (Mods::ALT_SHIFT, KeyCode::Char('<')) => self.buffer_mut().move_text_start(),
+            (Mods::ALT_SHIFT, KeyCode::Char('>')) => self.buffer_mut().move_text_end(),
             _ => return EditOutcome::Ignored,
         }
         EditOutcome::Consumed
@@ -1120,7 +1134,7 @@ impl Session<'_> {
         self.view.viewport.saturating_sub(PAGE_OVERLAP).max(1)
     }
 
-    /// Scroll so the cursor's line sits in the middle of the view (`Ctrl-l`).
+    /// Scroll so the cursor's line sits in the middle of the view (`C-l`).
     fn center_on_cursor(&mut self) {
         let row = self.buffer().row();
         *self.view.scroll = row.saturating_sub(self.view.viewport / HALF_PAGE);
@@ -1187,7 +1201,7 @@ impl Session<'_> {
         self.put_yank();
     }
 
-    /// `Alt-/`: complete the word before the caret from the words around it,
+    /// `M-/`: complete the word before the caret from the words around it,
     /// nearest first, then from the other open texts. Pressed again it puts
     /// in the next candidate, and after the last, the word as it was typed.
     fn complete(&mut self) {
@@ -1250,7 +1264,7 @@ impl Session<'_> {
         if key.alt || key.ctrl {
             return EditOutcome::Ignored;
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Escape => self.leave_insert(),
             KeyCode::Backspace => {
                 self.buffer_mut().move_left(1);
@@ -1324,7 +1338,7 @@ impl Session<'_> {
             return self.leave_visual();
         };
         if self.ed.read_only {
-            match key.code {
+            match key.glyph() {
                 KeyCode::Char('d' | 'x' | 'c' | 's' | '>' | '<' | 'J' | '~' | 'p' | 'P' | 'r') => {
                     self.ed.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
                     return EditOutcome::Consumed;
@@ -1332,7 +1346,7 @@ impl Session<'_> {
                 _ => {}
             }
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Escape | KeyCode::Char('q') => self.leave_visual(),
             KeyCode::Char('v') => match selection.linewise {
                 true => self.start_visual(false),
@@ -1391,7 +1405,7 @@ impl Session<'_> {
                 EditOutcome::Consumed
             }
             KeyCode::Char('i') | KeyCode::Char('a') => {
-                let around = key.code == KeyCode::Char('a');
+                let around = key.glyph() == KeyCode::Char('a');
                 self.ed.pending = Some(Pending::Object(ObjectWait { around }));
                 EditOutcome::Consumed
             }
@@ -1408,7 +1422,7 @@ impl Session<'_> {
                 EditOutcome::Consumed
             }
             KeyCode::Char('n') | KeyCode::Char('N') => {
-                let reverse = key.code == KeyCode::Char('N');
+                let reverse = key.glyph() == KeyCode::Char('N');
                 self.search_step(reverse)
             }
             _ => self.shared_motion(key),
@@ -1522,7 +1536,7 @@ impl Session<'_> {
     /// register or a mark.
     fn resolve_pending(&mut self, pending: Pending, key: &Key) -> EditOutcome {
         self.ed.pending = None;
-        if key.code == KeyCode::Escape {
+        if key.glyph() == KeyCode::Escape {
             self.ed.operator = None;
             self.ed.count = None;
             return EditOutcome::Consumed;
@@ -1530,7 +1544,7 @@ impl Session<'_> {
         match pending {
             // `]b` and `[b` step through the open files, the way they step
             // through the blocks of a shell's output.
-            Pending::Bracket(wait) => match key.code {
+            Pending::Bracket(wait) => match key.glyph() {
                 KeyCode::Char('b') => EditOutcome::StepBuffer {
                     forward: wait.forward,
                 },
@@ -1544,7 +1558,7 @@ impl Session<'_> {
                 None => EditOutcome::Consumed,
             },
             Pending::Mark => {
-                if let KeyCode::Char(c) = key.code {
+                if let KeyCode::Char(c) = key.glyph() {
                     let at = (self.buffer().row(), self.buffer().col());
                     self.view.marks.named.insert(c, at);
                 }
@@ -1553,7 +1567,7 @@ impl Session<'_> {
             Pending::Motion => self.resolve_motion(key),
             Pending::Object(wait) => self.resolve_object(wait, key),
             Pending::Register => {
-                if let KeyCode::Char(c) = key.code {
+                if let KeyCode::Char(c) = key.glyph() {
                     self.ed.register = Some(c);
                     if c == '_' {
                         self.ed.held = Some(self.buffer().register().clone());
@@ -1578,7 +1592,7 @@ impl Session<'_> {
     /// `r`: write one character over the one under the cursor, or over every
     /// character of a selection.
     fn resolve_replace(&mut self, key: &Key) -> EditOutcome {
-        let c = match key.code {
+        let c = match key.glyph() {
             KeyCode::Char(c) => c,
             KeyCode::Space => ' ',
             _ => return EditOutcome::Consumed,
@@ -1623,7 +1637,7 @@ impl Session<'_> {
     /// The character a char search was waiting for, which now stands as the
     /// search `;` and `,` repeat.
     fn resolve_find(&mut self, wait: FindWait, key: &Key) -> EditOutcome {
-        let ch = match key.code {
+        let ch = match key.glyph() {
             KeyCode::Char(ch) => ch,
             KeyCode::Space => ' ',
             _ => {
@@ -1684,7 +1698,7 @@ impl Session<'_> {
     /// Go to a mark (`'a`, `` `a ``), or back to where the last jump started
     /// (`''`).
     fn jump_to_mark(&mut self, jump: MarkJump, key: &Key) -> EditOutcome {
-        let KeyCode::Char(c) = key.code else {
+        let KeyCode::Char(c) = key.glyph() else {
             return EditOutcome::Consumed;
         };
         let at = match c {
@@ -1736,9 +1750,9 @@ impl Session<'_> {
             self.ed.pending = Some(Pending::Motion);
             return EditOutcome::Consumed;
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('i') | KeyCode::Char('a') => {
-                let around = key.code == KeyCode::Char('a');
+                let around = key.glyph() == KeyCode::Char('a');
                 self.ed.pending = Some(Pending::Object(ObjectWait { around }));
                 return EditOutcome::Consumed;
             }
@@ -1759,7 +1773,7 @@ impl Session<'_> {
             (None, one) if one > 1 => Some(one),
             (None, _) => None,
         };
-        if key.code == doubled_key(operator.kind) {
+        if key.glyph() == doubled_key(operator.kind) {
             let count = typed.unwrap_or(1);
             return self.operate_on_lines(Operator { count, ..operator });
         }
@@ -2028,7 +2042,7 @@ impl Session<'_> {
     /// operator reaches, or what a Visual selection now covers.
     fn resolve_object(&mut self, wait: ObjectWait, key: &Key) -> EditOutcome {
         let operator = self.ed.operator.take();
-        let Some(object) = TextObject::of_key(key.code) else {
+        let Some(object) = TextObject::of_key(key.glyph()) else {
             return EditOutcome::Consumed;
         };
         let Some((span, linewise)) = self.object_span(object, wait.around) else {
@@ -2245,7 +2259,7 @@ fn move_cursor(
 
 /// What `key` stands for in one of the command tables.
 fn table_entry<T: Copy>(table: &[(char, T, &str)], key: &Key) -> Option<T> {
-    let KeyCode::Char(c) = key.code else {
+    let KeyCode::Char(c) = key.glyph() else {
         return None;
     };
     table
@@ -2323,8 +2337,8 @@ fn completion_candidates(
 /// The direction and the stopping rule a char search key names.
 fn find_wait(key: &Key) -> FindWait {
     FindWait {
-        forward: matches!(key.code, KeyCode::Char('f') | KeyCode::Char('t')),
-        till: matches!(key.code, KeyCode::Char('t') | KeyCode::Char('T')),
+        forward: matches!(key.glyph(), KeyCode::Char('f') | KeyCode::Char('t')),
+        till: matches!(key.glyph(), KeyCode::Char('t') | KeyCode::Char('T')),
     }
 }
 
@@ -2473,6 +2487,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         };
         let Some(name) = token.strip_prefix('<').and_then(|t| t.strip_suffix('>')) else {
             return plain(KeyCode::Char(token.chars().next().unwrap_or(' ')));

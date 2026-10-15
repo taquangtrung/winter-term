@@ -78,7 +78,8 @@ window.addEventListener('keydown', function (event) {\
   event.preventDefault();\
   try {\
     window.ipc.postMessage(JSON.stringify({winterKey: {\
-      alt: event.altKey, ctrl: event.ctrlKey, name: event.key, shift: event.shiftKey\
+      alt: event.altKey, ctrl: event.ctrlKey, name: event.key, shift: event.shiftKey,\
+      sup: event.metaKey\
     }}));\
   } catch (e) {}\
 }, true);";
@@ -168,6 +169,8 @@ struct RelayedKeyBody {
     ctrl: bool,
     name: String,
     shift: bool,
+    #[serde(default)]
+    sup: bool,
 }
 
 /// A key a surface relayed, already in Winter's own terms.
@@ -888,7 +891,9 @@ fn read_surface_message(body: &str, tab_id: TabId) -> SurfaceMessage {
                 code,
                 ctrl: relayed.winter_key.ctrl,
                 shift: relayed.winter_key.shift,
-            },
+                sup: relayed.winter_key.sup,
+            }
+            .canonical(),
             tab_id,
         }),
         None => SurfaceMessage::Text(SurfaceText {

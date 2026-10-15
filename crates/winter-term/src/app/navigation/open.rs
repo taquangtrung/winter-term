@@ -1,4 +1,4 @@
-//! Opening what the terminal points at (`gx`, `Alt+.`), rooting Find File
+//! Opening what the terminal points at (`gx`, `M-.`), rooting Find File
 //! there, and reading the pane's working directory back out (the palette's
 //! "Copy: Working Directory").
 //!
@@ -382,7 +382,7 @@ fn enclosed_quote_span(line: &[char], idx: usize) -> Option<(usize, usize)> {
 
 impl App {
     /// What the focused terminal points at, for the commands that act on a
-    /// path in its text (`gx`, `Alt+.`, Find File), tried in order:
+    /// path in its text (`gx`, `M-.`, Find File), tried in order:
     ///
     /// 1. The Normal/Visual cursor, when there is one: it is placed on
     ///    purpose, so nothing else is guessed at when it rests on nothing.
@@ -447,7 +447,7 @@ impl App {
         }
     }
 
-    /// `gx` and `Alt+.`: open what the focused terminal points at (see
+    /// `gx` and `M-.`: open what the focused terminal points at (see
     /// [`Self::target_at_point`]). A URL goes to the system opener, a
     /// directory to the dir tool, and a file to the editor at the referenced
     /// line, each over this pane.

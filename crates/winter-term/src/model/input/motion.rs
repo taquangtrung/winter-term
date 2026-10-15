@@ -81,10 +81,10 @@ impl TextObjectSpec {
         Self { around, object }
     }
 }
-/// Whether a Visual selection spans blocks, characters, or whole lines (`Ctrl-V`, `v`, `V`).
+/// Whether a Visual selection spans blocks, characters, or whole lines (`C-v`, `v`, `V`).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum VisualKind {
-    /// A rectangular selection (`Ctrl-V`).
+    /// A rectangular selection (`C-v`).
     Block,
     /// A character-wise selection (`v`).
     Char,

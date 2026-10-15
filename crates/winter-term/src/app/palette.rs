@@ -26,7 +26,7 @@ impl App {
         physical: &PhysicalKey,
         focused: TabId,
     ) {
-        // Prompt undo/redo chords (default `Ctrl-/` / `Ctrl-\`) also drive the
+        // Prompt undo/redo chords (default `C-/` / `C-\`) also drive the
         // palette query history, resolved through the configurable keymap.
         let mods = self.modifiers.state();
         let model_key = input::Key {
@@ -34,6 +34,7 @@ impl App {
             code: winit_key_to_code(key, physical),
             ctrl: mods.control_key(),
             shift: mods.shift_key(),
+            sup: mods.super_key(),
         };
         match self.window_keymap.edit_binding(&model_key) {
             Some(EditBinding::Undo) => {
@@ -49,7 +50,7 @@ impl App {
         if mods.control_key() {
             if let Key::Character(c) = key.as_ref() {
                 let lower = c.to_lowercase();
-                // In the browser `Ctrl-H` goes up to the parent directory;
+                // In the browser `C-h` goes up to the parent directory;
                 // `Backspace` stays a plain delete of the typed character.
                 if lower == "h" {
                     if let Some(up) = self.step_out(palette) {

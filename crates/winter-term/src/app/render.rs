@@ -2627,7 +2627,7 @@ mod tests {
     fn test_frame_grid_lays_spans_out_left_to_right() {
         let content = Frame::new(vec![vec![
             Span::plain("Zoom Pane"),
-            Span::new(paint::Style::Accent, "Shift-Alt-="),
+            Span::new(paint::Style::Accent, "M-S-="),
         ]]);
         let grid = build_frame_grid(&content, &Theme::dark(), 40, 4, IconStyle::None, false);
         let first = grid
@@ -2636,7 +2636,7 @@ mod tests {
             .next()
             .unwrap_or_default()
             .to_string();
-        assert_eq!(first.trim_end(), "Zoom PaneShift-Alt-=");
+        assert_eq!(first.trim_end(), "Zoom PaneM-S-=");
     }
 
     #[test]

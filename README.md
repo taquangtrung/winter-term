@@ -9,11 +9,11 @@ See the [usage guide](docs/usage-guide.md) for how to drive Winter, and the [pro
 ## Key features
 
 - **Vim modal editing everywhere:** Normal mode, motions, operators, registers, marks, and text objects live directly inside the terminal layer. They work identically in bash, zsh, fish, Python or Node REPLs, and over remote `ssh` sessions without configuring anything on the remote host.
-- **Built-in multiplexer:** Split panes horizontally (`Shift-Alt--`) or vertically (`Shift-Alt-\`), move between them with `Alt-h/j/k/l`, zoom active panes, and cycle tabs with `gt`/`gT`. Panes track independent modes while sharing global Vim registers.
+- **Built-in multiplexer:** Split panes horizontally (`M-S--`) or vertically (`M-S-\`), move between them with `M-h/j/k/l`, zoom active panes, and cycle tabs with `gt`/`gT`. Panes track independent modes while sharing global Vim registers.
 - **Structured command blocks:** OSC 133 shell integration organizes your session into discrete, foldable units with exit codes and durations clearly marked. Jump between blocks with `]b`/`[b`, yank block output with `y`, or target blocks with quick-select (`q`).
 - **Rich inline MIME blocks (TBP):** Render tables, interactive Vega charts, LaTeX math, PDFs, and images inline via the Terminal Block Protocol, backed by a real web engine with secure CSP sandboxing and automatic plain-text fallbacks.
 - **Prompt-line integration:** Normal-mode operators (`dw`, `ci"`, `x`) act directly on your active shell prompt line, accompanied by which-key hints that display pending keybindings dynamically.
-- **Tool tabs:** `Ctrl-Shift-d` opens a tree-style directory listing with marks, file operations, and background directory sizes; `Ctrl-Shift-g` opens the working tree, where hunks stage and discard one at a time and transient menus drive branch, commit, merge, rebase, stash, tag, log, and blame; `Ctrl-Shift-s` searches the tree for text and opens any match at its line; `Ctrl-Shift-f` walks the working directory in the command palette, a directory at a time, and opens the file you land on; a `.pdf` opens in a viewer that renders it inline and offline, read with vim's own motions: counts, `gg`/`G`, `zt`/`zz`/`zb`, and `i` for a cursor in the text with `w`/`b`/`e`, `f`/`t`, visual selection, and the `y` operator. Each opens as a tab of its own in the focused pane's strip, beside the terminal it was opened from, which keeps running and is one tab away; `/`, `n`, and `N` search whichever tool is up.
+- **Tool tabs:** `C-S-d` opens a tree-style directory listing with marks, file operations, and background directory sizes; `C-S-g` opens the working tree, where hunks stage and discard one at a time and transient menus drive branch, commit, merge, rebase, stash, tag, log, and blame; `C-S-s` searches the tree for text and opens any match at its line; `C-S-f` walks the working directory in the command palette, a directory at a time, and opens the file you land on; a `.pdf` opens in a viewer that renders it inline and offline, read with vim's own motions: counts, `gg`/`G`, `zt`/`zz`/`zb`, and `i` for a cursor in the text with `w`/`b`/`e`, `f`/`t`, visual selection, and the `y` operator. Each opens as a tab of its own in the focused pane's strip, beside the terminal it was opened from, which keeps running and is one tab away; `/`, `n`, and `N` search whichever tool is up.
 
 ## Core keybindings
 
@@ -23,13 +23,13 @@ A Winter window is split into panes, each a strip of tabs, and every tab is a te
 |---|---|---|
 | **Modes** | `Esc` | Enter Normal mode (`Esc Esc` if running vim or less) |
 | | `i`, `a`, `o` | Return to Insert mode (active shell prompt) |
-| | `v`, `V`, `Ctrl-v` | Characterwise, linewise, or blockwise Visual mode |
+| | `v`, `V`, `C-v` | Characterwise, linewise, or blockwise Visual mode |
 | | `Enter` | Focus rich WebView block (Block-Focus mode) |
 | **Motions** | `h` `j` `k` `l` | Left, down, up, right |
 | | `w` `b` `e` / `W` `B` `E` | Word forward, backward, word end |
 | | `0` / `^` / `$` | Start of line, first non-blank character, end of line |
 | | `gg` / `G` | Jump to first line, last line of scrollback |
-| | `Ctrl-u` / `Ctrl-d` | Scroll half page up, half page down |
+| | `C-u` / `C-d` | Scroll half page up, half page down |
 | **Operators** | `d` `c` `y` | Delete, change, yank (with motion or text object) |
 | | `iw`, `i"`, `i(`, `i[` | Inner word, quotes, parentheses, brackets |
 | | `p` / `P` | Paste from register (shared across all panes) |
@@ -39,19 +39,19 @@ A Winter window is split into panes, each a strip of tabs, and every tab is a te
 | **Blocks** | `]b` / `[b` | Next command block, previous command block |
 | | `y` | Yank the command block output under the cursor |
 | | `q` | Quick-select: overlay labels to target any block |
-| **Panes** | `Shift-Alt-\` | Split pane vertically |
-| | `Shift-Alt--` | Split pane horizontally |
-| | `Alt-h/j/k/l` | Move focus between panes |
-| | `Shift-Alt-=` | Zoom or restore focused pane (toggle) |
-| | `Ctrl-Shift-q` | Close focused pane |
-| **Window** | `Ctrl-Shift-Alt-n` | New window |
-| **Tabs** | `Ctrl-Shift-n` / `Ctrl-Shift-w` | New tab, close tab |
+| **Panes** | `M-S-\` | Split pane vertically |
+| | `M-S--` | Split pane horizontally |
+| | `M-h/j/k/l` | Move focus between panes |
+| | `M-S-=` | Zoom or restore focused pane (toggle) |
+| | `C-S-q` | Close focused pane |
+| **Window** | `C-M-S-n` | New window |
+| **Tabs** | `C-S-n` / `C-S-w` | New tab, close tab |
 | | `gt` / `gT` | Next tab, previous tab |
-| **Tools** | `Ctrl-Shift-d` / `Ctrl-Shift-g` | Directory listing, git status |
-| | `Ctrl-Shift-f` | Browse files in the palette, and open one |
-| | `Ctrl-Shift-s` | Search the tree for text |
+| **Tools** | `C-S-d` / `C-S-g` | Directory listing, git status |
+| | `C-S-f` | Browse files in the palette, and open one |
+| | `C-S-s` | Search the tree for text |
 | | `/` then `n` / `N` | Search an open tool, next and previous match |
-| **Palette** | `Alt-x` | Open command palette |
+| **Palette** | `M-x` | Open command palette |
 
 See the [keybinding reference](docs/usage-guide.md#keybinding-reference) in the usage guide for the complete keymap.
 

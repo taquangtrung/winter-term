@@ -144,6 +144,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 

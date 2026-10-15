@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
-use crate::model::input::{Key, KeyCode};
+use crate::model::input::{Key, KeyCode, Mods};
 use crate::model::paint::{Frame, Row, Span, Style};
 use crate::model::textedit::modal::EditMode;
 use crate::model::tool::{
@@ -28,7 +28,7 @@ use crate::model::tool::{
 const HEADER_ROWS: usize = 2;
 
 /// Hint shown beside the title.
-const HINT: &str = "i cursor, / search, j/k scroll, Ctrl-d/u half, gg/G ends, {n} repeats";
+const HINT: &str = "i cursor, / search, j/k scroll, C-d/u half, gg/G ends, {n} repeats";
 
 /// Which question a prompt's answer belongs to: what to look for down the
 /// document, and what to look for back up it.
@@ -38,11 +38,11 @@ const ASK_SEARCH_BACK: &str = "search-back";
 /// Left margin the title starts at, matching the other tools.
 const LEFT_PAD: usize = 2;
 
-/// Fraction of the viewport `Ctrl-d` and `Ctrl-u` move, the half-screen step
+/// Fraction of the viewport `C-d` and `C-u` move, the half-screen step
 /// vim's own are named for.
 const HALF_SCREEN: f32 = 0.5;
 
-/// Fraction of the viewport `Ctrl-f`, `Ctrl-b`, and the page keys move. Short
+/// Fraction of the viewport `C-f`, `C-b`, and the page keys move. Short
 /// of a whole screen on purpose: the lines that were at the edge stay on it,
 /// so a page read straight through never skips a band of text.
 const FULL_SCREEN: f32 = 0.9;
@@ -74,7 +74,7 @@ pub struct PdfTool {
     /// for the key that completes it.
     pending: Pending,
     /// How far through the document the surface last reported being, for the
-    /// position `Ctrl-g` shows.
+    /// position `C-g` shows.
     percent: usize,
     /// What the cursor has selected, which the header names so a selection
     /// left open is never a surprise.
@@ -472,7 +472,7 @@ impl PdfTool {
     /// else abandons the prefix, as vim does.
     fn on_goto_key(&mut self, key: &Key) -> ToolOutcome {
         let count = self.pending.count;
-        if key.code != KeyCode::Char('g') {
+        if key.glyph() != KeyCode::Char('g') {
             self.pending = Pending::default();
             return ToolOutcome::Consumed;
         }
@@ -493,7 +493,7 @@ impl PdfTool {
     /// Act on `key` while `z` is pending: `zt`, `zz`, and `zb` put the page
     /// the reader is on at the top, middle, or bottom of the pane.
     fn on_place_key(&mut self, key: &Key) -> ToolOutcome {
-        let place = match key.code {
+        let place = match key.glyph() {
             KeyCode::Char('b') => Some(PagePlace::Bottom),
             KeyCode::Char('t') => Some(PagePlace::Top),
             KeyCode::Char('z') => Some(PagePlace::Center),
@@ -515,7 +515,7 @@ impl PdfTool {
     fn on_find_key(&mut self, kind: FindKind, key: &Key) -> ToolOutcome {
         let pending = self.pending;
         self.pending = Pending::default();
-        let KeyCode::Char(ch) = key.code else {
+        let KeyCode::Char(ch) = key.glyph() else {
             // Anything but a character abandons the find, as vim does.
             return ToolOutcome::Consumed;
         };
@@ -540,17 +540,17 @@ impl PdfTool {
     /// Act on a key held with Ctrl, which is where vim keeps the scrolls that
     /// move by a screen or a line without moving a cursor.
     fn on_ctrl_key(&mut self, key: &Key) -> ToolOutcome {
-        match key.code {
-            KeyCode::Char('b') => self.act(Command::ScrollScreens(-FULL_SCREEN)),
-            KeyCode::Char('d') => self.act(Command::ScrollScreens(HALF_SCREEN)),
-            KeyCode::Char('e') => {
+        match (key.mods(), key.glyph()) {
+            (Mods::CTRL, KeyCode::Char('b')) => self.act(Command::ScrollScreens(-FULL_SCREEN)),
+            (Mods::CTRL, KeyCode::Char('d')) => self.act(Command::ScrollScreens(HALF_SCREEN)),
+            (Mods::CTRL, KeyCode::Char('e')) => {
                 let lines = self.steps(1);
                 self.act(Command::ScrollLines(lines))
             }
-            KeyCode::Char('f') => self.act(Command::ScrollScreens(FULL_SCREEN)),
-            KeyCode::Char('g') => self.act(Command::ReportPosition),
-            KeyCode::Char('u') => self.act(Command::ScrollScreens(-HALF_SCREEN)),
-            KeyCode::Char('y') => {
+            (Mods::CTRL, KeyCode::Char('f')) => self.act(Command::ScrollScreens(FULL_SCREEN)),
+            (Mods::CTRL, KeyCode::Char('g')) => self.act(Command::ReportPosition),
+            (Mods::CTRL, KeyCode::Char('u')) => self.act(Command::ScrollScreens(-HALF_SCREEN)),
+            (Mods::CTRL, KeyCode::Char('y')) => {
                 let lines = self.steps(-1);
                 self.act(Command::ScrollLines(lines))
             }
@@ -565,7 +565,7 @@ impl PdfTool {
     /// `l` still move the cursor, but `zt`, `zz`, and `zb` move the window,
     /// and the Ctrl scrolls leave the cursor where it is.
     fn on_cursor_key(&mut self, key: &Key) -> ToolOutcome {
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('h') | KeyCode::Left => self.caret_motion(Motion::Left),
             KeyCode::Char('l') | KeyCode::Right => self.caret_motion(Motion::Right),
             KeyCode::Char('j') | KeyCode::Down => self.caret_motion(Motion::Down),
@@ -722,7 +722,7 @@ impl PdfTool {
 
     /// Act on a key with no cursor in the text.
     fn on_normal_key(&mut self, key: &Key) -> ToolOutcome {
-        match key.code {
+        match key.glyph() {
             // Vim's own key for putting a cursor where the text is.
             KeyCode::Char('i') => {
                 self.mode = Mode::Cursor;
@@ -736,7 +736,7 @@ impl PdfTool {
     /// Normal mode directly, and from cursor mode for the keys it leaves
     /// alone, so a document can still be paged through with a cursor in it.
     fn on_window_key(&mut self, key: &Key) -> ToolOutcome {
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('j') | KeyCode::Down => {
                 let lines = self.steps(1);
                 self.act(Command::ScrollLines(lines))
@@ -850,12 +850,12 @@ impl Tool for PdfTool {
         }
         // A count is typed ahead of the motion it multiplies, so the digits
         // are taken before any key is read as a command.
-        if let KeyCode::Char(digit) = key.code {
+        if let KeyCode::Char(digit) = key.glyph() {
             if self.take_count_digit(digit) {
                 return ToolOutcome::Consumed;
             }
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('g') => {
                 self.pending.prefix = Prefix::Goto;
                 ToolOutcome::Consumed
@@ -998,7 +998,7 @@ impl Tool for PdfTool {
         if let Some(text) = report.yank {
             return ToolOutcome::Yank(text);
         }
-        // Vim's own `Ctrl-G` answers with the file, where you are in it, and
+        // Vim's own `C-g` answers with the file, where you are in it, and
         // how far through: the surface knows the last two, this knows the
         // first.
         if report.announce.unwrap_or(false) {
@@ -1327,13 +1327,13 @@ mod tests {
 
     #[test]
     fn test_the_half_and_full_screen_scrolls_differ() {
-        // Ctrl-d and Ctrl-f both scroll down; a viewer where they move the
+        // C-d and C-f both scroll down; a viewer where they move the
         // same distance has quietly lost one of them.
         let mut pdf = page();
         pdf.on_key(&Key::with_ctrl(KeyCode::Char('d')));
-        let half = pdf.take_surface_script().expect("Ctrl-d scrolls");
+        let half = pdf.take_surface_script().expect("C-d scrolls");
         pdf.on_key(&Key::with_ctrl(KeyCode::Char('f')));
-        let full = pdf.take_surface_script().expect("Ctrl-f scrolls");
+        let full = pdf.take_surface_script().expect("C-f scrolls");
         assert_ne!(half, full);
         assert!(half.contains("0.5"), "{half}");
         assert!(full.contains("0.9"), "{full}");

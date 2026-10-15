@@ -10,7 +10,7 @@ use crate::model::paint::Point;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::CursorIcon;
 
-use crate::model::input::{self, KeyCode};
+use crate::model::input::{self, KeyCode, Mods};
 use crate::model::layout::TabId;
 use crate::model::mode::Mode;
 use crate::model::textedit::modal::EditOutcome;
@@ -51,7 +51,7 @@ impl App {
     ) -> bool {
         // winit synthesizes KeyboardInput::Pressed events for every
         // physically-held key on XI_FocusIn (handle_pressed_keys). Swallow
-        // those here so e.g. the Tab from Alt+Tab never reaches the PTY.
+        // those here so e.g. the Tab from M-TAB never reaches the PTY.
         if state == ElementState::Pressed && self.suppress_synthesized_keys {
             return false;
         }
@@ -72,7 +72,9 @@ impl App {
             code,
             ctrl: mods_state.control_key(),
             shift: mods_state.shift_key(),
-        };
+            sup: mods_state.super_key(),
+        }
+        .canonical();
         if state == ElementState::Released {
             let kitty_flags = self
                 .open_tabs
@@ -113,7 +115,7 @@ impl App {
         // While a tab rename is in progress, intercept all keyboard
         // input: Enter confirms, Escape cancels, other keys edit the name.
         if self.tabs.rename_input.is_some() {
-            match key.code {
+            match key.glyph() {
                 KeyCode::Enter => {
                     let name = self.tabs.rename_input.take().unwrap();
                     let focused = self.layout().focused();
@@ -131,7 +133,7 @@ impl App {
                         input.pop();
                     }
                 }
-                KeyCode::Char(c) if !key.ctrl && !key.alt => {
+                KeyCode::Char(c) if !key.ctrl && !key.alt && !key.sup => {
                     if let Some(input) = &mut self.tabs.rename_input {
                         input.push(c);
                     }
@@ -193,7 +195,7 @@ impl App {
         }
 
         // Esc dismisses an open menu before anything else acts on it.
-        if self.menus.open.is_some() && key.code == KeyCode::Escape {
+        if self.menus.open.is_some() && key.glyph() == KeyCode::Escape {
             self.close_menu();
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -271,7 +273,7 @@ impl App {
 
         // `v` in a tool that did not bind it starts a text cursor, the way it
         // starts a Visual selection in a terminal.
-        if tool_focused && key.code == KeyCode::Char('v') && !key.alt && !key.ctrl && !key.shift {
+        if tool_focused && key.glyph() == KeyCode::Char('v') && key.mods() == Mods::NONE {
             self.start_tool_cursor(focused);
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -284,8 +286,8 @@ impl App {
         // only when there is none, and a program is running (or the shell is
         // mid tab-completion), is it written to the PTY.
         // In Insert mode, bare Escape is not intercepted here and passes
-        // through to the PTY. Normal mode is entered via Alt-Escape or Ctrl-Shift-Space.
-        let bare_esc = key.code == KeyCode::Escape && !key.alt && !key.ctrl && !key.shift;
+        // through to the PTY. Normal mode is entered via M-ESC or C-S-SPC.
+        let bare_esc = key.glyph() == KeyCode::Escape && key.mods() == Mods::NONE;
         if bare_esc && mode == Mode::Normal && !self.escape_has_winter_target() {
             let pending_tab_completion = self
                 .open_tabs
@@ -344,7 +346,7 @@ impl App {
             self.pending_since = None;
         }
         // Keep the per-pane prompt shadow in step with this key so
-        // `Ctrl-/`/`Ctrl-\` can replay edits. Only forwarded keys mutate
+        // `C-/`/`C-\` can replay edits. Only forwarded keys mutate
         // the line (`apply_insert_key` models them or desyncs on the
         // unmodeled ones); `Edit`/undo/redo update it in their handlers.
         // Mode switches, focus and tab commands leave this line untouched,
@@ -374,7 +376,7 @@ impl App {
     /// Whether the global copy chord, with nothing selected, should pass to
     /// the tool in tab `focused` instead: with nothing to copy it
     /// would do nothing, and a tool may bind the same chord (the Git tool
-    /// commits on `Ctrl-Shift-c`). A tool that declines it still reaches the
+    /// commits on `C-S-c`). A tool that declines it still reaches the
     /// ordinary keymap, where it resolves to the same harmless copy.
     fn is_copy_yielded_to_tool(&self, action: &input::Action, focused: TabId) -> bool {
         *action == input::Action::Copy
@@ -1097,7 +1099,7 @@ mod tests {
     #[test]
     fn test_alt_escape_switches_to_normal_at_a_bare_prompt() {
         // A real shell sitting at its prompt: primary screen, no foreground
-        // child, Alt-Escape switches modes.
+        // child, M-ESC switches modes.
         let mut app = App::new();
         app.window_keymap = crate::model::input::WindowKeymap::default();
         let id = app.layout().shown_tabs()[0];

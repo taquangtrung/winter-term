@@ -808,7 +808,7 @@ impl TextBuffer {
         self.goal = self.col;
     }
 
-    /// Add `by` to the number at or right of the cursor (`Ctrl-A`/`Ctrl-X`),
+    /// Add `by` to the number at or right of the cursor (`C-a`/`C-x`),
     /// leaving the cursor on its last digit. Reports whether there was one.
     pub fn add_to_number(&mut self, by: i64) -> bool {
         let chars = self.chars();
@@ -1026,9 +1026,9 @@ impl TextBuffer {
 /// How a word is recased in place.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WordCase {
-    /// First letter upper, the rest lower (`Alt-c`).
+    /// First letter upper, the rest lower (`M-c`).
     Capitalize,
-    /// Every letter upper (`Alt-u`).
+    /// Every letter upper (`M-u`).
     Upper,
 }
 
@@ -1077,14 +1077,14 @@ impl TextBuffer {
     }
 
     /// Move over one Emacs word, forward to its end or back to its start
-    /// (`Alt-f` / `Alt-b`).
+    /// (`M-f` / `M-b`).
     pub fn move_emacs_word(&mut self, forward: bool) {
         (self.row, self.col) = self.emacs_word_point(forward);
         self.goal = self.col;
     }
 
     /// Kill one Emacs word into the register, the one ahead of the cursor or
-    /// the one behind it (`Alt-d` / `Alt-Backspace`).
+    /// the one behind it (`M-d` / `M-DEL`).
     pub fn kill_emacs_word(&mut self, forward: bool) {
         let here = (self.row, self.col);
         let there = self.emacs_word_point(forward);
@@ -1098,7 +1098,7 @@ impl TextBuffer {
 
     /// Kill from the cursor to the end of the line into the register; at the
     /// end of the line, the line break itself, so the next line joins this
-    /// one (`Ctrl-k`).
+    /// one (`C-k`).
     pub fn kill_to_line_end(&mut self) {
         let len = self.line_len();
         if self.col < len {
@@ -1116,7 +1116,7 @@ impl TextBuffer {
     }
 
     /// Delete the character under the cursor, or at the end of a line the
-    /// line break, without touching the register (`Ctrl-d`).
+    /// line break, without touching the register (`C-d`).
     pub fn delete_forward(&mut self) {
         let mut chars = self.chars();
         if self.col < chars.len() {
@@ -1130,7 +1130,7 @@ impl TextBuffer {
     }
 
     /// Break the line at the cursor and leave the cursor where it was, ahead
-    /// of the break (`Ctrl-o`).
+    /// of the break (`C-o`).
     pub fn open_line_here(&mut self) {
         if self.fixed {
             return;
@@ -1143,7 +1143,7 @@ impl TextBuffer {
     }
 
     /// Swap the character before the cursor with the one under it, and step
-    /// over both; at the end of a line, the last two (`Ctrl-t`).
+    /// over both; at the end of a line, the last two (`C-t`).
     pub fn transpose_chars(&mut self) {
         let mut chars = self.chars();
         if chars.len() < 2 || self.col == 0 {
@@ -1157,7 +1157,7 @@ impl TextBuffer {
     }
 
     /// Drag the word at or before the cursor past the next one on its line,
-    /// leaving the cursor after both (`Alt-t`).
+    /// leaving the cursor after both (`M-t`).
     pub fn transpose_words(&mut self) {
         let chars = self.chars();
         let mut words: Vec<(usize, usize)> = Vec::new();
@@ -1194,7 +1194,7 @@ impl TextBuffer {
     }
 
     /// Recase the word ahead of the cursor on this line and step past it
-    /// (`Alt-u` / `Alt-c`).
+    /// (`M-u` / `M-c`).
     pub fn change_word_case(&mut self, case: WordCase) {
         let mut chars = self.chars();
         let mut start = self.col.min(chars.len());
@@ -1225,7 +1225,7 @@ impl TextBuffer {
     }
 
     /// Put what was last killed back in at the cursor, and step past it
-    /// (`Ctrl-y`). Whole lines come in as lines.
+    /// (`C-y`). Whole lines come in as lines.
     pub fn yank(&mut self) {
         if self.register.text.is_empty() {
             return;
@@ -1256,14 +1256,14 @@ impl TextBuffer {
         self.goal = self.col;
     }
 
-    /// To the very start of the text (`Alt-<`).
+    /// To the very start of the text (`M-<`).
     pub fn move_text_start(&mut self) {
         self.row = 0;
         self.col = 0;
         self.goal = 0;
     }
 
-    /// To the very end of the text (`Alt->`).
+    /// To the very end of the text (`M->`).
     pub fn move_text_end(&mut self) {
         self.row = self.lines.len().saturating_sub(1);
         self.col = self.line_len_of(self.row);

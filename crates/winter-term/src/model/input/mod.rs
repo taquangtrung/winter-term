@@ -43,6 +43,78 @@ pub struct Key {
     pub ctrl: bool,
     /// Whether Shift was held.
     pub shift: bool,
+    /// Whether Super (the logo or Windows key) was held.
+    pub sup: bool,
+}
+
+/// The modifiers held with a key, compared as a whole.
+///
+/// A shortcut is the exact set of modifiers it names: `C-d` is not
+/// `C-S-d`, and neither is `C-M-d`. Handlers match
+/// `(key.mods(), key.glyph())` against these constants so a chord with an extra
+/// modifier is declined instead of read as the plainer one.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Mods {
+    /// Whether Alt was held.
+    pub alt: bool,
+    /// Whether Ctrl was held.
+    pub ctrl: bool,
+    /// Whether Shift was held.
+    pub shift: bool,
+    /// Whether Super was held.
+    pub sup: bool,
+}
+
+impl Mods {
+    /// Alt alone.
+    pub const ALT: Mods = Mods {
+        alt: true,
+        ctrl: false,
+        shift: false,
+        sup: false,
+    };
+    /// Alt and Shift together.
+    pub const ALT_SHIFT: Mods = Mods {
+        alt: true,
+        ctrl: false,
+        shift: true,
+        sup: false,
+    };
+    /// Ctrl alone.
+    pub const CTRL: Mods = Mods {
+        alt: false,
+        ctrl: true,
+        shift: false,
+        sup: false,
+    };
+    /// Ctrl and Alt together.
+    pub const CTRL_ALT: Mods = Mods {
+        alt: true,
+        ctrl: true,
+        shift: false,
+        sup: false,
+    };
+    /// Ctrl and Shift together.
+    pub const CTRL_SHIFT: Mods = Mods {
+        alt: false,
+        ctrl: true,
+        shift: true,
+        sup: false,
+    };
+    /// No modifier.
+    pub const NONE: Mods = Mods {
+        alt: false,
+        ctrl: false,
+        shift: false,
+        sup: false,
+    };
+    /// Shift alone.
+    pub const SHIFT: Mods = Mods {
+        alt: false,
+        ctrl: false,
+        shift: true,
+        sup: false,
+    };
 }
 
 /// A physical key, independent of modifiers.
@@ -138,7 +210,7 @@ pub enum Action {
     DeleteWordBack,
     /// Delete forward to the next word (`dw`).
     DeleteWordForward,
-    /// A configurable Insert-mode line edit (e.g. `Ctrl-Backspace` to delete the
+    /// A configurable Insert-mode line edit (e.g. `C-DEL` to delete the
     /// word before the cursor). Realized as readline bytes plus a shadow update.
     Edit(EditAction),
     /// Enter Visual mode with the given selection shape.
@@ -181,9 +253,9 @@ pub enum Action {
         /// The motion to repeat.
         mv: CursorMove,
     },
-    /// `Ctrl+O`: jump to the previous recorded position (vim's jumplist).
+    /// `C-o`: jump to the previous recorded position (vim's jumplist).
     JumpOlder,
-    /// `Ctrl+I`/`Tab`: jump to the next recorded position.
+    /// `C-i`/`Tab`: jump to the next recorded position.
     JumpNewer,
     /// `g;`: jump to where the previous change began (vim's changelist).
     ChangeOlder,
@@ -235,9 +307,9 @@ pub enum Action {
     },
     /// Activate the previous tab.
     PrevTab,
-    /// Re-apply an undone prompt edit (`Ctrl-\`).
+    /// Re-apply an undone prompt edit (`C-\`).
     PromptRedo,
-    /// Undo the last prompt edit (`Ctrl-/`).
+    /// Undo the last prompt edit (`C-/`).
     PromptUndo,
     /// `.`: repeat the pane's most recent change at the cursor.
     RepeatLastChange,
@@ -271,7 +343,7 @@ pub enum Action {
         /// True to search forward, false to search backward.
         forward: bool,
     },
-    /// `Alt-i` in Normal mode: select the paragraph around the cursor, linewise
+    /// `M-i` in Normal mode: select the paragraph around the cursor, linewise
     /// (vim's `vip` in one chord).
     SelectParagraph,
     /// Select a text object (e.g. `iw`, `a"`, `i(`, `a{`).
@@ -372,6 +444,16 @@ pub enum Action {
 // ========================================================================
 
 impl Key {
+    /// The modifiers held, as the one set a shortcut is matched against.
+    pub fn mods(&self) -> Mods {
+        Mods {
+            alt: self.alt,
+            ctrl: self.ctrl,
+            shift: self.shift,
+            sup: self.sup,
+        }
+    }
+
     /// Whether this is a key press winit could not name, such as a bare Ctrl
     /// or Shift going down, which arrives as the NUL character. It types
     /// nothing, and text entry that inserted it would show a stray glyph.
@@ -386,41 +468,94 @@ impl Key {
     /// the character it is. A chord with Ctrl or Alt held is not typing, and
     /// stays as it arrived.
     pub fn typed(&self) -> Self {
-        match self.code == KeyCode::Space && !self.ctrl && !self.alt {
-            true => Self {
+        match (self.glyph(), !self.ctrl && !self.alt && !self.sup) {
+            (KeyCode::Space, true) => Self {
                 code: KeyCode::Char(' '),
                 ..self.clone()
             },
-            false => self.clone(),
+            (code, _) => Self {
+                code,
+                ..self.clone()
+            },
         }
     }
 
-    /// This key as a shortcut is matched: a letter pressed with Ctrl or Alt is
-    /// the lowercase letter, with Shift reported by the `shift` flag alone.
+    /// This key in the one form every handler matches: a letter is the
+    /// lowercase letter, and whether Shift was held is the `shift` flag alone.
+    /// A shifted symbol is shifted however it was reached.
     ///
-    /// The window reports the character Shift produces, so `Ctrl-Shift-C`
-    /// arrives as `Char('C')`. A binding written against `Char('c')` would
-    /// never fire, and neither would one written against `Char('C')` when a
-    /// layout reports the other. Without Ctrl or Alt the key is typing, and a
-    /// capital stays the capital typed.
-    pub fn chorded(&self) -> Self {
-        match (self.ctrl || self.alt, self.code) {
-            (true, KeyCode::Char(c)) if c.is_ascii_uppercase() => Self {
+    /// The window reports the character Shift produces, so `S-s` arrives
+    /// as `Char('S')` and `C-S-c` as `Char('C')`, while a layout or a
+    /// Caps Lock may report either. Folding them all to `Char('s')` with
+    /// `shift` set makes `s` and `S-s` two plainly different keys, and
+    /// lets a binding written `S+s` match whichever way the key arrived. Use
+    /// [`glyph`](Self::glyph) for the character a key types.
+    pub fn canonical(&self) -> Self {
+        match self.code {
+            KeyCode::Char(c) if c.is_ascii_uppercase() => Self {
                 code: KeyCode::Char(c.to_ascii_lowercase()),
+                shift: true,
+                ..self.clone()
+            },
+            // A symbol that is itself the shifted glyph (`?`, `+`, `(`) is
+            // shifted wherever it came from: the shifted key, a layout with it
+            // unshifted, the keypad, or a chord written `M-?`.
+            KeyCode::Char(c) if keymap::is_shifted_symbol(c) => Self {
+                shift: true,
                 ..self.clone()
             },
             _ => self.clone(),
         }
     }
 
+    /// Whether Shift is held on a key that Shift gives no meaning of its own
+    /// (`S-RET`, `S-ESC`, `S-<down>`, ...). A handler that binds
+    /// the plain key has not bound this one, so it is left for the window to
+    /// match rather than read as the unshifted key. Letters, symbols, `Tab`,
+    /// `Space`, `Backspace`, and the function keys all take Shift.
+    pub fn is_shifted_plain_key(&self) -> bool {
+        self.shift
+            && !self.ctrl
+            && !self.alt
+            && !self.sup
+            && matches!(
+                self.code,
+                KeyCode::Delete
+                    | KeyCode::Down
+                    | KeyCode::End
+                    | KeyCode::Enter
+                    | KeyCode::Escape
+                    | KeyCode::Home
+                    | KeyCode::Insert
+                    | KeyCode::Left
+                    | KeyCode::PageDown
+                    | KeyCode::PageUp
+                    | KeyCode::Right
+                    | KeyCode::Up
+            )
+    }
+
+    /// The code this key types: a letter pressed with Shift alone is the
+    /// capital, every other key is its code as it stands. The inverse of the
+    /// letter folding in [`canonical`](Self::canonical) for keys that type.
+    pub fn glyph(&self) -> KeyCode {
+        match self.code {
+            KeyCode::Char(c) if self.shift && !self.ctrl && !self.alt && !self.sup => {
+                KeyCode::Char(c.to_ascii_uppercase())
+            }
+            code => code,
+        }
+    }
+
     /// `code` with no modifier held, which for a letter is the letter as
-    /// typed: `Key::plain(KeyCode::Char('S'))` is what Shift-s arrives as.
+    /// typed: `Key::plain(KeyCode::Char('S'))` is what S-s arrives as.
     pub fn plain(code: KeyCode) -> Self {
         Self {
             alt: false,
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -431,6 +566,7 @@ impl Key {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -441,6 +577,7 @@ impl Key {
             code,
             ctrl: true,
             shift: false,
+            sup: false,
         }
     }
 
@@ -451,6 +588,7 @@ impl Key {
             code,
             ctrl: true,
             shift: true,
+            sup: false,
         }
     }
 }
@@ -583,6 +721,7 @@ pub(super) mod test_support {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
     pub(crate) fn resolve_simple(mode: Mode, key: &Key) -> Action {
@@ -628,6 +767,22 @@ mod tests {
     }
 
     #[test]
+    fn test_shift_on_a_named_key_is_not_the_plain_key() {
+        let shifted = |code| Key {
+            shift: true,
+            sup: false,
+            ..Key::plain(code)
+        };
+        assert!(shifted(KeyCode::Enter).is_shifted_plain_key());
+        assert!(shifted(KeyCode::Down).is_shifted_plain_key());
+        assert!(!Key::plain(KeyCode::Enter).is_shifted_plain_key());
+        // Shift means something on these, so they are matched as they come.
+        assert!(!shifted(KeyCode::Tab).is_shifted_plain_key());
+        assert!(!shifted(KeyCode::Char('s')).is_shifted_plain_key());
+        assert!(!shifted(KeyCode::Backspace).is_shifted_plain_key());
+    }
+
+    #[test]
     fn test_a_bare_modifier_is_not_a_key() {
         // Holding Shift fires a keydown of its own; routing it as a key would
         // send a stray press to the tool on every chord typed.
@@ -644,35 +799,54 @@ mod tests {
             ..Key::with_ctrl_shift(KeyCode::Char('c'))
         };
         assert_eq!(
-            ctrl_shift_c.chorded(),
+            ctrl_shift_c.canonical(),
             Key::with_ctrl_shift(KeyCode::Char('c'))
         );
         let alt_shift_q = Key {
             shift: true,
+            sup: false,
             ..Key::with_alt(KeyCode::Char('Q'))
         };
-        assert_eq!(alt_shift_q.chorded().code, KeyCode::Char('q'));
+        assert_eq!(alt_shift_q.canonical().code, KeyCode::Char('q'));
+        let shift_s = Key::plain(KeyCode::Char('S')).canonical();
         assert_eq!(
-            Key::plain(KeyCode::Char('S')).chorded(),
-            Key::plain(KeyCode::Char('S')),
-            "Shift-s typed is the capital"
+            shift_s,
+            Key {
+                shift: true,
+                sup: false,
+                ..Key::plain(KeyCode::Char('s'))
+            },
+            "S-s is the lowercase letter with Shift held"
         );
         assert_eq!(
-            Key::with_ctrl(KeyCode::Char('+')).chorded(),
-            Key::with_ctrl(KeyCode::Char('+')),
-            "not a letter"
+            shift_s.glyph(),
+            KeyCode::Char('S'),
+            "and it still types a capital"
+        );
+        assert_ne!(shift_s, Key::plain(KeyCode::Char('s')));
+        // Super survives the folding; it is a modifier of its own.
+        let super_shift_s = Key {
+            sup: true,
+            ..Key::plain(KeyCode::Char('S'))
+        };
+        assert!(super_shift_s.canonical().sup);
+        assert_eq!(
+            Key::with_ctrl(KeyCode::Char('+')).canonical(),
+            Key::with_ctrl_shift(KeyCode::Char('+')),
+            "a shifted symbol is shifted"
         );
     }
 
     #[test]
     fn test_a_tool_tab_still_honors_the_window_layout_chords() {
-        // A tool tab has to stay manageable: `Alt-h` moves focus off it and
-        // `Shift-Alt-\\` splits beside it, exactly as from a terminal tab.
+        // A tool tab has to stay manageable: `M-h` moves focus off it and
+        // `M-S-\\` splits beside it, exactly as from a terminal tab.
         let focus_left = Key {
             alt: true,
             code: KeyCode::Char('h'),
             ctrl: false,
             shift: false,
+            sup: false,
         };
         assert_eq!(
             resolve_tool(&focus_left, &WindowKeymap::default()),
@@ -689,6 +863,7 @@ mod tests {
             code: KeyCode::Char('d'),
             ctrl: true,
             shift: true,
+            sup: false,
         };
         let expected = Action::RunCommand("dir_page".to_string());
         for mode in [Mode::Insert, Mode::Normal, Mode::Visual] {
@@ -706,6 +881,7 @@ mod tests {
             code: KeyCode::Char('.'),
             ctrl: false,
             shift: false,
+            sup: false,
         };
         let expected = Action::RunCommand("open_under_cursor".to_string());
         for mode in [Mode::Insert, Mode::Normal, Mode::Visual] {
@@ -724,6 +900,7 @@ mod tests {
                 code: KeyCode::Char(key),
                 ctrl: true,
                 shift: true,
+                sup: false,
             };
             let expected = Action::RunCommand(command.to_string());
             for mode in [Mode::Insert, Mode::Normal, Mode::Visual] {
@@ -746,6 +923,7 @@ mod tests {
             code: KeyCode::Char('i'),
             ctrl: false,
             shift: false,
+            sup: false,
         };
         assert_eq!(
             resolve_tool(&insert, &WindowKeymap::default()),

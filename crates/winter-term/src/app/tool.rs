@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
 
 use crate::control::EditWaiter;
-use crate::model::input::{self, Key, KeyCode};
+use crate::model::input::{self, Key, KeyCode, Mods};
 use crate::model::layout::{Direction, LayoutTree, Rect, TabId};
 use crate::model::paint::Point;
 use crate::model::palette::{Palette, PaletteMode};
@@ -469,9 +469,9 @@ fn tool_label(kind: ToolKind, title: &str) -> String {
 /// a question that takes one, and how to answer it. A question answered by a
 /// single key has no line to type on, so it is given none.
 /// Which way a key walks a prompt's earlier answers: `Some(true)` back to an
-/// older one (Up, `Ctrl-P`), `Some(false)` on to a newer (Down, `Ctrl-N`).
+/// older one (Up, `C-p`), `Some(false)` on to a newer (Down, `C-n`).
 fn recall_step(key: &Key) -> Option<bool> {
-    match (key.ctrl, key.code) {
+    match (key.ctrl, key.glyph()) {
         (false, KeyCode::Up) | (true, KeyCode::Char('p')) => Some(true),
         (false, KeyCode::Down) | (true, KeyCode::Char('n')) => Some(false),
         _ => None,
@@ -713,7 +713,7 @@ impl App {
     /// so closing it returns to the tab the file was opened from.
     ///
     /// A file the editor will not open (binary, not UTF-8, too large to
-    /// repaint) says so and stays closed; `Ctrl-O` hands those to `$EDITOR`.
+    /// repaint) says so and stays closed; `C-o` hands those to `$EDITOR`.
     pub(crate) fn open_editor_tool(&mut self, target: OpenTarget) {
         // A file opened from inside the editor joins it as another buffer of
         // its own, rather than opening a second editor beside it.
@@ -1286,10 +1286,15 @@ impl App {
     pub(crate) fn offer_key_to_tool(&mut self, tab_id: TabId, key: &Key) -> bool {
         // Wrap belongs to the pane, not the tool: every tool gets the toggle,
         // ahead of its own keys, so no tool has to claim it itself.
-        if key.alt && !key.ctrl && matches!(key.code, KeyCode::Char('z') | KeyCode::Char('Z')) {
+        if key.mods() == Mods::ALT && key.glyph() == KeyCode::Char('z') {
             self.tool_wrap = !self.tool_wrap;
             self.dirty = true;
             return true;
+        }
+        // The tool binds the plain key; `S-RET` is a different key, and `s-x`
+        // is none a tool binds. Both are the window's to match.
+        if key.is_shifted_plain_key() || key.sup {
+            return false;
         }
         let neighbors: Vec<PathBuf> = self
             .layout()
@@ -1306,7 +1311,7 @@ impl App {
             return false;
         };
         slot.tool.set_neighbors(neighbors);
-        let outcome = slot.tool.on_key(&key.chorded());
+        let outcome = slot.tool.on_key(&key.canonical());
         self.act_on_tool_outcome(tab_id, outcome)
     }
 
@@ -1367,7 +1372,7 @@ impl App {
         let Some(prompt) = self.tool_prompt.as_mut() else {
             return;
         };
-        let answer = match (prompt.request.mode, key.code) {
+        let answer = match (prompt.request.mode, key.glyph()) {
             (_, KeyCode::Escape) => Some(None),
             (PromptMode::Confirm, KeyCode::Char(c)) => {
                 Some((c == 'y' || c == 'Y').then(|| c.to_string()))
@@ -1622,7 +1627,7 @@ mod tests {
         }
 
         fn on_key(&mut self, key: &Key) -> ToolOutcome {
-            match key.code {
+            match key.glyph() {
                 KeyCode::Char('x') => {
                     self.claimed += 1;
                     ToolOutcome::Consumed
@@ -1734,6 +1739,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -2020,7 +2026,7 @@ mod tests {
             .as_ref()
             .map(|(text, _, _)| text.clone())
             .expect("the first close says so");
-        assert!(said.contains("Ctrl-Shift-u"), "naming the key: {said}");
+        assert!(said.contains("C-S-u"), "naming the key: {said}");
 
         app.notice = None;
         let tab = app.show_tool(ToolKind::Grep, Box::new(CountingTool::default()));
@@ -2114,7 +2120,7 @@ mod tests {
     #[test]
     fn test_picking_a_row_reopens_that_tool_and_leaves_the_rest_closed() {
         // Reopening the newest whatever was picked would make the list a
-        // decoration over `Ctrl-Shift-u`.
+        // decoration over `C-S-u`.
         let mut app = App::new();
         for claimed in 1..=3 {
             let tab = app.show_tool(ToolKind::Grep, Box::new(CountingTool::default()));
@@ -2275,7 +2281,7 @@ mod tests {
         let palette = app.palette.as_ref().expect("still browsing");
         assert_eq!(palette.dir.as_ref(), Some(&tree.0.join("src")));
 
-        // `Ctrl-H` is the way back out.
+        // `C-h` is the way back out.
         app.modifiers = winit::keyboard::ModifiersState::CONTROL.into();
         let tab = app.layout().focused();
         let phys = winit::keyboard::PhysicalKey::Unidentified(
@@ -2771,6 +2777,22 @@ mod tests {
             app.open_tabs.tool(&pane).unwrap().tool.title(),
             "Counting 1"
         );
+    }
+
+    #[test]
+    fn test_a_super_chord_and_a_shifted_enter_are_not_the_plain_keys_to_a_tool() {
+        let (mut app, pane) = app_with_open_tool();
+        let super_x = Key {
+            sup: true,
+            ..press(KeyCode::Char('x'))
+        };
+        assert!(!app.offer_key_to_tool(pane, &super_x), "s-x is not x");
+        let shifted_enter = Key {
+            shift: true,
+            ..press(KeyCode::Enter)
+        };
+        assert!(!app.offer_key_to_tool(pane, &shifted_enter));
+        assert!(app.offer_key_to_tool(pane, &press(KeyCode::Char('x'))));
     }
 
     #[test]

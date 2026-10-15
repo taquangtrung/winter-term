@@ -93,10 +93,10 @@ pub struct EditorTool {
     /// What each screen row of the last painted frame holds, so a click lands
     /// on the character under the pointer.
     painted: Vec<Painted>,
-    /// Whether `Ctrl-C` has just been pressed in a commit message, which the
-    /// next `Ctrl-C` finishes and `Ctrl-K` cancels.
+    /// Whether `C-c` has just been pressed in a commit message, which the
+    /// next `C-c` finishes and `C-k` cancels.
     message_chord: bool,
-    /// Where `Alt-P`/`Alt-N` have got to through earlier commit messages, for
+    /// Where `M-p`/`M-n` have got to through earlier commit messages, for
     /// a buffer that is one.
     recall: MessageRecall,
     /// How many rows of text the pane last had room for, so the paging keys
@@ -207,7 +207,7 @@ impl EditorTool {
         Some(ToolOutcome::Close)
     }
 
-    /// `Ctrl-Alt-P`/`Ctrl-Alt-N` in a commit message: swap the message above git's
+    /// `C-M-p`/`C-M-n` in a commit message: swap the message above git's
     /// comment footer for an earlier one (`back`) or the one after it.
     pub(super) fn recall_message(&mut self, back: bool) {
         if !commit::is_message_file(&self.doc().path) {
@@ -1121,6 +1121,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -1130,6 +1131,7 @@ mod tests {
             code: KeyCode::Char(c),
             ctrl: true,
             shift: false,
+            sup: false,
         }
     }
 
@@ -1684,7 +1686,7 @@ mod tests {
 
     #[test]
     fn test_the_alt_chords_the_window_keeps_still_reach_it() {
-        // `Alt-h` and `Alt-l` move focus, and `Alt-1` picks a pane; claiming
+        // `M-h` and `M-l` move focus, and `M-1` picks a pane; claiming
         // them for editing would strand the window chords inside a message.
         let tmp = TempDir::new("emacs-window");
         let mut tool = tmp.tool("abc\n");
@@ -2026,6 +2028,7 @@ mod tests {
         let chord = Key {
             code: KeyCode::Char('C'),
             shift: true,
+            sup: false,
             ..ctrl('c')
         };
         assert_eq!(tool.on_key(&chord), ToolOutcome::Close);
@@ -2037,6 +2040,7 @@ mod tests {
         let (mut tool, _) = message_tool(&tmp);
         let lower = Key {
             shift: true,
+            sup: false,
             ..ctrl('c')
         };
         assert_eq!(tool.on_key(&lower), ToolOutcome::Close);
@@ -2156,7 +2160,7 @@ mod tests {
     #[test]
     fn test_the_window_chords_still_reach_the_window_from_either_mode() {
         // An Alt chord read as text types an `h` instead of moving focus, and
-        // in Normal mode `Alt-p` would paste: a tool that swallows the window
+        // in Normal mode `M-p` would paste: a tool that swallows the window
         // chords traps the user inside it.
         let tmp = TempDir::new("alt");
         let alt = |c: char| Key {
@@ -2164,6 +2168,7 @@ mod tests {
             code: KeyCode::Char(c),
             ctrl: false,
             shift: false,
+            sup: false,
         };
 
         let mut tool = tmp.tool("one\ntwo\n");
@@ -2182,7 +2187,8 @@ mod tests {
             alt: true,
             code: KeyCode::Char('>'),
             ctrl: false,
-            shift: false,
+            shift: true,
+            sup: false,
         };
         assert_eq!(ends.on_key(&shifted), ToolOutcome::Consumed);
         assert_eq!(ends.buffer().row(), 2);

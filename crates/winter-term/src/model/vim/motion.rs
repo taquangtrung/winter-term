@@ -39,9 +39,9 @@ pub enum CursorMove {
     Down,
     /// To the first non-blank column of the line (`^`).
     FirstNonBlank,
-    /// Down half a screen (`Ctrl-D`).
+    /// Down half a screen (`C-d`).
     HalfPageDown,
-    /// Up half a screen (`Ctrl-U`).
+    /// Up half a screen (`C-u`).
     HalfPageUp,
     /// `g_`: the last non-blank character on the line.
     LastNonBlank,
@@ -59,9 +59,9 @@ pub enum CursorMove {
     LineStart,
     /// `%`: the bracket matching the one at or right of the cursor.
     MatchingBracket,
-    /// Down one screen (`Ctrl-F`).
+    /// Down one screen (`C-f`).
     PageDown,
-    /// Up one screen (`Ctrl-B`).
+    /// Up one screen (`C-b`).
     PageUp,
     /// `{`: the previous paragraph boundary (blank line).
     ParagraphBack,

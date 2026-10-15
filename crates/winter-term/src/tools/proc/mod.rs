@@ -819,7 +819,7 @@ impl Tool for ProcTool {
         if self.nav.in_sequence() || key.alt || key.ctrl {
             return self.on_motion_key(key);
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('s') => {
                 let mut next = self.sort.next();
                 // A column that is not shown is not one to land on.

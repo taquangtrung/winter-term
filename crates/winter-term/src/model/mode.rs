@@ -27,7 +27,7 @@ pub enum Mode {
 /// machine's).
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ModeEvent {
-    /// The configurable entry chord (default `Alt-Escape` or `Ctrl-Shift-Space`).
+    /// The configurable entry chord (default `M-ESC` or `C-S-SPC`).
     EnterNormal,
     /// `v`/`V` in Normal mode (and the toggle back out of Visual).
     EnterVisual,

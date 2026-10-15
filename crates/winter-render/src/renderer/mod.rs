@@ -167,7 +167,7 @@ pub(crate) mod test_support {
             menus: vec![Menu {
                 title: "Menu".into(),
                 items: vec![
-                    leaf("New Tab", "Ctrl-Shift-N"),
+                    leaf("New Tab", "C-S-n"),
                     leaf("Split Vertical", ""),
                     MenuItem {
                         children: vec![leaf("Dark", ""), leaf("Light", "")],

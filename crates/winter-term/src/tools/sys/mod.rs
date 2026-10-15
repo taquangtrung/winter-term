@@ -14,7 +14,7 @@ pub mod view;
 
 use std::time::{Duration, Instant};
 
-use crate::model::input::{CursorMove, Key, KeyCode};
+use crate::model::input::{CursorMove, Key, KeyCode, Mods};
 use crate::model::paint::{Frame, Row, Span, Style};
 use crate::model::system::SystemSample;
 use crate::model::tool::{JobReply, JobRequest, Tool, ToolMenuItem, ToolOutcome};
@@ -210,19 +210,19 @@ impl Tool for SysTool {
             return self.on_motion_key(key);
         }
         if key.ctrl {
-            return match key.code {
-                KeyCode::Char('e') => {
+            return match (key.mods(), key.glyph()) {
+                (Mods::CTRL, KeyCode::Char('e')) => {
                     self.scroll_by(1);
                     ToolOutcome::Consumed
                 }
-                KeyCode::Char('y') => {
+                (Mods::CTRL, KeyCode::Char('y')) => {
                     self.scroll_by(-1);
                     ToolOutcome::Consumed
                 }
                 _ => self.on_motion_key(key),
             };
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('n') => {
                 self.jump_section(true);
                 ToolOutcome::Consumed

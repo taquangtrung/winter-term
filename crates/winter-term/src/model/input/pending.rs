@@ -17,7 +17,7 @@ pub enum PendingPrefix {
     /// A count typed before a motion (`5` before `j`), accumulating further
     /// digits until the motion that spends it resolves.
     Count(usize),
-    /// Awaiting a window command after `Ctrl-W` or a configurable window leader.
+    /// Awaiting a window command after `C-w` or a configurable window leader.
     CtrlW,
     /// The change operator `c`, awaiting the motion or object it applies to.
     Change,
@@ -115,7 +115,7 @@ impl PendingPrefix {
             PendingPrefix::BracketClose => Some(("]", &[("b", "next block")])),
             PendingPrefix::BracketOpen => Some(("[", &[("b", "previous block")])),
             PendingPrefix::CtrlW => Some((
-                "Ctrl-W",
+                "C-w",
                 &[
                     ("v", "split vertical"),
                     ("s", "split horizontal"),

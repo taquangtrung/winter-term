@@ -315,7 +315,7 @@ impl App {
         }
     }
 
-    /// Close every pane except the one holding `focused` (Vim `Ctrl-w o`).
+    /// Close every pane except the one holding `focused` (Vim `C-w o`).
     pub(crate) fn close_other_panes(&mut self, focused: TabId) {
         // One question for the lot of them: asking pane by pane would put a
         // dialog up behind the dialog already waiting to be answered.

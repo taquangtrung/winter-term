@@ -127,7 +127,7 @@ Normal mode is what lets the vim vocabulary work against any shell without shell
 
 `resolve_with` takes the pane's mode, the key event, and a mutable `PendingPrefix`, and returns an `Action`; Insert, Normal, and Visual each have their own resolver behind it. The pending prefix is what makes multi-key sequences work without a parser. It is an explicit state machine holding what has been typed but not yet spent, so `d`, `i`, `w` arrives as three separate key events that leave `Delete`, then `DeleteObject { around: false }`, then a resolved action.
 
-Counts live in the same enum (`Count(usize)`, accumulating digits until a motion spends them), alongside the operator-pending states, the `[` and `]` bracket prefixes, and `Ctrl-W` for window commands. Because the prefix is a value rather than hidden control flow, a half-typed sequence can be rendered: the which-key popup is a view over it.
+Counts live in the same enum (`Count(usize)`, accumulating digits until a motion spends them), alongside the operator-pending states, the `[` and `]` bracket prefixes, and `C-w` for window commands. Because the prefix is a value rather than hidden control flow, a half-typed sequence can be rendered: the which-key popup is a view over it.
 
 ### Motions and text objects
 

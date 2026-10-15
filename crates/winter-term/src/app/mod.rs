@@ -386,6 +386,18 @@ fn winit_key_to_code(key: &Key, physical: &PhysicalKey) -> KeyCode {
         Key::Named(NamedKey::F10) => KeyCode::F(10),
         Key::Named(NamedKey::F11) => KeyCode::F(11),
         Key::Named(NamedKey::F12) => KeyCode::F(12),
+        Key::Named(NamedKey::F13) => KeyCode::F(13),
+        Key::Named(NamedKey::F14) => KeyCode::F(14),
+        Key::Named(NamedKey::F15) => KeyCode::F(15),
+        Key::Named(NamedKey::F16) => KeyCode::F(16),
+        Key::Named(NamedKey::F17) => KeyCode::F(17),
+        Key::Named(NamedKey::F18) => KeyCode::F(18),
+        Key::Named(NamedKey::F19) => KeyCode::F(19),
+        Key::Named(NamedKey::F20) => KeyCode::F(20),
+        Key::Named(NamedKey::F21) => KeyCode::F(21),
+        Key::Named(NamedKey::F22) => KeyCode::F(22),
+        Key::Named(NamedKey::F23) => KeyCode::F(23),
+        Key::Named(NamedKey::F24) => KeyCode::F(24),
         _ => physical_key_fallback(physical).map_or(KeyCode::Char('\0'), KeyCode::Char),
     }
 }
@@ -401,7 +413,7 @@ fn forwarded_to_pty(action: &Action) -> bool {
 
 impl App {
     /// Bookkeeping for one key forwarded to the PTY while the terminal is in
-    /// Insert mode: keep the prompt shadow in step so `Ctrl-/`/`Ctrl-\\` can
+    /// Insert mode: keep the prompt shadow in step so `C-/`/`C-\\` can
     /// replay edits, and accumulate the exact bytes into the Insert session's
     /// `.`-repeat run (finalized when the pane leaves Insert: see
     /// [`App::track_change`]). Extracted from the keyboard handler so tests
@@ -420,7 +432,7 @@ impl App {
             // Tracks whether the tab may now be mid the shell's own
             // tab-completion, so a following bare Escape can cancel it -
             // see `escape_forwarded_to_pty`.
-            tab.pending_tab_completion = key.code == input::KeyCode::Tab;
+            tab.pending_tab_completion = key.glyph() == input::KeyCode::Tab;
         }
         if let Action::SendBytes(bytes) = action {
             self.vim
@@ -461,7 +473,7 @@ impl App {
 /// mode is excluded: there Escape already clears the selection via the
 /// Normal-mode switch, together with the mode's own anchor state.
 fn escape_clears_selection(key: &input::Key, mode: Mode, has_selection: bool) -> bool {
-    key.code == KeyCode::Escape
+    key.glyph() == KeyCode::Escape
         && !key.ctrl
         && !key.alt
         && !key.shift
@@ -472,7 +484,7 @@ fn escape_clears_selection(key: &input::Key, mode: Mode, has_selection: bool) ->
 /// Whether a `KeyboardInput` event should be dropped as a Windows-only race:
 /// Win32 can dispatch a queued `WM_KEYDOWN` for the window that is about to
 /// gain focus before it dispatches the matching `WM_SETFOCUS`, so the first
-/// keystroke of an OS-level window switch (e.g. Alt+Tab's `Tab`) arrives
+/// keystroke of an OS-level window switch (e.g. M-TAB's `Tab`) arrives
 /// while `winit`'s cached focus state still reads unfocused.
 #[cfg(target_os = "windows")]
 fn is_pre_focus_key_leak(state: ElementState, window_has_focus: bool) -> bool {
@@ -544,7 +556,7 @@ pub struct App {
     /// Set when the window gains focus; cleared on the next `ModifiersChanged`
     /// event. While set, `KeyboardInput::Pressed` events are swallowed because
     /// winit synthesizes presses for all physically-held keys on `XI_FocusIn`,
-    /// and those would otherwise be forwarded to the PTY (e.g. Tab from Alt+Tab).
+    /// and those would otherwise be forwarded to the PTY (e.g. Tab from M-TAB).
     pub(crate) suppress_synthesized_keys: bool,
     /// Whether the OS window currently has keyboard focus. `false` while the
     /// user has switched away (alt-tab, another app clicked to front), which
@@ -609,7 +621,7 @@ pub struct App {
     /// edits over there are meant to go with it.
     pub(crate) pending_close: Option<tool::PendingClose>,
     /// Whether tools wrap rows wider than their pane onto the next screen
-    /// row, toggled by `Alt+Z` in every tool at once.
+    /// row, toggled by `M-z` in every tool at once.
     pub(crate) tool_wrap: bool,
     /// Slow work tools have asked for, and the answers coming back.
     pub(crate) jobs: jobs::Jobs,
@@ -658,7 +670,7 @@ pub struct App {
     /// block), resolved against in Normal mode.
     pub(crate) window_keymap: WindowKeymap,
     pub(crate) window_title: String,
-    /// The font size from config at startup; Ctrl+0 resets back to this value.
+    /// The font size from config at startup; C-0 resets back to this value.
     pub(crate) base_font_size: f32,
     /// Whether the cursor is in its "visible" blink phase. Toggled by the blink
     /// timer; always `true` while blink is disabled.
@@ -1440,7 +1452,7 @@ mod tests {
         // The operators are realized as readline chords, so a shell in vi mode
         // has them bound to something else. Declining leaves the user with the
         // shell's own Vim editing; translating anyway would fire whatever
-        // `Ctrl-W` happens to mean there.
+        // `C-w` happens to mean there.
         let mut app = App::new();
         app.config.prompt_edit_bindings = crate::config::PromptEditBindings::None;
         assert!(!app.prompt_editing_enabled());
@@ -2056,7 +2068,7 @@ mod tests {
     #[cfg(target_os = "windows")]
     #[test]
     fn test_is_pre_focus_key_leak_swallows_press_before_focus() {
-        // Regression: Alt+Tab into the window can dispatch the queued
+        // Regression: M-TAB into the window can dispatch the queued
         // Tab KeyboardInput before the Focused(true) event, so `has_focus()`
         // still reads false when the leaked press arrives.
         assert!(is_pre_focus_key_leak(ElementState::Pressed, false));
@@ -2432,6 +2444,7 @@ mod tests {
             code: KeyCode::Escape,
             ctrl: false,
             shift: false,
+            sup: false,
         };
         assert!(escape_clears_selection(&key, Mode::Insert, true));
         assert!(escape_clears_selection(&key, Mode::Normal, true));
@@ -2444,6 +2457,7 @@ mod tests {
             code: KeyCode::Escape,
             ctrl: false,
             shift: false,
+            sup: false,
         };
         assert!(!escape_clears_selection(&key, Mode::Insert, false));
     }
@@ -2459,6 +2473,7 @@ mod tests {
             code: KeyCode::Escape,
             ctrl: false,
             shift: false,
+            sup: false,
         };
         assert!(!escape_clears_selection(&key, Mode::Visual, true));
     }
@@ -2470,6 +2485,7 @@ mod tests {
             code: KeyCode::Escape,
             ctrl: false,
             shift: true,
+            sup: false,
         };
         assert!(!escape_clears_selection(&shift_escape, Mode::Insert, true));
     }

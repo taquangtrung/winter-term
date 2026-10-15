@@ -54,7 +54,7 @@ pub(crate) struct VimState {
     /// The Insert-mode typing run in progress per pane (see
     /// [`InsertSession`]).
     pub(crate) insert_sessions: HashMap<TabId, InsertSession>,
-    /// Per-pane vim-style jumplists backing `Ctrl+O`/`Ctrl+I` (see
+    /// Per-pane vim-style jumplists backing `C-o`/`C-i` (see
     /// [`JumpList`]).
     pub(crate) jump_lists: HashMap<TabId, JumpList>,
     /// The most recent change per pane, replayed by `.` (see
@@ -69,8 +69,8 @@ pub(crate) struct VimState {
 /// A per-pane, vim-style jumplist: the absolute positions (row, col) the
 /// cursor was at before each "long" jump: `gg`/`G`, `H`/`M`/`L`, `{`/`}`,
 /// `%`, a confirmed search, an `f`/`t` label jump, leaving Normal for Insert,
-/// oldest first. `Ctrl+O` walks back through them ([`App::jump_older`]),
-/// `Ctrl+I`/`Tab` forward again ([`App::jump_newer`]).
+/// oldest first. `C-o` walks back through them ([`App::jump_older`]),
+/// `C-i`/`Tab` forward again ([`App::jump_newer`]).
 #[derive(Default)]
 pub(crate) struct JumpList {
     /// Jump origins, oldest first, capped at [`MAX_JUMP_LIST_LEN`].
@@ -81,7 +81,7 @@ pub(crate) struct JumpList {
     index: usize,
     /// The live position [`JumpList::older`] stepped away from, so
     /// [`JumpList::newer`] can return to it after walking all the way back,
-    /// vim appends the current position the first time `Ctrl+O` is pressed.
+    /// vim appends the current position the first time `C-o` is pressed.
     return_pos: Option<(usize, usize)>,
 }
 
@@ -109,9 +109,9 @@ impl JumpList {
         self.entries.len()
     }
 
-    /// The origin `Ctrl+O` lands on next, or `None` when already at the oldest
+    /// The origin `C-o` lands on next, or `None` when already at the oldest
     /// entry. `live` is the current non-jumplist position, remembered so the
-    /// matching `Ctrl+I` can come back to it.
+    /// matching `C-i` can come back to it.
     fn older(&mut self, live: (usize, usize)) -> Option<(usize, usize)> {
         if self.entries.is_empty() {
             return None;
@@ -125,7 +125,7 @@ impl JumpList {
         self.entries.get(self.entries.len() - self.index).copied()
     }
 
-    /// The position `Ctrl+I` lands on next: the next entry forward, or the
+    /// The position `C-i` lands on next: the next entry forward, or the
     /// remembered live position once the walk is exhausted. `None` when
     /// already at the live position.
     fn newer(&mut self) -> Option<(usize, usize)> {
@@ -365,7 +365,7 @@ impl App {
     }
 
     /// Record the cursor's current position (absolute) as the origin of a
-    /// jump, so `Ctrl+O` can come back: called before jump-class motions
+    /// jump, so `C-o` can come back: called before jump-class motions
     /// land, before confirmed search steps, and when Normal mode ends.
     pub(crate) fn push_jump(&mut self, focused: TabId) {
         let Some(terminal) = self.open_tabs.terminal(&focused) else {
@@ -389,7 +389,7 @@ impl App {
         self.vim.marks.insert((focused, name), pos);
     }
 
-    /// `Ctrl+O`: step the cursor back to the previous recorded jump origin,
+    /// `C-o`: step the cursor back to the previous recorded jump origin,
     /// revealing it if it scrolled off screen. Extends the Visual selection
     /// when the pane is in Visual mode, like any other cursor move.
     pub(crate) fn jump_older(&mut self, focused: TabId) {
@@ -401,7 +401,7 @@ impl App {
         }
     }
 
-    /// `Ctrl+I`/`Tab`: step the cursor forward through the jumplist, back
+    /// `C-i`/`Tab`: step the cursor forward through the jumplist, back
     /// toward the position the walk started from.
     pub(crate) fn jump_newer(&mut self, focused: TabId) {
         let target = self.vim.jump_lists.entry(focused).or_default().newer();
@@ -558,7 +558,7 @@ impl App {
 
     /// `` `{a-z} `` / `'{a-z}`: jump to a named mark recorded by [`Self::set_mark`].
     /// `exact` lands on the exact column; `false` lands on the line's first non-blank.
-    /// Records the jump origin beforehand so `Ctrl+O` returns to the pre-jump location.
+    /// Records the jump origin beforehand so `C-o` returns to the pre-jump location.
     pub(crate) fn goto_mark(&mut self, focused: TabId, mark: char, exact: bool) {
         let Some(&(abs_row, col)) = self.vim.marks.get(&(focused, mark)) else {
             return;
@@ -674,14 +674,14 @@ impl App {
     /// Move the traversal cursor within the focused pane. Moves past a viewport
     /// edge scroll the grid's history instead, so the cursor reaches the whole
     /// buffer. Full-page moves scroll and snap the cursor to the new page's top
-    /// or bottom row, like vim's `Ctrl-F`/`Ctrl-B`; half-page moves scroll and
-    /// keep the cursor on its current screen row, like `Ctrl-D`/`Ctrl-U`.
+    /// or bottom row, like vim's `C-f`/`C-b`; half-page moves scroll and
+    /// keep the cursor on its current screen row, like `C-d`/`C-u`.
     /// A rich block's reserved band counts as one stop for `j`/`k` (see
     /// [`vertical_band_stop`]).
     pub(crate) fn move_nav_cursor(&mut self, mv: input::CursorMove, focused: TabId) {
         use CursorMove;
 
-        // A jump-class motion records its origin for `Ctrl+O` before moving.
+        // A jump-class motion records its origin for `C-o` before moving.
         if pushes_jump(mv) {
             self.push_jump(focused);
         }
@@ -859,7 +859,7 @@ impl App {
         self.focus_block(input::BlockNav::Previous, focused);
     }
 
-    /// `Alt-i`: select the paragraph the cursor sits in, linewise: vim's `vip`
+    /// `M-i`: select the paragraph the cursor sits in, linewise: vim's `vip`
     /// in one chord. A paragraph is the run of non-blank lines around the cursor;
     /// on a blank line it's the run of blank lines instead, as `ip` does.
     ///
@@ -1666,7 +1666,7 @@ mod tests {
 
     #[test]
     fn test_select_paragraph_covers_the_run_of_lines_around_the_cursor() {
-        // `Alt-i` from the second line of the first paragraph selects both its
+        // `M-i` from the second line of the first paragraph selects both its
         // lines linewise and stops at the blank separator: vim's `vip`.
         let (mut app, id) = app_with_paragraphs(1);
 
@@ -2143,7 +2143,7 @@ mod tests {
 
     #[test]
     fn test_page_up_snaps_cursor_to_top_of_page() {
-        // Editor convention: PageUp (vim's `Ctrl-F`/`Ctrl-B` analog) scrolls a
+        // Editor convention: PageUp (vim's `C-f`/`C-b` analog) scrolls a
         // full page and repositions the cursor to the new page's top row,
         // rather than leaving it on whatever screen row it was on before.
         let terminal = pane_with_scrollback();
@@ -2421,7 +2421,7 @@ mod tests {
         // for each key, `record_insert_key` for forwarded bytes, `handle_action`
         // for dispatch, so the Insert session opens, accumulates, and closes
         // through production code, not hand-built actions. Entry chord
-        // (Ctrl+Shift+Space) leaves Insert deterministically, without the
+        // (C-S-SPC) leaves Insert deterministically, without the
         // bare-Escape foreground-process branch.
         let mut app = App::new();
         let id = app.layout().shown_tabs()[0];
@@ -2450,6 +2450,7 @@ mod tests {
                 code: input::KeyCode::Char('i'),
                 ctrl: false,
                 shift: false,
+                sup: false,
             },
         );
         for ch in ['h', 'i'] {
@@ -2460,6 +2461,7 @@ mod tests {
                     code: input::KeyCode::Char(ch),
                     ctrl: false,
                     shift: false,
+                    sup: false,
                 },
             );
         }
@@ -2470,6 +2472,7 @@ mod tests {
                 code: input::KeyCode::Space,
                 ctrl: true,
                 shift: true,
+                sup: false,
             },
         );
 
@@ -2502,7 +2505,7 @@ mod tests {
 
     #[test]
     fn test_jumplist_returns_to_the_position_before_the_jump() {
-        // `gg` records its origin, so `Ctrl+O` comes back to it and `Ctrl+I`
+        // `gg` records its origin, so `C-o` comes back to it and `C-i`
         // walks forward again: in absolute terms, so the round trip holds
         // even once the view has scrolled.
         let (mut app, id) = app_with_paragraphs(2);
@@ -2529,21 +2532,21 @@ mod tests {
                 .grid()
                 .to_absolute_row(row),
             abs_before,
-            "Ctrl+O returns to the pre-jump line"
+            "C-o returns to the pre-jump line"
         );
 
         app.handle_action(input::Action::JumpNewer, id);
         assert_eq!(
             app.nav_cursor(id),
             Some((0, 0)),
-            "Ctrl+I walks forward to the post-jump position"
+            "C-i walks forward to the post-jump position"
         );
     }
 
     #[test]
     fn test_jumplist_forks_when_a_new_jump_leaves_the_past() {
         // Stepping back then jumping again discards the abandoned entries, so
-        // the next Ctrl+O lands on the new jump, not on a forked-away future.
+        // the next C-o lands on the new jump, not on a forked-away future.
         let mut jumps = JumpList::default();
         jumps.push((1, 0));
         jumps.push((2, 0));
@@ -2566,7 +2569,7 @@ mod tests {
     fn test_leaving_normal_records_a_jump_origin() {
         // Pressing `i` from a browsed position is itself a jump in vim's
         // jumplist: after the next Escape (which re-derives the cursor at the
-        // prompt), Ctrl+O returns to where the browsing left off.
+        // prompt), C-o returns to where the browsing left off.
         let (mut app, id) = app_with_paragraphs(2);
         let abs_before = app
             .open_tabs
@@ -2577,7 +2580,7 @@ mod tests {
 
         app.handle_action(input::Action::SwitchMode(Mode::Insert), id);
         // The next Escape re-enters Normal and re-derives the cursor at the
-        // prompt: the state Ctrl+O is actually pressed from.
+        // prompt: the state C-o is actually pressed from.
         app.handle_action(input::Action::SwitchMode(Mode::Normal), id);
 
         app.handle_action(input::Action::JumpOlder, id);
@@ -2725,7 +2728,7 @@ mod tests {
         app.handle_action(input::Action::GotoMark(input::GotoMark::new('z', true)), id);
         assert_eq!(app.nav_cursor(id), Some((3, 0)));
 
-        // Ctrl+O returns to (0, 2)
+        // C-o returns to (0, 2)
         app.handle_action(input::Action::JumpOlder, id);
         assert_eq!(app.nav_cursor(id), Some((0, 2)));
     }

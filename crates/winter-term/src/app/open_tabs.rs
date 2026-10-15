@@ -44,8 +44,8 @@ pub(crate) struct TerminalTab {
     /// in Normal, with nothing of Winter's to cancel, reach the PTY and close
     /// it: see `escape_forwarded_to_pty`.
     pub(crate) pending_tab_completion: bool,
-    /// The model of the editable prompt line behind `Ctrl-/` undo and
-    /// `Ctrl-\` redo, made on the first key typed at the prompt.
+    /// The model of the editable prompt line behind `C-/` undo and
+    /// `C-\` redo, made on the first key typed at the prompt.
     pub(crate) prompt_shadow: Option<PromptShadow>,
     pub(crate) terminal: Terminal,
 }

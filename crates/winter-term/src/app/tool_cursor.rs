@@ -88,7 +88,7 @@ impl App {
         // Chorded keys stay with the window: splitting, zooming and moving
         // focus have to work from here, exactly as they do from a tool, and
         // none of them collide with a motion.
-        if key.alt || key.ctrl {
+        if key.alt || key.ctrl || key.sup {
             return false;
         }
         let Some(cursor) = self.tool_cursor.as_ref() else {
@@ -110,7 +110,7 @@ impl App {
         let (mut row, mut col) = (cursor.row, cursor.col);
         let (mut anchor, mut linewise) = (cursor.anchor, cursor.linewise);
 
-        match key.code {
+        match key.glyph() {
             KeyCode::Escape => {
                 self.stop_tool_cursor();
                 return true;
@@ -283,6 +283,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         })
     }
 
@@ -373,6 +374,7 @@ mod tests {
             code: KeyCode::Char('h'),
             ctrl: false,
             shift: false,
+            sup: false,
         };
         assert!(!app.handle_tool_cursor_key(&chord));
         assert!(

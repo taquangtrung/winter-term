@@ -3,7 +3,7 @@
 //! then the modal keys every text shares, and what the tool does with what
 //! those ask of it.
 
-use crate::model::input::{Key, KeyCode};
+use crate::model::input::{Key, KeyCode, Mods};
 use crate::model::textedit::modal::EditOutcome;
 use crate::model::tool::{PickRequest, PromptMode, PromptRequest, ToolNotice, ToolOutcome};
 
@@ -22,8 +22,8 @@ impl EditorTool {
         // Stepping between buffers, and recalling a commit message, are no part
         // of a text command, so they are taken ahead of the modal keys: the
         // chord means the same whether a file is being read or typed into.
-        if key.ctrl && key.alt {
-            match key.code {
+        if key.mods() == Mods::CTRL_ALT {
+            match key.glyph() {
                 KeyCode::Char(']') => {
                     self.recent_buffer(true);
                     return ToolOutcome::Consumed;
@@ -45,7 +45,7 @@ impl EditorTool {
         }
         // Commenting is the same chord in every mode: the line, or the lines
         // a selection covers.
-        if key.ctrl && !key.alt && key.code == KeyCode::Char('/') {
+        if key.mods() == Mods::CTRL && key.glyph() == KeyCode::Char('/') {
             return self.toggle_comment();
         }
         if let Some(outcome) = self.message_chord(key) {
@@ -58,24 +58,25 @@ impl EditorTool {
         self.carry_out(outcome)
     }
 
-    /// `Ctrl-Shift-C`, or `C-c C-c`, and `C-c C-k` in a commit message: save
+    /// `C-S-c`, or `C-c C-c`, and `C-c C-k` in a commit message: save
     /// and close to commit, or empty it and close to cancel. `None` for every
-    /// other key, which is left to the mode, and a `Ctrl-C` not followed by
+    /// other key, which is left to the mode, and a `C-c` not followed by
     /// either is forgotten.
     fn message_chord(&mut self, key: &Key) -> Option<ToolOutcome> {
         if !commit::is_message_file(&self.doc().path) {
             return None;
         }
         // Shift turns the letter into the capital, as it does for the Git
-        // tool's own `Ctrl-Shift-C`.
-        let commit_chord = matches!(key.code, KeyCode::Char('C' | 'c'));
-        if key.ctrl && key.shift && !key.alt && commit_chord {
+        // tool's own `C-S-c`.
+        let commit_chord = matches!(key.glyph(), KeyCode::Char('C' | 'c'));
+        if key.mods() == Mods::CTRL_SHIFT && commit_chord {
             self.message_chord = false;
             self.write();
             return Some(ToolOutcome::Close);
         }
         let started = std::mem::take(&mut self.message_chord);
-        match (started, key.ctrl, key.code) {
+        let ctrl = key.mods() == Mods::CTRL;
+        match (started, ctrl, key.glyph()) {
             (false, true, KeyCode::Char('c')) => {
                 self.message_chord = true;
                 Some(ToolOutcome::Consumed)
@@ -99,16 +100,16 @@ impl EditorTool {
         }
         let started = std::mem::take(&mut self.message_chord);
         if !started {
-            if key.ctrl && key.code == KeyCode::Char('c') {
+            if key.mods() == Mods::CTRL && key.glyph() == KeyCode::Char('c') {
                 self.message_chord = true;
                 return Some(ToolOutcome::Consumed);
             }
             return None;
         }
         let row = self.buffer().row();
-        match (key.ctrl, key.code) {
-            (true, KeyCode::Char('c')) => return Some(self.finish_todo()),
-            (true, KeyCode::Char('k')) => {
+        match (key.mods(), key.glyph()) {
+            (Mods::CTRL, KeyCode::Char('c')) => return Some(self.finish_todo()),
+            (Mods::CTRL, KeyCode::Char('k')) => {
                 // An empty plan is how git is told to abort: it stops at
                 // "nothing to do" and leaves the branch as it was.
                 let rows = self.buffer().lines().len();
@@ -116,9 +117,9 @@ impl EditorTool {
                 self.write();
                 return Some(ToolOutcome::Close);
             }
-            (false, KeyCode::Char('j')) => self.move_todo_line(row, row + 1),
-            (false, KeyCode::Char('k')) if row > 0 => self.move_todo_line(row, row - 1),
-            (false, KeyCode::Char(c)) => {
+            (Mods::NONE, KeyCode::Char('j')) => self.move_todo_line(row, row + 1),
+            (Mods::NONE, KeyCode::Char('k')) if row > 0 => self.move_todo_line(row, row - 1),
+            (Mods::NONE | Mods::SHIFT, KeyCode::Char(c)) => {
                 let line = self.buffer().lines()[row].clone();
                 match rebase::action_of(c).and_then(|action| rebase::with_action(&line, action)) {
                     Some(changed) => {
@@ -157,7 +158,7 @@ impl EditorTool {
     }
 
     /// Comment out the cursor's line, or every line a selection covers, or
-    /// comment them back in, with the file's own comment marker (`Ctrl-/`).
+    /// comment them back in, with the file's own comment marker (`C-/`).
     /// The cursor stays on the character it was on.
     fn toggle_comment(&mut self) -> ToolOutcome {
         let marker =

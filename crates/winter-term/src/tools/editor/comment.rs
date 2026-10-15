@@ -1,4 +1,4 @@
-//! Commenting lines out and back in (`Ctrl-/`), with whatever the file's
+//! Commenting lines out and back in (`C-/`), with whatever the file's
 //! language writes comments with.
 
 // ========================================================================

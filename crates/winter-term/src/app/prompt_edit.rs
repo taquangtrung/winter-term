@@ -4,29 +4,29 @@
 //! Normal mode never forwards keys to the PTY, so a delete is realized by
 //! sending the shell the equivalent readline keystrokes: first arrow keys to
 //! move the line-editor cursor under the Vim cursor, then a kill. This assumes
-//! the default emacs-mode readline bindings (`Ctrl-K`, `Ctrl-U`, ...).
+//! the default emacs-mode readline bindings (`C-k`, `C-u`, ...).
 
 use crate::model::history::EditHistory;
-use crate::model::input::{EditAction, Key, KeyCode};
+use crate::model::input::{EditAction, Key, KeyCode, Mods};
 
 // ========================================================================
 // Constants
 // ========================================================================
 
-/// `Ctrl-A`: move to start of line (readline `beginning-of-line`).
+/// `C-a`: move to start of line (readline `beginning-of-line`).
 const CTRL_A: u8 = 0x01;
-/// `Ctrl-K`: kill from cursor to end of line.
+/// `C-k`: kill from cursor to end of line.
 const CTRL_K: u8 = 0x0b;
-/// `Ctrl-U`: kill from cursor to start of line.
+/// `C-u`: kill from cursor to start of line.
 const CTRL_U: u8 = 0x15;
-/// `Ctrl-W`: kill the word before the cursor.
+/// `C-w`: kill the word before the cursor.
 const CTRL_W: u8 = 0x17;
-/// `Ctrl-_` (0x1f): the readline / ZLE `undo` command. Undo delegates to this so
+/// `C-_` (0x1f): the readline / ZLE `undo` command. Undo delegates to this so
 /// the shell performs a single edit operation: plugins that re-render the line on
 /// every keystroke (syntax highlighting, autosuggestions) then repaint once
 /// instead of flashing through Winter's multi-keystroke rebuild.
 pub(crate) const READLINE_UNDO: u8 = 0x1f;
-/// `Alt-d`: kill the word after the cursor.
+/// `M-d`: kill the word after the cursor.
 const ALT_D: &[u8] = b"\x1bd";
 /// The Delete key (CSI 3~): forward-delete one character.
 const KEY_DELETE: &[u8] = b"\x1b[3~";
@@ -257,19 +257,25 @@ impl PromptShadow {
     /// Fold one Insert-mode key into the shadow. `at_prompt` is the pane's live
     /// shell-integration state; off the prompt the shadow cannot be trusted.
     pub(crate) fn apply_insert_key(&mut self, key: &Key, at_prompt: bool) {
-        if !at_prompt || key.alt {
+        if !at_prompt || key.alt || key.sup {
             self.desync();
             return;
         }
         if key.ctrl {
-            match key.code {
+            // Readline's chords are the bare Ctrl ones; any other modifier set
+            // is a chord the shadow cannot follow.
+            if key.mods() != Mods::CTRL {
+                self.desync();
+                return;
+            }
+            match key.glyph() {
                 KeyCode::Char('a') => self.cursor_op(PromptLine::move_home),
                 KeyCode::Char('e') => self.cursor_op(PromptLine::move_end),
                 KeyCode::Char('u') => self.edit_op(PromptLine::kill_to_start, EditKind::Delete),
                 KeyCode::Char('k') => self.edit_op(PromptLine::kill_to_end, EditKind::Delete),
                 KeyCode::Char('w') => self.edit_op(PromptLine::kill_word_back, EditKind::Delete),
-                // Readline's `Ctrl-D` on a non-empty line is delete-char-forward, the
-                // same edit as the Delete key. Without modeling it, `Ctrl-D` would hit
+                // Readline's `C-d` on a non-empty line is delete-char-forward, the
+                // same edit as the Delete key. Without modeling it, `C-d` would hit
                 // the `_ => self.desync()` fallback and break undo/redo tracking.
                 KeyCode::Char('d') => self.edit_op(PromptLine::delete_forward, EditKind::Delete),
                 // SIGINT: readline-based shells abort whatever is on the line and
@@ -282,7 +288,7 @@ impl PromptShadow {
             }
             return;
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char(c) => self.edit_op(|l| l.insert_char(c), EditKind::Insert),
             KeyCode::Space => self.edit_op(|l| l.insert_char(' '), EditKind::Insert),
             KeyCode::Backspace => self.edit_op(PromptLine::backspace, EditKind::Delete),
@@ -581,7 +587,7 @@ fn word_end_after(text: &str, cursor: usize) -> usize {
 ///
 /// Redo cannot trust the line to match our shadow (the shell's own undo, which
 /// powers undo, may leave it in a state we do not exactly model), so it rebuilds
-/// the whole line: `Ctrl-A` `Ctrl-K` clears whatever is there, then the text is
+/// the whole line: `C-a` `C-k` clears whatever is there, then the text is
 /// inserted in a **single** operation. When the terminal has bracketed paste on
 /// (`bracketed`), the text rides inside paste markers so the shell treats it as
 /// one edit and plugins (syntax highlighting, autosuggestions) repaint once
@@ -637,7 +643,7 @@ mod tests {
 
     #[test]
     fn test_to_line_end_aligns_right_then_kills() {
-        // Cursor at col 2, Vim cursor at col 4: two right arrows, then Ctrl-K.
+        // Cursor at col 2, Vim cursor at col 4: two right arrows, then C-k.
         let bytes = prompt_delete_bytes(PromptDelete::ToLineEnd, 2, 4);
         assert_eq!(bytes, [ARROW_RIGHT, ARROW_RIGHT, &[CTRL_K][..]].concat());
     }
@@ -668,6 +674,7 @@ mod tests {
             code: KeyCode::Char(c),
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -818,7 +825,7 @@ mod tests {
     /// real readline buffer to the shadow's state. The buffer starts from an
     /// arbitrary "diverged" state each step to prove the rebuild does not depend on
     /// the prior line matching our shadow. (Undo itself is the shell's own
-    /// single-op `Ctrl-_`, so only the redo rebuild is byte-tested here.)
+    /// single-op `C-_`, so only the redo rebuild is byte-tested here.)
     fn check_roundtrip(keys: &[Key]) {
         let mut shadow = PromptShadow::default();
         for k in keys {
@@ -903,7 +910,7 @@ mod tests {
         s.apply_insert_key(&up, true);
         assert!(!s.step_back(), "desynced: undo is a no-op");
 
-        // Ctrl-C then clears the recalled line back to a fresh, empty prompt,
+        // C-c then clears the recalled line back to a fresh, empty prompt,
         // so subsequent typing builds on a fresh base rather than stale history.
         let ctrl_c = Key {
             code: KeyCode::Char('c'),

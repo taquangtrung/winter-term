@@ -42,7 +42,7 @@ pub struct PaletteItem {
     pub label: String,
     /// Char indices in `label` that matched the query, used to highlight them.
     pub match_positions: Vec<usize>,
-    /// Keyboard shortcut hint shown on the right (e.g. `"Ctrl-Shift-T"`).
+    /// Keyboard shortcut hint shown on the right (e.g. `"C-S-t"`).
     pub shortcut: String,
 }
 /// The command palette state the renderer needs to draw its overlay.

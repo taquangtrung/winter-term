@@ -90,7 +90,7 @@ pub struct PaneView<'a> {
     /// The selected region as `(start_row, start_col, end_row, end_col)` in
     /// viewport coordinates, or `None` when nothing is selected.
     pub selection: Option<(usize, usize, usize, usize)>,
-    /// When `true`, selection is rectangular (blockwise `Ctrl-V`).
+    /// When `true`, selection is rectangular (blockwise `C-v`).
     pub selection_block: bool,
     /// How many rows the pane is currently scrolled up from the live bottom.
     pub scroll_offset: usize,

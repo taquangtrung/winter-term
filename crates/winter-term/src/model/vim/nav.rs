@@ -4,7 +4,7 @@
 //! the override contract.
 
 use super::motion::CursorMove;
-use crate::model::input::{Key, KeyCode};
+use crate::model::input::{Key, KeyCode, Mods};
 
 // ========================================================================
 // Data Structures
@@ -57,7 +57,7 @@ impl VimNav {
         }
         if self.goto {
             self.goto = false;
-            return match key.code {
+            return match key.glyph() {
                 KeyCode::Char('g') => VimKey::Motion(CursorMove::Top),
                 // The sequence is abandoned and the key spent, matching how a
                 // stray follow key abandons dir's own two-key leaders.
@@ -65,17 +65,17 @@ impl VimNav {
             };
         }
         if key.ctrl {
-            return match key.code {
-                KeyCode::Char('d') => VimKey::Motion(CursorMove::HalfPageDown),
-                KeyCode::Char('u') => VimKey::Motion(CursorMove::HalfPageUp),
-                KeyCode::Char('f') => VimKey::Motion(CursorMove::PageDown),
-                KeyCode::Char('b') => VimKey::Motion(CursorMove::PageUp),
+            return match (key.mods(), key.glyph()) {
+                (Mods::CTRL, KeyCode::Char('d')) => VimKey::Motion(CursorMove::HalfPageDown),
+                (Mods::CTRL, KeyCode::Char('u')) => VimKey::Motion(CursorMove::HalfPageUp),
+                (Mods::CTRL, KeyCode::Char('f')) => VimKey::Motion(CursorMove::PageDown),
+                (Mods::CTRL, KeyCode::Char('b')) => VimKey::Motion(CursorMove::PageUp),
                 _ => VimKey::Unhandled,
             };
         }
         match bare_motion(key) {
             Some(motion) => VimKey::Motion(motion),
-            None if key.code == KeyCode::Char('g') => {
+            None if key.glyph() == KeyCode::Char('g') => {
                 self.goto = true;
                 VimKey::Pending
             }
@@ -97,14 +97,13 @@ impl VimNav {
 /// punctuation (`<`, `>`) and one that reports the unshifted key with a shift
 /// flag (`,`, `.`) are the same chord under the fingers.
 pub fn buffer_end(key: &Key) -> Option<CursorMove> {
-    if !key.alt {
+    // `M-<` is Alt with Shift held: `M-,` is a different chord.
+    if key.mods() != Mods::ALT_SHIFT {
         return None;
     }
-    Some(match key.code {
-        KeyCode::Char('<') => CursorMove::Top,
-        KeyCode::Char('>') => CursorMove::Bottom,
-        KeyCode::Char(',') if key.shift => CursorMove::Top,
-        KeyCode::Char('.') if key.shift => CursorMove::Bottom,
+    Some(match key.glyph() {
+        KeyCode::Char('<' | ',') => CursorMove::Top,
+        KeyCode::Char('>' | '.') => CursorMove::Bottom,
         _ => return None,
     })
 }
@@ -115,7 +114,7 @@ pub fn buffer_end(key: &Key) -> Option<CursorMove> {
 /// the terminal's own resolver does; the caller owns any modifier policy.
 pub fn bare_motion(key: &Key) -> Option<CursorMove> {
     use CursorMove as M;
-    Some(match key.code {
+    Some(match key.glyph() {
         KeyCode::Char('h') | KeyCode::Left => M::Left,
         KeyCode::Char('j') | KeyCode::Down => M::Down,
         KeyCode::Char('k') | KeyCode::Up => M::Up,
@@ -157,6 +156,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -166,6 +166,7 @@ mod tests {
             code: KeyCode::Char(c),
             ctrl: true,
             shift: false,
+            sup: false,
         }
     }
 
@@ -175,6 +176,7 @@ mod tests {
             code: KeyCode::Char(c),
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -244,6 +246,30 @@ mod tests {
     }
 
     #[test]
+    fn test_a_paging_chord_with_an_extra_modifier_is_declined() {
+        // `C-S-d` is the window's `dir_page`, not a half page down.
+        let mut nav = VimNav::new();
+        for code in ['d', 'u', 'f', 'b'] {
+            let shifted = Key {
+                shift: true,
+                sup: false,
+                ..ctrl(code)
+            };
+            let alted = Key {
+                alt: true,
+                ..ctrl(code)
+            };
+            assert_eq!(nav.key(&shifted), VimKey::Unhandled, "ctrl-shift-{code}");
+            assert_eq!(nav.key(&alted), VimKey::Unhandled, "ctrl-alt-{code}");
+        }
+        let ctrl_alt_end = Key {
+            ctrl: true,
+            ..alt('>')
+        };
+        assert_eq!(buffer_end(&ctrl_alt_end), None);
+    }
+
+    #[test]
     fn test_the_emacs_buffer_ends_resolve_however_the_layout_spells_them() {
         // `M-<` and `M->` reach the top and the bottom whether the layout
         // reports the shifted punctuation or the unshifted key with a shift
@@ -254,18 +280,38 @@ mod tests {
             code: KeyCode::Char(c),
             ctrl: false,
             shift: true,
+            sup: false,
         };
-        assert_eq!(buffer_end(&alt('<')), Some(CursorMove::Top));
-        assert_eq!(buffer_end(&alt('>')), Some(CursorMove::Bottom));
+        assert_eq!(
+            buffer_end(&Key {
+                shift: true,
+                ..alt('<')
+            }),
+            Some(CursorMove::Top)
+        );
+        assert_eq!(
+            buffer_end(&Key {
+                shift: true,
+                ..alt('>')
+            }),
+            Some(CursorMove::Bottom)
+        );
         assert_eq!(buffer_end(&shifted(',')), Some(CursorMove::Top));
         assert_eq!(buffer_end(&shifted('.')), Some(CursorMove::Bottom));
 
-        // Without Alt they are ordinary text, and an unshifted comma is a key
-        // of its own.
+        // Without Alt they are ordinary text, and an unshifted comma or a bare
+        // `M-<` without its Shift are keys of their own.
+        assert_eq!(buffer_end(&alt('<')), None);
         assert_eq!(buffer_end(&plain(KeyCode::Char('<'))), None);
         assert_eq!(buffer_end(&alt(',')), None);
 
         let mut nav = VimNav::new();
-        assert_eq!(nav.key(&alt('>')), VimKey::Motion(CursorMove::Bottom));
+        assert_eq!(
+            nav.key(&Key {
+                shift: true,
+                ..alt('>')
+            }),
+            VimKey::Motion(CursorMove::Bottom)
+        );
     }
 }

@@ -23,7 +23,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::model::input::CursorMove;
-use crate::model::input::{Key, KeyCode};
+use crate::model::input::{Key, KeyCode, Mods};
 use crate::model::paint::{
     row_height, row_text, wheel_scroll, window_anchor, wrap_window, Frame, Icon, Span, Style,
 };
@@ -206,7 +206,7 @@ pub struct GitTool {
     /// The conflicted file a resolve is settling, staged once git has
     /// written the side that was taken.
     resolving: Option<String>,
-    /// The diff line `Ctrl-Space` set the mark on, which `Alt-s` and `Alt-u`
+    /// The diff line `C-SPC` set the mark on, which `M-s` and `M-u`
     /// stage or unstage from, to the line under the cursor.
     line_mark: Option<usize>,
     /// Where the repository is rooted, once git has said.
@@ -601,12 +601,12 @@ impl GitTool {
         }
         self.line_mark = Some(self.cursor);
         self.notice = Some(ToolNotice::info(
-            "mark set; Alt-s or Alt-u takes the lines to here",
+            "mark set; M-s or M-u takes the lines to here",
         ));
         ToolOutcome::Consumed
     }
 
-    /// Stage (`Alt-s`) or unstage (`Alt-u`) only some lines of a hunk: from
+    /// Stage (`M-s`) or unstage (`M-u`) only some lines of a hunk: from
     /// the mark to the cursor where both are in one hunk, or the line under the
     /// cursor alone.
     fn apply_lines(&mut self, unstage: bool) -> ToolOutcome {
@@ -779,7 +779,7 @@ impl GitTool {
         }
     }
 
-    /// `Ctrl-Shift-P`: push the current branch without asking where. It goes to
+    /// `C-S-p`: push the current branch without asking where. It goes to
     /// the remote the branch already tracks, else `origin`, and is set to track
     /// it, so a branch the remote has never seen is created there.
     fn quick_push(&mut self) -> ToolOutcome {
@@ -928,7 +928,7 @@ impl GitTool {
         if key.alt || key.ctrl {
             return None;
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('/') => Some(self.ask(ASK_SEARCH, "/")),
             KeyCode::Char('n') => Some(self.search_step(true)),
             KeyCode::Char('N') => Some(self.search_step(false)),
@@ -944,12 +944,12 @@ impl GitTool {
         // A row of a commit's patch belongs to a file the same way a row of
         // the status view does, so it opens the same way. A view whose rows
         // stand for nothing (a log, a blame) keeps the key.
-        if key.code == KeyCode::Enter && !key.ctrl {
+        if key.glyph() == KeyCode::Enter && !key.ctrl && !key.alt {
             if let Some(target) = self.file_at_point() {
                 return ToolOutcome::OpenPath(target);
             }
         }
-        if key.ctrl && key.code == KeyCode::Char('o') {
+        if key.mods() == Mods::CTRL && key.glyph() == KeyCode::Char('o') {
             if let Some(target) = self.file_at_point() {
                 return ToolOutcome::SpawnEditor(target);
             }
@@ -965,7 +965,7 @@ impl GitTool {
             };
             return ToolOutcome::Consumed;
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Char('j') | KeyCode::Down => {
                 output.cursor = (output.cursor + 1).min(last);
                 ToolOutcome::Consumed
@@ -1103,7 +1103,7 @@ impl GitTool {
     /// header, so a commit reads first as the list of what it touched and the
     /// patch is asked for a piece at a time. The status view opens the same
     /// way, and a commit touching thirty files is unreadable as a wall of
-    /// diff. `Tab` opens what the cursor is on, `Shift-Tab` all of it.
+    /// diff. `Tab` opens what the cursor is on, `S-TAB` all of it.
     fn show_commit(&mut self, title: &str, content: CommitContent) {
         let folded_files = (0..content.files.len()).collect();
         let folded_hunks = content
@@ -1819,7 +1819,7 @@ impl Tool for GitTool {
     fn on_key(&mut self, key: &Key) -> ToolOutcome {
         self.wheel = false;
         if let Some(popup) = self.popup.take() {
-            return self.on_popup_key(popup, key.code);
+            return self.on_popup_key(popup, key.glyph());
         }
         if self.output.is_some() {
             return self.on_output_key(key);
@@ -1829,34 +1829,34 @@ impl Tool for GitTool {
                 self.apply_motion(motion);
                 return ToolOutcome::Consumed;
             }
-            return match key.code {
-                KeyCode::Char('n') => {
+            return match (key.mods(), key.glyph()) {
+                (Mods::ALT, KeyCode::Char('n')) => {
                     self.move_to_entity(true);
                     ToolOutcome::Consumed
                 }
-                KeyCode::Char('p') => {
+                (Mods::ALT, KeyCode::Char('p')) => {
                     self.move_to_entity(false);
                     ToolOutcome::Consumed
                 }
-                KeyCode::Char('y') => match &self.root {
+                (Mods::ALT, KeyCode::Char('y')) => match &self.root {
                     Some(root) => ToolOutcome::Job(exec::show_refs(root)),
                     None => ToolOutcome::Consumed,
                 },
-                KeyCode::Char('b') => self.blame_at_point(),
-                KeyCode::Char('g') => self.open_in_remote(),
-                KeyCode::Char('s') => self.apply_lines(false),
-                KeyCode::Char('u') => self.apply_lines(true),
+                (Mods::ALT, KeyCode::Char('b')) => self.blame_at_point(),
+                (Mods::ALT, KeyCode::Char('g')) => self.open_in_remote(),
+                (Mods::ALT, KeyCode::Char('s')) => self.apply_lines(false),
+                (Mods::ALT, KeyCode::Char('u')) => self.apply_lines(true),
                 _ => ToolOutcome::Ignored,
             };
         }
         if key.ctrl {
-            return match key.code {
-                KeyCode::Char('C') | KeyCode::Char('c') if key.shift => self.commit_in_editor(),
-                KeyCode::Char('S') | KeyCode::Char('s') if key.shift => self.stage_all(),
-                KeyCode::Char('P') | KeyCode::Char('p') if key.shift => self.quick_push(),
-                KeyCode::Char('l') => self.open_popup(Popup::Log),
-                KeyCode::Char('o') => self.open_external(),
-                KeyCode::Space | KeyCode::Char(' ') => self.toggle_line_mark(),
+            return match (key.mods(), key.glyph()) {
+                (Mods::CTRL_SHIFT, KeyCode::Char('c')) => self.commit_in_editor(),
+                (Mods::CTRL_SHIFT, KeyCode::Char('s')) => self.stage_all(),
+                (Mods::CTRL_SHIFT, KeyCode::Char('p')) => self.quick_push(),
+                (Mods::CTRL, KeyCode::Char('l')) => self.open_popup(Popup::Log),
+                (Mods::CTRL, KeyCode::Char('o')) => self.open_external(),
+                (Mods::CTRL, KeyCode::Space | KeyCode::Char(' ')) => self.toggle_line_mark(),
                 // The paging chords the shared layer binds fall through to it;
                 // the rest stay with the window.
                 _ => match self.nav.key(key) {
@@ -1872,7 +1872,7 @@ impl Tool for GitTool {
         if let Some(outcome) = self.on_search_key(key) {
             return outcome;
         }
-        match key.code {
+        match key.glyph() {
             KeyCode::Tab if key.shift => {
                 self.toggle_fold_all();
                 ToolOutcome::Consumed
@@ -2177,7 +2177,7 @@ impl Tool for GitTool {
                 ToolMenuItem::new(Key::plain(KeyCode::Char('G')), LABEL_RELOAD),
             ],
             Some(Item::None) | None => vec![
-                ToolMenuItem::new(Key::with_ctrl_shift(KeyCode::Char('C')), LABEL_COMMIT),
+                ToolMenuItem::new(Key::with_ctrl_shift(KeyCode::Char('c')), LABEL_COMMIT),
                 ToolMenuItem::new(Key::plain(KeyCode::Char('P')), LABEL_PUSH),
                 ToolMenuItem::new(Key::plain(KeyCode::Char('F')), LABEL_PULL),
                 ToolMenuItem::new(Key::plain(KeyCode::Char('f')), LABEL_FETCH),
@@ -2418,6 +2418,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -2427,6 +2428,7 @@ mod tests {
             code,
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -2436,6 +2438,7 @@ mod tests {
             code: KeyCode::Char(c),
             ctrl: true,
             shift: true,
+            sup: false,
         }
     }
 
@@ -2462,6 +2465,7 @@ mod tests {
             code,
             ctrl: true,
             shift: false,
+            sup: false,
         }
     }
 
@@ -2475,6 +2479,43 @@ mod tests {
                 format!("{hash}{sep}{sep}Someone{sep}1700000000{sep}{subject}\n")
             })
             .collect()
+    }
+
+    #[test]
+    fn test_a_chord_with_an_extra_modifier_is_left_to_the_window() {
+        // `C-S-d` is the window's `dir_page`; it must not be read as
+        // the `C-d` half page, and `C-M-n` is not `M-n`.
+        let mut tool = loaded_tool();
+        for key in [
+            ctrl_shift('d'),
+            ctrl_shift('u'),
+            ctrl_shift('l'),
+            ctrl_shift('o'),
+            Key {
+                ctrl: true,
+                ..alt(KeyCode::Char('n'))
+            },
+        ] {
+            assert_eq!(tool.on_key(&key), ToolOutcome::Ignored, "{key:?}");
+        }
+    }
+
+    #[test]
+    fn test_shift_g_and_g_are_different_keys_as_the_window_delivers_them() {
+        // The window delivers S-g as `g` with Shift held, not as `G`.
+        let shift_g = Key {
+            shift: true,
+            sup: false,
+            ..Key::plain(KeyCode::Char('g'))
+        };
+        let mut tool = loaded_tool();
+        assert!(matches!(tool.on_key(&shift_g), ToolOutcome::Job(_)));
+        let mut tool = loaded_tool();
+        assert_eq!(
+            tool.on_key(&Key::plain(KeyCode::Char('g'))),
+            ToolOutcome::Consumed
+        );
+        assert!(tool.popup.is_some(), "plain g opens the jump menu");
     }
 
     fn loaded_tool() -> GitTool {
@@ -2630,7 +2671,7 @@ mod tests {
     fn test_every_menu_entry_runs_a_key_the_view_binds() {
         // The menu offers keys rather than commands of its own, so an entry
         // naming a chord the tool does not match does nothing when chosen.
-        // The commit entry is `Ctrl-Shift-C`, which is exactly the shape that
+        // The commit entry is `C-S-c`, which is exactly the shape that
         // gets written with a modifier missing.
         let mut tool = loaded_tool();
         cursor_on(&mut tool, "working.rs");
@@ -2765,7 +2806,7 @@ mod tests {
         // files that section lists, by name.
         let mut tool = loaded_tool();
         cursor_on(&mut tool, "new.rs");
-        let command = command_of(&tool.on_key(&ctrl_shift('S')));
+        let command = command_of(&tool.on_key(&ctrl_shift('s')));
         assert_eq!(command.args, ["add", "--", "new.rs"]);
     }
 
@@ -2775,7 +2816,7 @@ mod tests {
         // until asked for by name.
         let mut tool = loaded_tool();
         cursor_on(&mut tool, "working.rs");
-        let command = command_of(&tool.on_key(&ctrl_shift('S')));
+        let command = command_of(&tool.on_key(&ctrl_shift('s')));
         assert_eq!(command.args, ["add", "-u"]);
     }
 
@@ -2842,6 +2883,7 @@ mod tests {
             code: KeyCode::Char('c'),
             ctrl: true,
             shift: true,
+            sup: false,
         });
         assert_eq!(outcome, ToolOutcome::Consumed);
     }
@@ -3351,6 +3393,7 @@ index aaa..bbb 100644
             code,
             ctrl: false,
             shift: true,
+            sup: false,
         }
     }
 
@@ -3369,6 +3412,7 @@ index aaa..bbb 100644
             code: KeyCode::Char(c),
             ctrl: false,
             shift: false,
+            sup: false,
         }
     }
 
@@ -3572,6 +3616,7 @@ index aaa..bbb 100644
             code: KeyCode::Char('p'),
             ctrl: true,
             shift: true,
+            sup: false,
         }
     }
 
@@ -3625,6 +3670,7 @@ index aaa..bbb 100644
             code: KeyCode::Char('c'),
             ctrl: true,
             shift: true,
+            sup: false,
         });
         assert_eq!(outcome, ToolOutcome::Consumed);
         assert_eq!(
@@ -3641,6 +3687,7 @@ index aaa..bbb 100644
             code: KeyCode::Char('c'),
             ctrl: true,
             shift: true,
+            sup: false,
         });
         let request = command_of(&outcome);
         assert_eq!(request.tag, exec::TAG_COMMIT);
@@ -3990,7 +4037,7 @@ index aaa..bbb 100644
         tool.on_key(&shift(KeyCode::Tab));
         assert!(
             !output_has(&tool, "new();") && !output_has(&tool, "third();"),
-            "a second Shift-Tab shuts all of it again"
+            "a second S-TAB shuts all of it again"
         );
         assert!(
             output_has(&tool, "src/a.rs") && output_has(&tool, "src/b.rs"),
@@ -4393,16 +4440,28 @@ index aaa..bbb 100644
         // Vim `G`/`gg` pair is otherwise the only way there.
         let mut tool = loaded_tool();
         tool.cursor = 0;
-        tool.on_key(&alt_char('>'));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt_char('>')
+        });
         assert_eq!(tool.cursor, tool.rows.len() - 1, "the last row");
-        tool.on_key(&alt_char('<'));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt_char('<')
+        });
         assert_eq!(tool.cursor, 0, "and back to the first");
 
         tool.on_job(reply(exec::TAG_SHOW, SHOWN_TWO_FILES));
-        tool.on_key(&alt_char('>'));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt_char('>')
+        });
         let output = tool.output.as_ref().expect("the commit view");
         assert_eq!(output.cursor, output.lines.len() - 1);
-        tool.on_key(&alt_char('<'));
+        tool.on_key(&Key {
+            shift: true,
+            ..alt_char('<')
+        });
         assert_eq!(tool.output.as_ref().unwrap().cursor, 0);
     }
 
@@ -4490,7 +4549,7 @@ index aaa..bbb 100644
 
     #[test]
     fn test_entity_motion_skips_the_blank_lines_between_sections() {
-        // Plain `j` walks through the gaps; `Alt-n` is what steps from one
+        // Plain `j` walks through the gaps; `M-n` is what steps from one
         // thing to the next thing.
         let mut tool = loaded_tool();
         tool.cursor = 0;
@@ -4499,6 +4558,7 @@ index aaa..bbb 100644
             code: KeyCode::Char('n'),
             ctrl: false,
             shift: false,
+            sup: false,
         });
         assert_ne!(tool.selected().map(|row| &row.item), Some(&Item::None));
     }
@@ -4533,6 +4593,7 @@ index aaa..bbb 100644
             code: KeyCode::Tab,
             ctrl: false,
             shift: true,
+            sup: false,
         };
         tool.on_key(&shift_tab);
         assert!(!tool

@@ -1,7 +1,7 @@
 //! Visual mode: Normal-mode resolution with motions extending a selection.
 
 use super::normal::{accumulate_count, motion_action};
-use super::{Action, Key, KeyCode};
+use super::{Action, Key, KeyCode, Mods};
 use super::{
     CursorMove, InsertAt, PendingPrefix, TextObject, TextObjectSpec, VisualKind, WindowKeymap,
 };
@@ -31,16 +31,21 @@ pub(super) fn resolve_visual(
         return a;
     }
 
+    if key.sup {
+        *pending = PendingPrefix::None;
+        return Action::Ignore;
+    }
+
     if key.ctrl {
         *pending = PendingPrefix::None;
-        return match key.code {
-            KeyCode::Char('d') => Action::MoveCursor(CursorMove::HalfPageDown),
-            KeyCode::Char('u') => Action::MoveCursor(CursorMove::HalfPageUp),
-            KeyCode::Char('v') => Action::EnterVisual(VisualKind::Block),
+        return match (key.mods(), key.glyph()) {
+            (Mods::CTRL, KeyCode::Char('d')) => Action::MoveCursor(CursorMove::HalfPageDown),
+            (Mods::CTRL, KeyCode::Char('u')) => Action::MoveCursor(CursorMove::HalfPageUp),
+            (Mods::CTRL, KeyCode::Char('v')) => Action::EnterVisual(VisualKind::Block),
             // Jumplist walking works from Visual too (extends the selection,
             // like any other cursor move).
-            KeyCode::Char('o') => Action::JumpOlder,
-            KeyCode::Char('i') => Action::JumpNewer,
+            (Mods::CTRL, KeyCode::Char('o')) => Action::JumpOlder,
+            (Mods::CTRL, KeyCode::Char('i')) => Action::JumpNewer,
             _ => Action::Ignore,
         };
     }
@@ -60,7 +65,7 @@ pub(super) fn resolve_visual(
     }
 
     match prev {
-        PendingPrefix::TextObject { around } => match key.code {
+        PendingPrefix::TextObject { around } => match key.glyph() {
             KeyCode::Char('w') => {
                 Action::SelectTextObject(TextObjectSpec::new(around, TextObject::Word))
             }
@@ -100,14 +105,14 @@ pub(super) fn resolve_visual(
                 }
             }
         },
-        PendingPrefix::Register => match key.code {
+        PendingPrefix::Register => match key.glyph() {
             KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == '+' || c == '*' || c == '"' => {
                 *pending = PendingPrefix::WithRegister(c);
                 Action::Ignore
             }
             _ => Action::Ignore,
         },
-        PendingPrefix::WithRegister(reg) => match key.code {
+        PendingPrefix::WithRegister(reg) => match key.glyph() {
             KeyCode::Char('y') => Action::YankSelectionRegister(reg),
             KeyCode::Char('d') | KeyCode::Char('x') => Action::DeleteSelection,
             KeyCode::Char('p') => Action::PasteRegister {
@@ -120,7 +125,7 @@ pub(super) fn resolve_visual(
             },
             _ => Action::Ignore,
         },
-        PendingPrefix::G => match key.code {
+        PendingPrefix::G => match key.glyph() {
             KeyCode::Char('n') => Action::SelectSearchMatch { forward: true },
             KeyCode::Char('N') => Action::SelectSearchMatch { forward: false },
             KeyCode::Char('p') => Action::JumpToPrompt,
@@ -129,7 +134,7 @@ pub(super) fn resolve_visual(
             KeyCode::Char('x') => Action::OpenUnderCursor,
             _ => Action::Ignore,
         },
-        _ => match key.code {
+        _ => match key.glyph() {
             KeyCode::Char('y') => Action::YankSelection,
             KeyCode::Char('Y') => Action::YankSelectionLines,
             KeyCode::Char('d') | KeyCode::Char('x') => Action::DeleteSelection,
@@ -223,13 +228,14 @@ mod tests {
     }
     #[test]
     fn test_ctrl_o_and_ctrl_i_and_tab_walk_the_jumplist() {
-        // `Ctrl+O`/`Ctrl+I` are vim's own jumplist bindings; Tab doubles for
-        // `Ctrl+I` because most terminals deliver the two identically.
+        // `C-o`/`C-i` are vim's own jumplist bindings; Tab doubles for
+        // `C-i` because most terminals deliver the two identically.
         let ctrl = |code: KeyCode| Key {
             alt: false,
             code,
             ctrl: true,
             shift: false,
+            sup: false,
         };
         assert_eq!(
             resolve_simple(Mode::Normal, &ctrl(KeyCode::Char('o'))),
@@ -274,15 +280,16 @@ mod tests {
             code,
             ctrl: true,
             shift: false,
+            sup: false,
         };
 
-        // Ctrl+V in Normal enters VisualKind::Block
+        // C-v in Normal enters VisualKind::Block
         assert_eq!(
             resolve_simple(Mode::Normal, &ctrl(KeyCode::Char('v'))),
             Action::EnterVisual(VisualKind::Block)
         );
 
-        // Ctrl+V in Visual toggles / enters VisualKind::Block
+        // C-v in Visual toggles / enters VisualKind::Block
         assert_eq!(
             resolve_simple(Mode::Visual, &ctrl(KeyCode::Char('v'))),
             Action::EnterVisual(VisualKind::Block)

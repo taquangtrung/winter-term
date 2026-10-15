@@ -770,11 +770,11 @@ impl Perform for CombinedPerformer {
         // startup to identify the terminal and decide which keyboard protocol
         // to use. A missing response makes many apps fall back to a bare VT100
         // assumption and use the legacy `\x1b<char>` Alt encoding, whose ESC
-        // prefix is timing-ambiguous: `\x1bE` can parse as Alt+Shift+E *or* as
+        // prefix is timing-ambiguous: `\x1bE` can parse as M-S-e *or* as
         // a standalone Escape (which cancels the current operation) followed by
         // `E`. By advertising a modern Kitty-compatible terminal identity we
         // let these apps switch to the unambiguous CSI-u encoding so modifier
-        // combos like Shift+Alt+E/H/L arrive intact.
+        // combos like M-S-e/H/L arrive intact.
         if action == 'c' {
             match intermediates {
                 // DA1 (Primary Device Attributes): CSI c or CSI 0 c.
@@ -860,7 +860,7 @@ impl Perform for CombinedPerformer {
         // xterm modifyOtherKeys: `CSI > 4 ; N m` (set mode N) or `CSI > 4 m`
         // (reset to None). Mode 2 enables the unambiguous
         // `\x1b[27;<modifier>;<codepoint>~` encoding for modified keys so apps
-        // like Claude Code can reliably distinguish Shift+Alt+E from Escape+E.
+        // like Claude Code can reliably distinguish M-S-e from Escape+E.
         // Mirrors WezTerm's `XtermKeyMode { resource: OtherKeys, value }`.
         if action == 'm' && intermediates == [b'>'] {
             let p0 = params
@@ -933,7 +933,7 @@ impl Perform for CombinedPerformer {
         // RIS (ESC c): full reset. The Kitty keyboard protocol relies on this
         // as the recovery path when a TUI that pushed enhancement flags crashes
         // without popping them: `reset` sends ESC c, and legacy xterm encoding
-        // must return so shell editing keys (Ctrl+W, Ctrl+C, ...) work again.
+        // must return so shell editing keys (C-w, C-c, ...) work again.
         if intermediates.is_empty() && byte == RIS {
             self.kitty_main.clear();
             self.kitty_alt.clear();
@@ -1300,7 +1300,7 @@ mod tests {
         }
         assert_eq!(cp.kitty_flags(), 1);
         // `reset` sends RIS (ESC c); legacy xterm encoding must return so shell
-        // editing keys (Ctrl+W, Ctrl+C, ...) reach the PTY as raw control bytes.
+        // editing keys (C-w, C-c, ...) reach the PTY as raw control bytes.
         for &b in b"\x1bc" {
             parser.advance(&mut cp, &[b]);
         }

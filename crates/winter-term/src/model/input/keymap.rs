@@ -161,7 +161,7 @@ impl WindowAction {
     /// bypassed when a full-screen (alt-screen) app is running so the key
     /// reaches the app instead, scrolling a TUI app's non-existent scrollback
     /// is never useful, and intercepting the key would swallow app shortcuts
-    /// like Claude Code's `Shift+Alt+E/H/L`.
+    /// like Claude Code's `M-S-e/H/L`.
     pub(super) fn is_scroll(self) -> bool {
         matches!(
             self,
@@ -176,7 +176,7 @@ impl WindowAction {
 
     /// Whether this action must intercept the key before overlays (the command
     /// palette, tab rename, settings page) get a chance to consume it: e.g.
-    /// `Ctrl-,` must open Settings even while the palette is open. Window
+    /// `C-,` must open Settings even while the palette is open. Window
     /// layout actions (split/close/focus/scroll/zoom/tab-cycle) are
     /// deliberately excluded: they only apply once no overlay owns the key.
     pub(super) fn is_global(self) -> bool {
@@ -243,15 +243,15 @@ impl IndexAction {
     }
 }
 /// User-configurable window-management key bindings. A binding is either a
-/// direct chord (e.g. `Ctrl-h` to focus left) or a two-key sequence opened by
-/// the `leader` (e.g. `Ctrl-w` then `v` to split). Built from defaults and
+/// direct chord (e.g. `C-h` to focus left) or a two-key sequence opened by
+/// the `leader` (e.g. `C-w` then `v` to split). Built from defaults and
 /// overlaid with config via [`WindowKeymap::from_config`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct WindowKeymap {
     /// Direct chords: the full key (with modifiers) triggers the action.
     pub(super) direct: Vec<(Key, WindowAction)>,
-    /// Line-edit and prompt-history chords (e.g. `Ctrl-Backspace` → delete word
-    /// back, `Ctrl-/` → undo, `Ctrl-\` → redo).
+    /// Line-edit and prompt-history chords (e.g. `C-DEL` → delete word
+    /// back, `C-/` → undo, `C-\` → redo).
     pub(super) editing: Vec<(Key, EditBinding)>,
     /// Chords for globally-intercepted actions (settings, font size, tab/pane
     /// management, palette toggles): looked up before the command palette, tab
@@ -275,6 +275,8 @@ pub struct WindowKeymap {
 /// [`WindowKeymap::default`] parses this through the same pipeline used for
 /// the user's own config, so there is exactly one place defining what the
 /// defaults are.
+/// The highest function key a chord can name.
+const MAX_FUNCTION_KEY: u8 = 24;
 pub(super) const DEFAULT_KEYBINDINGS_KDL: &str = include_str!("../../../samples/keybindings.kdl");
 /// The leader key when no two-chord `window` binding (default or user) has
 /// set one explicitly. There is no built-in two-chord default to parse this
@@ -284,6 +286,7 @@ pub(crate) const DEFAULT_LEADER: Key = Key {
     code: KeyCode::Char('w'),
     ctrl: true,
     shift: false,
+    sup: false,
 };
 impl WindowAction {
     /// The dispatched [`Action`] this window command produces.
@@ -408,7 +411,7 @@ impl WindowKeymap {
     /// Build a keymap from the `window` keybindings block, layered onto the
     /// built-in defaults (parsed from [`DEFAULT_KEYBINDINGS_KDL`]). A
     /// configured binding replaces every default chord for that same action,
-    /// so rebinding `split_vertical` drops the default `Ctrl-w v`; actions
+    /// so rebinding `split_vertical` drops the default `C-w v`; actions
     /// left unmentioned keep their defaults.
     pub fn from_config(
         window: Option<&HashMap<String, String>>,
@@ -437,6 +440,7 @@ impl WindowKeymap {
         let mut named: Vec<(Key, String)> = Vec::new();
         for (spec, name) in bindings {
             let Some(keys) = parse_chord_sequence(spec) else {
+                eprintln!("winter: ignoring key binding {spec:?}: not a chord");
                 continue;
             };
             if let Some(action) = WindowAction::from_name(name) {
@@ -452,12 +456,27 @@ impl WindowKeymap {
             }
         }
 
-        if !named.is_empty() {
-            self.direct
-                .retain(|(key, _)| !named.iter().any(|(k, _)| k == key));
-            self.global
-                .retain(|(key, _)| !named.iter().any(|(k, _)| k == key));
-            self.named.extend(named);
+        // A chord belongs to one command: the one configured last takes it
+        // from whatever held it, in every table that answers a chord.
+        for (key, _) in &named {
+            self.unbind_chord(key);
+        }
+        self.named.extend(named);
+        for (keys, _) in &parsed {
+            match keys.as_slice() {
+                [single] => {
+                    self.unbind_chord(single);
+                    // A chord that opens a sequence cannot also be a plain one.
+                    self.sequence.retain(|(leader, _, _)| leader != single);
+                }
+                [leader, follow] => {
+                    self.sequence
+                        .retain(|(l, f, _)| !(l == leader && f == follow));
+                    // A leader that is also a plain chord would never open.
+                    self.unbind_chord(leader);
+                }
+                _ => {}
+            }
         }
 
         if parsed.is_empty() {
@@ -483,6 +502,15 @@ impl WindowKeymap {
         }
     }
 
+    /// Free `key` in every table that answers a single chord, so the binding
+    /// added next is the only one on it.
+    fn unbind_chord(&mut self, key: &Key) {
+        self.direct.retain(|(k, _)| k != key);
+        self.global.retain(|(k, _)| k != key);
+        self.index_specific.retain(|(k, _)| k != key);
+        self.named.retain(|(k, _)| k != key);
+    }
+
     /// Overlay the `close_pane_N`/`focus_pane_N`/`goto_tab_N` bindings from
     /// the `window` block. A configured chord replaces every prior chord for
     /// that same specific index, including the built-in default.
@@ -497,6 +525,9 @@ impl WindowKeymap {
         let rebound: HashSet<IndexAction> = parsed.iter().map(|(_, action)| *action).collect();
         self.index_specific
             .retain(|(_, action)| !rebound.contains(action));
+        for (key, _) in &parsed {
+            self.unbind_chord(key);
+        }
         self.index_specific.extend(parsed);
     }
 
@@ -508,7 +539,13 @@ impl WindowKeymap {
         };
         let parsed: Vec<(Key, EditBinding)> = bindings
             .iter()
-            .filter_map(|(spec, name)| Some((parse_chord(spec)?, EditBinding::from_name(name)?)))
+            .filter_map(|(spec, name)| {
+                let Some(key) = parse_chord(spec) else {
+                    eprintln!("winter: ignoring key binding {spec:?}: not a chord");
+                    return None;
+                };
+                Some((key, EditBinding::from_name(name)?))
+            })
             .collect();
         if parsed.is_empty() {
             return;
@@ -550,11 +587,13 @@ impl WindowKeymap {
     }
 
     /// The action the follow key selects after a leader, if any.
-    pub(super) fn sequence_action(&self, code: KeyCode) -> Option<WindowAction> {
-        self.sequence
+    pub(super) fn sequence_action(&self, key: &Key) -> Option<WindowAction> {
+        let follows: Vec<(Key, WindowAction)> = self
+            .sequence
             .iter()
-            .find(|(_, follow, _)| follow.code == code)
-            .map(|(_, _, action)| *action)
+            .map(|(_, follow, action)| (*follow, *action))
+            .collect();
+        find_chord(&follows, key)
     }
 
     /// Whether any sequence is registered for `key` as leader.
@@ -577,7 +616,7 @@ pub(super) fn default_bindings_maps() -> HashMap<String, HashMap<String, String>
 }
 impl WindowKeymap {
     /// Return the formatted shortcut hint for a palette command name
-    /// (e.g. `"Ctrl-H"` for `"focus_left"`), or an empty string when unbound.
+    /// (e.g. `"C-h"` for `"focus_left"`), or an empty string when unbound.
     pub fn chord_hint(&self, command: &str) -> String {
         let Some(action) = WindowAction::from_name(command) else {
             return self
@@ -601,39 +640,49 @@ impl WindowKeymap {
         String::new()
     }
 }
-/// Format a [`Key`] as a human-readable shortcut string (e.g. `"Ctrl-Shift-T"`).
+/// Format a [`Key`] in Emacs notation (e.g. `"C-M-S-t"`): `C-` for Ctrl, `M-`
+/// for Alt, `S-` for Shift, `s-` for Super, in that order, then the key as Emacs names it
+/// (`RET`, `TAB`, `SPC`, `ESC`, `DEL`, `<up>`, `<f5>`). A letter is always the
+/// lowercase letter, so Shift-s reads `S-s` and never a bare `S`.
 pub fn format_key(key: &Key) -> String {
+    let key = key.canonical();
     let mut s = String::new();
     if key.ctrl {
-        s.push_str("Ctrl-");
-    }
-    if key.shift {
-        s.push_str("Shift-");
+        s.push_str("C-");
     }
     if key.alt {
-        s.push_str("Alt-");
+        s.push_str("M-");
+    }
+    // A shifted symbol carries its Shift in the glyph: `M-?`, not `M-S-?`.
+    let glyph_is_shifted = matches!(key.code, KeyCode::Char(c) if is_shifted_symbol(c));
+    if key.shift && !glyph_is_shifted {
+        s.push_str("S-");
+    }
+    if key.sup {
+        s.push_str("s-");
     }
     match key.code {
         KeyCode::Char(c) => s.push(c),
-        KeyCode::Backspace => s.push_str("Backspace"),
-        KeyCode::Delete => s.push_str("Del"),
-        KeyCode::Down => s.push_str("Down"),
-        KeyCode::End => s.push_str("End"),
-        KeyCode::Enter => s.push_str("Enter"),
-        KeyCode::Escape => s.push_str("Esc"),
+        KeyCode::Backspace => s.push_str("DEL"),
+        KeyCode::Delete => s.push_str("<delete>"),
+        KeyCode::Down => s.push_str("<down>"),
+        KeyCode::End => s.push_str("<end>"),
+        KeyCode::Enter => s.push_str("RET"),
+        KeyCode::Escape => s.push_str("ESC"),
         KeyCode::F(n) => {
-            s.push('F');
+            s.push_str("<f");
             s.push_str(&n.to_string());
+            s.push('>');
         }
-        KeyCode::Home => s.push_str("Home"),
-        KeyCode::Insert => s.push_str("Ins"),
-        KeyCode::Left => s.push_str("Left"),
-        KeyCode::PageDown => s.push_str("PgDn"),
-        KeyCode::PageUp => s.push_str("PgUp"),
-        KeyCode::Right => s.push_str("Right"),
-        KeyCode::Space => s.push_str("Space"),
-        KeyCode::Tab => s.push_str("Tab"),
-        KeyCode::Up => s.push_str("Up"),
+        KeyCode::Home => s.push_str("<home>"),
+        KeyCode::Insert => s.push_str("<insert>"),
+        KeyCode::Left => s.push_str("<left>"),
+        KeyCode::PageDown => s.push_str("<next>"),
+        KeyCode::PageUp => s.push_str("<prior>"),
+        KeyCode::Right => s.push_str("<right>"),
+        KeyCode::Space => s.push_str("SPC"),
+        KeyCode::Tab => s.push_str("TAB"),
+        KeyCode::Up => s.push_str("<up>"),
     }
     s
 }
@@ -653,8 +702,8 @@ pub(super) fn parse_chord_sequence(spec: &str) -> Option<Vec<Key>> {
 }
 /// Look up `key` in a chord table, retrying with the unshifted glyph if the
 /// first lookup misses. winit reports `logical_key`, which applies the Shift
-/// character transformation (`Shift+\` -> `'|'`, `Shift+-` -> `'_'`,
-/// `Shift+o` -> `'O'`, ...); binding specs use the physical key label, so a
+/// character transformation (`S-\` -> `'|'`, `S--` -> `'_'`,
+/// `S-o` -> `'O'`, ...); binding specs use the physical key label, so a
 /// held-Shift chord that misses on the transformed glyph retries on the
 /// untransformed one.
 pub(super) fn find_chord<T: Clone>(entries: &[(Key, T)], key: &Key) -> Option<T> {
@@ -662,7 +711,7 @@ pub(super) fn find_chord<T: Clone>(entries: &[(Key, T)], key: &Key) -> Option<T>
         return Some(action.clone());
     }
     if key.shift {
-        if let KeyCode::Char(c) = key.code {
+        if let KeyCode::Char(c) = key.glyph() {
             if let Some(base) = unshift_char(c) {
                 let base_key = Key {
                     code: KeyCode::Char(base),
@@ -676,6 +725,11 @@ pub(super) fn find_chord<T: Clone>(entries: &[(Key, T)], key: &Key) -> Option<T>
         }
     }
     None
+}
+/// Whether `c` is a symbol typed with Shift (`?`, `+`, `(`), so its Shift is
+/// in the glyph. Capital letters are not: they fold to lowercase plus Shift.
+pub(super) fn is_shifted_symbol(c: char) -> bool {
+    !c.is_ascii_uppercase() && unshift_char(c).is_some()
 }
 /// Map a Shift-modified character back to its physical key for US QWERTY,
 /// so binding specs like `"S+M+\\"` match the winit `logical_key` `'|'`.
@@ -706,16 +760,56 @@ pub(super) fn unshift_char(c: char) -> Option<char> {
         _ => return None,
     })
 }
-/// Parse a single chord like `"C+S+Space"` or `"C+w"` into a [`Key`].
-/// Modifiers are `+`-separated and precede the key name. Accepted modifier
-/// tokens (case-sensitive abbreviations take priority):
-///   `C` or `ctrl`/`control` = Ctrl,
-///   `S` or `shift` = Shift,
-///   `M` or `alt`/`meta`/`option` = Alt.
+/// Parse a single chord into a [`Key`], in Emacs notation (`"C-M-S-n"`,
+/// `"C-RET"`, `"M-<left>"`, `"C-x"`): `C-` Ctrl, `M-` Alt, `S-` Shift, `s-` Super, in any
+/// order, then the key. The key is a single character, an Emacs name (`RET`,
+/// `TAB`, `SPC`, `ESC`, `DEL` for Backspace, `<up>`, `<next>`, `<f5>`), or
+/// one of the plain names (`Space`, `Enter`, `PageDown`, ...). `s-` is Super.
 ///
-/// A literal `+` key is written as a trailing `++` (e.g. `"C+S++"`), which
-/// produces two consecutive empty segments when split on `+`.
+/// The older `+` spelling (`"C+S+Space"`, `"ctrl+shift+Space"`, `"C++"`) is
+/// still read, so a config written before the Emacs notation keeps working.
+/// A letter is kept as the lowercase letter with Shift held, however it is
+/// spelled.
 pub(super) fn parse_chord(token: &str) -> Option<Key> {
+    parse_emacs_chord(token)
+        .or_else(|| parse_plus_chord(token))
+        .map(|key| key.canonical())
+}
+/// The Emacs spelling of a chord: see [`parse_chord`].
+fn parse_emacs_chord(token: &str) -> Option<Key> {
+    let mut key = Key {
+        alt: false,
+        code: KeyCode::Space,
+        ctrl: false,
+        shift: false,
+        sup: false,
+    };
+    let mut rest = token;
+    loop {
+        let mut chars = rest.chars();
+        match (chars.next(), chars.next(), chars.as_str()) {
+            (Some(modifier), Some('-'), tail) if !tail.is_empty() => {
+                match modifier {
+                    'C' => key.ctrl = true,
+                    'M' => key.alt = true,
+                    'S' => key.shift = true,
+                    's' => key.sup = true,
+                    _ => return None,
+                }
+                rest = tail;
+            }
+            _ => break,
+        }
+    }
+    key.code = parse_key_code(
+        rest.strip_prefix('<')
+            .and_then(|name| name.strip_suffix('>'))
+            .unwrap_or(rest),
+    )?;
+    Some(key)
+}
+/// The `+` spelling of a chord: see [`parse_chord`].
+fn parse_plus_chord(token: &str) -> Option<Key> {
     let parts: Vec<&str> = token.split('+').collect();
     let n = parts.len();
 
@@ -733,16 +827,19 @@ pub(super) fn parse_chord(token: &str) -> Option<Key> {
         code,
         ctrl: false,
         shift: false,
+        sup: false,
     };
     for modifier in mods {
         match *modifier {
             "C" => key.ctrl = true,
             "S" => key.shift = true,
             "M" => key.alt = true,
+            "s" => key.sup = true,
             _ => match modifier.to_ascii_lowercase().as_str() {
                 "ctrl" | "control" => key.ctrl = true,
                 "shift" => key.shift = true,
                 "alt" | "meta" | "option" => key.alt = true,
+                "super" | "cmd" | "win" | "logo" => key.sup = true,
                 _ => return None,
             },
         }
@@ -752,6 +849,10 @@ pub(super) fn parse_chord(token: &str) -> Option<Key> {
 /// Parse a key name into a [`KeyCode`]: a single character is a `Char`, and
 /// named keys (`Space`, `Enter`, `F1`, ...) map case-insensitively.
 pub(super) fn parse_key_code(name: &str) -> Option<KeyCode> {
+    // Emacs' `DEL` is the Backspace key; `Del` and `Delete` are Delete.
+    if name == "DEL" {
+        return Some(KeyCode::Backspace);
+    }
     let mut chars = name.chars();
     let first = chars.next()?;
     if chars.next().is_none() {
@@ -762,24 +863,26 @@ pub(super) fn parse_key_code(name: &str) -> Option<KeyCode> {
         "delete" | "del" => KeyCode::Delete,
         "down" => KeyCode::Down,
         "end" => KeyCode::End,
-        "enter" | "return" => KeyCode::Enter,
+        "enter" | "ret" | "return" => KeyCode::Enter,
         "escape" | "esc" => KeyCode::Escape,
         "home" => KeyCode::Home,
         "insert" => KeyCode::Insert,
         "left" => KeyCode::Left,
-        "pagedown" => KeyCode::PageDown,
-        "pageup" => KeyCode::PageUp,
+        "next" | "pagedown" => KeyCode::PageDown,
+        "pageup" | "prior" => KeyCode::PageUp,
         "right" => KeyCode::Right,
-        "space" => KeyCode::Space,
+        "space" | "spc" => KeyCode::Space,
         "tab" => KeyCode::Tab,
         "up" => KeyCode::Up,
         other => return parse_function_key(other),
     })
 }
-/// Parse an `f1`..`f12` function-key name into [`KeyCode::F`].
+/// Parse an `f1`..`f24` function-key name into [`KeyCode::F`].
 pub(super) fn parse_function_key(name: &str) -> Option<KeyCode> {
     let number: u8 = name.strip_prefix('f')?.parse().ok()?;
-    (1..=12).contains(&number).then_some(KeyCode::F(number))
+    (1..=MAX_FUNCTION_KEY)
+        .contains(&number)
+        .then_some(KeyCode::F(number))
 }
 
 // ========================================================================
@@ -847,6 +950,7 @@ mod tests {
                 code: KeyCode::Char('w'),
                 ctrl: true,
                 shift: false,
+                sup: false,
             })
         );
         assert_eq!(
@@ -856,6 +960,7 @@ mod tests {
                 code: KeyCode::Space,
                 ctrl: true,
                 shift: true,
+                sup: false,
             })
         );
         // Full names still accepted.
@@ -866,6 +971,7 @@ mod tests {
                 code: KeyCode::Space,
                 ctrl: true,
                 shift: true,
+                sup: false,
             })
         );
         assert_eq!(parse_chord("F5").map(|k| k.code), Some(KeyCode::F(5)));
@@ -879,6 +985,7 @@ mod tests {
                 code: KeyCode::Char('-'),
                 ctrl: false,
                 shift: true,
+                sup: false,
             })
         );
         assert_eq!(
@@ -888,6 +995,7 @@ mod tests {
                 code: KeyCode::Char('-'),
                 ctrl: true,
                 shift: false,
+                sup: false,
             })
         );
         // `+` key is written as a trailing `++`.
@@ -898,6 +1006,7 @@ mod tests {
                 code: KeyCode::Char('+'),
                 ctrl: true,
                 shift: true,
+                sup: false,
             })
         );
     }
@@ -916,17 +1025,216 @@ mod tests {
             code: KeyCode::Char('n'),
             ctrl: true,
             shift: true,
+            sup: false,
         };
         let ctrl_shift_t = Key {
             alt: false,
             code: KeyCode::Char('t'),
             ctrl: true,
             shift: true,
+            sup: false,
         };
         assert_eq!(keymap.global_action(&ctrl_shift_n), Some(Action::NewTab));
         assert_ne!(keymap.global_action(&ctrl_shift_t), Some(Action::NewTab));
-        assert_eq!(keymap.chord_hint("new_tab"), "Ctrl-Shift-n");
+        assert_eq!(keymap.chord_hint("new_tab"), "C-S-n");
     }
+    #[test]
+    fn test_every_displayed_chord_parses_back_to_the_same_key() {
+        // What the app shows is what a config can say: the two notations are
+        // one, for letters, symbols, and every named key.
+        let codes = [
+            KeyCode::Backspace,
+            KeyCode::Char('-'),
+            KeyCode::Char('+'),
+            KeyCode::Char('n'),
+            KeyCode::Delete,
+            KeyCode::Down,
+            KeyCode::Enter,
+            KeyCode::Escape,
+            KeyCode::Char('?'),
+            KeyCode::F(5),
+            KeyCode::F(24),
+            KeyCode::PageDown,
+            KeyCode::PageUp,
+            KeyCode::Space,
+            KeyCode::Tab,
+        ];
+        for code in codes {
+            for bits in 0..16u8 {
+                let key = Key {
+                    alt: bits & 1 != 0,
+                    code,
+                    ctrl: bits & 2 != 0,
+                    shift: bits & 4 != 0,
+                    sup: bits & 8 != 0,
+                };
+                let shown = format_key(&key);
+                assert_eq!(parse_chord(&shown), Some(key.canonical()), "{shown}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_emacs_chords_and_the_older_plus_spelling_are_one_key() {
+        assert_eq!(parse_chord("C-M-S-n"), parse_chord("C+S+M+n"));
+        assert_eq!(parse_chord("M-S--"), parse_chord("S+M+-"));
+        assert_eq!(parse_chord("DEL").map(|k| k.code), Some(KeyCode::Backspace));
+        assert_eq!(parse_chord("Del").map(|k| k.code), Some(KeyCode::Delete));
+        // Shift on a letter is the flag, however it is written.
+        assert_eq!(parse_chord("C-S-R"), parse_chord("C-S-r"));
+        // A shifted symbol has its Shift in the glyph, so `M-?` is what
+        // Alt-Shift-/ sends, and `C-+` is Ctrl-Shift-=.
+        let alt_question = Key {
+            shift: true,
+            ..Key::with_alt(KeyCode::Char('?'))
+        };
+        assert_eq!(parse_chord("M-?"), Some(alt_question));
+        assert_eq!(format_key(&alt_question), "M-?");
+        let mut bindings = HashMap::new();
+        bindings.insert("M-?".to_string(), "zoom_pane".to_string());
+        let keymap = WindowKeymap::from_config(Some(&bindings), None);
+        assert_eq!(
+            keymap.direct_action(&alt_question, false),
+            Some(WindowAction::Zoom.to_action())
+        );
+        let super_x = parse_chord("s-x").expect("s- is Super");
+        assert!(super_x.sup && !super_x.ctrl && !super_x.alt && !super_x.shift);
+        assert_eq!(
+            parse_chord("C-M-S-s-x").map(|k| format_key(&k)),
+            Some("C-M-S-s-x".into())
+        );
+        assert_eq!(parse_chord("super+x"), Some(super_x));
+        assert_ne!(Some(super_x), parse_chord("M-x"), "Super is not Alt");
+        assert_eq!(parse_chord("C-"), None);
+    }
+
+    #[test]
+    fn test_a_configured_chord_matches_only_its_own_modifiers() {
+        // For every key and every set of the four modifiers: bind that one
+        // chord to a command of its own, then offer all sixteen sets of the
+        // same key. Only the bound one may answer.
+        let mut codes = vec![
+            KeyCode::Backspace,
+            KeyCode::Delete,
+            KeyCode::Down,
+            KeyCode::End,
+            KeyCode::Enter,
+            KeyCode::Escape,
+            KeyCode::Home,
+            KeyCode::Insert,
+            KeyCode::Left,
+            KeyCode::PageDown,
+            KeyCode::PageUp,
+            KeyCode::Right,
+            KeyCode::Space,
+            KeyCode::Tab,
+            KeyCode::Up,
+        ];
+        codes.extend((1..=24).map(KeyCode::F));
+        codes.extend("abz09,./;'[]\\-=`".chars().map(KeyCode::Char));
+        let with = |code, bits: u8| Key {
+            alt: bits & 1 != 0,
+            code,
+            ctrl: bits & 2 != 0,
+            shift: bits & 4 != 0,
+            sup: bits & 8 != 0,
+        };
+        let mut failures = Vec::new();
+        for code in codes {
+            for bound in 0..16u8 {
+                let spec = format_key(&with(code, bound));
+                let mut bindings = HashMap::new();
+                bindings.insert(spec.clone(), "mux_probe_command".to_string());
+                let keymap = WindowKeymap::from_config(Some(&bindings), None);
+                for offered in 0..16u8 {
+                    let got = keymap.direct_action(&with(code, offered), false);
+                    let hit = got == Some(Action::RunCommand("mux_probe_command".into()));
+                    if hit != (offered == bound) {
+                        failures.push(format!(
+                            "bound {spec}, offered {}",
+                            format_key(&with(code, offered))
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            failures.is_empty(),
+            "{} mismatches, first: {:?}",
+            failures.len(),
+            &failures[..failures.len().min(12)]
+        );
+    }
+
+    #[test]
+    fn test_a_configured_chord_takes_the_key_from_a_default_on_another_action() {
+        // `M-h` is `focus_left` by default; binding it to something else must
+        // move it, not leave the default answering first.
+        let mut bindings = HashMap::new();
+        bindings.insert("M-h".to_string(), "split_vertical".to_string());
+        let keymap = WindowKeymap::from_config(Some(&bindings), None);
+        let alt_h = Key::with_alt(KeyCode::Char('h'));
+        assert_eq!(
+            keymap.direct_action(&alt_h, false),
+            Some(WindowAction::SplitVertical.to_action())
+        );
+        // A second sequence on the `M-g` leader leaves the first alone.
+        let mut bindings = HashMap::new();
+        bindings.insert("M-g M-z".to_string(), "zoom_pane".to_string());
+        let keymap = WindowKeymap::from_config(Some(&bindings), None);
+        let alt_g = Key::with_alt(KeyCode::Char('g'));
+        assert!(keymap.has_sequence_for_leader(&alt_g));
+        assert_eq!(
+            keymap.sequence_action(&Key::with_alt(KeyCode::Char('h'))),
+            Some(WindowAction::MoveTabLeft)
+        );
+    }
+
+    #[test]
+    fn test_shift_alt_slash_and_alt_slash_are_different_chords() {
+        let mut bindings = HashMap::new();
+        bindings.insert("M-/".to_string(), "mux_plain".to_string());
+        bindings.insert("S-M-/".to_string(), "mux_shifted".to_string());
+        let keymap = WindowKeymap::from_config(Some(&bindings), None);
+        let alt_slash = Key::with_alt(KeyCode::Char('/'));
+        // Alt-Shift-/ reaches the window as the glyph it types, with Shift held.
+        let alt_shift_slash = Key {
+            shift: true,
+            ..Key::with_alt(KeyCode::Char('?'))
+        };
+        let named = |name: &str| Some(Action::RunCommand(name.to_string()));
+        assert_eq!(keymap.direct_action(&alt_slash, false), named("mux_plain"));
+        assert_eq!(
+            keymap.direct_action(&alt_shift_slash, false),
+            named("mux_shifted")
+        );
+    }
+
+    #[test]
+    fn test_format_key_writes_emacs_notation_in_c_m_s_order() {
+        let chord = Key {
+            alt: true,
+            code: KeyCode::Char('n'),
+            ctrl: true,
+            shift: true,
+            sup: false,
+        };
+        assert_eq!(format_key(&chord), "C-M-S-n");
+        // A capital is the lowercase letter with Shift, never a bare `S`.
+        assert_eq!(format_key(&Key::plain(KeyCode::Char('S'))), "S-s");
+        assert_eq!(format_key(&Key::plain(KeyCode::Char('s'))), "s");
+        assert_eq!(format_key(&Key::with_ctrl(KeyCode::Enter)), "C-RET");
+        assert_eq!(format_key(&Key::with_alt(KeyCode::Backspace)), "M-DEL");
+        assert_eq!(format_key(&Key::plain(KeyCode::PageDown)), "<next>");
+        assert_eq!(
+            format_key(&Key {
+                sup: true,
+                ..Key::plain(KeyCode::Char('x'))
+            }),
+            "s-x"
+        );
+    }
+
     #[test]
     fn test_new_window_is_bound_to_ctrl_shift_alt_n() {
         let keymap = WindowKeymap::default();
@@ -935,12 +1243,13 @@ mod tests {
             code: KeyCode::Char('n'),
             ctrl: true,
             shift: true,
+            sup: false,
         };
         assert_eq!(
             keymap.global_action(&ctrl_shift_alt_n),
             Some(Action::NewWindow)
         );
-        assert_eq!(keymap.chord_hint("new_window"), "Ctrl-Shift-Alt-n");
+        assert_eq!(keymap.chord_hint("new_window"), "C-M-S-n");
     }
     #[test]
     fn test_config_rebinds_window_action_and_drops_default() {
@@ -968,6 +1277,7 @@ mod tests {
             code: KeyCode::Char('-'),
             ctrl: false,
             shift: true,
+            sup: false,
         };
         let mut pending = PendingPrefix::None;
         assert_eq!(
@@ -982,12 +1292,13 @@ mod tests {
             ),
             Action::Ignore
         );
-        // An unmentioned action keeps its default (Ctrl-Shift-q still closes the tab).
+        // An unmentioned action keeps its default (C-S-q still closes the tab).
         let ctrl_shift_q = Key {
             alt: false,
             code: KeyCode::Char('q'),
             ctrl: true,
             shift: true,
+            sup: false,
         };
         assert_eq!(
             keymap.global_action(&ctrl_shift_q),
@@ -1002,6 +1313,7 @@ mod tests {
             code: KeyCode::Char(ch),
             ctrl: false,
             shift: true,
+            sup: false,
         };
         // Closing tabs is global, so it is resolved ahead of the overlays.
         assert_eq!(
@@ -1067,7 +1379,7 @@ mod tests {
         assert_eq!(resolve(Mode::Normal, &ctrl_z), Action::PromptUndo);
         assert_eq!(resolve(Mode::Insert, &ctrl_y), Action::PromptRedo);
         assert_eq!(resolve(Mode::Normal, &ctrl_y), Action::PromptRedo);
-        // The default Ctrl-/ is dropped because undo was rebound.
+        // The default C-/ is dropped because undo was rebound.
         let ctrl_slash = Key {
             ctrl: true,
             ..key(KeyCode::Char('/'))
@@ -1092,7 +1404,7 @@ mod tests {
             resolve_with(Mode::Insert, &ctrl_u, &mut pending, &keymap, 0, None, false),
             Action::Edit(EditAction::DeleteToLineStart)
         );
-        // The default Ctrl-Backspace binding survives (a different action).
+        // The default C-DEL binding survives (a different action).
         let ctrl_bsp = Key {
             ctrl: true,
             ..key(KeyCode::Backspace)
@@ -1174,6 +1486,7 @@ mod tests {
         let ctrl_shift_o = Key {
             ctrl: true,
             shift: true,
+            sup: false,
             ..key(KeyCode::Char('o'))
         };
         assert_eq!(
@@ -1181,7 +1494,7 @@ mod tests {
             Some(Action::OpenSettings)
         );
 
-        // The default Ctrl-, no longer opens settings once rebound.
+        // The default C-, no longer opens settings once rebound.
         let ctrl_comma = Key {
             ctrl: true,
             ..key(KeyCode::Char(','))
@@ -1191,7 +1504,7 @@ mod tests {
     #[test]
     fn test_config_rebinds_index_action_and_drops_default() {
         let mut bindings = HashMap::new();
-        // Move focus_pane_2 off its default Alt+2 chord onto Alt+Q.
+        // Move focus_pane_2 off its default M-2 chord onto M-q.
         bindings.insert("M+q".to_string(), "focus_pane_2".to_string());
         let keymap = WindowKeymap::from_config(Some(&bindings), None);
 
@@ -1205,7 +1518,7 @@ mod tests {
             Action::FocusPaneByIndex(2)
         );
 
-        // The default Alt+2 no longer focuses pane 2: it was dropped in favor
+        // The default M-2 no longer focuses pane 2: it was dropped in favor
         // of the rebound chord.
         let alt_2 = Key {
             alt: true,
@@ -1217,7 +1530,7 @@ mod tests {
             Action::Ignore
         );
 
-        // An unmentioned index (Alt+3) keeps its default.
+        // An unmentioned index (M-3) keeps its default.
         let alt_3 = Key {
             alt: true,
             ..key(KeyCode::Char('3'))
@@ -1263,7 +1576,7 @@ mod tests {
     }
     #[test]
     fn test_config_named_command_displaces_the_default_window_action_on_that_chord() {
-        // Rebinding a chord that already has a default WindowAction (Alt+h /
+        // Rebinding a chord that already has a default WindowAction (M-h /
         // focus_left) to a named command must actually take effect, not be
         // shadowed by the still-active default.
         let mut bindings = HashMap::new();
@@ -1299,7 +1612,7 @@ mod tests {
         let mut bindings = HashMap::new();
         bindings.insert("F5".to_string(), "mux_new_session".to_string());
         let keymap = WindowKeymap::from_config(Some(&bindings), None);
-        assert_eq!(keymap.chord_hint("mux_new_session"), "F5");
+        assert_eq!(keymap.chord_hint("mux_new_session"), "<f5>");
         assert_eq!(keymap.chord_hint("cd_recent"), "");
     }
     #[test]
@@ -1318,7 +1631,7 @@ mod tests {
             Action::FocusPaneByIndex(1)
         );
 
-        // An unrelated default (Alt+3) is untouched by the new binding.
+        // An unrelated default (M-3) is untouched by the new binding.
         let alt_3 = Key {
             alt: true,
             ..key(KeyCode::Char('3'))
@@ -1353,6 +1666,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('"'),
             },
@@ -1371,6 +1685,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('a'),
             },
@@ -1389,6 +1704,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('p'),
             },
@@ -1418,6 +1734,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('d'),
             },
@@ -1432,6 +1749,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('s'),
             },
@@ -1446,6 +1764,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('"'),
             },
@@ -1464,6 +1783,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('c'),
             },
@@ -1478,6 +1798,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('s'),
             },
@@ -1492,6 +1813,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('"'),
             },
@@ -1506,6 +1828,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('\''),
             },
@@ -1534,6 +1857,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('c'),
             },
@@ -1549,6 +1873,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('w'),
             },
@@ -1567,6 +1892,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('c'),
             },
@@ -1581,6 +1907,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('i'),
             },
@@ -1596,6 +1923,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('w'),
             },
@@ -1617,6 +1945,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('C'),
             },
@@ -1635,6 +1964,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('s'),
             },
@@ -1653,6 +1983,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('S'),
             },
@@ -1671,6 +2002,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('r'),
             },
@@ -1686,6 +2018,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('x'),
             },
@@ -1704,6 +2037,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('~'),
             },
@@ -1726,6 +2060,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('g'),
             },
@@ -1741,6 +2076,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('n'),
             },
@@ -1759,6 +2095,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('g'),
             },
@@ -1773,6 +2110,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('N'),
             },
@@ -1791,6 +2129,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('c'),
             },
@@ -1805,6 +2144,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('g'),
             },
@@ -1820,6 +2160,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('n'),
             },
@@ -1838,6 +2179,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('d'),
             },
@@ -1852,6 +2194,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('g'),
             },
@@ -1867,6 +2210,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('n'),
             },
@@ -1885,6 +2229,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('g'),
             },
@@ -1899,6 +2244,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('s'),
             },
@@ -1917,6 +2263,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('g'),
             },
@@ -1931,6 +2278,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('p'),
             },
@@ -1949,6 +2297,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('g'),
             },
@@ -1963,6 +2312,7 @@ mod tests {
             &Key {
                 alt: false,
                 shift: false,
+                sup: false,
                 ctrl: false,
                 code: KeyCode::Char('P'),
             },
@@ -1978,10 +2328,10 @@ mod tests {
     #[test]
     fn test_move_tab_keybindings_and_hints() {
         let win = WindowKeymap::default();
-        assert_eq!(win.chord_hint("move_tab_left"), "Alt-g Alt-h");
-        assert_eq!(win.chord_hint("move_tab_down"), "Alt-g Alt-j");
-        assert_eq!(win.chord_hint("move_tab_up"), "Alt-g Alt-k");
-        assert_eq!(win.chord_hint("move_tab_right"), "Alt-g Alt-l");
+        assert_eq!(win.chord_hint("move_tab_left"), "M-g M-h");
+        assert_eq!(win.chord_hint("move_tab_down"), "M-g M-j");
+        assert_eq!(win.chord_hint("move_tab_up"), "M-g M-k");
+        assert_eq!(win.chord_hint("move_tab_right"), "M-g M-l");
 
         let alt_g = Key::with_alt(KeyCode::Char('g'));
         let alt_h = Key::with_alt(KeyCode::Char('h'));
@@ -1989,7 +2339,7 @@ mod tests {
         let alt_k = Key::with_alt(KeyCode::Char('k'));
         let alt_l = Key::with_alt(KeyCode::Char('l'));
 
-        // Alt+g then Alt+h in Normal mode
+        // M-g then M-h in Normal mode
         let mut pending = PendingPrefix::None;
         let a = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
         assert_eq!(a, Action::Ignore);
@@ -1999,22 +2349,22 @@ mod tests {
         assert_eq!(a, Action::MoveTabToPane(FocusDir::Left));
         assert_eq!(pending, PendingPrefix::None);
 
-        // Alt+g then Alt+j in Normal mode
+        // M-g then M-j in Normal mode
         let _ = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
         let a = resolve_with(Mode::Normal, &alt_j, &mut pending, &win, 0, None, false);
         assert_eq!(a, Action::MoveTabToPane(FocusDir::Down));
 
-        // Alt+g then Alt+k in Normal mode
+        // M-g then M-k in Normal mode
         let _ = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
         let a = resolve_with(Mode::Normal, &alt_k, &mut pending, &win, 0, None, false);
         assert_eq!(a, Action::MoveTabToPane(FocusDir::Up));
 
-        // Alt+g then Alt+l in Normal mode
+        // M-g then M-l in Normal mode
         let _ = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
         let a = resolve_with(Mode::Normal, &alt_l, &mut pending, &win, 0, None, false);
         assert_eq!(a, Action::MoveTabToPane(FocusDir::Right));
 
-        // Bare h after Alt+g also matches
+        // A bare h after M-g is not M-h: the follow key matches whole.
         let _ = resolve_with(Mode::Normal, &alt_g, &mut pending, &win, 0, None, false);
         let a = resolve_with(
             Mode::Normal,
@@ -2025,6 +2375,7 @@ mod tests {
             None,
             false,
         );
-        assert_eq!(a, Action::MoveTabToPane(FocusDir::Left));
+        assert_eq!(a, Action::Ignore);
+        assert_eq!(pending, PendingPrefix::None);
     }
 }

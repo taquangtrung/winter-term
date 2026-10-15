@@ -257,8 +257,8 @@ pub enum IconStyle {
 /// answers to. It cannot detect this: the shell never reports its editing mode.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PromptEditBindings {
-    /// Readline/ZLE emacs bindings (`Ctrl-A`, `Ctrl-K`, `Ctrl-U`, `Ctrl-W`,
-    /// `Alt-d`), which is every common shell's default.
+    /// Readline/ZLE emacs bindings (`C-a`, `C-k`, `C-u`, `C-w`,
+    /// `M-d`), which is every common shell's default.
     #[default]
     Emacs,
     /// Do not translate. For a shell already in vi mode (`bindkey -v`,
@@ -1240,7 +1240,7 @@ keybindings {
         k "focus_up"
     }
     insert {
-        "Ctrl-Space" "toggle_mode"
+        "C-SPC" "toggle_mode"
     }
 }
 "#,
@@ -1250,7 +1250,7 @@ keybindings {
         assert_eq!(normal.get("j"), Some(&"focus_down".to_string()));
         assert_eq!(normal.get("k"), Some(&"focus_up".to_string()));
         let insert = config.keybindings.get("insert").unwrap();
-        assert_eq!(insert.get("Ctrl-Space"), Some(&"toggle_mode".to_string()));
+        assert_eq!(insert.get("C-SPC"), Some(&"toggle_mode".to_string()));
     }
 
     #[test]
@@ -1273,7 +1273,7 @@ normal {
     j "focus_down"
 }
 window {
-    "Ctrl-w v" "split_vertical"
+    "C-w v" "split_vertical"
 }
 "#;
         let config = Config::parse_with_keys(settings, keys);
@@ -1289,7 +1289,7 @@ window {
             config
                 .keybindings
                 .get("window")
-                .and_then(|m| m.get("Ctrl-w v")),
+                .and_then(|m| m.get("C-w v")),
             Some(&"split_vertical".to_string())
         );
     }

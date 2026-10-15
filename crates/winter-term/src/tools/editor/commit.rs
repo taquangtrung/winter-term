@@ -2,8 +2,8 @@
 //!
 //! `git commit` hands the editor a `COMMIT_EDITMSG` whose message sits above a
 //! footer of `#` comment lines. Recall swaps only the part above the footer for
-//! a message from the repository's history, `Alt-P` going further back and
-//! `Alt-N` coming forward again to what was being typed.
+//! a message from the repository's history, `M-p` going further back and
+//! `M-n` coming forward again to what was being typed.
 
 use std::path::Path;
 use std::process::Command;

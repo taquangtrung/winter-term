@@ -1,6 +1,6 @@
 //! Normal mode: resolving motions, counts, and operator sequences.
 
-use super::{Action, Key, KeyCode};
+use super::{Action, Key, KeyCode, Mods};
 use super::{
     BlockNav, CursorMove, FindChar, GotoMark, InsertAt, PendingPrefix, TextObject, TextObjectSpec,
     VisualKind, WindowAction, WindowKeymap, DEFAULT_LEADER,
@@ -23,10 +23,10 @@ pub(super) const MAX_COUNT: usize = 9999;
 /// other sequence is open (a `/` query, a quick-select label, an operator)
 /// pass through untouched, as do modified keys (window chords).
 pub(super) fn accumulate_count(key: &Key, pending: &mut PendingPrefix) -> Option<Action> {
-    if key.ctrl || key.alt {
+    if key.ctrl || key.alt || key.sup {
         return None;
     }
-    let KeyCode::Char(ch) = key.code else {
+    let KeyCode::Char(ch) = key.glyph() else {
         return None;
     };
     let digit = ch.to_digit(10)? as usize;
@@ -78,7 +78,7 @@ pub(super) fn mark_name(c: char) -> Option<char> {
 /// Build the char-search action for the key that follows `f`/`F`/`t`/`T`. A
 /// printable character is the search target; anything else cancels the search.
 pub(super) fn find_char_action(key: &Key, forward: bool, till: bool) -> Action {
-    match key.code {
+    match key.glyph() {
         KeyCode::Char(ch) => Action::FindChar(FindChar { ch, forward, till }),
         _ => Action::Ignore,
     }
@@ -100,7 +100,7 @@ pub(super) fn motion_action(
 
     match prev {
         PendingPrefix::G => {
-            return match key.code {
+            return match key.glyph() {
                 KeyCode::Char('g') => Some(Action::MoveCursor(M::Top)),
                 KeyCode::Char('_') => Some(Action::MoveCursor(M::LastNonBlank)),
                 KeyCode::Char('e') => Some(Action::MoveCursor(M::WordEndBack)),
@@ -109,7 +109,7 @@ pub(super) fn motion_action(
             };
         }
         PendingPrefix::Z => {
-            return match key.code {
+            return match key.glyph() {
                 KeyCode::Char('z') => Some(Action::MoveCursor(M::LineToCenter)),
                 KeyCode::Char('t') => Some(Action::MoveCursor(M::LineToTop)),
                 KeyCode::Char('b') => Some(Action::MoveCursor(M::LineToBottom)),
@@ -123,13 +123,13 @@ pub(super) fn motion_action(
         // The `f`/`t` overlay is showing: a label key jumps, anything else dismisses
         // it (so `Esc` and a mistyped key both get out of the way).
         PendingPrefix::FindLabel => {
-            return Some(match key.code {
+            return Some(match key.glyph() {
                 KeyCode::Char(c) if c.is_ascii_lowercase() => Action::FindJump(c),
                 _ => Action::FindCancel,
             });
         }
         PendingPrefix::GotoMark { exact } => {
-            return Some(match key.code {
+            return Some(match key.glyph() {
                 KeyCode::Char(c) => match mark_name(c) {
                     Some(mark) => Action::GotoMark(GotoMark::new(mark, exact)),
                     None => Action::Ignore,
@@ -148,7 +148,7 @@ pub(super) fn motion_action(
         // view; this resolver keeps only what is not a motion — the repeat
         // keys and the prefix openers it owns.
         Some(mv) => Action::MoveCursor(mv),
-        None => match key.code {
+        None => match key.glyph() {
             KeyCode::Char(';') => Action::FindRepeat { reverse: false },
             KeyCode::Char(',') => Action::FindRepeat { reverse: true },
             KeyCode::Char('`') => {
@@ -208,12 +208,12 @@ pub(super) fn motion_action(
 /// carry on resolving it as part of a sequence.
 fn resolve_chord(key: &Key, pending: &mut PendingPrefix, window: &WindowKeymap) -> Option<Action> {
     // A window-command sequence is open: the follow key selects its action
-    // (matched by code, so `Ctrl-w v` and `Ctrl-w Ctrl-v` both split).
+    // (matched as a whole chord, so `C-w C-v` is not `C-w v`).
     if *pending == PendingPrefix::CtrlW {
         *pending = PendingPrefix::None;
         return Some(
             window
-                .sequence_action(key.code)
+                .sequence_action(key)
                 .map_or(Action::Ignore, WindowAction::to_action),
         );
     }
@@ -224,7 +224,7 @@ fn resolve_chord(key: &Key, pending: &mut PendingPrefix, window: &WindowKeymap) 
         return Some(Action::Ignore);
     }
 
-    // A direct window chord (Ctrl-h/j/k/l focus motions by default). Normal
+    // A direct window chord (C-h/j/k/l focus motions by default). Normal
     // mode is Winter's own navigation mode, so scroll bindings always apply
     // here (pass `false` for is_alt_screen).
     if let Some(action) = window.direct_action(key, false) {
@@ -237,7 +237,7 @@ fn resolve_chord(key: &Key, pending: &mut PendingPrefix, window: &WindowKeymap) 
         return Some(a);
     }
 
-    // Prompt undo/redo (default `Ctrl-/` / `Ctrl-\`) also work in Normal mode.
+    // Prompt undo/redo (default `C-/` / `C-\`) also work in Normal mode.
     // Line-edit bindings are Insert-only, so they fall through here.
     if let Some(binding) = window.edit_binding(key) {
         if binding.is_history() {
@@ -246,18 +246,24 @@ fn resolve_chord(key: &Key, pending: &mut PendingPrefix, window: &WindowKeymap) 
         }
     }
 
+    if key.sup {
+        // Super chords are the window's alone, and nothing here binds one.
+        *pending = PendingPrefix::None;
+        return Some(Action::Ignore);
+    }
+
     if key.ctrl {
         // Non-window control chords resolve immediately and clear any prefix.
         *pending = PendingPrefix::None;
-        return Some(match key.code {
-            KeyCode::Char('d') => Action::MoveCursor(CursorMove::HalfPageDown),
-            KeyCode::Char('u') => Action::MoveCursor(CursorMove::HalfPageUp),
-            KeyCode::Char('v') => Action::EnterVisual(VisualKind::Block),
-            // `Ctrl+O`/`Ctrl+I` walk the jumplist (vim's own binding).
-            KeyCode::Char('o') => Action::JumpOlder,
-            KeyCode::Char('i') => Action::JumpNewer,
-            KeyCode::Home => Action::MoveCursor(CursorMove::Top),
-            KeyCode::End => Action::MoveCursor(CursorMove::Bottom),
+        return Some(match (key.mods(), key.glyph()) {
+            (Mods::CTRL, KeyCode::Char('d')) => Action::MoveCursor(CursorMove::HalfPageDown),
+            (Mods::CTRL, KeyCode::Char('u')) => Action::MoveCursor(CursorMove::HalfPageUp),
+            (Mods::CTRL, KeyCode::Char('v')) => Action::EnterVisual(VisualKind::Block),
+            // `C-o`/`C-i` walk the jumplist (vim's own binding).
+            (Mods::CTRL, KeyCode::Char('o')) => Action::JumpOlder,
+            (Mods::CTRL, KeyCode::Char('i')) => Action::JumpNewer,
+            (Mods::CTRL, KeyCode::Home) => Action::MoveCursor(CursorMove::Top),
+            (Mods::CTRL, KeyCode::End) => Action::MoveCursor(CursorMove::Bottom),
             _ => Action::Ignore,
         });
     }
@@ -265,10 +271,10 @@ fn resolve_chord(key: &Key, pending: &mut PendingPrefix, window: &WindowKeymap) 
     if key.alt {
         // Alt chords resolve immediately too, clearing any prefix.
         *pending = PendingPrefix::None;
-        return Some(match key.code {
-            KeyCode::Escape => Action::EnterInsert(InsertAt::Cursor),
-            // `Alt-i`: vim's `vip` in a single chord.
-            KeyCode::Char('i') | KeyCode::Char('I') => Action::SelectParagraph,
+        return Some(match (key.mods(), key.glyph()) {
+            (Mods::ALT, KeyCode::Escape) => Action::EnterInsert(InsertAt::Cursor),
+            // `M-i`: vim's `vip` in a single chord.
+            (Mods::ALT, KeyCode::Char('i')) => Action::SelectParagraph,
             _ => Action::Ignore,
         });
     }
@@ -279,11 +285,11 @@ fn resolve_chord(key: &Key, pending: &mut PendingPrefix, window: &WindowKeymap) 
 /// mode switches that start from a bare Normal-mode keystroke. Keys that open
 /// a multi-key sequence set `pending` and yield [`Action::Ignore`].
 fn resolve_bare_key(key: &Key, pending: &mut PendingPrefix) -> Action {
-    match key.code {
+    match key.glyph() {
         KeyCode::Char('i') => Action::EnterInsert(InsertAt::Cursor),
         KeyCode::Char('a') => Action::EnterInsert(InsertAt::After),
         KeyCode::Char('o') => Action::EnterInsert(InsertAt::LineEnd),
-        // Tab is `Ctrl+I`'s unmodified twin on most terminals (same byte
+        // Tab is `C-i`'s unmodified twin on most terminals (same byte
         // without the kitty protocol), so it walks the jumplist forward.
         KeyCode::Tab => Action::JumpNewer,
         // `Esc` does not leave Normal (see `ModeEvent::Escape`); it clears the
@@ -382,17 +388,17 @@ pub(super) fn resolve_normal(
     }
 
     match prev {
-        PendingPrefix::BracketClose => match key.code {
+        PendingPrefix::BracketClose => match key.glyph() {
             KeyCode::Char('b') => Action::FocusBlock(BlockNav::Next),
             _ => Action::Ignore,
         },
-        PendingPrefix::BracketOpen => match key.code {
+        PendingPrefix::BracketOpen => match key.glyph() {
             KeyCode::Char('b') => Action::FocusBlock(BlockNav::Previous),
             _ => Action::Ignore,
         },
         // The leader sequence is resolved at the top of this function.
         PendingPrefix::CtrlW => Action::Ignore,
-        PendingPrefix::Change => match key.code {
+        PendingPrefix::Change => match key.glyph() {
             KeyCode::Char('c') => Action::ChangeLine,
             KeyCode::Char('s') => {
                 *pending = PendingPrefix::ChangeSurroundTarget;
@@ -416,16 +422,16 @@ pub(super) fn resolve_normal(
             }
             _ => Action::Ignore,
         },
-        PendingPrefix::ChangeG => match key.code {
+        PendingPrefix::ChangeG => match key.glyph() {
             KeyCode::Char('n') => Action::ChangeSearchMatch { forward: true },
             KeyCode::Char('N') => Action::ChangeSearchMatch { forward: false },
             _ => Action::Ignore,
         },
-        PendingPrefix::ChangeObject { around } => match TextObject::of_key(key.code) {
+        PendingPrefix::ChangeObject { around } => match TextObject::of_key(key.glyph()) {
             Some(object) => Action::ChangeTextObject(TextObjectSpec::new(around, object)),
             None => Action::Ignore,
         },
-        PendingPrefix::Yank { register } => match key.code {
+        PendingPrefix::Yank { register } => match key.glyph() {
             KeyCode::Char('y') => Action::YankLine { register },
             KeyCode::Char('s') => {
                 *pending = PendingPrefix::YieldSurround { around: false };
@@ -471,14 +477,14 @@ pub(super) fn resolve_normal(
             }
             _ => Action::Ignore,
         },
-        PendingPrefix::YankObject { around, register } => match TextObject::of_key(key.code) {
+        PendingPrefix::YankObject { around, register } => match TextObject::of_key(key.glyph()) {
             Some(object) => Action::YankTextObject {
                 spec: TextObjectSpec::new(around, object),
                 register,
             },
             None => Action::Ignore,
         },
-        PendingPrefix::Delete => match key.code {
+        PendingPrefix::Delete => match key.glyph() {
             KeyCode::Char('d') => Action::DeleteLine,
             KeyCode::Char('s') => {
                 *pending = PendingPrefix::DeleteSurround;
@@ -502,12 +508,12 @@ pub(super) fn resolve_normal(
             }
             _ => Action::Ignore,
         },
-        PendingPrefix::DeleteG => match key.code {
+        PendingPrefix::DeleteG => match key.glyph() {
             KeyCode::Char('n') => Action::DeleteSearchMatch { forward: true },
             KeyCode::Char('N') => Action::DeleteSearchMatch { forward: false },
             _ => Action::Ignore,
         },
-        PendingPrefix::DeleteObject { around } => match TextObject::of_key(key.code) {
+        PendingPrefix::DeleteObject { around } => match TextObject::of_key(key.glyph()) {
             Some(object) => Action::DeleteTextObject(TextObjectSpec::new(around, object)),
             None => Action::Ignore,
         },
@@ -523,7 +529,7 @@ pub(super) fn resolve_normal(
         // `gg`, `g_`, `ge`/`gE` are motions (see `motion_action`); these are the
         // tab commands Normal adds to the same prefix, plus `gv` restoring the
         // last Visual selection.
-        PendingPrefix::G => match key.code {
+        PendingPrefix::G => match key.glyph() {
             KeyCode::Char('v') => Action::RestoreVisual,
             KeyCode::Char('<') => Action::MoveTabLeft,
             KeyCode::Char('>') => Action::MoveTabRight,
@@ -543,18 +549,18 @@ pub(super) fn resolve_normal(
             KeyCode::Char('N') => Action::SelectSearchMatch { forward: false },
             _ => Action::Ignore,
         },
-        PendingPrefix::SetMark => match key.code {
+        PendingPrefix::SetMark => match key.glyph() {
             KeyCode::Char(c) if c.is_ascii_lowercase() => Action::SetMark(c),
             _ => Action::Ignore,
         },
-        PendingPrefix::Register => match key.code {
+        PendingPrefix::Register => match key.glyph() {
             KeyCode::Char(c) if c.is_ascii_alphanumeric() || c == '+' || c == '*' || c == '"' => {
                 *pending = PendingPrefix::WithRegister(c);
                 Action::Ignore
             }
             _ => Action::Ignore,
         },
-        PendingPrefix::WithRegister(reg) => match key.code {
+        PendingPrefix::WithRegister(reg) => match key.glyph() {
             KeyCode::Char('y') => {
                 *pending = PendingPrefix::Yank {
                     register: Some(reg),
@@ -579,25 +585,25 @@ pub(super) fn resolve_normal(
             }
             _ => Action::Ignore,
         },
-        PendingPrefix::ChangeSurroundTarget => match key.code {
+        PendingPrefix::ChangeSurroundTarget => match key.glyph() {
             KeyCode::Char(c) => {
                 *pending = PendingPrefix::ChangeSurroundReplacement { target: c };
                 Action::Ignore
             }
             _ => Action::Ignore,
         },
-        PendingPrefix::ChangeSurroundReplacement { target } => match key.code {
+        PendingPrefix::ChangeSurroundReplacement { target } => match key.glyph() {
             KeyCode::Char(r) => Action::ChangeSurround {
                 target,
                 replacement: r,
             },
             _ => Action::Ignore,
         },
-        PendingPrefix::DeleteSurround => match key.code {
+        PendingPrefix::DeleteSurround => match key.glyph() {
             KeyCode::Char(c) => Action::DeleteSurround(c),
             _ => Action::Ignore,
         },
-        PendingPrefix::YieldSurround { around } => match key.code {
+        PendingPrefix::YieldSurround { around } => match key.glyph() {
             // `ysi`/`ysa` re-enter this state to set the inner/around flag;
             // any object key then hands off to the delimiter prompt.
             KeyCode::Char('i') => {
@@ -617,25 +623,25 @@ pub(super) fn resolve_normal(
                 Action::Ignore
             }
         },
-        PendingPrefix::YieldSurroundDelimiter { spec } => match key.code {
+        PendingPrefix::YieldSurroundDelimiter { spec } => match key.glyph() {
             KeyCode::Char(d) => Action::SurroundTextObject { spec, delimiter: d },
             _ => Action::Ignore,
         },
-        PendingPrefix::ReplaceChar => match key.code {
+        PendingPrefix::ReplaceChar => match key.glyph() {
             KeyCode::Char(c) => Action::ReplaceChar(c),
             _ => Action::Ignore,
         },
         // `zz`/`zt`/`zb` are motions; `za` is Normal's fold toggle.
-        PendingPrefix::Z => match key.code {
+        PendingPrefix::Z => match key.glyph() {
             KeyCode::Char('a') => Action::ToggleFold,
             _ => Action::Ignore,
         },
-        PendingPrefix::QuickSelect => match key.code {
+        PendingPrefix::QuickSelect => match key.glyph() {
             KeyCode::Escape => Action::QuickCancel,
             KeyCode::Char(c) if c.is_ascii_alphabetic() => Action::QuickJump(c),
             _ => Action::QuickCancel,
         },
-        PendingPrefix::SearchInput => match key.code {
+        PendingPrefix::SearchInput => match key.glyph() {
             KeyCode::Escape => Action::SearchCancel,
             KeyCode::Enter => Action::SearchExecute,
             KeyCode::Backspace => {
@@ -1349,6 +1355,7 @@ mod tests {
             code: KeyCode::Char('q'),
             ctrl: true,
             shift: true,
+            sup: false,
         };
         // Closing a tab is a global action, resolved ahead of the overlays.
         assert_eq!(
@@ -1358,12 +1365,13 @@ mod tests {
     }
     #[test]
     fn test_default_split_bindings() {
-        // Shift-Alt-- splits horizontally; Shift-Alt-\ splits vertically.
+        // M-S-- splits horizontally; M-S-\ splits vertically.
         let shift_alt = |c: char| Key {
             alt: true,
             code: KeyCode::Char(c),
             ctrl: false,
             shift: true,
+            sup: false,
         };
         let mut pending = PendingPrefix::None;
         assert_eq!(
@@ -1375,7 +1383,7 @@ mod tests {
             resolve(Mode::Normal, &shift_alt('\\'), &mut pending, 0),
             Action::SplitPane(Direction::Vertical)
         );
-        // The old Ctrl-w v/s/S no longer trigger splits by default.
+        // The old C-w v/s/S no longer trigger splits by default.
         for code in [KeyCode::Char('v'), KeyCode::Char('s'), KeyCode::Char('S')] {
             let mut pending = PendingPrefix::CtrlW;
             assert_eq!(
@@ -1389,18 +1397,20 @@ mod tests {
         let shift_alt_equals = Key {
             alt: true,
             shift: true,
+            sup: false,
             ..key(KeyCode::Char('='))
         };
         let ctrl_shift_m = Key {
             ctrl: true,
             shift: true,
+            sup: false,
             ..key(KeyCode::Char('m'))
         };
         assert_eq!(
             resolve_simple(Mode::Normal, &shift_alt_equals),
             Action::ZoomPane
         );
-        // Ctrl-Shift-m used to be an alternative zoom chord; it is not one now.
+        // C-S-m used to be an alternative zoom chord; it is not one now.
         assert_ne!(
             resolve_simple(Mode::Normal, &ctrl_shift_m),
             Action::ZoomPane
@@ -1413,6 +1423,7 @@ mod tests {
             code: KeyCode::Char('o'),
             ctrl: false,
             shift: true,
+            sup: false,
         };
         let mut pending = PendingPrefix::None;
         assert_eq!(
@@ -1445,5 +1456,16 @@ mod tests {
             resolve_simple(Mode::Normal, &alt_esc),
             Action::EnterInsert(InsertAt::Cursor)
         );
+    }
+
+    #[test]
+    fn test_ctrl_shift_o_is_not_the_jumplist_walk_in_normal_mode() {
+        // Unbound here, it falls to Ignore rather than the plain C-o walk.
+        let chord = Key {
+            shift: true,
+            sup: false,
+            ..Key::with_ctrl(KeyCode::Char('o'))
+        };
+        assert_eq!(resolve_simple(Mode::Normal, &chord), Action::Ignore);
     }
 }

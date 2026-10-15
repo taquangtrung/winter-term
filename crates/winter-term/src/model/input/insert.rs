@@ -1,6 +1,6 @@
 //! Insert mode: encoding key events into the bytes the PTY expects.
 
-use super::{Action, Key, KeyCode, PendingPrefix, WindowKeymap};
+use super::{Action, Key, KeyCode, Mods, PendingPrefix, WindowKeymap};
 use crate::model::mode::{Mode, ModeEvent};
 
 // ========================================================================
@@ -11,6 +11,10 @@ pub(super) const CONTROL_MASK: u8 = 0x1f;
 pub(super) const DELETE: u8 = 0x7f;
 pub(super) const ESCAPE: u8 = 0x1b;
 pub(super) const CARRIAGE_RETURN: u8 = b'\r';
+/// The kitty protocol's private-use codepoint for F13; F14.. follow it.
+const KITTY_F13: u32 = 57376;
+/// xterm's `CSI n ~` numbers for F13 through F20, in order.
+const XTERM_F13_TO_F20: [u8; 8] = [25, 26, 28, 29, 31, 32, 33, 34];
 pub(super) fn resolve_insert(
     key: &Key,
     pending: &mut PendingPrefix,
@@ -21,7 +25,7 @@ pub(super) fn resolve_insert(
 ) -> Action {
     if *pending == PendingPrefix::CtrlW {
         *pending = PendingPrefix::None;
-        if let Some(action) = window.sequence_action(key.code) {
+        if let Some(action) = window.sequence_action(key) {
             return action.to_action();
         }
         return Action::Ignore;
@@ -42,8 +46,8 @@ pub(super) fn resolve_insert(
     if is_entry_chord(key) {
         return Action::SwitchMode(Mode::Insert.apply(ModeEvent::EnterNormal));
     }
-    // Configurable line edits and prompt undo/redo (defaults: `Ctrl-Backspace` →
-    // delete word back, `Ctrl-/` → undo, `Ctrl-\` → redo). Claiming the undo/redo
+    // Configurable line edits and prompt undo/redo (defaults: `C-DEL` →
+    // delete word back, `C-/` → undo, `C-\` → redo). Claiming the undo/redo
     // chords also stops them reaching the PTY as raw control bytes 0x1f / 0x1c.
     if let Some(binding) = window.edit_binding(key) {
         return binding.to_action();
@@ -58,7 +62,7 @@ pub(super) fn resolve_block_focus(
     window: &WindowKeymap,
     is_alt_screen: bool,
 ) -> Action {
-    if key.code == KeyCode::Escape {
+    if key.glyph() == KeyCode::Escape {
         return Action::SwitchMode(Mode::BlockFocus.apply(ModeEvent::Escape));
     }
     if let Some(action) = window.direct_action(key, is_alt_screen) {
@@ -67,8 +71,8 @@ pub(super) fn resolve_block_focus(
     Action::ForwardToBlock(encode(key, flags, None))
 }
 pub(super) fn is_entry_chord(key: &Key) -> bool {
-    (key.ctrl && key.shift && key.code == KeyCode::Space)
-        || (key.alt && !key.ctrl && !key.shift && key.code == KeyCode::Escape)
+    (key.mods() == Mods::CTRL_SHIFT && key.glyph() == KeyCode::Space)
+        || (key.mods() == Mods::ALT && key.glyph() == KeyCode::Escape)
 }
 /// Encode a key as the bytes a terminal program expects on the PTY.
 /// `flags` is the active Kitty keyboard protocol bitmask for the pane
@@ -92,9 +96,10 @@ pub fn encode_release(key: &Key, flags: u32) -> Vec<u8> {
     }
     encode_kitty_release(key)
 }
-/// xterm modifier byte: 1 + shift + 2*alt + 4*ctrl. Value 1 means no modifier.
+/// xterm modifier byte: 1 + shift + 2*alt + 4*ctrl + 8*super. Value 1 means no
+/// modifier.
 pub(super) fn xterm_modifier(key: &Key) -> u8 {
-    1 + (key.shift as u8) + 2 * (key.alt as u8) + 4 * (key.ctrl as u8)
+    1 + (key.shift as u8) + 2 * (key.alt as u8) + 4 * (key.ctrl as u8) + 8 * (key.sup as u8)
 }
 /// Prepend an ESC byte (Alt prefix convention).
 pub(super) fn esc_prefix(mut bytes: Vec<u8>) -> Vec<u8> {
@@ -156,12 +161,32 @@ pub(super) fn encode_f_xterm(n: u8, m: u8) -> Vec<u8> {
         10 => tilde_xterm(21, m),
         11 => tilde_xterm(23, m),
         12 => tilde_xterm(24, m),
+        13..=20 => tilde_xterm(XTERM_F13_TO_F20[usize::from(n) - 13], m),
         _ => Vec::new(),
     }
 }
 pub(super) fn encode_xterm(key: &Key, modify_other_keys: Option<i64>) -> Vec<u8> {
+    // Legacy xterm has no way to say Super on a key with no parameter slot, so
+    // such a chord sends nothing rather than the bare character.
+    let carries_modifier = matches!(
+        key.glyph(),
+        KeyCode::Delete
+            | KeyCode::Down
+            | KeyCode::End
+            | KeyCode::F(_)
+            | KeyCode::Home
+            | KeyCode::Insert
+            | KeyCode::Left
+            | KeyCode::PageDown
+            | KeyCode::PageUp
+            | KeyCode::Right
+            | KeyCode::Up
+    );
+    if key.sup && modify_other_keys.is_none() && !carries_modifier {
+        return Vec::new();
+    }
     let m = xterm_modifier(key);
-    let bytes = match key.code {
+    let bytes = match key.glyph() {
         KeyCode::Backspace => vec![DELETE],
         KeyCode::Char('\0') => return Vec::new(),
         KeyCode::Char(c) => {
@@ -210,12 +235,14 @@ pub(super) fn encode_xterm(key: &Key, modify_other_keys: Option<i64>) -> Vec<u8>
     // key has at least one modifier, encode character keys as
     // `\x1b[27;<modifier>;<codepoint>~` instead of the legacy `\x1b<char>`.
     // This is unambiguous: there is no ESC prefix that could be parsed as a
-    // standalone Escape, so Shift+Alt+E/H/L arrive intact. Mirrors WezTerm.
+    // standalone Escape, so M-S-e/H/L arrive intact. Mirrors WezTerm.
     //
     // Mode 1 excludes a few well-known keys from the extended encoding (the
     // same set xterm excludes); mode 2 applies it to all modified chars.
     if let Some(mode) = modify_other_keys {
-        if let (KeyCode::Char(c), true) = (key.code, (key.shift || key.ctrl || key.alt)) {
+        if let (KeyCode::Char(c), true) =
+            (key.glyph(), (key.shift || key.ctrl || key.alt || key.sup))
+        {
             let cp = if key.ctrl && c.is_ascii_alphabetic() {
                 (c.to_ascii_uppercase() as u32) & 0x1f
             } else {
@@ -229,15 +256,16 @@ pub(super) fn encode_xterm(key: &Key, modify_other_keys: Option<i64>) -> Vec<u8>
     }
 
     // Alt prefix: prepend ESC (never on bare Escape to avoid double-ESC).
-    if key.alt && !matches!(key.code, KeyCode::Escape | KeyCode::Char('\0')) {
+    if key.alt && !matches!(key.glyph(), KeyCode::Escape | KeyCode::Char('\0')) {
         esc_prefix(bytes)
     } else {
         bytes
     }
 }
-/// Kitty modifier value: 1 + shift + 2*alt + 4*ctrl. Value 1 means no modifier.
+/// Kitty modifier value: 1 + shift + 2*alt + 4*ctrl + 8*super. Value 1 means no
+/// modifier.
 pub(super) fn kitty_modifier(key: &Key) -> u32 {
-    1 + (key.shift as u32) + 2 * (key.alt as u32) + 4 * (key.ctrl as u32)
+    1 + (key.shift as u32) + 2 * (key.alt as u32) + 4 * (key.ctrl as u32) + 8 * (key.sup as u32)
 }
 /// `CSI codepoint u` or `CSI codepoint ; modifier u` (omit `;1`).
 /// A key the kitty protocol leaves in its legacy shape rather than giving it a
@@ -314,7 +342,7 @@ pub(super) fn kitty_csi_release(codepoint: u32, modifier: u32) -> Vec<u8> {
 /// can distinguish press from release.
 pub(super) fn encode_kitty_release(key: &Key) -> Vec<u8> {
     let m = kitty_modifier(key);
-    match key.code {
+    match key.glyph() {
         KeyCode::Char('\0') => Vec::new(),
         KeyCode::Char(c) => kitty_csi_release(base_codepoint(c, key.shift), m),
         KeyCode::Space => kitty_csi_release(32, m),
@@ -322,6 +350,7 @@ pub(super) fn encode_kitty_release(key: &Key) -> Vec<u8> {
         KeyCode::Enter => kitty_csi_release(13, m),
         KeyCode::Escape => kitty_csi_release(27, m),
         KeyCode::Backspace => kitty_csi_release(127, m),
+        KeyCode::F(n @ 13..=24) => kitty_csi_release(KITTY_F13 + u32::from(n) - 13, m),
         code => match kitty_legacy_shape(code) {
             Some((number, last)) => kitty_legacy_key(number, last, m, true),
             None => Vec::new(),
@@ -329,7 +358,7 @@ pub(super) fn encode_kitty_release(key: &Key) -> Vec<u8> {
     }
 }
 /// The base Unicode codepoint of a character key (lowercase for ASCII alpha
-/// so Ctrl+Shift+a uses codepoint 97, not 65).
+/// so C-S-a uses codepoint 97, not 65).
 pub(super) fn base_codepoint(c: char, shift: bool) -> u32 {
     if shift && c.is_ascii_uppercase() {
         c.to_ascii_lowercase() as u32
@@ -339,11 +368,11 @@ pub(super) fn base_codepoint(c: char, shift: bool) -> u32 {
 }
 pub(super) fn encode_kitty(key: &Key) -> Vec<u8> {
     let m = kitty_modifier(key);
-    match key.code {
+    match key.glyph() {
         KeyCode::Char('\0') => Vec::new(),
         KeyCode::Char(c) => {
             // No modifier or lone Shift: send raw UTF-8. Shift is already
-            // encoded in the char winit provides ('A' for Shift+a).
+            // encoded in the char winit provides ('A' for S-a).
             if m == 1 || m == 2 {
                 return c.to_string().into_bytes();
             }
@@ -359,7 +388,7 @@ pub(super) fn encode_kitty(key: &Key) -> Vec<u8> {
         KeyCode::Tab => {
             if m == 1 {
                 vec![b'\t']
-            } else if key.shift && !key.ctrl && !key.alt {
+            } else if m == 2 {
                 vec![ESCAPE, b'[', b'Z'] // backtab
             } else {
                 kitty_csi(9, m)
@@ -386,6 +415,7 @@ pub(super) fn encode_kitty(key: &Key) -> Vec<u8> {
                 kitty_csi(127, m)
             }
         }
+        KeyCode::F(n @ 13..=24) => kitty_csi(KITTY_F13 + u32::from(n) - 13, m),
         code => match kitty_legacy_shape(code) {
             Some((number, last)) => kitty_legacy_key(number, last, m, false),
             None => Vec::new(),
@@ -398,7 +428,7 @@ pub(super) fn csi(final_byte: u8) -> Vec<u8> {
 /// `param` is written as its decimal ASCII digits (`3` -> `b"3"`), not the raw
 /// byte value: `3u8` alone is the ETX control character, and a raw control
 /// byte embedded mid-sequence gets caught by the pty's line discipline as a
-/// signal (e.g. `3` is `Ctrl-C`/`VINTR`) instead of reaching the app as part
+/// signal (e.g. `3` is `C-c`/`VINTR`) instead of reaching the app as part
 /// of the escape sequence.
 pub(super) fn csi_param(param: u8, final_byte: u8) -> Vec<u8> {
     let mut bytes = vec![ESCAPE, b'['];
@@ -449,7 +479,7 @@ mod tests {
     fn test_delete_key_sends_ascii_tilde_sequence() {
         // Regression: `csi_param` used to splice the raw byte value 3 into the
         // sequence instead of the ASCII digit '3', producing
-        // `\x1b[\x03~`, embedding a literal Ctrl-C (ETX) that a pty's line
+        // `\x1b[\x03~`, embedding a literal C-c (ETX) that a pty's line
         // discipline intercepts as SIGINT, so a bare Delete keypress could
         // kill the foreground program instead of forward-deleting.
         assert_eq!(
@@ -496,6 +526,7 @@ mod tests {
         let chord = Key {
             ctrl: true,
             shift: true,
+            sup: false,
             ..key(KeyCode::Space)
         };
         assert_eq!(
@@ -521,17 +552,15 @@ mod tests {
             resolve_simple(Mode::Normal, &alt_i),
             Action::SelectParagraph
         );
-        // Shift transforms the glyph on some layouts; both reach the same action.
+        // Alt-Shift-i is another chord, and is not this one.
         let alt_shift_i = Key {
             alt: true,
             shift: true,
+            sup: false,
             ..key(KeyCode::Char('I'))
         };
-        assert_eq!(
-            resolve_simple(Mode::Normal, &alt_shift_i),
-            Action::SelectParagraph
-        );
-        // Alt-i in Insert mode still belongs to the shell.
+        assert_eq!(resolve_simple(Mode::Normal, &alt_shift_i), Action::Ignore);
+        // M-i in Insert mode still belongs to the shell.
         assert_ne!(
             resolve_simple(Mode::Insert, &alt_i),
             Action::SelectParagraph
@@ -542,6 +571,7 @@ mod tests {
         let alt = |c: char| Key {
             alt: true,
             shift: false,
+            sup: false,
             ..key(KeyCode::Char(c))
         };
         let cases = [
@@ -567,6 +597,7 @@ mod tests {
                 ctrl: true,
                 alt: false,
                 shift: false,
+                sup: false,
                 code: KeyCode::Char(char::from_digit(n as u32, 10).unwrap()),
             };
             assert_eq!(resolve_simple(Mode::Normal, &k), Action::GotoTab(n));
@@ -580,6 +611,7 @@ mod tests {
                 ctrl: false,
                 alt: true,
                 shift: false,
+                sup: false,
                 code: KeyCode::Char(char::from_digit(n as u32, 10).unwrap()),
             };
             assert_eq!(
@@ -603,6 +635,7 @@ mod tests {
                 ctrl: true,
                 alt: true,
                 shift: false,
+                sup: false,
                 code: KeyCode::Char(char::from_digit(n as u32, 10).unwrap()),
             };
             assert_eq!(
@@ -690,7 +723,7 @@ mod tests {
     }
     #[test]
     fn test_xterm_ctrl_i_equals_tab_ambiguity() {
-        // In legacy xterm mode, Ctrl+I and Tab produce the same bytes.
+        // In legacy xterm mode, C-i and Tab produce the same bytes.
         let tab = resolve_simple(Mode::Insert, &key(KeyCode::Tab));
         let ctrl_i = resolve_simple(
             Mode::Insert,
@@ -703,7 +736,7 @@ mod tests {
     }
     #[test]
     fn test_kitty_ctrl_i_differs_from_tab() {
-        // In Kitty mode, Tab still produces \t but Ctrl+I is disambiguated.
+        // In Kitty mode, Tab still produces \t but C-i is disambiguated.
         let tab = kitty(KeyCode::Tab);
         let ctrl_i = kitty_key(Key {
             ctrl: true,
@@ -711,13 +744,14 @@ mod tests {
         });
         assert_ne!(tab, ctrl_i);
         assert_eq!(tab, Action::SendBytes(vec![b'\t']));
-        // Ctrl+I: codepoint 105 ('i'), modifier 5 (ctrl=4, +1 base).
+        // C-i: codepoint 105 ('i'), modifier 5 (ctrl=4, +1 base).
         assert_eq!(ctrl_i, Action::SendBytes(b"\x1b[105;5u".to_vec()));
     }
     #[test]
     fn test_kitty_shift_enter() {
         let shift_enter = kitty_key(Key {
             shift: true,
+            sup: false,
             ..key(KeyCode::Enter)
         });
         // Codepoint 13 (CR), modifier 2 (shift).
@@ -756,7 +790,7 @@ mod tests {
     }
     #[test]
     fn test_kitty_ctrl_printable() {
-        // Ctrl+A: codepoint 97 ('a'), modifier 5 (ctrl).
+        // C-a: codepoint 97 ('a'), modifier 5 (ctrl).
         let ctrl_a = kitty_key(Key {
             ctrl: true,
             ..key(KeyCode::Char('a'))
@@ -772,7 +806,7 @@ mod tests {
     fn test_kitty_arrows_keep_their_legacy_shape() {
         // Regression: with the protocol on, a bare Up went out as
         // `CSI 57352 u`, a codepoint no program reads as an arrow, so a menu
-        // answered to `j` and `Ctrl-N` but not to the arrow keys.
+        // answered to `j` and `C-n` but not to the arrow keys.
         assert_eq!(kitty(KeyCode::Up), Action::SendBytes(b"\x1b[A".to_vec()));
         assert_eq!(kitty(KeyCode::Down), Action::SendBytes(b"\x1b[B".to_vec()));
         assert_eq!(kitty(KeyCode::Home), Action::SendBytes(b"\x1b[H".to_vec()));
@@ -805,6 +839,7 @@ mod tests {
     fn test_kitty_shift_tab_backtab() {
         let shift_tab = kitty_key(Key {
             shift: true,
+            sup: false,
             ..key(KeyCode::Tab)
         });
         assert_eq!(shift_tab, Action::SendBytes(vec![ESCAPE, b'[', b'Z']));
@@ -816,6 +851,7 @@ mod tests {
             code: KeyCode::Char(c),
             ctrl: false,
             shift: true,
+            sup: false,
         };
         assert_eq!(
             resolve_simple(Mode::Normal, &shift_alt('h')),
@@ -863,18 +899,21 @@ mod tests {
             code: KeyCode::PageUp,
             ctrl: true,
             shift: false,
+            sup: false,
         };
         let ctrl_pagedown = Key {
             alt: false,
             code: KeyCode::PageDown,
             ctrl: true,
             shift: false,
+            sup: false,
         };
         let ctrl_bracket = |c: char| Key {
             alt: false,
             code: KeyCode::Char(c),
             ctrl: true,
             shift: false,
+            sup: false,
         };
         assert_eq!(resolve_simple(Mode::Normal, &ctrl_pageup), Action::PrevTab);
         assert_eq!(
@@ -907,13 +946,14 @@ mod tests {
     }
     #[test]
     fn test_shift_alt_letter_encodes_esc_prefix_in_legacy_mode() {
-        // Shift+Alt+E in legacy (flags=0) mode produces \x1bE (ESC + uppercase
+        // M-S-e in legacy (flags=0) mode produces \x1bE (ESC + uppercase
         // letter). The shift is encoded as the uppercase character; the alt is
         // the ESC prefix. This is the correct xterm encoding but is timing-
         // ambiguous (can parse as Escape then E).
         let shift_alt_e = Key {
             alt: true,
             shift: true,
+            sup: false,
             ctrl: false,
             code: KeyCode::Char('E'),
         };
@@ -922,11 +962,12 @@ mod tests {
     }
     #[test]
     fn test_shift_alt_letter_encodes_csi_u_in_kitty_mode() {
-        // Shift+Alt+E with Kitty flags active produces \x1b[101;4u: the
+        // M-S-e with Kitty flags active produces \x1b[101;4u: the
         // unambiguous CSI-u encoding (codepoint 101='e', modifier 4=shift+alt).
         let shift_alt_e = Key {
             alt: true,
             shift: true,
+            sup: false,
             ctrl: false,
             code: KeyCode::Char('E'),
         };
@@ -935,10 +976,11 @@ mod tests {
     }
     #[test]
     fn test_shift_alt_h_l_encode_correctly_in_kitty_mode() {
-        // Verify Shift+Alt+H and Shift+Alt+L as well.
+        // Verify M-S-h and M-S-l as well.
         let mk = |c: char| Key {
             alt: true,
             shift: true,
+            sup: false,
             ctrl: false,
             code: KeyCode::Char(c),
         };
@@ -947,12 +989,13 @@ mod tests {
     }
     #[test]
     fn test_modify_other_keys_shift_alt_e_uses_27_format() {
-        // When modifyOtherKeys is active (mode 2), Shift+Alt+E produces
+        // When modifyOtherKeys is active (mode 2), M-S-e produces
         // `\x1b[27;4;69~` (modifier 4 = shift+alt, codepoint 69 = 'E').
         // This is unambiguous: no ESC prefix that could parse as standalone Escape.
         let shift_alt_e = Key {
             alt: true,
             shift: true,
+            sup: false,
             ctrl: false,
             code: KeyCode::Char('E'),
         };
@@ -961,10 +1004,11 @@ mod tests {
     }
     #[test]
     fn test_modify_other_keys_disabled_falls_back_to_esc_prefix() {
-        // Without modifyOtherKeys, Shift+Alt+E falls back to the legacy \x1bE.
+        // Without modifyOtherKeys, M-S-e falls back to the legacy \x1bE.
         let shift_alt_e = Key {
             alt: true,
             shift: true,
+            sup: false,
             ctrl: false,
             code: KeyCode::Char('E'),
         };
@@ -977,6 +1021,7 @@ mod tests {
         let plain_e = Key {
             alt: false,
             shift: false,
+            sup: false,
             ctrl: false,
             code: KeyCode::Char('e'),
         };
@@ -1004,5 +1049,74 @@ mod tests {
             Action::MoveTabToPane(crate::model::layout::FocusDir::Left)
         );
         assert_eq!(pending, PendingPrefix::None);
+    }
+
+    #[test]
+    fn test_a_super_chord_is_not_typed_into_the_shell_as_its_bare_character() {
+        let super_x = Key {
+            sup: true,
+            ..key(KeyCode::Char('x'))
+        };
+        assert_eq!(encode(&super_x, 0, None), Vec::<u8>::new());
+        // Kitty can say Super, so it is sent with its modifier (1 + 8).
+        assert_eq!(encode(&super_x, 1, None), b"\x1b[120;9u".to_vec());
+        // A key with a parameter slot carries it.
+        let super_up = Key {
+            sup: true,
+            ..key(KeyCode::Up)
+        };
+        assert_eq!(encode(&super_up, 0, None), b"\x1b[1;9A".to_vec());
+    }
+
+    #[test]
+    fn test_kitty_tells_every_key_and_modifier_set_apart() {
+        // A program that asks for the kitty protocol is owed every chord as
+        // its own sequence: no two sets of modifiers on a key may collide.
+        let mut codes = vec![
+            KeyCode::Backspace,
+            KeyCode::Delete,
+            KeyCode::Down,
+            KeyCode::End,
+            KeyCode::Enter,
+            KeyCode::Escape,
+            KeyCode::Home,
+            KeyCode::Insert,
+            KeyCode::Left,
+            KeyCode::PageDown,
+            KeyCode::PageUp,
+            KeyCode::Right,
+            KeyCode::Space,
+            KeyCode::Tab,
+            KeyCode::Up,
+        ];
+        codes.extend((1..=24).map(KeyCode::F));
+        codes.extend("a1,/".chars().map(KeyCode::Char));
+        for code in codes {
+            let mut seen = std::collections::HashMap::new();
+            for bits in 0..16u8 {
+                let key = Key {
+                    alt: bits & 1 != 0,
+                    code,
+                    ctrl: bits & 2 != 0,
+                    shift: bits & 4 != 0,
+                    sup: bits & 8 != 0,
+                };
+                // A lone Shift on a symbol arrives as the shifted glyph, never as
+                // the unshifted one with the flag, so that pair is not a key.
+                let unreal = matches!(code, KeyCode::Char(c) if !c.is_ascii_alphabetic())
+                    && key.shift
+                    && !key.ctrl
+                    && !key.alt
+                    && !key.sup;
+                if unreal {
+                    continue;
+                }
+                let bytes = encode(&key, 1, None);
+                assert!(!bytes.is_empty(), "{key:?} sends nothing");
+                if let Some(other) = seen.insert(bytes.clone(), key) {
+                    panic!("{key:?} and {other:?} both send {bytes:?}");
+                }
+            }
+        }
     }
 }

@@ -143,7 +143,7 @@ status-bar {
 // prompt line (d/c/r/~ and prompt undo/redo in Normal mode). Winter sends the
 // shell the equivalent keystrokes, so it has to know which set to send; it
 // cannot detect this, because no shell reports its editing mode.
-//   "emacs" the readline/ZLE default: Ctrl-A, Ctrl-K, Ctrl-U, Ctrl-W, Alt-d
+//   "emacs" the readline/ZLE default: C-a, C-k, C-u, C-w, M-d
 //   "none"  do not translate. Use this if your shell is in vi mode
 //           (bindkey -v, set editing-mode vi, fish vi bindings): those chords
 //           mean something else there, and the shell gives you Vim editing on

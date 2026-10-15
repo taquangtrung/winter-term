@@ -993,7 +993,7 @@ mod tests {
             MenuStyle::Modern => vec![Menu {
                 title: "Menu".into(),
                 items: vec![
-                    leaf("New Tab", "Ctrl-Shift-N"),
+                    leaf("New Tab", "C-S-n"),
                     // A submenu parent: hovering it opens its children.
                     MenuItem {
                         children: vec![leaf("Vertical", ""), leaf("Horizontal", "")],
