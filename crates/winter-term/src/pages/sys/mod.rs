@@ -68,8 +68,6 @@ pub struct SysPage {
     body_len: usize,
     /// Why the last snapshot failed, until one succeeds.
     error: Option<String>,
-    /// What the last key reported, shown until the next key.
-    message: Option<String>,
     nav: VimNav,
     sample: Option<SystemSample>,
     scroll: usize,
@@ -93,7 +91,6 @@ impl SysPage {
         Self {
             body_len: 0,
             error: None,
-            message: None,
             nav: VimNav::new(),
             sample: None,
             scroll: 0,
@@ -176,8 +173,7 @@ impl SysPage {
             title.push_str("  paused");
         }
         let mut row = vec![PageSpan::new(PageStyle::Header, title)];
-        let report = self.message.as_ref().or(self.error.as_ref());
-        match report {
+        match &self.error {
             Some(report) => row.push(PageSpan::new(PageStyle::Accent, format!("  {report}"))),
             None => row.push(PageSpan::new(PageStyle::Dim, HINTS)),
         }
@@ -212,7 +208,6 @@ impl Page for SysPage {
     }
 
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        self.message = None;
         if self.nav.in_sequence() || key.alt {
             return self.on_motion_key(key);
         }

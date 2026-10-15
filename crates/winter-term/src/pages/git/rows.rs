@@ -202,10 +202,9 @@ pub fn build(
         stashes,
         progress,
         root,
-        message,
         now,
     } = content;
-    let mut rows = header_block(status, commits, root, progress, message);
+    let mut rows = header_block(status, commits, root, progress);
     rows.push(blank_row());
     for section in Section::all() {
         let files: Vec<&FileStatus> = status
@@ -318,7 +317,6 @@ fn header_block(
     commits: &[Commit],
     root: Option<&Path>,
     progress: Option<&Progress>,
-    message: Option<&str>,
 ) -> Vec<ViewRow> {
     let mut rows = Vec::new();
     if let Some(root) = root {
@@ -381,14 +379,6 @@ fn header_block(
             LABEL_TAG,
             vec![PageSpan::new(PageStyle::RefTag, tag.name.clone())],
         ));
-    }
-    if let Some(message) = message {
-        rows.push(ViewRow {
-            icon: None,
-            item: Item::None,
-            spans: vec![PageSpan::new(PageStyle::Accent, message)],
-            wrap_indent: 0,
-        });
     }
     rows
 }
@@ -767,8 +757,6 @@ pub struct StatusContent<'a> {
     pub progress: Option<&'a Progress>,
     /// The repository's path, drawn on the `Repo:` line.
     pub root: Option<&'a Path>,
-    /// What the last command reported, drawn under the header.
-    pub message: Option<&'a str>,
     /// The current Unix time, which the commit rows measure ages against.
     pub now: i64,
 }
@@ -1224,7 +1212,6 @@ mod tests {
             stashes: &[],
             progress: None,
             root: None,
-            message: None,
             now: NOW,
         }
     }

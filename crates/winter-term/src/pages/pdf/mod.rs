@@ -13,8 +13,8 @@ use serde::Deserialize;
 
 use crate::model::input::{Key, KeyCode};
 use crate::model::page::{
-    Page, PageContent, PageHint, PageOutcome, PageRow, PageSpan, PageStyle, PageSurface,
-    PromptMode, PromptReply, PromptRequest,
+    Page, PageContent, PageHint, PageNotice, PageOutcome, PageRow, PageSpan, PageStyle,
+    PageSurface, PromptMode, PromptReply, PromptRequest,
 };
 
 // ========================================================================
@@ -68,9 +68,8 @@ const TITLE_PLACE: &str = "z";
 /// A page showing one PDF, driven by keys and drawn by its surface.
 #[derive(Clone, Debug)]
 pub struct PdfPage {
-    /// What the surface last said went wrong, shown beside the title until the
-    /// next key.
-    message: Option<String>,
+    /// What the surface last reported, waiting for the status bar to take it.
+    notice: Option<PageNotice>,
     /// Which line the cursor is on, once there is one, for the header.
     caret_line: usize,
     /// How the document is being read: with a cursor in the text, or with the
@@ -345,7 +344,7 @@ impl PdfPage {
     /// A page showing `path`, before its surface has opened it.
     pub fn new(path: PathBuf) -> Self {
         Self {
-            message: None,
+            notice: None,
             page: 0,
             pages: 0,
             caret_line: 0,
@@ -450,9 +449,6 @@ impl PdfPage {
         let typed = self.typed();
         if !typed.is_empty() {
             spans.push(PageSpan::new(PageStyle::Accent, format!("  {typed}")));
-        }
-        if let Some(message) = &self.message {
-            spans.push(PageSpan::new(PageStyle::Dim, format!("  {message}")));
         }
         spans
     }
@@ -680,7 +676,7 @@ impl PdfPage {
     fn search_step(&mut self, reverse: bool) -> PageOutcome {
         if self.search.is_none() {
             self.pending = Pending::default();
-            self.message = Some("nothing has been searched for".to_string());
+            self.notice = Some(PageNotice::error("nothing has been searched for"));
             return PageOutcome::Consumed;
         }
         let pending = self.pending;
@@ -829,8 +825,11 @@ impl Page for PdfPage {
         PageContent::new(vec![self.title_row(), PageRow::new()])
     }
 
+    fn take_notice(&mut self) -> Option<PageNotice> {
+        self.notice.take()
+    }
+
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        self.message = None;
         // A prefix owns the key after it, before anything else looks at it:
         // the `t` of `zt` is not the text tool, and the `g` of `gg` is not a
         // fresh prefix.
@@ -963,7 +962,7 @@ impl Page for PdfPage {
             return PageOutcome::Consumed;
         };
         if let Some(error) = report.error {
-            self.message = Some(error);
+            self.notice = Some(PageNotice::error(error));
         }
         if let Some(page) = report.page {
             self.page = page;
@@ -1000,13 +999,13 @@ impl Page for PdfPage {
         // how far through: the surface knows the last two, this knows the
         // first.
         if report.announce.unwrap_or(false) {
-            self.message = Some(format!(
+            self.notice = Some(PageNotice::info(format!(
                 "{}, page {} of {}, {}%",
                 self.file_name(),
                 self.page.max(1),
                 self.pages,
                 self.percent
-            ));
+            )));
         }
         PageOutcome::Consumed
     }
@@ -1703,7 +1702,7 @@ mod tests {
         let mut pdf = page();
         pdf.on_key(&press(KeyCode::Char('n')));
         assert_eq!(pdf.take_surface_script(), None, "nothing to repeat yet");
-        assert!(pdf.message.is_some(), "and the header says so");
+        assert!(pdf.take_notice().is_some(), "and says so");
 
         pdf.on_key(&press(KeyCode::Char('/')));
         pdf.on_prompt(PromptReply {
@@ -1948,20 +1947,26 @@ mod tests {
         // knows which file is open, so neither can answer on its own.
         let mut pdf = page();
         pdf.on_surface_message(r#"{"announce":true,"page":3,"pages":18,"percent":42}"#.to_string());
-        assert_eq!(pdf.message.as_deref(), Some("paper.pdf, page 3 of 18, 42%"));
+        assert_eq!(
+            pdf.take_notice().map(|notice| notice.text).as_deref(),
+            Some("paper.pdf, page 3 of 18, 42%")
+        );
     }
 
     #[test]
     fn test_a_surface_error_is_shown_and_malformed_output_is_not() {
         let mut pdf = page();
         pdf.on_surface_message(r#"{"error":"broken xref"}"#.to_string());
-        assert_eq!(pdf.message.as_deref(), Some("broken xref"));
+        assert_eq!(
+            pdf.take_notice().map(|notice| notice.text).as_deref(),
+            Some("broken xref")
+        );
 
         pdf.on_surface_message("not json at all".to_string());
         assert_eq!(
-            pdf.message.as_deref(),
-            Some("broken xref"),
-            "output the page cannot parse must leave what it knows alone"
+            pdf.take_notice(),
+            None,
+            "output the page cannot parse reports nothing"
         );
     }
 }

@@ -8,8 +8,9 @@ use std::path::{Path, PathBuf};
 use crate::model::input::{CursorMove, Key, KeyCode};
 use crate::model::page::{
     row_height, row_text, wheel_scroll, window_anchor, wrap_window, JobReply, JobRequest,
-    OpenTarget, Page, PageCaret, PageContent, PageMenuItem, PageOutcome, PageRow, PageSpan,
-    PageStyle, PromptMode, PromptReply, PromptRequest, SearchHit, SearchRequest, SearchResult,
+    OpenTarget, Page, PageCaret, PageContent, PageMenuItem, PageNotice, PageOutcome, PageRow,
+    PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest, SearchHit, SearchRequest,
+    SearchResult,
 };
 use crate::model::textedit::field::TextField;
 use crate::model::textedit::modal::{EditMode, EditOutcome};
@@ -60,8 +61,9 @@ pub struct GrepPage {
     /// the chord that starts or ends editing.
     edit_chord: bool,
     hits: Vec<SearchHit>,
-    /// What the last search reported, shown in the header until the next key.
-    message: Option<String>,
+    /// What the last search or edit reported, waiting for the status bar to
+    /// take it.
+    notice: Option<PageNotice>,
     /// The text last searched for, which a new question starts out holding.
     query: String,
     root: PathBuf,
@@ -103,7 +105,7 @@ impl GrepPage {
             edit: None,
             edit_chord: false,
             hits: Vec::new(),
-            message: None,
+            notice: None,
             query: String::new(),
             root,
             rows: Vec::new(),
@@ -137,7 +139,6 @@ impl GrepPage {
         self.rows.clear();
         self.cursor = 0;
         self.scroll = 0;
-        self.message = None;
         self.searching = true;
         self.truncated = false;
         PageOutcome::Job(JobRequest::Search(SearchRequest {
@@ -158,7 +159,7 @@ impl GrepPage {
         self.hits = found.hits;
         self.rebuild();
         if self.hits.is_empty() {
-            self.message = Some(format!("no matches for {}", self.query));
+            self.notice = Some(PageNotice::info(format!("no matches for {}", self.query)));
         }
     }
 
@@ -255,7 +256,7 @@ impl GrepPage {
             return;
         }
         if self.hits.is_empty() || self.searching {
-            self.message = Some("nothing to edit".to_string());
+            self.notice = Some(PageNotice::error("nothing to edit"));
             return;
         }
         let lines = self.hits.iter().map(|hit| hit.text.clone()).collect();
@@ -285,7 +286,7 @@ impl GrepPage {
     fn discard_edit(&mut self) {
         let edited = self.edited().len();
         self.edit = None;
-        self.message = (edited > 0).then(|| format!("discarded {edited}"));
+        self.notice = (edited > 0).then(|| PageNotice::info(format!("discarded {edited}")));
     }
 
     /// Write the edited lines back to their files, each file read and written
@@ -297,7 +298,7 @@ impl GrepPage {
         let edited = self.edited();
         self.edit = None;
         if edited.is_empty() {
-            self.message = Some("no changes".to_string());
+            self.notice = Some(PageNotice::info("no changes"));
             return PageOutcome::Consumed;
         }
         let mut by_file: BTreeMap<PathBuf, Vec<(usize, String)>> = BTreeMap::new();
@@ -354,7 +355,7 @@ impl GrepPage {
                 lines_count(refused)
             ));
         }
-        self.message = Some(report);
+        self.notice = Some(PageNotice::info(report));
         PageOutcome::Consumed
     }
 
@@ -376,8 +377,8 @@ impl GrepPage {
         }
         let outcome = edit.on_key(key, viewport);
         let row = edit.row();
-        if let Some(message) = edit.take_message() {
-            self.message = Some(message);
+        if let Some(notice) = edit.take_notice() {
+            self.notice = Some(notice);
         }
         if let Some(cursor) = self.row_of_hit(row) {
             self.cursor = cursor;
@@ -453,9 +454,6 @@ impl GrepPage {
                 format!("  editing:{mode}"),
             ));
         }
-        if let Some(message) = &self.message {
-            spans.push(PageSpan::new(PageStyle::Dim, format!("  {message}")));
-        }
         spans
     }
 }
@@ -505,8 +503,11 @@ impl Page for GrepPage {
         }
     }
 
+    fn take_notice(&mut self) -> Option<PageNotice> {
+        self.notice.take()
+    }
+
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        self.message = None;
         self.wheel = false;
         if std::mem::take(&mut self.edit_chord) {
             if key.ctrl && key.code == KeyCode::Char('q') {
@@ -586,7 +587,7 @@ impl Page for GrepPage {
             // means stop is the one to abandon it with.
             KeyCode::Escape if self.searching => {
                 self.searching = false;
-                self.message = Some("search stopped".to_string());
+                self.notice = Some(PageNotice::info("search stopped"));
                 PageOutcome::CancelJobs
             }
             _ => PageOutcome::Ignored,
@@ -875,7 +876,10 @@ mod tests {
             "the line changed, its trailing blanks and the CRLF endings kept"
         );
         assert_eq!(std::fs::read_to_string(&moved).expect("read"), "other\n");
-        let message = page.message.clone().unwrap_or_default();
+        let message = page
+            .take_notice()
+            .map(|notice| notice.text)
+            .unwrap_or_default();
         assert!(
             message.contains("1 line changed on disk"),
             "got {message:?}"
@@ -1024,8 +1028,11 @@ mod tests {
 
     #[test]
     fn test_a_walk_that_found_nothing_says_so() {
-        let page = page_with(Vec::new());
-        assert_eq!(page.message.as_deref(), Some("no matches for thing"));
+        let mut page = page_with(Vec::new());
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("no matches for thing")
+        );
         assert!(page.rows.is_empty());
     }
 

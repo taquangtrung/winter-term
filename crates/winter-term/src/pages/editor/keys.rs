@@ -4,7 +4,7 @@
 //! those ask of it.
 
 use crate::model::input::{Key, KeyCode};
-use crate::model::page::{PageOutcome, PickRequest, PromptMode, PromptRequest};
+use crate::model::page::{PageNotice, PageOutcome, PickRequest, PromptMode, PromptRequest};
 use crate::model::textedit::modal::EditOutcome;
 
 use super::comment::{self, Marker};
@@ -125,7 +125,7 @@ impl EditorPage {
                         self.buffer_mut().replace_rows(row, 1, vec![changed]);
                         self.buffer_mut().move_to_line(row + 1);
                     }
-                    None => self.modal.set_message("not a commit line".to_string()),
+                    None => self.modal.report(PageNotice::error("not a commit line")),
                 }
             }
             _ => {}
@@ -149,7 +149,7 @@ impl EditorPage {
     /// refuse it, which is said instead.
     fn finish_todo(&mut self) -> PageOutcome {
         if let Some(problem) = rebase::problem(self.buffer().lines()) {
-            self.modal.set_message(problem);
+            self.modal.report(PageNotice::error(problem));
             return PageOutcome::Consumed;
         }
         self.write();
@@ -170,7 +170,7 @@ impl EditorPage {
                 });
         let Some(marker) = marker else {
             self.modal
-                .set_message("no comment marker known for this file".to_string());
+                .report(PageNotice::error("no comment marker known for this file"));
             return PageOutcome::Consumed;
         };
         let (row, col) = (self.buffer().row(), self.buffer().col());
@@ -247,7 +247,8 @@ impl EditorPage {
     fn step_buffer(&mut self, forward: bool) -> PageOutcome {
         let count = self.buffer_count();
         if count < 2 {
-            self.modal.set_message("only this file is open".to_string());
+            self.modal
+                .report(PageNotice::error("only this file is open"));
             return PageOutcome::Consumed;
         }
         let at = self.buffer_at();

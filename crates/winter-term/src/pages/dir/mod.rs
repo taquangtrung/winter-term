@@ -122,8 +122,8 @@ pub struct DirPage {
     forward: Vec<PathBuf>,
     /// Where the cursor and scroll were before jump previewing started: (cursor, scroll).
     jump_origin: Option<(usize, usize)>,
-    /// What the last operation reported, shown in the header until the next key.
-    message: Option<String>,
+    /// What the last operation reported, waiting for the status bar to take it.
+    notice: Option<PageNotice>,
     marks: Marks,
     /// The first key of a two-key sequence, waiting for its second.
     pending: Option<Leader>,
@@ -184,7 +184,7 @@ impl DirPage {
             forward: Vec::new(),
             jump_origin: None,
             marks: Marks::new(),
-            message: None,
+            notice: None,
             pending: None,
             git_due: None,
             neighbors: Vec::new(),
@@ -632,8 +632,8 @@ impl DirPage {
     /// nothing to move to: a listing that silently stays put looks broken.
     fn search_step(&mut self, forward: bool) -> PageOutcome {
         if self.search.is_empty() {
-            self.message = Some("no search".to_string());
-            return PageOutcome::Notice(PageNotice::error("no search"));
+            self.notice = Some(PageNotice::error("no search"));
+            return PageOutcome::Consumed;
         }
         let names: Vec<&str> = self
             .rows
@@ -646,9 +646,8 @@ impl DirPage {
                 PageOutcome::Consumed
             }
             None => {
-                let text = format!("not found: {}", self.search);
-                self.message = Some(text.clone());
-                PageOutcome::Notice(PageNotice::error(text))
+                self.notice = Some(PageNotice::error(format!("not found: {}", self.search)));
+                PageOutcome::Consumed
             }
         }
     }
@@ -790,9 +789,9 @@ impl DirPage {
             _ => Ok(String::new()),
         };
         let created = result.is_ok();
-        self.message = Some(match result {
-            Ok(report) => report,
-            Err(report) => format!("failed: {report}"),
+        self.notice = Some(match result {
+            Ok(report) => PageNotice::info(report),
+            Err(report) => PageNotice::error(format!("failed: {report}")),
         });
         self.marks.clear();
         self.reload_keeping_selection();
@@ -1070,10 +1069,10 @@ impl Page for DirPage {
             // A batch turned down stays on screen to be fixed or applied.
             None if reply.tag == ASK_APPLY_EDITS => {
                 self.rename_plan = None;
-                self.message = Some("not renamed; still editing".to_string());
+                self.notice = Some(PageNotice::info("not renamed; still editing"));
             }
             Some(answer) => return self.apply_answer(reply.tag, &answer),
-            None => self.message = Some("cancelled".to_string()),
+            None => self.notice = Some(PageNotice::info("cancelled")),
         }
         PageOutcome::Consumed
     }
@@ -1128,7 +1127,6 @@ impl Page for DirPage {
                 show_sizes: self.show_sizes,
             },
             self.marks.len(),
-            self.message.as_deref(),
         )];
         if self.rows.is_empty() {
             page_rows.push(vec![PageSpan::new(PageStyle::Dim, EMPTY_NOTE)]);
@@ -1197,8 +1195,11 @@ impl Page for DirPage {
         }
     }
 
+    fn take_notice(&mut self) -> Option<PageNotice> {
+        self.notice.take()
+    }
+
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        self.message = None;
         self.wheel = false;
         if self.edit.is_some() {
             return self.on_edit_key(key);
@@ -1570,8 +1571,8 @@ impl DirPage {
         edit.move_to_row(self.cursor);
         let outcome = edit.on_key(key, self.viewport.max(1));
         self.cursor = edit.row();
-        if let Some(message) = edit.take_message() {
-            self.message = Some(message);
+        if let Some(notice) = edit.take_notice() {
+            self.notice = Some(notice);
         }
         match outcome {
             EditOutcome::Quit { save: true } | EditOutcome::Save | EditOutcome::Submit => {
@@ -1603,7 +1604,7 @@ impl DirPage {
         self.edit = None;
         // Names snapping back to the disk's can read as the edits having been
         // applied; saying they were not is one line of insurance.
-        self.message = (pending > 0).then(|| format!("discarded {pending}"));
+        self.notice = (pending > 0).then(|| PageNotice::info(format!("discarded {pending}")));
     }
 
     /// Apply the edited names as renames. Every name, and every collision,
@@ -1615,7 +1616,7 @@ impl DirPage {
         let pending = self.pending_edits();
         if pending.is_empty() {
             self.edit = None;
-            self.message = Some("no changes".to_string());
+            self.notice = Some(PageNotice::info("no changes"));
             return PageOutcome::Consumed;
         }
         let mut renames: Vec<ops::Rename> = Vec::new();
@@ -1627,7 +1628,7 @@ impl DirPage {
             else {
                 // Stay in edit mode: the name is still on screen, still
                 // editable, and now flagged as the problem.
-                self.message = Some(format!("failed: not a name: {name}"));
+                self.notice = Some(PageNotice::error(format!("failed: not a name: {name}")));
                 return PageOutcome::Consumed;
             };
             renames.push(ops::Rename {
@@ -1637,7 +1638,7 @@ impl DirPage {
             });
         }
         if let Err(problem) = ops::check_renames(&renames) {
-            self.message = Some(format!("failed: {problem}"));
+            self.notice = Some(PageNotice::error(format!("failed: {problem}")));
             return PageOutcome::Consumed;
         }
         if renames.len() == 1 {
@@ -1656,9 +1657,9 @@ impl DirPage {
     fn run_renames(&mut self, renames: Vec<ops::Rename>) -> PageOutcome {
         self.edit = None;
         let (done, failure) = ops::rename_all(&renames);
-        self.message = Some(match failure {
-            Some(report) => format!("failed: {report}"),
-            None => format!("renamed {done}"),
+        self.notice = Some(match failure {
+            Some(report) => PageNotice::error(format!("failed: {report}")),
+            None => PageNotice::info(format!("renamed {done}")),
         });
         self.marks.clear();
         self.reload_keeping_selection();
@@ -2508,7 +2509,10 @@ mod tests {
 
         let outcome = page.on_key(&press(KeyCode::Char('_')));
         answer(&mut page, outcome, "../escape.txt");
-        let message = page.message.clone().unwrap_or_default();
+        let message = page
+            .take_notice()
+            .map(|notice| notice.text)
+            .unwrap_or_default();
         assert!(message.starts_with("failed:"), "got {message:?}");
         assert!(!tree.0.parent().expect("parent").join("escape.txt").exists());
     }
@@ -2719,11 +2723,17 @@ mod tests {
         let mut page = DirPage::new(tree.0.clone());
 
         page.on_key(&press(KeyCode::Char('n')));
-        assert_eq!(page.message.as_deref(), Some("no search"));
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("no search")
+        );
 
         let outcome = page.on_key(&press(KeyCode::Char('/')));
         answer(&mut page, outcome, "absent");
-        assert_eq!(page.message.as_deref(), Some("not found: absent"));
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("not found: absent")
+        );
         assert_eq!(selected_name(&page), "alpha.txt");
     }
 
@@ -2757,7 +2767,10 @@ mod tests {
         page.on_key(&press(KeyCode::Char('Z')));
         page.on_key(&press(KeyCode::Char('Z')));
         assert!(page.edit.is_none());
-        assert_eq!(page.message.as_deref(), Some("no changes"));
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("no changes")
+        );
         assert!(tree.path("same.txt").exists());
     }
 
@@ -2775,7 +2788,10 @@ mod tests {
         assert!(page.edit.is_some(), "Escape returns to Normal mode");
         page.on_key(&press(KeyCode::Char('q')));
         assert!(page.edit.is_none());
-        assert_eq!(page.message.as_deref(), Some("discarded 1"));
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("discarded 1")
+        );
         assert!(tree.path("keep.txt").exists());
         assert!(!tree.path("x").exists());
         assert_eq!(selected_name(&page), "keep.txt");
@@ -2810,7 +2826,10 @@ mod tests {
 
         page.on_key(&press(KeyCode::Enter));
         assert!(page.edit.is_some(), "still editing, so it can be fixed");
-        let message = page.message.clone().unwrap_or_default();
+        let message = page
+            .take_notice()
+            .map(|notice| notice.text)
+            .unwrap_or_default();
         assert!(message.starts_with("failed:"), "got {message:?}");
         assert!(tree.path("gone.txt").exists());
 
@@ -2935,7 +2954,10 @@ mod tests {
 
         toggle_edit(&mut page);
         assert!(page.edit.is_none());
-        assert_eq!(page.message.as_deref(), Some("discarded 1"));
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("discarded 1")
+        );
         assert!(tree.path("keep.txt").exists());
         assert!(!tree.path("x").exists());
     }

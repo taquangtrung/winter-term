@@ -22,8 +22,8 @@ use crate::control::EditWaiter;
 use crate::model::input::Key;
 use crate::model::page::{
     row_height, wheel_scroll, window_anchor, wrap_window, wrapped_lines, OpenTarget, Page,
-    PageCaret, PageContent, PageHint, PageOutcome, PagePoint, PageRow, PageSpan, PageStyle,
-    PromptMode, PromptReply, PromptRequest,
+    PageCaret, PageContent, PageHint, PageNotice, PageOutcome, PagePoint, PageRow, PageSpan,
+    PageStyle, PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::textedit::buffer::TextBuffer;
 use crate::model::textedit::modal::{EditMode, EditView, Marks, ModalEditor, Selection};
@@ -250,7 +250,7 @@ impl EditorPage {
                 self.docs.push(doc);
                 self.select_buffer(self.docs.len() - 1);
             }
-            Err(e) => self.modal.set_message(format!("{e}")),
+            Err(e) => self.modal.report(PageNotice::error(e.to_string())),
         }
     }
 
@@ -409,9 +409,12 @@ impl EditorPage {
                 self.doc_mut().stamp = stamp;
                 self.buffer_mut().mark_saved();
                 let wrote = lines_written(self.buffer());
-                self.modal.set_message(format!("wrote {wrote}"));
+                self.modal
+                    .report(PageNotice::info(format!("wrote {wrote}")));
             }
-            Err(e) => self.modal.set_message(format!("could not write: {e}")),
+            Err(e) => self
+                .modal
+                .report(PageNotice::error(format!("could not write: {e}"))),
         }
         PageOutcome::Consumed
     }
@@ -496,9 +499,6 @@ impl EditorPage {
         }
         if let Some(register) = self.modal.register_prefix() {
             spans.push(PageSpan::new(PageStyle::Dim, format!("  \"{register}")));
-        }
-        if let Some(message) = self.modal.message() {
-            spans.push(PageSpan::new(PageStyle::Dim, format!("  {message}")));
         }
         spans
     }
@@ -744,7 +744,7 @@ impl EditorPage {
         let at = self.at.min(self.docs.len() - 1);
         self.modal.reset(&self.docs[at].buffer);
         self.modal
-            .set_message("changed on disk, re-read".to_string());
+            .report(PageNotice::info("changed on disk, re-read"));
         PageOutcome::Consumed
     }
 }
@@ -805,8 +805,11 @@ impl Page for EditorPage {
         }
     }
 
+    fn take_notice(&mut self) -> Option<PageNotice> {
+        self.modal.take_notice()
+    }
+
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        self.modal.take_message();
         self.wheel = false;
         // The space bar is typed text here, in insert mode and after `f`, `r`
         // and the like, all of which match characters.
@@ -1595,8 +1598,8 @@ mod tests {
             "refused, not closed"
         );
         assert!(page
-            .modal
-            .message()
+            .take_notice()
+            .map(|notice| notice.text)
             .unwrap_or_default()
             .contains("first commit"));
 
@@ -1854,7 +1857,10 @@ mod tests {
 
         press(&mut page, "'a");
         assert!(
-            page.modal.message().unwrap_or_default().contains("not set"),
+            page.take_notice()
+                .map(|notice| notice.text)
+                .unwrap_or_default()
+                .contains("not set"),
             "the mark stayed with its own file"
         );
     }

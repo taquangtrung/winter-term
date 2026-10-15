@@ -3,6 +3,7 @@
 //! names, one per listed entry, being renamed in place.
 
 use crate::model::input::Key;
+use crate::model::page::PageNotice;
 use crate::model::textedit::buffer::TextBuffer;
 use crate::model::textedit::modal::{EditMode, EditOutcome, EditView, Marks, ModalEditor};
 
@@ -73,8 +74,8 @@ impl TextField {
         self.buffer.col()
     }
 
-    /// The keys' state, for what the host shows of it: the mode, what is
-    /// part-typed, what the last command reported.
+    /// The keys' state, for what the host shows of it: the mode and what is
+    /// part-typed.
     pub fn modal(&self) -> &ModalEditor {
         &self.modal
     }
@@ -86,9 +87,9 @@ impl TextField {
         self.buffer.move_line_end(true);
     }
 
-    /// Take what the last command reported.
-    pub fn take_message(&mut self) -> Option<String> {
-        self.modal.take_message()
+    /// Take what the last command reported, for the status bar.
+    pub fn take_notice(&mut self) -> Option<PageNotice> {
+        self.modal.take_notice()
     }
 
     /// Put the cursor on line `row`, as the host does when something other

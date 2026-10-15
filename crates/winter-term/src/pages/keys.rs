@@ -4,8 +4,8 @@
 use crate::model::input::{Key, KeyCode, WindowKeymap};
 use crate::model::page::{
     row_height, wheel_scroll, window_anchor, wrap_window, wrapped_lines, Page, PageCaret,
-    PageContent, PageHint, PageOutcome, PagePoint, PageRow, PageSpan, PageStyle, PromptMode,
-    PromptReply, PromptRequest,
+    PageContent, PageHint, PageNotice, PageOutcome, PagePoint, PageRow, PageSpan, PageStyle,
+    PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::palette::builtin_commands;
 use crate::model::textedit::buffer::TextBuffer;
@@ -145,9 +145,6 @@ impl KeysPage {
         }
         if let Some(register) = self.modal.register_prefix() {
             spans.push(PageSpan::new(PageStyle::Dim, format!("  \"{register}")));
-        }
-        if let Some(message) = self.modal.message() {
-            spans.push(PageSpan::new(PageStyle::Dim, format!("  {message}")));
         }
         spans
     }
@@ -325,8 +322,11 @@ impl Page for KeysPage {
         }
     }
 
+    fn take_notice(&mut self) -> Option<PageNotice> {
+        self.modal.take_notice()
+    }
+
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        self.modal.take_message();
         self.wheel = false;
 
         // Enter on a command line in Normal mode runs the action.
@@ -601,10 +601,10 @@ mod tests {
     fn test_a_search_with_nothing_to_find_reports_it() {
         let mut page = page_with_rows(2);
         page.on_key(&press(KeyCode::Char('n')));
-        assert!(page.modal.message().is_some());
+        assert!(page.take_notice().is_some());
 
         search(&mut page, "absent");
-        assert!(page.modal.message().is_some());
+        assert!(page.take_notice().is_some());
         assert_eq!(page.selected(), 0);
     }
 
@@ -653,11 +653,20 @@ mod tests {
 
         // Typing 'i', 'x', 'd', 'p' should not change buffer
         page.on_key(&press(KeyCode::Char('i')));
-        assert_eq!(page.modal.message(), Some("buffer is read-only"));
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("buffer is read-only")
+        );
         page.on_key(&press(KeyCode::Char('x')));
-        assert_eq!(page.modal.message(), Some("buffer is read-only"));
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("buffer is read-only")
+        );
         page.on_key(&press(KeyCode::Char('d')));
-        assert_eq!(page.modal.message(), Some("buffer is read-only"));
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("buffer is read-only")
+        );
 
         assert_eq!(page.buffer.lines()[0], orig_line);
     }

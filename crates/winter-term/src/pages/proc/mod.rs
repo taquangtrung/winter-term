@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 use crate::model::input::{CursorMove, Key, KeyCode};
 use crate::model::page::{
     row_height, row_text, wheel_scroll, window_anchor, wrap_window, CommandOutput, JobReply,
-    JobRequest, Page, PageContent, PageMenuItem, PageOutcome, PagePoint, PageRow, PageSpan,
-    PageStyle, PromptMode, PromptReply, PromptRequest,
+    JobRequest, Page, PageContent, PageMenuItem, PageNotice, PageOutcome, PagePoint, PageRow,
+    PageSpan, PageStyle, PromptMode, PromptReply, PromptRequest,
 };
 use crate::model::process::{ProcState, ProcessSample};
 use crate::model::vim::nav::{VimKey, VimNav};
@@ -150,8 +150,8 @@ pub struct ProcPage {
     has_gpu: bool,
     /// Whether a snapshot has arrived, so an empty list can say why.
     loaded: bool,
-    /// What the last action reported, shown until the next key.
-    message: Option<String>,
+    /// What the last action reported, waiting for the status bar to take it.
+    notice: Option<PageNotice>,
     mode: ViewMode,
     /// Cells the NAME column takes now: grown to fit, never shrunk, so the
     /// columns after it do not jump about as the list changes.
@@ -218,7 +218,7 @@ impl ProcPage {
             filter: String::new(),
             has_gpu: false,
             loaded: false,
-            message: None,
+            notice: None,
             mode: ViewMode::Tree,
             name_width: MIN_NAME_WIDTH,
             pending_signal: None,
@@ -413,7 +413,7 @@ impl ProcPage {
                 PageOutcome::Job(JobRequest::Command(request))
             }
             Err(reason) => {
-                self.message = Some(reason);
+                self.notice = Some(PageNotice::error(reason));
                 PageOutcome::Consumed
             }
         }
@@ -451,10 +451,10 @@ impl ProcPage {
     /// What a finished signal or priority change reports.
     fn on_command_done(&mut self, output: &CommandOutput) -> PageOutcome {
         let done = self.acting.take();
-        self.message = Some(match (output.succeeded(), done) {
-            (true, Some(what)) => what,
-            (true, None) => "done".to_string(),
-            (false, _) => format!("failed: {}", output.failure()),
+        self.notice = Some(match (output.succeeded(), done) {
+            (true, Some(what)) => PageNotice::info(what),
+            (true, None) => PageNotice::info("done"),
+            (false, _) => PageNotice::error(format!("failed: {}", output.failure())),
         });
         // The list is about to be wrong, so the next snapshot is not left to
         // the timer.
@@ -541,8 +541,7 @@ impl ProcPage {
             text.push_str("  paused");
         }
         let mut row = vec![PageSpan::new(PageStyle::Header, text)];
-        let report = self.message.as_ref().or(self.error.as_ref());
-        match report {
+        match &self.error {
             Some(report) => row.push(PageSpan::new(PageStyle::Accent, format!("  {report}"))),
             None => row.push(PageSpan::new(PageStyle::Dim, HINTS)),
         }
@@ -809,8 +808,11 @@ impl Page for ProcPage {
         }
     }
 
+    fn take_notice(&mut self) -> Option<PageNotice> {
+        self.notice.take()
+    }
+
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        self.message = None;
         self.wheel = false;
         if self.nav.in_sequence() || key.alt || key.ctrl {
             return self.on_motion_key(key);
@@ -932,7 +934,7 @@ impl Page for ProcPage {
                         PageOutcome::Job(JobRequest::Command(request))
                     }
                     Err(reason) => {
-                        self.message = Some(reason);
+                        self.notice = Some(PageNotice::error(reason));
                         PageOutcome::Consumed
                     }
                 }
@@ -1300,7 +1302,10 @@ mod tests {
             stdout: String::new(),
             tag: TAG_SIGNAL,
         }));
-        assert_eq!(page.message.as_deref(), Some("suspended server (10)"));
+        assert_eq!(
+            page.take_notice().map(|notice| notice.text).as_deref(),
+            Some("suspended server (10)")
+        );
         assert!(page.next_tick().unwrap() <= Instant::now().max(before));
     }
 
@@ -1315,7 +1320,10 @@ mod tests {
             stdout: String::new(),
             tag: TAG_SIGNAL,
         }));
-        let message = page.message.unwrap();
+        let message = page
+            .take_notice()
+            .map(|notice| notice.text)
+            .unwrap_or_default();
         assert!(
             message.contains("Operation not permitted"),
             "got {message:?}"

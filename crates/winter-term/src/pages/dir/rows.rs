@@ -134,9 +134,9 @@ pub fn path_spans(path: &str) -> Vec<PageSpan> {
         .collect()
 }
 
-/// The header: where the listing is, which toggles are on, how much is marked,
-/// and what the last operation reported.
-pub fn header_row(root: &str, flags: HeaderFlags, marked: usize, message: Option<&str>) -> PageRow {
+/// The header: where the listing is, which toggles are on, and how much is
+/// marked.
+pub fn header_row(root: &str, flags: HeaderFlags, marked: usize) -> PageRow {
     let HeaderFlags {
         editing,
         show_hidden,
@@ -168,10 +168,6 @@ pub fn header_row(root: &str, flags: HeaderFlags, marked: usize, message: Option
         spans.push(PageSpan::new(PageStyle::Dim, "  "));
         spans.push(PageSpan::new(PageStyle::SyntaxNumber, marked.to_string()));
         spans.push(PageSpan::new(PageStyle::Dim, " marked"));
-    }
-    if let Some(message) = message {
-        spans.push(PageSpan::new(PageStyle::Dim, "  "));
-        spans.push(PageSpan::new(PageStyle::HeaderAccent, message));
     }
     spans
 }
@@ -616,7 +612,7 @@ mod tests {
 
     #[test]
     fn test_the_header_says_when_the_names_are_editable() {
-        let plain = header_row("/tmp", HeaderFlags::default(), 0, None);
+        let plain = header_row("/tmp", HeaderFlags::default(), 0);
         assert!(!text(plain).contains("editing"));
         let editing = header_row(
             "/tmp",
@@ -625,7 +621,6 @@ mod tests {
                 ..HeaderFlags::default()
             },
             0,
-            None,
         );
         assert!(text(editing).contains("editing"));
     }
@@ -637,7 +632,7 @@ mod tests {
             let home =
                 crate::model::path::home_dir().unwrap_or_else(|| PathBuf::from(r"C:\Users\User"));
             let sub = home.join("projects").join("winter");
-            let row = header_row(&sub.to_string_lossy(), HeaderFlags::default(), 0, None);
+            let row = header_row(&sub.to_string_lossy(), HeaderFlags::default(), 0);
             let row_str = text(row);
             let expected_prefix = crate::model::path::format_full_path(&sub);
             assert!(
@@ -646,7 +641,7 @@ mod tests {
             );
 
             let forward_slash_path = "C:/Windows/System32";
-            let row_win = header_row(forward_slash_path, HeaderFlags::default(), 0, None);
+            let row_win = header_row(forward_slash_path, HeaderFlags::default(), 0);
             let row_win_str = text(row_win);
             assert!(
                 row_win_str.starts_with(r"C:\Windows\System32"),
@@ -658,7 +653,7 @@ mod tests {
             let home =
                 crate::model::path::home_dir().unwrap_or_else(|| PathBuf::from("/home/user"));
             let sub = home.join("projects").join("winter");
-            let row = header_row(&sub.to_string_lossy(), HeaderFlags::default(), 0, None);
+            let row = header_row(&sub.to_string_lossy(), HeaderFlags::default(), 0);
             let row_str = text(row);
             let expected_prefix = crate::model::path::format_full_path(&sub);
             assert!(
@@ -667,7 +662,7 @@ mod tests {
             );
 
             let posix_path = "/var/log";
-            let row_posix = header_row(posix_path, HeaderFlags::default(), 0, None);
+            let row_posix = header_row(posix_path, HeaderFlags::default(), 0);
             let row_posix_str = text(row_posix);
             assert!(
                 row_posix_str.starts_with("/var/log"),
@@ -735,7 +730,7 @@ mod tests {
             show_details: true,
             show_sizes: true,
         };
-        let row = header_row("/tmp", flags, 5, Some("file created"));
+        let row = header_row("/tmp", flags, 5);
 
         // Verify sort information is removed
         assert!(!row.iter().any(|span| span.text.contains("sort")));
@@ -762,8 +757,5 @@ mod tests {
         assert!(row
             .iter()
             .any(|span| span.style == PageStyle::Dim && span.text == " marked"));
-        assert!(row
-            .iter()
-            .any(|span| span.style == PageStyle::HeaderAccent && span.text == "file created"));
     }
 }

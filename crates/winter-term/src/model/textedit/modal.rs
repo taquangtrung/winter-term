@@ -11,6 +11,7 @@
 use std::collections::HashMap;
 
 use crate::model::input::{Key, KeyCode, TextObject};
+use crate::model::page::PageNotice;
 use crate::model::textedit::buffer::{Register, TextBuffer, WordCase};
 use crate::model::textedit::kill::{KillRing, Merge};
 use crate::model::textedit::search::Search;
@@ -182,9 +183,9 @@ pub struct ModalEditor {
     kills: KillRing,
     /// The keys of the last command that changed the text, for `.`.
     last_change: Vec<Key>,
-    /// What the last command reported, until the host clears it.
-    message: Option<String>,
     mode: EditMode,
+    /// What the last command reported, until the host takes it.
+    notice: Option<PageNotice>,
     nav: VimNav,
     /// An operator waiting for the motion or object that says how far it
     /// reaches.
@@ -526,19 +527,15 @@ impl ModalEditor {
         self.register
     }
 
-    /// What the last command reported.
-    pub fn message(&self) -> Option<&str> {
-        self.message.as_deref()
+    /// Report `notice`, as the host does for what it carried out itself.
+    pub fn report(&mut self, notice: PageNotice) {
+        self.notice = Some(notice);
     }
 
-    /// Report `message`, as the host does for what it carried out itself.
-    pub fn set_message(&mut self, message: String) {
-        self.message = Some(message);
-    }
-
-    /// Take what the last command reported, leaving nothing reported.
-    pub fn take_message(&mut self) -> Option<String> {
-        self.message.take()
+    /// Take what the last command reported, for the status bar, leaving
+    /// nothing reported.
+    pub fn take_notice(&mut self) -> Option<PageNotice> {
+        self.notice.take()
     }
 
     /// Forget anything part-typed and go back to Normal, over text that has
@@ -621,7 +618,7 @@ impl ModalEditor {
     /// answer to an [`EditOutcome::Paste`], and what a pasted chord brings.
     pub fn paste_text(&mut self, view: EditView<'_>, text: String) {
         if self.read_only {
-            self.message = Some(READ_ONLY_MESSAGE.to_string());
+            self.notice = Some(PageNotice::error(READ_ONLY_MESSAGE));
             return;
         }
         Session::new(self, view).paste_text(text);
@@ -691,7 +688,7 @@ impl Session<'_> {
     /// Type the last command that changed the text again (`.`).
     fn repeat_change(&mut self) -> EditOutcome {
         if self.ed.last_change.is_empty() {
-            self.ed.message = Some("nothing to repeat".to_string());
+            self.ed.notice = Some(PageNotice::error("nothing to repeat"));
             return EditOutcome::Consumed;
         }
         let keys = self.ed.last_change.clone();
@@ -745,7 +742,7 @@ impl Session<'_> {
                     'i' | 'a' | 'I' | 'A' | 'o' | 'O' | 'R' | 's' | 'S' | 'x' | 'X' | 'C' | 'D'
                     | 'r' | '~' | 'J' | 'p' | 'P' | 'u' | '.' | 'd' | 'c' | '>' | '<',
                 ) => {
-                    self.ed.message = Some(READ_ONLY_MESSAGE.to_string());
+                    self.ed.notice = Some(PageNotice::error(READ_ONLY_MESSAGE));
                     return EditOutcome::Consumed;
                 }
                 _ => {}
@@ -834,7 +831,7 @@ impl Session<'_> {
             }
             KeyCode::Char('u') => {
                 if !self.buffer_mut().undo() {
-                    self.ed.message = Some("nothing to undo".to_string());
+                    self.ed.notice = Some(PageNotice::error("nothing to undo"));
                 }
                 // An undo is not a change to be done again: `.` still means
                 // whatever changed the text last.
@@ -906,14 +903,14 @@ impl Session<'_> {
     /// The Ctrl chords: saving, redo, the number keys, and the paging motions.
     fn on_ctrl_key(&mut self, key: &Key) -> EditOutcome {
         if self.ed.read_only && matches!(key.code, KeyCode::Char('s' | 'r' | 'a' | 'x')) {
-            self.ed.message = Some(READ_ONLY_MESSAGE.to_string());
+            self.ed.notice = Some(PageNotice::error(READ_ONLY_MESSAGE));
             return EditOutcome::Consumed;
         }
         match key.code {
             KeyCode::Char('s') => EditOutcome::Save,
             KeyCode::Char('r') => {
                 if !self.buffer_mut().redo() {
-                    self.ed.message = Some("nothing to redo".to_string());
+                    self.ed.notice = Some(PageNotice::error("nothing to redo"));
                 }
                 self.ed.revision = self.buffer().revision();
                 EditOutcome::Consumed
@@ -926,7 +923,7 @@ impl Session<'_> {
                 };
                 self.buffer_mut().snapshot();
                 if !self.buffer_mut().add_to_number(by) {
-                    self.ed.message = Some("no number here".to_string());
+                    self.ed.notice = Some(PageNotice::error("no number here"));
                 }
                 EditOutcome::Consumed
             }
@@ -1164,7 +1161,7 @@ impl Session<'_> {
     /// `M-y` straight after a yank: swap what it put in for the kill before.
     fn yank_pop(&mut self) {
         let Some(yanked) = self.yanked else {
-            self.ed.message = Some("the last command was not a yank".to_string());
+            self.ed.notice = Some(PageNotice::error("the last command was not a yank"));
             return;
         };
         let Some(older) = self.ed.kills.yank_pop() else {
@@ -1206,7 +1203,8 @@ impl Session<'_> {
                     self.view.others,
                 );
                 if candidates.is_empty() {
-                    self.ed.message = Some(format!("nothing completes `{typed}`"));
+                    self.ed.notice =
+                        Some(PageNotice::error(format!("nothing completes `{typed}`")));
                     return;
                 }
                 Completion {
@@ -1316,7 +1314,7 @@ impl Session<'_> {
         if self.ed.read_only {
             match key.code {
                 KeyCode::Char('d' | 'x' | 'c' | 's' | '>' | '<' | 'J' | '~' | 'p' | 'P' | 'r') => {
-                    self.ed.message = Some(READ_ONLY_MESSAGE.to_string());
+                    self.ed.notice = Some(PageNotice::error(READ_ONLY_MESSAGE));
                     return EditOutcome::Consumed;
                 }
                 _ => {}
@@ -1649,7 +1647,7 @@ impl Session<'_> {
         let operator = self.ed.operator.take();
         let mut probe = self.buffer().clone();
         if !probe.move_to_char(find, count) {
-            self.ed.message = Some(format!("no `{}` on this line", find.ch));
+            self.ed.notice = Some(PageNotice::error(format!("no `{}` on this line", find.ch)));
             return EditOutcome::Consumed;
         }
         let to = (probe.row(), probe.col());
@@ -1682,7 +1680,7 @@ impl Session<'_> {
             _ => self.view.marks.named.get(&c).copied(),
         };
         let Some((row, col)) = at else {
-            self.ed.message = Some(format!("mark `{c}` is not set"));
+            self.ed.notice = Some(PageNotice::error(format!("mark `{c}` is not set")));
             return EditOutcome::Consumed;
         };
         self.push_jump();
@@ -1970,7 +1968,7 @@ impl Session<'_> {
             Some(c) => match self.ed.registers.get(&c.to_ascii_lowercase()).cloned() {
                 Some(register) => self.buffer_mut().set_register(register),
                 None => {
-                    self.ed.message = Some(format!("register `{c}` is empty"));
+                    self.ed.notice = Some(PageNotice::error(format!("register `{c}` is empty")));
                     return EditOutcome::Consumed;
                 }
             },
@@ -2022,7 +2020,7 @@ impl Session<'_> {
             return EditOutcome::Consumed;
         };
         let Some((span, linewise)) = self.object_span(object, wait.around) else {
-            self.ed.message = Some("no object here".to_string());
+            self.ed.notice = Some(PageNotice::error("no object here"));
             return EditOutcome::Consumed;
         };
         if let Some(operator) = operator {
@@ -2094,7 +2092,7 @@ impl Session<'_> {
     /// (`N`).
     fn search_step(&mut self, reverse: bool) -> EditOutcome {
         let Some(search) = self.ed.search.clone() else {
-            self.ed.message = Some("nothing has been searched for".to_string());
+            self.ed.notice = Some(PageNotice::error("nothing has been searched for"));
             return EditOutcome::Consumed;
         };
         let forward = search.forward != reverse;
@@ -2104,7 +2102,12 @@ impl Session<'_> {
                 self.push_jump();
                 self.buffer_mut().move_to(row, col);
             }
-            None => self.ed.message = Some(format!("`{}` is not in the file", search.pattern)),
+            None => {
+                self.ed.notice = Some(PageNotice::error(format!(
+                    "`{}` is not in the file",
+                    search.pattern
+                )))
+            }
         }
         EditOutcome::Consumed
     }
@@ -2573,10 +2576,16 @@ mod tests {
         ed.modal.set_read_only(true);
         ed.keys("w").assert("hello |world");
         ed.keys("x");
-        assert_eq!(ed.modal.message(), Some(READ_ONLY_MESSAGE));
+        assert_eq!(
+            ed.modal.take_notice(),
+            Some(PageNotice::error(READ_ONLY_MESSAGE))
+        );
         ed.assert("hello |world");
         ed.keys("i");
-        assert_eq!(ed.modal.message(), Some(READ_ONLY_MESSAGE));
+        assert_eq!(
+            ed.modal.take_notice(),
+            Some(PageNotice::error(READ_ONLY_MESSAGE))
+        );
         assert_eq!(ed.modal.mode(), EditMode::Normal);
         ed.keys("y $");
         assert_eq!(

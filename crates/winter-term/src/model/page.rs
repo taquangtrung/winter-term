@@ -478,8 +478,6 @@ pub enum PageOutcome {
     CancelJobs,
     /// The page asks the host to do slow work for it.
     Job(JobRequest),
-    /// The page asks the host to show a transient notice in the status bar.
-    Notice(PageNotice),
     /// The page asks the host to read an answer from the user.
     Prompt(PromptRequest),
     /// The page asks the host to have the user choose from a list, rather
@@ -886,6 +884,14 @@ pub trait Page {
     /// page shows, usually by asking for a job.
     fn on_tick(&mut self, _now: Instant) -> PageOutcome {
         PageOutcome::Consumed
+    }
+
+    /// What the page has to report since it was last asked, for the status
+    /// bar: the one way a page reports. The host asks after every call it
+    /// makes into the page, so a report made alongside some other outcome,
+    /// such as a job, still shows, and a page never draws a report itself.
+    fn take_notice(&mut self) -> Option<PageNotice> {
+        None
     }
 
     /// Where the page's own caret is on its cursor line, for a page that puts

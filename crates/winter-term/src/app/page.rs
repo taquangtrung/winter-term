@@ -721,7 +721,9 @@ impl App {
         let tab_id = self.layout().focused();
         if let Some(slot) = self.open_tabs.page_mut(&tab_id) {
             if slot.kind == PageKind::Editor && slot.page.open_file(target.clone()) {
-                self.dirty = true;
+                // Through the outcome, so a file the editor could not open
+                // is reported now rather than at the next key.
+                self.act_on_page_outcome(tab_id, PageOutcome::Consumed);
                 return;
             }
         }
@@ -1485,6 +1487,13 @@ impl App {
     /// Carry out what a page asked for. Returns whether the input that produced
     /// it was spent.
     pub(super) fn act_on_page_outcome(&mut self, tab_id: TabId, outcome: PageOutcome) -> bool {
+        let notice = self
+            .open_tabs
+            .page_mut(&tab_id)
+            .and_then(|slot| slot.page.take_notice());
+        if let Some(notice) = notice {
+            self.show_notice(notice.text, notice.kind);
+        }
         match outcome {
             PageOutcome::Close => {
                 self.close_page(tab_id);
@@ -1517,10 +1526,6 @@ impl App {
             }
             PageOutcome::Job(request) => {
                 self.jobs.spawn(tab_id, request);
-                true
-            }
-            PageOutcome::Notice(notice) => {
-                self.show_notice(notice.text, notice.kind);
                 true
             }
             PageOutcome::Spawn(request) => {
@@ -1592,7 +1597,7 @@ mod tests {
     use crate::model::input::KeyCode;
     use crate::model::layout::Direction;
     use crate::model::mode::Mode;
-    use crate::model::page::{PageContent, PageSpan};
+    use crate::model::page::{PageContent, PageNotice, PageSpan};
     use std::cell::RefCell;
     use std::path::PathBuf;
     use std::rc::Rc;
@@ -1634,6 +1639,27 @@ mod tests {
                 KeyCode::Char('q') => PageOutcome::Close,
                 _ => PageOutcome::Ignored,
             }
+        }
+    }
+
+    /// A page with one report queued for the status bar.
+    struct ReportingPage(Option<PageNotice>);
+
+    impl Page for ReportingPage {
+        fn title(&self) -> String {
+            "Reporting".to_string()
+        }
+
+        fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> PageContent {
+            PageContent::new(vec![vec![PageSpan::plain("reporting")]])
+        }
+
+        fn on_key(&mut self, _key: &Key) -> PageOutcome {
+            PageOutcome::Consumed
+        }
+
+        fn take_notice(&mut self) -> Option<PageNotice> {
+            self.0.take()
         }
     }
 
@@ -2155,6 +2181,20 @@ mod tests {
         assert_eq!(
             app.notice.as_ref().map(|(text, _, _)| text.as_str()),
             Some(NOTHING_CLOSED)
+        );
+    }
+
+    #[test]
+    fn test_a_page_report_reaches_the_status_bar_whatever_the_outcome() {
+        // A page reports beside another outcome, such as the job that re-reads
+        // it, so the report cannot ride on a `Notice` outcome alone.
+        let mut app = App::new();
+        let page = ReportingPage(Some(PageNotice::info("pushed")));
+        let tab = app.show_page(PageKind::Git, Box::new(page));
+        app.act_on_page_outcome(tab, PageOutcome::Consumed);
+        assert_eq!(
+            app.notice.as_ref().map(|(text, _, _)| text.as_str()),
+            Some("pushed")
         );
     }
 

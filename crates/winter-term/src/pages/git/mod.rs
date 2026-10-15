@@ -95,6 +95,12 @@ const LOADING: &str = "reading the repository...";
 /// Shown when the directory the view opened in is not in a repository.
 const NOT_A_REPO: &str = "not a git repository";
 
+/// Shown when the repository was found but reading its status failed.
+const UNREADABLE: &str = "the repository could not be read";
+
+/// Reported when a read the view would fill itself with came back empty.
+const NOTHING_TO_SHOW: &str = "nothing to show";
+
 /// Rows of header above the first section.
 const HEADER_ROWS: usize = 1;
 
@@ -193,8 +199,8 @@ pub struct GitPage {
     /// Where the cursor and scroll were before jump previewing started: (cursor, scroll).
     jump_origin: Option<(usize, usize)>,
     cursor: usize,
-    /// What the last command reported, shown in the header.
-    message: Option<String>,
+    /// What the last command reported, waiting for the status bar to take it.
+    notice: Option<PageNotice>,
     /// The conflicted file a resolve is settling, staged once git has
     /// written the side that was taken.
     resolving: Option<String>,
@@ -273,7 +279,7 @@ impl GitPage {
             jump_origin: None,
             cursor: 0,
             loaded: false,
-            message: None,
+            notice: None,
             line_mark: None,
             resolving: None,
             log_count: LOG_PAGE,
@@ -334,7 +340,6 @@ impl GitPage {
                 stashes: &self.stashes,
                 progress: self.progress.as_ref(),
                 root: self.root.as_deref(),
-                message: self.message.as_deref(),
                 now: now_unix(),
             },
             &|block| collapsed.contains(&block),
@@ -427,7 +432,8 @@ impl GitPage {
     /// one query serves the status and the output it opens.
     fn search_step(&mut self, forward: bool) -> PageOutcome {
         if self.search.is_empty() {
-            return PageOutcome::Notice(PageNotice::error("no search"));
+            self.notice = Some(PageNotice::error("no search"));
+            return PageOutcome::Consumed;
         }
         if let Some(output) = self.output.as_mut() {
             if let Some(index) = find_match(&output.lines, &self.search, output.cursor, forward) {
@@ -441,7 +447,8 @@ impl GitPage {
                 return PageOutcome::Consumed;
             }
         }
-        PageOutcome::Notice(PageNotice::error(format!("not found: {}", self.search)))
+        self.notice = Some(PageNotice::error(format!("not found: {}", self.search)));
+        PageOutcome::Consumed
     }
 
     /// The next or previous section heading in the direction of `forward`,
@@ -587,11 +594,13 @@ impl GitPage {
     fn toggle_line_mark(&mut self) -> PageOutcome {
         if self.line_mark == Some(self.cursor) || self.hunk_line_at(self.cursor).is_none() {
             self.line_mark = None;
-            self.message = Some("mark cleared".to_string());
+            self.notice = Some(PageNotice::info("mark cleared"));
             return PageOutcome::Consumed;
         }
         self.line_mark = Some(self.cursor);
-        self.message = Some("mark set; Alt-s or Alt-u takes the lines to here".to_string());
+        self.notice = Some(PageNotice::info(
+            "mark set; Alt-s or Alt-u takes the lines to here",
+        ));
         PageOutcome::Consumed
     }
 
@@ -600,7 +609,9 @@ impl GitPage {
     /// cursor alone.
     fn apply_lines(&mut self, unstage: bool) -> PageOutcome {
         let Some((hunk, here)) = self.hunk_line_at(self.cursor) else {
-            self.message = Some("on a line of a diff, that takes one line".to_string());
+            self.notice = Some(PageNotice::error(
+                "on a line of a diff, that takes one line",
+            ));
             return PageOutcome::Consumed;
         };
         let wanted = match unstage {
@@ -609,7 +620,9 @@ impl GitPage {
         };
         if hunk.section != wanted {
             let verb = if unstage { "unstage" } else { "stage" };
-            self.message = Some(format!("nothing to {verb} in this section"));
+            self.notice = Some(PageNotice::error(format!(
+                "nothing to {verb} in this section"
+            )));
             return PageOutcome::Consumed;
         }
         let from = match self
@@ -630,7 +643,7 @@ impl GitPage {
         let Some(patch) =
             diff.patch_for_lines(hunk.index, from.min(here)..=from.max(here), unstage)
         else {
-            self.message = Some("no change on those lines".to_string());
+            self.notice = Some(PageNotice::error("no change on those lines"));
             return PageOutcome::Consumed;
         };
         let target = match unstage {
@@ -772,8 +785,7 @@ impl GitPage {
             return PageOutcome::Consumed;
         };
         let Some(branch) = self.status.branch.clone() else {
-            self.message = Some("no branch to push".to_string());
-            self.rebuild();
+            self.notice = Some(PageNotice::error("no branch to push"));
             return PageOutcome::Consumed;
         };
         let remote = self
@@ -793,8 +805,7 @@ impl GitPage {
             return PageOutcome::Consumed;
         };
         if self.paths_in(Section::Staged).is_empty() {
-            self.message = Some("nothing staged to commit".to_string());
-            self.rebuild();
+            self.notice = Some(PageNotice::error("nothing staged to commit"));
             return PageOutcome::Consumed;
         }
         self.commit(&root, false)
@@ -895,8 +906,7 @@ impl GitPage {
                 PageOutcome::Job(exec::blame(&root, &hunk.path))
             }
             _ => {
-                self.message = Some("no file to blame here".to_string());
-                self.rebuild();
+                self.notice = Some(PageNotice::error("no file to blame here"));
                 PageOutcome::Consumed
             }
         }
@@ -1227,7 +1237,7 @@ impl GitPage {
                     return PageOutcome::Consumed;
                 };
                 if self.section_at_cursor() != Some(Section::Unmerged) {
-                    self.message = Some(format!("{path} is not in conflict"));
+                    self.notice = Some(PageNotice::error(format!("{path} is not in conflict")));
                     return PageOutcome::Consumed;
                 }
                 self.resolving = Some(path.clone());
@@ -1348,12 +1358,11 @@ impl GitPage {
         };
         match append_line(&root.join(".gitignore"), &pattern) {
             Ok(()) => {
-                self.message = Some(format!("ignored {pattern}"));
+                self.notice = Some(PageNotice::info(format!("ignored {pattern}")));
                 self.refresh()
             }
             Err(e) => {
-                self.message = Some(format!("failed: {e}"));
-                self.rebuild();
+                self.notice = Some(PageNotice::error(format!("failed: {e}")));
                 PageOutcome::Consumed
             }
         }
@@ -1471,8 +1480,7 @@ impl GitPage {
             self.loaded = true;
             self.watching = false;
             self.watch.on_answer(Instant::now());
-            self.message = Some(format!("failed: {}", output.failure()));
-            self.rebuild();
+            self.notice = Some(PageNotice::error(format!("failed: {}", output.failure())));
             return PageOutcome::Consumed;
         }
         match output.tag {
@@ -1521,7 +1529,7 @@ impl GitPage {
             }
             exec::TAG_RESOLVE => match (&self.root, self.resolving.take()) {
                 (Some(root), Some(path)) => {
-                    self.message = Some(format!("resolved {path}"));
+                    self.notice = Some(PageNotice::info(format!("resolved {path}")));
                     PageOutcome::Job(exec::stage(root, &[path]))
                 }
                 _ => PageOutcome::Consumed,
@@ -1584,8 +1592,7 @@ impl GitPage {
             // A blame and a plain read differ only in what the view is called.
             exec::TAG_BLAME | exec::TAG_READ => {
                 if output.stdout.trim().is_empty() {
-                    self.message = Some("nothing to show".to_string());
-                    self.rebuild();
+                    self.notice = Some(PageNotice::error(NOTHING_TO_SHOW));
                 } else {
                     let title = if output.tag == exec::TAG_BLAME {
                         "Blame"
@@ -1605,8 +1612,7 @@ impl GitPage {
             // A whole diff fills the view decorated, line for line.
             exec::TAG_DIFF_VIEW => {
                 if output.stdout.trim().is_empty() {
-                    self.message = Some("nothing to show".to_string());
-                    self.rebuild();
+                    self.notice = Some(PageNotice::error(NOTHING_TO_SHOW));
                 } else {
                     let lines: Vec<String> = output.stdout.lines().map(str::to_string).collect();
                     self.show_painted("Diff", rows::diff_view_rows(&lines));
@@ -1618,8 +1624,7 @@ impl GitPage {
             exec::TAG_LOG_VIEW => {
                 let commits = parse::parse_decorated_log(&output.stdout);
                 if commits.is_empty() {
-                    self.message = Some("nothing to show".to_string());
-                    self.rebuild();
+                    self.notice = Some(PageNotice::error(NOTHING_TO_SHOW));
                 } else {
                     let painted = rows::log_rows(&commits, self.root.as_deref(), now_unix(), true);
                     self.show_painted("Log", painted);
@@ -1635,8 +1640,7 @@ impl GitPage {
             // the working tree reads.
             exec::TAG_SHOW => {
                 if output.stdout.trim().is_empty() {
-                    self.message = Some("nothing to show".to_string());
-                    self.rebuild();
+                    self.notice = Some(PageNotice::error(NOTHING_TO_SHOW));
                 } else {
                     let lines: Vec<String> = output.stdout.lines().map(str::to_string).collect();
                     let title = commit_title(&output.stdout);
@@ -1649,15 +1653,14 @@ impl GitPage {
                 match url {
                     Some(url) => PageOutcome::OpenExternal(std::path::PathBuf::from(url)),
                     None => {
-                        self.message = Some("no web URL for that remote".to_string());
-                        self.rebuild();
+                        self.notice = Some(PageNotice::error("no web URL for that remote"));
                         PageOutcome::Consumed
                     }
                 }
             }
             // Anything that changed the repository: report it and re-read.
             tag => {
-                self.message = report_for(tag, &output);
+                self.notice = report_for(tag, &output).map(PageNotice::info);
                 self.refresh()
             }
         }
@@ -1752,11 +1755,12 @@ impl Page for GitPage {
         if self.rows.is_empty() {
             // A loaded view with no rows means git answered and had nothing
             // to report, which only happens outside a repository: a clean tree
-            // still has a header row.
-            let note = if self.loaded {
-                self.message.as_deref().unwrap_or(NOT_A_REPO)
-            } else {
-                LOADING
+            // still has a header row, unless the read itself failed. What git
+            // said went to the status bar.
+            let note = match (self.loaded, &self.root) {
+                (false, _) => LOADING,
+                (true, None) => NOT_A_REPO,
+                (true, Some(_)) => UNREADABLE,
             };
             return PageContent::new(vec![vec![PageSpan::new(PageStyle::Dim, note)]]);
         }
@@ -1806,8 +1810,11 @@ impl Page for GitPage {
         })
     }
 
+    fn take_notice(&mut self) -> Option<PageNotice> {
+        self.notice.take()
+    }
+
     fn on_key(&mut self, key: &Key) -> PageOutcome {
-        self.message = None;
         self.wheel = false;
         if let Some(popup) = self.popup.take() {
             return self.on_popup_key(popup, key.code);
@@ -1926,8 +1933,7 @@ impl Page for GitPage {
             KeyCode::Char('.') => match self.path_at_cursor() {
                 Some(_) => self.open_popup(Popup::File),
                 None => {
-                    self.message = Some("no file here".to_string());
-                    self.rebuild();
+                    self.notice = Some(PageNotice::error("no file here"));
                     PageOutcome::Consumed
                 }
             },
@@ -1965,8 +1971,7 @@ impl Page for GitPage {
     fn on_prompt(&mut self, reply: PromptReply) -> PageOutcome {
         self.wheel = false;
         let Some(answer) = reply.answer else {
-            self.message = Some("cancelled".to_string());
-            self.rebuild();
+            self.notice = Some(PageNotice::info("cancelled"));
             return PageOutcome::Consumed;
         };
         // A search is the one question that asks nothing of git, so it is
@@ -1999,8 +2004,7 @@ impl Page for GitPage {
                     PageOutcome::Job(exec::remote_add(&root, name.trim(), url.trim()))
                 }
                 None => {
-                    self.message = Some("failed: expected `name url`".to_string());
-                    self.rebuild();
+                    self.notice = Some(PageNotice::error("failed: expected `name url`"));
                     PageOutcome::Consumed
                 }
             },
@@ -2395,7 +2399,7 @@ fn report_for(tag: &'static str, output: &CommandOutput) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::page::CommandRequest;
+    use crate::model::page::{CommandRequest, NoticeKind};
 
     const STATUS_OUTPUT: &str = "\
 # branch.head main
@@ -2506,13 +2510,18 @@ mod tests {
             stdout: String::new(),
             tag: exec::TAG_ROOT,
         }));
-        let content = page.content(24, 80, false);
-        assert!(page.loaded);
-        let found = content.rows.iter().any(|r| {
-            let row_str: String = r.iter().map(|s| s.text.as_str()).collect();
-            row_str.contains("failed: fatal: not a git repository")
-        });
-        assert!(found, "expected failure message rendered in page content");
+        let text = painted_text(&mut page);
+        assert!(text.contains(NOT_A_REPO), "{text}");
+        assert!(!text.contains("fatal"), "git's words go to the status bar");
+        let notice = page.take_notice().expect("a failure is reported");
+        assert_eq!(notice.kind, NoticeKind::Error);
+        assert!(
+            notice
+                .text
+                .starts_with("failed: fatal: not a git repository"),
+            "{}",
+            notice.text
+        );
     }
 
     #[test]
@@ -2525,15 +2534,38 @@ mod tests {
             stdout: String::new(),
             tag: exec::TAG_STATUS,
         }));
-        let content = page.content(24, 80, false);
-        let text: String = content
+        let text = painted_text(&mut page);
+        assert!(text.contains(UNREADABLE), "{text}");
+        assert!(!text.contains(LOADING));
+        let notice = notice_text(&mut page).unwrap_or_default();
+        assert!(notice.contains("command timed out after 15s"), "{notice}");
+    }
+
+    #[test]
+    fn test_a_report_goes_to_the_status_bar_not_the_header() {
+        // The header is the repository's state; a report drawn there pushed
+        // the sections down a row and stayed until the next key.
+        let mut page = loaded_page();
+        page.on_job(reply(exec::TAG_FETCH, ""));
+        assert!(!painted_text(&mut page).contains("fetched"));
+        let notice = page.take_notice().expect("the fetch is reported");
+        assert_eq!(notice, PageNotice::info("fetched"));
+        assert_eq!(page.take_notice(), None, "a report is shown once");
+    }
+
+    /// Everything the page paints at a usual size, joined.
+    fn painted_text(page: &mut GitPage) -> String {
+        page.content(24, 80, false)
             .rows
             .iter()
             .flatten()
-            .map(|s| s.text.as_str())
-            .collect();
-        assert!(text.contains("command timed out after 15s"), "{text}");
-        assert!(!text.contains(LOADING));
+            .map(|span| span.text.as_str())
+            .collect()
+    }
+
+    /// The text of what the page has to report, taking it.
+    fn notice_text(page: &mut GitPage) -> Option<String> {
+        page.take_notice().map(|notice| notice.text)
     }
 
     #[test]
@@ -2819,7 +2851,11 @@ mod tests {
         let mut page = loaded_page();
         let next = page.on_job(reply(exec::TAG_STAGE, ""));
         assert_eq!(command_of(&next).tag, exec::TAG_STATUS);
-        assert_eq!(page.message, None, "the section headings already say it");
+        assert_eq!(
+            page.take_notice(),
+            None,
+            "the section headings already say it"
+        );
     }
 
     #[test]
@@ -2832,7 +2868,7 @@ mod tests {
             tag: exec::TAG_STAGE,
         }));
         assert_eq!(outcome, PageOutcome::Consumed);
-        let message = page.message.clone().unwrap_or_default();
+        let message = notice_text(&mut page).unwrap_or_default();
         assert!(message.starts_with("failed:"), "got {message:?}");
         assert!(message.contains("pathspec"), "got {message:?}");
     }
@@ -3580,7 +3616,7 @@ index aaa..bbb 100644
         page.on_job(reply(exec::TAG_ROOT, "/repo\n/repo/.git\n"));
         page.on_job(reply(exec::TAG_STATUS, "# branch.head (detached)\n"));
         assert_eq!(page.on_key(&quick_push_key()), PageOutcome::Consumed);
-        assert_eq!(page.message.as_deref(), Some("no branch to push"));
+        assert_eq!(notice_text(&mut page).as_deref(), Some("no branch to push"));
     }
 
     #[test]
@@ -3595,7 +3631,10 @@ index aaa..bbb 100644
             shift: true,
         });
         assert_eq!(outcome, PageOutcome::Consumed);
-        assert_eq!(page.message.as_deref(), Some("nothing staged to commit"));
+        assert_eq!(
+            notice_text(&mut page).as_deref(),
+            Some("nothing staged to commit")
+        );
     }
 
     #[test]
@@ -3681,9 +3720,7 @@ index aaa..bbb 100644
             tag: request.tag,
         });
         assert_eq!(outcome, PageOutcome::Consumed);
-        assert!(page
-            .message
-            .clone()
+        assert!(notice_text(&mut page)
             .unwrap_or_default()
             .starts_with("failed:"));
     }
@@ -4059,7 +4096,7 @@ index aaa..bbb 100644
 ",
         ));
         assert!(page.output.is_none(), "the status view stays");
-        assert_eq!(page.message.as_deref(), Some("nothing to show"));
+        assert_eq!(notice_text(&mut page).as_deref(), Some("nothing to show"));
     }
 
     #[test]
@@ -4168,7 +4205,7 @@ index aaa..bbb 100644
         let mut page = loaded_page();
         page.on_job(reply(exec::TAG_READ, "\n"));
         assert!(page.output.is_none());
-        assert_eq!(page.message.as_deref(), Some("nothing to show"));
+        assert_eq!(notice_text(&mut page).as_deref(), Some("nothing to show"));
     }
 
     #[test]
@@ -4329,7 +4366,7 @@ index aaa..bbb 100644
         page.cursor = 0;
         assert_eq!(page.on_key(&press_char('.')), PageOutcome::Consumed);
         assert_eq!(page.popup, None);
-        assert_eq!(page.message.as_deref(), Some("no file here"));
+        assert_eq!(notice_text(&mut page).as_deref(), Some("no file here"));
     }
 
     #[test]
@@ -4572,23 +4609,13 @@ index aaa..bbb 100644
     #[test]
     fn test_a_search_that_finds_nothing_reports_it_instead_of_going_quiet() {
         let mut page = loaded_page();
-        let outcome = page.on_key(&press_char('n'));
-        assert_eq!(outcome, PageOutcome::Notice(PageNotice::error("no search")));
+        page.on_key(&press_char('n'));
+        assert_eq!(page.take_notice(), Some(PageNotice::error("no search")));
 
-        let outcome = search(&mut page, "absent");
+        search(&mut page, "absent");
         assert_eq!(
-            outcome,
-            PageOutcome::Notice(PageNotice::error("not found: absent"))
-        );
-
-        let content = page.content(24, 80, false);
-        let found = content.rows.iter().any(|r| {
-            let row_str: String = r.iter().map(|s| s.text.as_str()).collect();
-            row_str.contains("not found: absent") || row_str.contains("no search")
-        });
-        assert!(
-            !found,
-            "notices must be routed to status bar, not printed into git view rows"
+            page.take_notice(),
+            Some(PageNotice::error("not found: absent"))
         );
     }
 
@@ -4597,10 +4624,10 @@ index aaa..bbb 100644
         // Every other question needs a repository and is dropped without one,
         // which would swallow a search the user typed while the status loaded.
         let mut page = GitPage::new(PathBuf::from("/repo"));
-        let outcome = search(&mut page, "anything");
+        search(&mut page, "anything");
         assert_eq!(
-            outcome,
-            PageOutcome::Notice(PageNotice::error("not found: anything"))
+            page.take_notice(),
+            Some(PageNotice::error("not found: anything"))
         );
     }
 
@@ -4621,7 +4648,10 @@ index aaa..bbb 100644
         let mut page = loaded_page();
         page.cursor = 0;
         assert_eq!(page.on_key(&alt_char('b')), PageOutcome::Consumed);
-        assert_eq!(page.message.as_deref(), Some("no file to blame here"));
+        assert_eq!(
+            notice_text(&mut page).as_deref(),
+            Some("no file to blame here")
+        );
     }
 
     #[test]
