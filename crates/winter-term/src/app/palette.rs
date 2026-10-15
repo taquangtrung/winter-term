@@ -106,7 +106,7 @@ impl App {
                 } else if palette.mode == PaletteMode::Swoop {
                     if let Some((pid, (r, c))) = self.swoop_initial_cursor.take() {
                         if pid == focused {
-                            self.nav_cursors.insert(focused, (r, c));
+                            self.set_nav_cursor(focused, (r, c));
                             self.reveal_position(focused, (r, c));
                         }
                     }
@@ -199,7 +199,7 @@ impl App {
             }
             PaletteMode::History => {
                 if let Some(cmd) = action {
-                    if let Some(terminal) = self.terminals.get_mut(&focused) {
+                    if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                         terminal.write(cmd.as_bytes());
                     }
                 }
@@ -211,7 +211,7 @@ impl App {
                     // inject a second shell command.
                     let safe = !dir.chars().any(|c| c.is_control());
                     if safe {
-                        if let Some(terminal) = self.terminals.get_mut(&focused) {
+                        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                             // Single-quote the path so shell metacharacters
                             // in the directory name are inert. The only
                             // character that cannot appear inside single
@@ -223,15 +223,15 @@ impl App {
                     }
                 }
             }
-            PaletteMode::Extensions => {
+            PaletteMode::TabList => {
                 if let Some(action) = action {
-                    self.choose_extension_row(&action);
+                    self.choose_tab_row(&action);
                 }
             }
             PaletteMode::Panes => {
                 if let Some(pane_id_str) = action {
                     if let Ok(pane_id_val) = pane_id_str.parse::<u64>() {
-                        self.switch_to_pane(TabId(pane_id_val));
+                        self.switch_to_tab(TabId(pane_id_val));
                     }
                 }
             }
@@ -251,24 +251,24 @@ impl App {
                         if let Some((_pid, origin)) = self.swoop_initial_cursor.take() {
                             self.vim.jump_lists.entry(focused).or_default().push(origin);
                         }
-                        self.nav_cursors.insert(focused, (abs_row, 0));
+                        self.set_nav_cursor(focused, (abs_row, 0));
                         self.reveal_position(focused, (abs_row, 0));
-                        self.modes.insert(focused, Mode::Normal);
+                        self.open_tabs.set_mode(&focused, Mode::Normal);
                     }
                 }
             }
             PaletteMode::Jump => {
                 if let Some(action) = action {
                     if let Ok(target) = action.parse::<usize>() {
-                        if let Some(slot) = self.pages.get_mut(&focused) {
+                        if let Some(slot) = self.open_tabs.page_mut(&focused) {
                             slot.page.jump_confirm(target);
                         } else {
                             if let Some((_pid, origin)) = self.swoop_initial_cursor.take() {
                                 self.vim.jump_lists.entry(focused).or_default().push(origin);
                             }
-                            self.nav_cursors.insert(focused, (target, 0));
+                            self.set_nav_cursor(focused, (target, 0));
                             self.reveal_position_centered(focused, (target, 0));
-                            self.modes.insert(focused, Mode::Normal);
+                            self.open_tabs.set_mode(&focused, Mode::Normal);
                         }
                     }
                 }
@@ -308,8 +308,8 @@ impl App {
                         // Start where the user is: the focused pane's OSC 7
                         // cwd, when the shell has reported one.
                         let cwd = self
-                            .terminals
-                            .get(&focused)
+                            .open_tabs
+                            .terminal(&focused)
                             .and_then(|terminal| terminal.cwd());
                         self.spawn_mux_tab_at(
                             &crate::mux::server::default_socket_path(),
@@ -429,7 +429,7 @@ impl App {
     }
     /// Buffer swoop: open fuzzy line search over the focused pane's grid and scrollback.
     pub(crate) fn open_swoop(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let initial = self.nav_cursor(focused).or_else(|| {
@@ -441,12 +441,12 @@ impl App {
         if let Some(pos) = initial {
             self.swoop_initial_cursor = Some((focused, pos));
         }
-        self.modes.insert(focused, Mode::Normal);
         let lines = navigation::swoop::extract_swoop_lines(terminal.grid());
+        self.open_tabs.set_mode(&focused, Mode::Normal);
         let palette = Palette::open_swoop(lines).with_query_history(self.palette_history.clone());
         if let Some(action) = palette.selected_action() {
             if let Ok(abs_row) = action.parse::<usize>() {
-                self.nav_cursors.insert(focused, (abs_row, 0));
+                self.set_nav_cursor(focused, (abs_row, 0));
                 self.reveal_position(focused, (abs_row, 0));
             }
         }
@@ -460,7 +460,7 @@ impl App {
     pub(crate) fn update_swoop_preview(&mut self, palette: &Palette, focused: TabId) {
         if let Some(action) = palette.selected_action() {
             if let Ok(abs_row) = action.parse::<usize>() {
-                self.nav_cursors.insert(focused, (abs_row, 0));
+                self.set_nav_cursor(focused, (abs_row, 0));
                 self.reveal_position(focused, (abs_row, 0));
                 self.dirty = true;
                 if let Some(window) = &self.window {
@@ -472,7 +472,7 @@ impl App {
 
     /// Buffer jump: open fuzzy target completion dialog for the active buffer view.
     pub(crate) fn open_jump(&mut self, focused: TabId) {
-        if let Some(slot) = self.pages.get_mut(&focused) {
+        if let Some(slot) = self.open_tabs.page_mut(&focused) {
             if let Some(targets) = slot.page.jump_targets() {
                 let title = format!("Jump: {}", slot.page.title());
                 let initial_cursor = slot.page.jump_cursor();
@@ -495,7 +495,7 @@ impl App {
             }
         }
 
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let initial = self.nav_cursor(focused).or_else(|| {
@@ -507,8 +507,8 @@ impl App {
         if let Some(pos) = initial {
             self.swoop_initial_cursor = Some((focused, pos));
         }
-        self.modes.insert(focused, Mode::Normal);
         let lines = navigation::swoop::extract_swoop_lines(terminal.grid());
+        self.open_tabs.set_mode(&focused, Mode::Normal);
         let targets = lines
             .into_iter()
             .map(|(abs_row, line)| (abs_row, format!("{:>5}  {}", abs_row + 1, line)))
@@ -520,7 +520,7 @@ impl App {
         }
         if let Some(action) = palette.selected_action() {
             if let Ok(abs_row) = action.parse::<usize>() {
-                self.nav_cursors.insert(focused, (abs_row, 0));
+                self.set_nav_cursor(focused, (abs_row, 0));
                 self.reveal_position_centered(focused, (abs_row, 0));
             }
         }
@@ -535,10 +535,10 @@ impl App {
     pub(crate) fn update_jump_preview(&mut self, palette: &Palette, focused: TabId) {
         if let Some(action) = palette.selected_action() {
             if let Ok(target) = action.parse::<usize>() {
-                if let Some(slot) = self.pages.get_mut(&focused) {
+                if let Some(slot) = self.open_tabs.page_mut(&focused) {
                     slot.page.jump_to(target);
                 } else {
-                    self.nav_cursors.insert(focused, (target, 0));
+                    self.set_nav_cursor(focused, (target, 0));
                     self.reveal_position_centered(focused, (target, 0));
                 }
                 self.dirty = true;
@@ -551,11 +551,11 @@ impl App {
 
     /// Restore the pre-jump view/cursor position when jump is cancelled.
     pub(crate) fn cancel_jump(&mut self, focused: TabId) {
-        if let Some(slot) = self.pages.get_mut(&focused) {
+        if let Some(slot) = self.open_tabs.page_mut(&focused) {
             slot.page.jump_cancel();
         } else if let Some((pid, (r, c))) = self.swoop_initial_cursor.take() {
             if pid == focused {
-                self.nav_cursors.insert(focused, (r, c));
+                self.set_nav_cursor(focused, (r, c));
                 self.reveal_position(focused, (r, c));
             }
         }

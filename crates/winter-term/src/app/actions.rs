@@ -24,7 +24,7 @@ impl App {
         self.track_change(&action, focused);
         match action {
             Action::SendBytes(bytes) => {
-                if let Some(terminal) = self.terminals.get_mut(&focused) {
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                     // Typing means looking at the prompt: a view scrolled back
                     // through history comes down to the live screen, or the
                     // keys would land where nothing shows them.
@@ -46,16 +46,15 @@ impl App {
                     InsertAt::LineEnd => self.move_nav_cursor(CursorMove::LineEnd, focused),
                 }
                 let mode = self
-                    .modes
-                    .get(&focused)
-                    .copied()
+                    .open_tabs
+                    .mode(&focused)
                     .unwrap_or_default()
                     .apply(ModeEvent::ToInsert);
                 self.handle_action(Action::SwitchMode(mode), focused);
             }
             Action::MoveCursor(mv) => {
                 self.move_nav_cursor(mv, focused);
-                if self.modes.get(&focused) == Some(&Mode::Visual) {
+                if self.open_tabs.mode(&focused) == Some(Mode::Visual) {
                     self.update_visual_selection(focused);
                 }
             }
@@ -63,7 +62,7 @@ impl App {
                 for _ in 0..count.max(1) {
                     self.move_nav_cursor(mv, focused);
                 }
-                if self.modes.get(&focused) == Some(&Mode::Visual) {
+                if self.open_tabs.mode(&focused) == Some(Mode::Visual) {
                     self.update_visual_selection(focused);
                 }
             }
@@ -269,16 +268,16 @@ impl App {
                 self.close_other_tabs(focused);
             }
             Action::CloseTab(which) => {
-                let pane = match which {
+                let tab = match which {
                     Some(n) => self
                         .layout()
-                        .group_members(focused)
+                        .tabs_in_pane(focused)
                         .get(n.saturating_sub(1))
                         .copied(),
                     None => Some(focused),
                 };
-                if let Some(pane) = pane {
-                    self.close_tab(pane);
+                if let Some(tab) = tab {
+                    self.close_tab(tab);
                 }
             }
             Action::FocusPane(dir) => {
@@ -290,7 +289,7 @@ impl App {
                 self.layout_mut().focus_by_index(n.saturating_sub(1));
             }
             Action::ClosePaneByIndex(n) => {
-                if let Some(&id) = self.layout().panes().get(n.saturating_sub(1)) {
+                if let Some(&id) = self.layout().shown_tabs().get(n.saturating_sub(1)) {
                     self.close_pane(id);
                 }
             }
@@ -374,45 +373,45 @@ impl App {
                 self.quick_select = None;
             }
             Action::ScrollPageUp => {
-                if let Some(pane) = self.terminals.get_mut(&focused) {
-                    let rows = pane.grid().rows();
-                    pane.grid_mut().scroll_up_history(rows);
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
+                    let rows = terminal.grid().rows();
+                    terminal.grid_mut().scroll_up_history(rows);
                     self.scroll_app_view(focused, rows as isize);
                 }
                 self.dirty = true;
             }
             Action::ScrollPageDown => {
-                if let Some(pane) = self.terminals.get_mut(&focused) {
-                    let rows = pane.grid().rows();
-                    pane.grid_mut().scroll_down_history(rows);
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
+                    let rows = terminal.grid().rows();
+                    terminal.grid_mut().scroll_down_history(rows);
                     self.scroll_app_view(focused, -(rows as isize));
                 }
                 self.dirty = true;
             }
             Action::ScrollLineUp => {
-                if let Some(pane) = self.terminals.get_mut(&focused) {
-                    pane.grid_mut().scroll_up_history(1);
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
+                    terminal.grid_mut().scroll_up_history(1);
                     self.scroll_app_view(focused, 1);
                 }
                 self.dirty = true;
             }
             Action::ScrollLineDown => {
-                if let Some(pane) = self.terminals.get_mut(&focused) {
-                    pane.grid_mut().scroll_down_history(1);
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
+                    terminal.grid_mut().scroll_down_history(1);
                     self.scroll_app_view(focused, -1);
                 }
                 self.dirty = true;
             }
             Action::ScrollToTop => {
-                if let Some(pane) = self.terminals.get_mut(&focused) {
-                    let limit = pane.grid().scrollback_len();
-                    pane.grid_mut().set_scroll_offset(limit);
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
+                    let limit = terminal.grid().scrollback_len();
+                    terminal.grid_mut().set_scroll_offset(limit);
                 }
                 self.dirty = true;
             }
             Action::ScrollToBottom => {
-                if let Some(pane) = self.terminals.get_mut(&focused) {
-                    pane.grid_mut().set_scroll_offset(0);
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
+                    terminal.grid_mut().set_scroll_offset(0);
                 }
                 self.dirty = true;
             }
@@ -468,8 +467,8 @@ impl App {
     /// transition owes: what the old mode must hand back, then what the new one
     /// needs set up.
     fn switch_mode(&mut self, new_mode: Mode, focused: TabId) {
-        let old_mode = self.modes.get(&focused).copied().unwrap_or_default();
-        self.modes.insert(focused, new_mode);
+        let old_mode = self.open_tabs.mode(&focused).unwrap_or_default();
+        self.open_tabs.set_mode(&focused, new_mode);
         // A pending `f`/`t` overlay belongs to the mode it was raised in.
         self.clear_find_labels();
         self.leave_mode(old_mode, new_mode, focused);
@@ -513,7 +512,7 @@ impl App {
                     self.init_nav_cursor(focused);
                 }
             }
-            Mode::Insert | Mode::BlockFocus | Mode::Page => {
+            Mode::Insert | Mode::BlockFocus => {
                 if new_mode == Mode::Insert {
                     self.align_prompt_to_nav_cursor(focused);
                 }
@@ -532,11 +531,11 @@ impl App {
         // Typing goes to the prompt, so a pane scrolled up into history snaps
         // back to the live bottom first.
         let was_scrolled = self
-            .terminals
-            .get(&focused)
+            .open_tabs
+            .terminal(&focused)
             .is_some_and(|terminal| terminal.grid().scroll_offset() > 0);
         if was_scrolled {
-            if let Some(terminal) = self.terminals.get_mut(&focused) {
+            if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                 terminal.grid_mut().set_scroll_offset(0);
             }
         }
@@ -546,7 +545,7 @@ impl App {
         let aligned = (!was_scrolled)
             .then(|| {
                 self.nav_cursor(focused).and_then(|(nav_row, nav_col)| {
-                    let terminal = self.terminals.get(&focused)?;
+                    let terminal = self.open_tabs.terminal(&focused)?;
                     let (prompt_row, pty_col) = terminal.grid().cursor();
                     (nav_row == prompt_row).then_some((nav_col, pty_col))
                 })
@@ -557,7 +556,7 @@ impl App {
         };
         // Keep the shadow cursor aligned with the shell cursor so
         // post-navigation inserts model correctly.
-        if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+        if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
             shadow.sync_cursor(nav_col, pty_col);
         }
         let (seq, steps) = if nav_col >= pty_col {
@@ -570,7 +569,7 @@ impl App {
             bytes.extend_from_slice(seq);
         }
         if !bytes.is_empty() {
-            if let Some(terminal) = self.terminals.get_mut(&focused) {
+            if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                 terminal.write(&bytes);
             }
         }
@@ -644,8 +643,8 @@ impl App {
             self.set_auto_mark(focused, ']', last);
         }
         self.remember_visual(focused);
-        self.modes
-            .insert(focused, Mode::Visual.apply(ModeEvent::Escape));
+        self.open_tabs
+            .set_mode(&focused, Mode::Visual.apply(ModeEvent::Escape));
         self.selection.visual_anchor = None;
         self.selection.span = None;
         self.dirty = true;
@@ -713,7 +712,7 @@ impl App {
             self.decline_prompt_edit();
             return;
         }
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let (prompt_row, pty_col) = terminal.grid().cursor();
@@ -732,11 +731,11 @@ impl App {
         if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(terminal, &targets)) {
             return;
         }
-        if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+        if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
             shadow.record_normal_delete(op, nav_col, pty_col);
         }
         let bytes = prompt_delete_bytes(op, pty_col, nav_col);
-        if let Some(terminal) = self.terminals.get_mut(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
             terminal.write(&bytes);
         }
         self.nav_resync_pending = true;
@@ -749,7 +748,7 @@ impl App {
             self.decline_prompt_edit();
             return;
         }
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let (prompt_row, pty_col) = terminal.grid().cursor();
@@ -759,7 +758,7 @@ impl App {
             return;
         }
         self.delete_on_prompt(op, focused);
-        self.modes.insert(focused, Mode::Insert);
+        self.open_tabs.set_mode(&focused, Mode::Insert);
         self.selection.span = None;
         self.selection.visual_anchor = None;
         self.dirty = true;
@@ -771,7 +770,7 @@ impl App {
             self.decline_prompt_edit();
             return;
         }
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let (prompt_row, pty_col) = terminal.grid().cursor();
@@ -783,11 +782,11 @@ impl App {
         if self.decline_decoration_edit(Self::prompt_edit_hits_decoration(terminal, &[nav_col])) {
             return;
         }
-        if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+        if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
             shadow.desync();
         }
         let bytes = prompt_edit::prompt_replace_char_bytes(pty_col, nav_col, ch);
-        if let Some(terminal) = self.terminals.get_mut(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
             terminal.write(&bytes);
         }
         self.nav_resync_pending = true;
@@ -800,7 +799,7 @@ impl App {
             self.decline_prompt_edit();
             return;
         }
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let (prompt_row, pty_col) = terminal.grid().cursor();
@@ -822,11 +821,11 @@ impl App {
                 self.move_nav_cursor(CursorMove::Right, focused);
                 return;
             };
-            if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+            if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
                 shadow.desync();
             }
             let bytes = prompt_edit::prompt_toggle_case_bytes(pty_col, nav_col, toggled);
-            if let Some(terminal) = self.terminals.get_mut(&focused) {
+            if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                 terminal.write(&bytes);
             }
             self.move_nav_cursor(CursorMove::Right, focused);
@@ -844,15 +843,15 @@ impl App {
         // model of the line would be wrong under other bindings.
         let at_prompt = self.prompt_editing_enabled()
             && self
-                .terminals
-                .get(&focused)
-                .is_some_and(|pane| pane.is_at_prompt());
-        if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+                .open_tabs
+                .terminal(&focused)
+                .is_some_and(|terminal| terminal.is_at_prompt());
+        if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
             shadow.apply_edit_action(action, at_prompt);
         }
         let bytes = edit_action_bytes(action);
-        if let Some(pane) = self.terminals.get_mut(&focused) {
-            pane.write(&bytes);
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
+            terminal.write(&bytes);
         }
         self.dirty = true;
     }
@@ -875,36 +874,36 @@ impl App {
             return;
         }
         let at_prompt = self
-            .terminals
-            .get(&focused)
-            .is_some_and(|pane| pane.is_at_prompt());
+            .open_tabs
+            .terminal(&focused)
+            .is_some_and(|terminal| terminal.is_at_prompt());
         if !at_prompt {
             return;
         }
         if undo {
-            if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+            if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
                 shadow.step_back();
             }
-            if let Some(pane) = self.terminals.get_mut(&focused) {
-                pane.write(&[READLINE_UNDO]);
+            if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
+                terminal.write(&[READLINE_UNDO]);
             }
             self.dirty = true;
             return;
         }
         let Some(target) = self
-            .prompt_shadows
-            .get_mut(&focused)
+            .open_tabs
+            .prompt_shadow_mut(&focused)
             .and_then(|shadow| shadow.redo_target())
         else {
             return;
         };
         let bracketed = self
-            .terminals
-            .get(&focused)
-            .is_some_and(|pane| pane.bracketed_paste());
+            .open_tabs
+            .terminal(&focused)
+            .is_some_and(|terminal| terminal.bracketed_paste());
         let bytes = rebuild_line_bytes(&target, bracketed);
-        if let Some(pane) = self.terminals.get_mut(&focused) {
-            pane.write(&bytes);
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
+            terminal.write(&bytes);
         }
         self.nav_resync_pending = true;
         self.dirty = true;
@@ -913,11 +912,11 @@ impl App {
     /// Enter Visual mode from Normal, toggle it off when the same kind is pressed
     /// again, or switch between charwise, linewise, and blockwise while staying in Visual.
     fn toggle_visual(&mut self, kind: VisualKind, focused: TabId) {
-        let mode = self.modes.get(&focused).copied().unwrap_or_default();
+        let mode = self.open_tabs.mode(&focused).unwrap_or_default();
         match mode {
             Mode::Normal => {
-                self.modes
-                    .insert(focused, Mode::Normal.apply(ModeEvent::EnterVisual));
+                self.open_tabs
+                    .set_mode(&focused, Mode::Normal.apply(ModeEvent::EnterVisual));
                 self.selection.visual_anchor =
                     Some(self.absolute_nav_cursor(focused).unwrap_or((0, 0)));
                 self.selection.visual_kind = kind;
@@ -926,8 +925,8 @@ impl App {
             Mode::Visual if self.selection.visual_kind == kind => {
                 // Same kind again leaves Visual, back to Normal.
                 self.remember_visual(focused);
-                self.modes
-                    .insert(focused, Mode::Visual.apply(ModeEvent::EnterVisual));
+                self.open_tabs
+                    .set_mode(&focused, Mode::Visual.apply(ModeEvent::EnterVisual));
                 self.selection.visual_anchor = None;
                 self.selection.span = None;
             }
@@ -936,7 +935,7 @@ impl App {
                 self.selection.visual_kind = kind;
                 self.update_visual_selection(focused);
             }
-            Mode::Insert | Mode::BlockFocus | Mode::Page => {}
+            Mode::Insert | Mode::BlockFocus => {}
         }
         self.dirty = true;
     }
@@ -970,10 +969,10 @@ impl App {
         let Some((cursor_row, cursor_col)) = self.nav_cursor(focused) else {
             return;
         };
-        let Some(pane) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
-        let grid = pane.grid();
+        let grid = terminal.grid();
         self.selection.last_visual = Some(LastVisual {
             anchor,
             cursor: (grid.to_absolute_row(cursor_row), cursor_col),
@@ -997,8 +996,8 @@ impl App {
         else {
             return;
         };
-        self.modes
-            .insert(focused, Mode::Normal.apply(ModeEvent::EnterVisual));
+        self.open_tabs
+            .set_mode(&focused, Mode::Normal.apply(ModeEvent::EnterVisual));
         self.selection.visual_kind = last.kind;
         self.reveal_position(focused, last.cursor);
         self.selection.visual_anchor = Some(last.anchor);

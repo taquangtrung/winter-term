@@ -1219,9 +1219,9 @@ impl GpuRenderer {
             }
         }
 
-        // The tool's glyph sits one cell in from the right edge: the line is
+        // The page's glyph sits one cell in from the right edge: the line is
         // monospace, so padding with spaces to the column count lands it there.
-        if let Some(icon) = status.tool_icon {
+        if let Some(icon) = status.page_icon {
             let columns = (surface_width / self.cell_width).floor() as usize;
             let used = status_text.chars().count();
             let padding = columns.saturating_sub(used + 2);

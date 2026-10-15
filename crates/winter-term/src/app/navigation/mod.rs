@@ -332,13 +332,13 @@ fn vertical_band_stop(spans: &[(usize, usize)], row: usize, down: bool) -> usize
 // ========================================================================
 
 impl App {
-    /// The focused pane's Normal/Visual traversal cursor, if it has one. Because
-    /// the cursor is stored per pane ([`App::nav_cursors`]), this never returns a
-    /// position belonging to a different pane: the previous bug where switching
-    /// panes leaked the source pane's cursor into the destination (landing it
-    /// before the first typeable column) cannot occur.
+    /// Terminal tab `tab`'s Normal/Visual traversal cursor, if it has one.
+    /// Because the cursor is kept with its tab, this never returns a position
+    /// belonging to a different one: the previous bug where switching panes
+    /// leaked the source pane's cursor into the destination (landing it before
+    /// the first typeable column) cannot occur.
     pub(crate) fn nav_cursor(&self, tab: TabId) -> Option<(usize, usize)> {
-        self.nav_cursors.get(&tab).copied()
+        self.open_tabs.nav_cursor(&tab)
     }
 
     /// The traversal cursor as an absolute `(row, col)`, which is how the
@@ -346,26 +346,29 @@ impl App {
     pub(crate) fn absolute_nav_cursor(&self, terminal: TabId) -> Option<(usize, usize)> {
         let (row, col) = self.nav_cursor(terminal)?;
         Some((
-            self.terminals.get(&terminal)?.grid().to_absolute_row(row),
+            self.open_tabs
+                .terminal(&terminal)?
+                .grid()
+                .to_absolute_row(row),
             col,
         ))
     }
 
-    /// Record the focused pane's traversal cursor.
+    /// Record terminal tab `tab`'s traversal cursor.
     pub(crate) fn set_nav_cursor(&mut self, tab: TabId, pos: (usize, usize)) {
-        self.nav_cursors.insert(tab, pos);
+        self.open_tabs.set_nav_cursor(&tab, Some(pos));
     }
 
-    /// Drop the focused pane's traversal cursor (called when it leaves Normal).
+    /// Drop terminal tab `tab`'s traversal cursor (called when it leaves Normal).
     pub(crate) fn clear_nav_cursor(&mut self, tab: TabId) {
-        self.nav_cursors.remove(&tab);
+        self.open_tabs.set_nav_cursor(&tab, None);
     }
 
     /// Record the cursor's current position (absolute) as the origin of a
     /// jump, so `Ctrl+O` can come back: called before jump-class motions
     /// land, before confirmed search steps, and when Normal mode ends.
     pub(crate) fn push_jump(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let Some((row, col)) = self.nav_cursor(focused) else {
@@ -460,15 +463,15 @@ impl App {
                 );
             }
             input::Action::SwitchMode(new_mode) => {
-                let was_insert = self.modes.get(&focused) == Some(&Mode::Insert);
+                let was_insert = self.open_tabs.mode(&focused) == Some(Mode::Insert);
                 if was_insert && *new_mode != Mode::Insert {
                     self.finish_insert_session(focused);
                 }
             }
             _ if is_change_action(action)
                 && self
-                    .terminals
-                    .get(&focused)
+                    .open_tabs
+                    .terminal(&focused)
                     .is_some_and(|p| p.is_at_prompt()) =>
             {
                 self.vim
@@ -483,7 +486,7 @@ impl App {
         }
     }
 
-    /// Close the pane's Insert-mode typing session: a non-empty run becomes
+    /// Close the terminal's Insert-mode typing session: a non-empty run becomes
     /// the pane's last change (replayed by `.`), and the session's anchor
     /// joins the changelist so `g;` returns to where the typing began.
     fn finish_insert_session(&mut self, focused: TabId) {
@@ -522,14 +525,14 @@ impl App {
             LastChange::Action(action) => self.handle_action(action, focused),
             LastChange::Typed(run) => {
                 if self
-                    .terminals
-                    .get(&focused)
+                    .open_tabs
+                    .terminal(&focused)
                     .is_some_and(|p| p.is_at_prompt())
                 {
                     if let Some(pos) = self.live_jump_position(focused) {
                         self.vim.change_lists.entry(focused).or_default().push(pos);
                     }
-                    if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+                    if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
                         shadow.desync();
                     }
                 }
@@ -543,7 +546,7 @@ impl App {
         if !mark.is_ascii_lowercase() {
             return;
         }
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let Some((row, col)) = self.nav_cursor(focused) else {
@@ -560,7 +563,7 @@ impl App {
         let Some(&(abs_row, col)) = self.vim.marks.get(&(focused, mark)) else {
             return;
         };
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -579,7 +582,7 @@ impl App {
     /// The cursor's current position in jump coordinates (absolute), when the
     /// pane and its nav cursor both exist.
     fn live_jump_position(&self, focused: TabId) -> Option<(usize, usize)> {
-        let terminal = self.terminals.get(&focused)?;
+        let terminal = self.open_tabs.terminal(&focused)?;
         let (row, col) = self.nav_cursor(focused)?;
         Some((terminal.grid().to_absolute_row(row), col))
     }
@@ -589,7 +592,7 @@ impl App {
     /// selection when the pane is in Visual mode.
     fn jump_to(&mut self, focused: TabId, (abs_row, col): (usize, usize)) {
         self.reveal_position(focused, (abs_row, col));
-        if self.modes.get(&focused) == Some(&Mode::Visual) {
+        if self.open_tabs.mode(&focused) == Some(Mode::Visual) {
             self.update_visual_selection(focused);
         }
         self.dirty = true;
@@ -600,7 +603,7 @@ impl App {
     /// Normal-mode cursor on it. Shared by search jumps and the jumplist so
     /// later motions and `n`/`N` resume from the landed spot.
     pub(crate) fn reveal_position(&mut self, focused: TabId, (abs_row, col): (usize, usize)) {
-        let Some(terminal) = self.terminals.get_mut(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal_mut(&focused) else {
             return;
         };
         let grid = terminal.grid_mut();
@@ -625,7 +628,7 @@ impl App {
         focused: TabId,
         (abs_row, col): (usize, usize),
     ) {
-        let Some(terminal) = self.terminals.get_mut(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal_mut(&focused) else {
             return;
         };
         let grid = terminal.grid_mut();
@@ -645,8 +648,8 @@ impl App {
     /// in `nav_cursors`.
     pub(crate) fn track_nav_cursor_to_mouse(&mut self, tab: TabId, row: usize, col: usize) {
         if self
-            .modes
-            .get(&tab)
+            .open_tabs
+            .mode(&tab)
             .is_some_and(|m| matches!(m, Mode::Normal | Mode::Visual))
         {
             self.set_nav_cursor(tab, (row, col));
@@ -659,7 +662,7 @@ impl App {
     /// that exact column so the cursor does not appear to jump when switching
     /// modes: only its shape changes (e.g. bar → block).
     pub(crate) fn init_nav_cursor(&mut self, focused: TabId) {
-        if let Some(terminal) = self.terminals.get(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal(&focused) {
             let grid = terminal.grid();
             let (cursor_row, cursor_col) = grid.cursor();
             let row = cursor_row.min(grid.rows().saturating_sub(1));
@@ -686,10 +689,10 @@ impl App {
         // The pane's block bands, gathered before the mutable pane borrow so
         // the two borrows of `self` don't overlap.
         let bands = self.block_bands(focused);
-        // Read the stored cursor before mutably borrowing the pane so the two
-        // borrows of `self` don't overlap (the method form borrows all of `self`).
-        let stored = self.nav_cursors.get(&focused).copied();
-        let Some(terminal) = self.terminals.get_mut(&focused) else {
+        // Read the stored cursor before mutably borrowing the terminal, since
+        // both live in the same tab.
+        let stored = self.nav_cursor(focused);
+        let Some(terminal) = self.open_tabs.terminal_mut(&focused) else {
             return;
         };
         let grid = terminal.grid_mut();
@@ -838,13 +841,13 @@ impl App {
 
     /// `gp`: Jump the navigation cursor directly to the active prompt row.
     pub(crate) fn jump_to_prompt(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let (prompt_row, pty_col) = terminal.grid().cursor();
         self.push_jump(focused);
         self.set_nav_cursor(focused, (prompt_row, pty_col));
-        if self.modes.get(&focused) == Some(&Mode::Visual) {
+        if self.open_tabs.mode(&focused) == Some(Mode::Visual) {
             self.update_visual_selection(focused);
         }
         self.dirty = true;
@@ -864,7 +867,7 @@ impl App {
     /// are viewport coordinates, so a paragraph continuing above or below the
     /// screen is selected up to the screen's edge.
     pub(crate) fn select_paragraph(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -886,10 +889,11 @@ impl App {
             end += 1;
         }
 
-        self.modes
-            .insert(focused, Mode::Normal.apply(ModeEvent::EnterVisual));
+        let anchor = (grid.to_absolute_row(start), 0);
+        self.open_tabs
+            .set_mode(&focused, Mode::Normal.apply(ModeEvent::EnterVisual));
         self.selection.visual_kind = VisualKind::Line;
-        self.selection.visual_anchor = Some((grid.to_absolute_row(start), 0));
+        self.selection.visual_anchor = Some(anchor);
         self.set_nav_cursor(focused, (end, 0));
         self.update_visual_selection(focused);
         self.dirty = true;
@@ -898,7 +902,7 @@ impl App {
     /// Select the specified text object (`iw`, `a"`, `i(`, etc.) around or inside the cursor.
     /// `yy`: copy the whole line the cursor is on.
     pub(crate) fn yank_line(&mut self, focused: TabId, register: Option<char>) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -918,7 +922,7 @@ impl App {
         register: Option<char>,
     ) {
         let cursor = self.nav_cursor(focused);
-        let Some(terminal) = self.terminals.get_mut(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal_mut(&focused) else {
             return;
         };
         // The word motions take the grid mutably: at the viewport's edge they
@@ -959,7 +963,7 @@ impl App {
         register: Option<char>,
     ) {
         let cursor = self.nav_cursor(focused);
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -1017,7 +1021,7 @@ impl App {
     }
 
     pub(crate) fn select_text_object(&mut self, focused: TabId, around: bool, object: TextObject) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -1035,12 +1039,12 @@ impl App {
             return;
         }
 
-        self.modes
-            .insert(focused, Mode::Normal.apply(ModeEvent::EnterVisual));
+        self.open_tabs
+            .set_mode(&focused, Mode::Normal.apply(ModeEvent::EnterVisual));
         self.selection.visual_kind = VisualKind::Char;
 
         self.reveal_position(focused, (abs_r2, c2));
-        if let Some(terminal) = self.terminals.get(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal(&focused) {
             let grid = terminal.grid();
             let top = grid.scrollback_len() - grid.scroll_offset().min(grid.scrollback_len());
             let view_r2 = abs_r2
@@ -1055,7 +1059,7 @@ impl App {
 
     /// Delete the specified text object on the editable prompt line.
     pub(crate) fn delete_text_object(&mut self, focused: TabId, around: bool, object: TextObject) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -1085,7 +1089,7 @@ impl App {
 
     /// Change the specified text object on the editable prompt line (delete and enter Insert mode).
     pub(crate) fn change_text_object(&mut self, focused: TabId, around: bool, object: TextObject) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -1111,7 +1115,7 @@ impl App {
             },
             focused,
         );
-        self.modes.insert(focused, Mode::Insert);
+        self.open_tabs.set_mode(&focused, Mode::Insert);
         self.selection.span = None;
         self.selection.visual_anchor = None;
         self.dirty = true;
@@ -1123,7 +1127,7 @@ impl App {
             self.decline_prompt_edit();
             return;
         }
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -1148,11 +1152,11 @@ impl App {
         )) {
             return;
         }
-        if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+        if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
             shadow.desync();
         }
         let bytes = super::prompt_edit::prompt_delete_surround_bytes(pty_col, c1, c2, nav_col);
-        if let Some(terminal) = self.terminals.get_mut(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
             terminal.write(&bytes);
         }
         self.nav_resync_pending = true;
@@ -1161,7 +1165,7 @@ impl App {
 
     /// Change the surrounding delimiter pair `target` to `replacement` on the editable prompt line.
     pub(crate) fn change_surround(&mut self, focused: TabId, target: char, replacement: char) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -1189,12 +1193,12 @@ impl App {
         let Some((open, close, _)) = vim::surround_pair_chars(replacement) else {
             return;
         };
-        if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+        if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
             shadow.desync();
         }
         let bytes =
             super::prompt_edit::prompt_change_surround_bytes(pty_col, c1, open, c2, close, nav_col);
-        if let Some(terminal) = self.terminals.get_mut(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
             terminal.write(&bytes);
         }
         self.nav_resync_pending = true;
@@ -1209,7 +1213,7 @@ impl App {
         object: TextObject,
         delimiter: char,
     ) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -1231,12 +1235,12 @@ impl App {
         let Some((open, close, _)) = vim::surround_pair_chars(delimiter) else {
             return;
         };
-        if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+        if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
             shadow.desync();
         }
         let bytes =
             super::prompt_edit::prompt_add_surround_bytes(pty_col, c1, c2, open, close, nav_col);
-        if let Some(terminal) = self.terminals.get_mut(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
             terminal.write(&bytes);
         }
         self.nav_resync_pending = true;
@@ -1245,7 +1249,7 @@ impl App {
 
     /// Delete the current Visual selection if it sits on the editable prompt line.
     pub(crate) fn delete_selection(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -1275,7 +1279,7 @@ impl App {
         } else {
             (0, grid.cols().saturating_sub(1))
         };
-        self.modes.insert(focused, Mode::Normal);
+        self.open_tabs.set_mode(&focused, Mode::Normal);
         self.selection.visual_anchor = None;
         self.selection.span = None;
         self.delete_on_prompt(
@@ -1296,7 +1300,7 @@ impl App {
     /// keymap on [`input::PendingPrefix::FindLabel`] to catch the label key.
     pub(crate) fn find_char_overlay(&mut self, find: FindChar, focused: TabId) -> bool {
         self.find_labels = None;
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return false;
         };
         let grid = terminal.grid();
@@ -1350,7 +1354,7 @@ impl App {
     /// when the pane is in Visual mode: the tail shared by the char-search jumps.
     fn move_nav_cursor_to(&mut self, focused: TabId, (row, col): (usize, usize)) {
         self.set_nav_cursor(focused, (row, col));
-        if self.modes.get(&focused) == Some(&Mode::Visual) {
+        if self.open_tabs.mode(&focused) == Some(Mode::Visual) {
             self.update_visual_selection(focused);
         }
         self.dirty = true;
@@ -1379,7 +1383,7 @@ impl App {
     /// current line. A miss leaves the cursor put. Extends the Visual selection
     /// when the focused pane is in Visual mode, mirroring [`Self::move_nav_cursor`].
     pub(crate) fn find_char_move(&mut self, find: FindChar, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -1392,7 +1396,7 @@ impl App {
         let col = target.min(vim::nav_line_end(grid, row));
 
         self.set_nav_cursor(focused, (row, col));
-        if self.modes.get(&focused) == Some(&Mode::Visual) {
+        if self.open_tabs.mode(&focused) == Some(Mode::Visual) {
             self.update_visual_selection(focused);
         }
         self.dirty = true;
@@ -1479,7 +1483,7 @@ mod tests {
     /// Row `row`'s visible text with trailing blanks trimmed, for asserting on
     /// what the fixture's `cat` echoed back into the grid.
     fn row_text(app: &App, terminal: TabId, row: usize) -> String {
-        let grid = app.terminals[&terminal].grid();
+        let grid = app.open_tabs.terminal(&terminal).unwrap().grid();
         (0..grid.cols())
             .map(|col| grid.visible_cell(row, col).map(|c| c.ch).unwrap_or(' '))
             .collect::<String>()
@@ -1492,10 +1496,10 @@ mod tests {
     fn app_with_paragraphs(cursor_row: usize) -> (App, TabId) {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
-        let id = app.layout().panes()[0];
-        app.terminals
-            .insert(id, pane_with_lines(&["alpha", "beta", "", "gamma"]));
-        app.modes.insert(id, Mode::Normal);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["alpha", "beta", "", "gamma"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (cursor_row, 0));
         (app, id)
     }
@@ -1511,8 +1515,8 @@ mod tests {
 
         assert_eq!(app.selection.visual_kind, VisualKind::Line);
         assert_eq!(
-            app.modes.get(&id),
-            Some(&Mode::Normal),
+            app.open_tabs.mode(&id),
+            Some(Mode::Normal),
             "yank leaves Visual"
         );
     }
@@ -1668,7 +1672,7 @@ mod tests {
 
         app.handle_action(input::Action::SelectParagraph, id);
 
-        assert_eq!(app.modes.get(&id), Some(&Mode::Visual));
+        assert_eq!(app.open_tabs.mode(&id), Some(Mode::Visual));
         assert_eq!(
             app.selection.visual_kind,
             VisualKind::Line,
@@ -1739,8 +1743,9 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_lines(&["banana"]));
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["banana"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
 
         app.handle_action(
@@ -1779,8 +1784,8 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_lines(&["abc"]));
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.insert_terminal(id, pane_with_lines(&["abc"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
 
         app.handle_action(
@@ -1804,9 +1809,9 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals
-            .insert(id, pane_with_lines(&["--a--", "--a--"]));
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["--a--", "--a--"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
 
         app.handle_action(
@@ -1831,8 +1836,9 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_lines(&["banana"]));
-        app.modes.insert(id, Mode::Visual);
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["banana"]));
+        app.open_tabs.set_mode(&id, Mode::Visual);
         app.selection.visual_anchor = Some((0, 0));
         app.set_nav_cursor(id, (0, 0));
         app.update_visual_selection(id);
@@ -1857,8 +1863,9 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_lines(&["banana"]));
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["banana"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
 
         app.handle_action(
@@ -1883,19 +1890,24 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         assert!(
-            app.terminals[&id].grid().scrollback_len() > 0,
+            app.open_tabs.terminal(&id).unwrap().grid().scrollback_len() > 0,
             "fixture needs the opening bracket above the viewport"
         );
         // The `)` sits on the last visible row, at column 0.
-        let last = app.terminals[&id].grid().last_content_row();
+        let last = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .last_content_row();
         app.set_nav_cursor(id, (last, 0));
 
         app.move_nav_cursor(input::CursorMove::MatchingBracket, id);
 
         let (row, col) = app.nav_cursor(id).unwrap();
-        let grid = app.terminals[&id].grid();
+        let grid = app.open_tabs.terminal(&id).unwrap().grid();
         assert!(
             grid.scroll_offset() > 0,
             "the view scrolled up to the partner"
@@ -1915,9 +1927,9 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         assert_eq!(
-            app.terminals[&id].grid().scrollback_len(),
+            app.open_tabs.terminal(&id).unwrap().grid().scrollback_len(),
             1,
             "one line above"
         );
@@ -1926,7 +1938,7 @@ mod tests {
         app.move_nav_cursor(input::CursorMove::WordEndBack, id);
 
         let (row, col) = app.nav_cursor(id).unwrap();
-        let grid = app.terminals[&id].grid();
+        let grid = app.open_tabs.terminal(&id).unwrap().grid();
         assert_eq!(grid.scroll_offset(), 1, "scrolled one line into history");
         assert_eq!(row, 0);
         assert_eq!(
@@ -1970,29 +1982,44 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         // Start at the top of the visible screen: everything earlier is off screen.
         app.set_nav_cursor(id, (0, 0));
-        let abs_before = app.terminals[&id].grid().to_absolute_row(0);
+        let abs_before = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(0);
 
         app.move_nav_cursor(input::CursorMove::ParagraphBack, id);
 
         let (row, _) = app.nav_cursor(id).unwrap();
-        let abs_after = app.terminals[&id].grid().to_absolute_row(row);
+        let abs_after = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(row);
         assert!(
             abs_after < abs_before,
             "backward paragraph should reach a boundary above the viewport \
              (was at absolute row {abs_before}, landed on {abs_after})"
         );
         assert!(
-            app.terminals[&id].grid().scroll_offset() > 0,
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset() > 0,
             "and scroll the view up to show it"
         );
 
         // Forward again returns down the buffer, past the viewport it scrolled to.
         app.move_nav_cursor(input::CursorMove::ParagraphForward, id);
         let (row_fwd, _) = app.nav_cursor(id).unwrap();
-        let abs_fwd = app.terminals[&id].grid().to_absolute_row(row_fwd);
+        let abs_fwd = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(row_fwd);
         assert!(abs_fwd > abs_after, "forward paragraph moves back down");
     }
 
@@ -2001,7 +2028,7 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(
+        app.open_tabs.insert_terminal(
             id,
             pane_with_lines(&["alpha", "beta", "", "gamma", "delta"]),
         );
@@ -2031,8 +2058,8 @@ mod tests {
         // Fill every row so `L`/`M` aren't clamped by the content's last row.
         let lines: Vec<String> = (0..8).map(|i| format!("line{i}")).collect();
         let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
-        app.terminals.insert(id, pane_with_lines(&refs));
-        let rows = app.terminals[&id].grid().rows();
+        app.open_tabs.insert_terminal(id, pane_with_lines(&refs));
+        let rows = app.open_tabs.terminal(&id).unwrap().grid().rows();
         app.set_nav_cursor(id, (3, 2));
 
         app.move_nav_cursor(input::CursorMove::ScreenTop, id);
@@ -2048,7 +2075,8 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_lines(&["f(g(x))"]));
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["f(g(x))"]));
 
         // From the outer `(` at col 1 to its partner at col 6, and back.
         app.set_nav_cursor(id, (0, 1));
@@ -2069,7 +2097,8 @@ mod tests {
         let mut app = App::new();
         app.config.status_bar.enabled = true;
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_lines(&["foo bar baz"]));
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["foo bar baz"]));
 
         app.set_nav_cursor(id, (0, 0));
         app.move_nav_cursor(input::CursorMove::LastNonBlank, id);
@@ -2091,14 +2120,19 @@ mod tests {
         terminal.grid_mut().scroll_up_history(20);
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         app.set_nav_cursor(id, (5, 0));
-        let abs_before = app.terminals[&id].grid().to_absolute_row(5);
+        let abs_before = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(5);
 
         app.move_nav_cursor(input::CursorMove::LineToTop, id);
 
         let (row, _) = app.nav_cursor(id).unwrap();
-        let grid = app.terminals[&id].grid();
+        let grid = app.open_tabs.terminal(&id).unwrap().grid();
         assert_eq!(row, 0, "the cursor's line is now the top row");
         assert_eq!(
             grid.to_absolute_row(row),
@@ -2115,7 +2149,7 @@ mod tests {
         let terminal = pane_with_scrollback();
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         app.set_nav_cursor(id, (5, 0));
 
         app.move_nav_cursor(input::CursorMove::PageUp, id);
@@ -2135,12 +2169,12 @@ mod tests {
         let terminal = pane_with_scrollback();
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
 
         app.move_nav_cursor(input::CursorMove::Top, id);
         app.move_nav_cursor(input::CursorMove::PageDown, id);
 
-        let rows = app.terminals[&id].grid().rows();
+        let rows = app.open_tabs.terminal(&id).unwrap().grid().rows();
         let (row, _) = app.nav_cursor(id).expect("cursor still tracked");
         assert_eq!(
             row,
@@ -2169,7 +2203,7 @@ mod tests {
 
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         // Simulate a cursor stranded past the content, as returning from a
         // scrolled-back page would leave it.
         app.set_nav_cursor(id, (bottom_row, 0));
@@ -2192,7 +2226,7 @@ mod tests {
         app.track_nav_cursor_to_mouse(id, 2, 4);
         assert_eq!(app.nav_cursor(id), Some((2, 4)));
 
-        app.modes.insert(id, Mode::Visual);
+        app.open_tabs.set_mode(&id, Mode::Visual);
         app.track_nav_cursor_to_mouse(id, 3, 1);
         assert_eq!(app.nav_cursor(id), Some((3, 1)));
     }
@@ -2203,7 +2237,7 @@ mod tests {
         // shell cursor on entering Normal, so a click must not overwrite the
         // stored position.
         let (mut app, id) = app_with_paragraphs(1);
-        app.modes.insert(id, Mode::Insert);
+        app.open_tabs.set_mode(&id, Mode::Insert);
 
         app.track_nav_cursor_to_mouse(id, 2, 4);
 
@@ -2283,7 +2317,7 @@ mod tests {
         // An edit records where it began; `g;` lands the cursor back there
         // after it moved on, and `g,` walks forward to the live spot again.
         let (mut app, id) = app_with_paragraphs(0);
-        let (prompt_row, prompt_col) = app.terminals[&id].grid().cursor();
+        let (prompt_row, prompt_col) = app.open_tabs.terminal(&id).unwrap().grid().cursor();
         app.set_nav_cursor(id, (prompt_row, prompt_col));
 
         app.handle_action(input::Action::DeleteCharForward, id);
@@ -2308,7 +2342,7 @@ mod tests {
         // `x` then `.`: the repeat re-runs the delete at the cursor, which a
         // no-op `.` (no recorded change, or a stale one) would leave behind.
         let (mut app, id) = app_with_paragraphs(0);
-        let (prompt_row, prompt_col) = app.terminals[&id].grid().cursor();
+        let (prompt_row, prompt_col) = app.open_tabs.terminal(&id).unwrap().grid().cursor();
         app.set_nav_cursor(id, (prompt_row, prompt_col));
 
         app.handle_action(input::Action::DeleteCharForward, id);
@@ -2333,9 +2367,9 @@ mod tests {
         // pane's last change; `.` re-sends it, so the echo pane shows it twice.
         // A blank fixture row so the echo is the only text to assert on.
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals.insert(id, pane_with_lines(&[""]));
-        app.modes.insert(id, Mode::Normal);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs.insert_terminal(id, pane_with_lines(&[""]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
 
         app.handle_action(input::Action::EnterInsert(input::InsertAt::Cursor), id);
@@ -2357,7 +2391,7 @@ mod tests {
         // `cat` echoes both writes back; pump until both arrive.
         let deadline = std::time::Instant::now() + PTY_WAIT;
         while std::time::Instant::now() < deadline {
-            app.terminals.get_mut(&id).unwrap().drain_output();
+            app.open_tabs.terminal_mut(&id).unwrap().drain_output();
             if row_text(&app, id, 0) == "hihi" {
                 break;
             }
@@ -2390,17 +2424,20 @@ mod tests {
         // (Ctrl+Shift+Space) leaves Insert deterministically, without the
         // bare-Escape foreground-process branch.
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals.insert(id, pane_with_lines(&[""]));
-        app.modes.insert(id, Mode::Normal);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs.insert_terminal(id, pane_with_lines(&[""]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
         let keymap = input::WindowKeymap::default();
         let mut pending = input::PendingPrefix::None;
         let mut dispatch = |app: &mut App, key: input::Key| {
-            let mode = app.modes.get(&id).copied().unwrap_or_default();
+            let mode = app.open_tabs.mode(&id).unwrap_or_default();
             let action = input::resolve_with(mode, &key, &mut pending, &keymap, 0, None, false);
             if mode == Mode::Insert && crate::app::forwarded_to_pty(&action) {
-                let at_prompt = app.terminals.get(&id).is_some_and(|p| p.is_at_prompt());
+                let at_prompt = app
+                    .open_tabs
+                    .terminal(&id)
+                    .is_some_and(|p| p.is_at_prompt());
                 app.record_insert_key(id, &key, &action, at_prompt);
             }
             app.handle_action(action, id);
@@ -2437,8 +2474,8 @@ mod tests {
         );
 
         assert_eq!(
-            app.modes.get(&id),
-            Some(&Mode::Normal),
+            app.open_tabs.mode(&id),
+            Some(Mode::Normal),
             "entry chord left Insert"
         );
         assert_eq!(
@@ -2450,7 +2487,7 @@ mod tests {
         app.handle_action(input::Action::RepeatLastChange, id);
         let deadline = std::time::Instant::now() + PTY_WAIT;
         while std::time::Instant::now() < deadline {
-            app.terminals.get_mut(&id).unwrap().drain_output();
+            app.open_tabs.terminal_mut(&id).unwrap().drain_output();
             if row_text(&app, id, 0) == "hihi" {
                 break;
             }
@@ -2469,7 +2506,12 @@ mod tests {
         // walks forward again: in absolute terms, so the round trip holds
         // even once the view has scrolled.
         let (mut app, id) = app_with_paragraphs(2);
-        let abs_before = app.terminals[&id].grid().to_absolute_row(2);
+        let abs_before = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(2);
 
         app.handle_action(input::Action::MoveCursor(input::CursorMove::Top), id);
         assert_eq!(
@@ -2481,7 +2523,11 @@ mod tests {
         app.handle_action(input::Action::JumpOlder, id);
         let (row, _) = app.nav_cursor(id).expect("cursor restored");
         assert_eq!(
-            app.terminals[&id].grid().to_absolute_row(row),
+            app.open_tabs
+                .terminal(&id)
+                .unwrap()
+                .grid()
+                .to_absolute_row(row),
             abs_before,
             "Ctrl+O returns to the pre-jump line"
         );
@@ -2522,7 +2568,12 @@ mod tests {
         // jumplist: after the next Escape (which re-derives the cursor at the
         // prompt), Ctrl+O returns to where the browsing left off.
         let (mut app, id) = app_with_paragraphs(2);
-        let abs_before = app.terminals[&id].grid().to_absolute_row(2);
+        let abs_before = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(2);
 
         app.handle_action(input::Action::SwitchMode(Mode::Insert), id);
         // The next Escape re-enters Normal and re-derives the cursor at the
@@ -2532,7 +2583,11 @@ mod tests {
         app.handle_action(input::Action::JumpOlder, id);
         let (row, _) = app.nav_cursor(id).expect("cursor restored");
         assert_eq!(
-            app.terminals[&id].grid().to_absolute_row(row),
+            app.open_tabs
+                .terminal(&id)
+                .unwrap()
+                .grid()
+                .to_absolute_row(row),
             abs_before,
             "the pre-Insert browsing position is on the jumplist"
         );
@@ -2544,7 +2599,7 @@ mod tests {
         // highlighted span is unchanged: it always runs anchor..cursor in
         // either order.
         let (mut app, id) = app_with_paragraphs(2);
-        app.modes.insert(id, Mode::Visual);
+        app.open_tabs.set_mode(&id, Mode::Visual);
         app.selection.visual_anchor = Some((0, 2));
         app.set_nav_cursor(id, (2, 1));
         app.update_visual_selection(id);
@@ -2609,8 +2664,8 @@ mod tests {
         app.handle_action(input::Action::RestoreVisual, id);
 
         assert_eq!(
-            app.modes.get(&id),
-            Some(&Mode::Visual),
+            app.open_tabs.mode(&id),
+            Some(Mode::Visual),
             "gv re-enters Visual"
         );
         assert_eq!(
@@ -2631,10 +2686,10 @@ mod tests {
     #[test]
     fn test_mark_set_and_goto_exact_and_first_non_blank() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals
-            .insert(id, pane_with_lines(&["alpha", "   beta", "gamma"]));
-        app.modes.insert(id, Mode::Normal);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["alpha", "   beta", "gamma"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (1, 4));
 
         // Set mark 'a' at row 1, col 4
@@ -2697,10 +2752,10 @@ mod tests {
     #[test]
     fn test_select_text_object_word_in_normal_enters_visual() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals
-            .insert(id, pane_with_lines(&["hello world foo"]));
-        app.modes.insert(id, Mode::Normal);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["hello world foo"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 7)); // on 'o' in 'world'
 
         app.handle_action(
@@ -2711,7 +2766,7 @@ mod tests {
             id,
         );
 
-        assert_eq!(app.modes.get(&id), Some(&Mode::Visual));
+        assert_eq!(app.open_tabs.mode(&id), Some(Mode::Visual));
         assert_eq!(app.selection.visual_kind, VisualKind::Char);
         assert_eq!(app.selected_text().as_deref(), Some("world"));
     }
@@ -2719,10 +2774,10 @@ mod tests {
     #[test]
     fn test_select_text_object_quotes() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals
-            .insert(id, pane_with_lines(&["let s = \"hello world\";"]));
-        app.modes.insert(id, Mode::Normal);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["let s = \"hello world\";"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 11)); // inside quotes
 
         // Inner quotes: `i"`
@@ -2749,15 +2804,15 @@ mod tests {
     #[test]
     fn test_blockwise_visual_selection_and_yank() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals
-            .insert(id, pane_with_lines(&["abcdef", "123456", "ghijkl"]));
-        app.modes.insert(id, Mode::Normal);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["abcdef", "123456", "ghijkl"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 1)); // 'b'
 
         // Enter blockwise visual
         app.handle_action(input::Action::EnterVisual(input::VisualKind::Block), id);
-        assert_eq!(app.modes.get(&id), Some(&Mode::Visual));
+        assert_eq!(app.open_tabs.mode(&id), Some(Mode::Visual));
         assert_eq!(app.selection.visual_kind, VisualKind::Block);
 
         // Move down 2 rows, right 2 cols (cols 1..=3 on rows 0..=2)
@@ -2772,10 +2827,10 @@ mod tests {
     #[test]
     fn test_named_register_yank_and_paste_in_app() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals
-            .insert(id, pane_with_lines(&["echo \"hello\"", ""]));
-        app.modes.insert(id, Mode::Visual);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["echo \"hello\"", ""]));
+        app.open_tabs.set_mode(&id, Mode::Visual);
         app.selection.visual_anchor = Some((0, 5));
         app.set_nav_cursor(id, (0, 11));
         app.update_visual_selection(id);
@@ -2786,7 +2841,7 @@ mod tests {
             app.vim.registers.get(&'a').map(String::as_str),
             Some("\"hello\"")
         );
-        assert_eq!(app.modes.get(&id), Some(&Mode::Normal));
+        assert_eq!(app.open_tabs.mode(&id), Some(Mode::Normal));
     }
 
     #[test]
@@ -2794,12 +2849,12 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals.insert(
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs.insert_terminal(
             id,
             pane_with_lines(&["alpha line", "beta target", "gamma last"]),
         );
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
 
         // Open Swoop
@@ -2836,12 +2891,12 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals.insert(
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs.insert_terminal(
             id,
             pane_with_lines(&["alpha line", "beta target", "gamma last"]),
         );
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 2));
 
         // Open Swoop
@@ -2872,15 +2927,15 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals.insert(
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs.insert_terminal(
             id,
             pane_with_lines(&["alpha line", "beta target", "gamma last"]),
         );
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
 
-        // Open Jump on terminal pane
+        // Open Jump on a terminal tab
         app.open_jump(id);
         let palette = app.palette.as_ref().expect("palette is active");
         assert_eq!(palette.mode, crate::model::palette::PaletteMode::Jump);
@@ -2912,12 +2967,12 @@ mod tests {
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals.insert(
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs.insert_terminal(
             id,
             pane_with_lines(&["alpha line", "beta target", "gamma last"]),
         );
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 3));
 
         app.open_jump(id);
@@ -2939,7 +2994,8 @@ mod tests {
 
     #[test]
     fn test_buffer_jump_on_page_previews_confirms_and_cancels() {
-        use crate::extensions::dir::DirPage;
+        use crate::app::page::PageKind;
+        use crate::pages::dir::DirPage;
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
@@ -2949,7 +3005,7 @@ mod tests {
         let _ = std::fs::write(dir.join("b.txt"), "world");
 
         let page = Box::new(DirPage::new(dir.clone()));
-        let id = app.show_page("dir", page);
+        let id = app.show_page(PageKind::Dir, page);
 
         // Open Jump over the page
         app.open_jump(id);
@@ -2964,14 +3020,14 @@ mod tests {
         app.handle_palette_input(&mut pal, &key_down, &phys, id);
         app.palette = Some(pal);
 
-        assert_eq!(app.pages.get(&id).unwrap().page.jump_cursor(), Some(1));
+        assert_eq!(app.open_tabs.page(&id).unwrap().page.jump_cursor(), Some(1));
 
         // Escape cancels and restores to 0
         let key_esc = Key::Named(NamedKey::Escape);
         let mut pal = app.palette.take().unwrap();
         app.handle_palette_input(&mut pal, &key_esc, &phys, id);
         assert!(app.palette.is_none());
-        assert_eq!(app.pages.get(&id).unwrap().page.jump_cursor(), Some(0));
+        assert_eq!(app.open_tabs.page(&id).unwrap().page.jump_cursor(), Some(0));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2979,9 +3035,9 @@ mod tests {
     #[test]
     fn test_action_jump_toggles_palette() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals
-            .insert(id, pane_with_lines(&["alpha line", "beta target"]));
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["alpha line", "beta target"]));
 
         // Action::Jump opens jump palette
         app.handle_action(crate::model::input::Action::Jump, id);
@@ -2999,11 +3055,12 @@ mod tests {
     #[test]
     fn test_reveal_position_centered_vertically_centers_in_pane() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let lines: Vec<String> = (0..20).map(|i| format!("line {i}")).collect();
         let str_lines: Vec<&str> = lines.iter().map(String::as_str).collect();
-        app.terminals.insert(id, pane_with_lines(&str_lines));
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&str_lines));
+        app.open_tabs.set_mode(&id, Mode::Normal);
 
         // Center on row 10 in a 20-row pane: view_row lands on 10 (20 / 2)
         app.reveal_position_centered(id, (10, 0));
@@ -3013,10 +3070,10 @@ mod tests {
     #[test]
     fn test_change_operator_deletes_and_enters_insert() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals
-            .insert(id, pane_with_lines(&["echo \"hello world\""]));
-        app.modes.insert(id, Mode::Normal);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["echo \"hello world\""]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 6)); // on 'h'
 
         // `ci"` (Change inside quotes)
@@ -3029,38 +3086,39 @@ mod tests {
         );
 
         // Pane should transition to Mode::Insert
-        assert_eq!(app.modes.get(&id), Some(&Mode::Insert));
+        assert_eq!(app.open_tabs.mode(&id), Some(Mode::Insert));
 
         // Return to Normal mode and test `s` (substitute)
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 2));
         app.handle_action(input::Action::SubstituteChar, id);
-        assert_eq!(app.modes.get(&id), Some(&Mode::Insert));
+        assert_eq!(app.open_tabs.mode(&id), Some(Mode::Insert));
 
         // Return to Normal mode and test `S` (change whole line)
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.handle_action(input::Action::ChangeLine, id);
-        assert_eq!(app.modes.get(&id), Some(&Mode::Insert));
+        assert_eq!(app.open_tabs.mode(&id), Some(Mode::Insert));
     }
 
     #[test]
     fn test_replace_char_and_toggle_case_on_prompt() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
-        app.terminals.insert(id, pane_with_lines(&["Hello World"]));
-        app.modes.insert(id, Mode::Normal);
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs
+            .insert_terminal(id, pane_with_lines(&["Hello World"]));
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0)); // 'H'
 
         // `rX` (Replace char with 'X')
         app.handle_action(input::Action::ReplaceChar('X'), id);
         // Stays in Mode::Normal
-        assert_eq!(app.modes.get(&id), Some(&Mode::Normal));
+        assert_eq!(app.open_tabs.mode(&id), Some(Mode::Normal));
 
         // `~` (Toggle case)
         app.handle_action(input::Action::ToggleCaseChar, id);
         // Cursor moved to column 1 and stays in Normal mode
         assert_eq!(app.nav_cursor(id), Some((0, 1)));
-        assert_eq!(app.modes.get(&id), Some(&Mode::Normal));
+        assert_eq!(app.open_tabs.mode(&id), Some(Mode::Normal));
     }
 
     #[test]
@@ -3070,11 +3128,11 @@ mod tests {
         // than mistranslated into readline chords that edit the wrong
         // characters.
         let mut app = App::new();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let mut terminal = pane_with_lines(&[]);
         terminal.feed_program_output(b"\x1b]133;A\x1b\\$ \x1b]133;B\x1b\\ls -l");
-        app.terminals.insert(id, terminal);
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.insert_terminal(id, terminal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0)); // the '$' of the decoration
 
         app.handle_action(input::Action::ReplaceChar('X'), id);
@@ -3100,12 +3158,12 @@ mod tests {
     #[test]
     fn test_jump_to_prompt_gp() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let mut terminal = pane_with_lines(&["first line", "second line", "prompt line"]);
         terminal.grid_mut().move_to_row(2);
         terminal.grid_mut().move_to_column(5);
-        app.terminals.insert(id, terminal);
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.insert_terminal(id, terminal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.set_nav_cursor(id, (0, 0));
 
         // Jump to prompt with `gp`
@@ -3147,10 +3205,10 @@ mod tests {
         // behind the image, and the 1-cell cursor parked inside it was
         // invisible against the block.
         let mut app = App::new();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let terminal = pane_with_lines(&["above", "more", "", "", "", "below"]);
-        app.terminals.insert(id, terminal);
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.insert_terminal(id, terminal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         // A block band over the blank rows 2..5 (absolute rows 2..5, no
         // scrollback in the fixture, so viewport rows line up with them).
         app.image_blocks.push(crate::app::ImageBlock {

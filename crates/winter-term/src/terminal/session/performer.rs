@@ -123,7 +123,7 @@ fn svg_intrinsic_size(markup: &str) -> Option<(f32, f32)> {
     }
 }
 
-/// Exact rows an image block occupies fit to the pane width, capped at
+/// Exact rows an image block occupies fit to the terminal width, capped at
 /// [`MAX_IMAGE_ROWS`]. `None` when the block's height is not knowable at emit
 /// time (markdown, text, live blocks), and the caller uses the default band.
 ///
@@ -250,7 +250,7 @@ pub(super) struct CombinedPerformer {
     apc_pending_esc: bool,
     bell: bool,
     /// Grid rows (one per emitted block, in emission order) where the block was
-    /// anchored, drained by [`Pane::drain_output`] into the block queue.
+    /// anchored, drained by [`Terminal::drain_output`] into the block queue.
     block_anchors: Vec<BlockBand>,
     /// Pixel cell size, used to convert an image's pixel height into reserved
     /// rows. Set by the app once the renderer is up; defaults are close enough
@@ -279,10 +279,10 @@ pub(super) struct CombinedPerformer {
     modify_other_keys: Option<i64>,
     performer: Performer,
     /// Response bytes queued by `CSI ? u` queries, drained into the PTY
-    /// writer by [`Pane::drain_output`] after each parse batch.
+    /// writer by [`Terminal::drain_output`] after each parse batch.
     pending_responses: Vec<u8>,
     /// Text written via `OSC 52 ; c ; <base64>`, drained into the host
-    /// clipboard by [`Pane::take_clipboard_write`] after each parse batch.
+    /// clipboard by [`Terminal::take_clipboard_write`] after each parse batch.
     pending_clipboard_read: bool,
     pending_clipboard_write: Option<String>,
     /// Grid column where the shell's own prompt decoration ends and the
@@ -369,7 +369,7 @@ impl CombinedPerformer {
     }
 
     /// Take the decoded clipboard text from a pending `OSC 52 ; c ; <base64>`
-    /// write, if any. Called by [`Pane::take_clipboard_write`] after each
+    /// write, if any. Called by [`Terminal::take_clipboard_write`] after each
     /// parse batch so the app layer can write it to the OS clipboard.
     pub(super) fn take_clipboard_write(&mut self) -> Option<String> {
         self.pending_clipboard_write.take()
@@ -381,7 +381,7 @@ impl CombinedPerformer {
     }
 
     /// Take the flag raised by an `OSC 52 ; c ; ?` read query, if any. The
-    /// pane cannot reach the OS clipboard, so the app layer answers it,
+    /// terminal cannot reach the OS clipboard, so the app layer answers it,
     /// honoring the `clipboard-read` setting: after each parse batch.
     pub(super) fn take_clipboard_read(&mut self) -> bool {
         std::mem::take(&mut self.pending_clipboard_read)
@@ -392,7 +392,7 @@ impl CombinedPerformer {
     /// raise a flag the app answers from the OS clipboard, and only when
     /// the `clipboard-read` setting allows it, so the default stays silent
     /// (a read would otherwise be an unconditional, invisible exfiltration
-    /// channel for any program in the pane, ssh'd or local).
+    /// channel for any program in the terminal, ssh'd or local).
     pub(super) fn handle_osc52(&mut self, params: &[&[u8]]) {
         let data = match params.get(2) {
             Some(d) => *d,
@@ -1181,9 +1181,9 @@ mod tests {
             id: BlockId(1),
             trust: winter_core::winter_proto::TrustTier::Restricted,
         };
-        // 90px tall at a 20px cell, inside a pane wide enough not to scale it.
+        // 90px tall at a 20px cell, inside a terminal wide enough not to scale it.
         assert_eq!(image_reserve_rows(&emit, 200, 10.0, 20.0), Some(5));
-        // Narrow pane: the image scales down to the width, and the band with it.
+        // Narrow terminal: the image scales down to the width, and the band with it.
         assert_eq!(image_reserve_rows(&emit, 18, 10.0, 20.0), Some(3));
     }
 
@@ -1199,7 +1199,7 @@ mod tests {
     }
     #[test]
     fn test_osc52_read_query_raises_the_pending_flag_once() {
-        // The pane cannot read the clipboard itself; a `?` query must surface
+        // The terminal cannot read the clipboard itself; a `?` query must surface
         // as a flag the app answers (when `clipboard-read` allows), while
         // primary-selection queries and plain writes must not raise it.
         let mut cp = CombinedPerformer::new(20, 10, MAX_SCROLLBACK);

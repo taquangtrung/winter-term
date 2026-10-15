@@ -1,5 +1,5 @@
 //! Pure interaction model: modes, layout geometry, key resolution, the palette,
-//! the settings page, and tool pages.
+//! the settings page, and the pages tabs hold.
 //!
 //! These modules share no external dependencies (std-only) and no side effects.
 

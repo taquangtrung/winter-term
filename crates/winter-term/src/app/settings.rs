@@ -238,7 +238,7 @@ impl App {
                     IconStyle::Svg => 1,
                     IconStyle::None => 2,
                 };
-                SettingsField::choice("icons", "Extension icons", icon_options, idx)
+                SettingsField::choice("icons", "File icons", icon_options, idx)
                     .in_section("Terminal")
                     .with_note("Where the icon beside each entry comes from. Font needs a patched terminal font; SVG always draws but blurs at small cell sizes")
             },
@@ -327,7 +327,7 @@ impl App {
                     idx,
                 )
                 .in_section("Security")
-                .with_note("Ceiling on the tier a block asks for. Trusted grants scripting to any stream that reaches a pane, not only to the extensions you had in mind")
+                .with_note("Ceiling on the tier a block asks for. Trusted grants scripting to any stream that reaches a pane, not only to the programs you had in mind")
             },
             SettingsField::toggle(
                 "security.block_remote_assets",
@@ -518,7 +518,7 @@ impl App {
             "wrap_indent" => {
                 let enabled = value == "true";
                 self.config.wrap_indent = enabled;
-                for terminal in self.terminals.values_mut() {
+                for (_, terminal) in self.open_tabs.terminals_mut() {
                     terminal.grid_mut().set_wrap_indent(enabled);
                 }
                 self.dirty = true;
@@ -526,7 +526,7 @@ impl App {
             "wrap_words" => {
                 let enabled = value == "true";
                 self.config.wrap_words = enabled;
-                for terminal in self.terminals.values_mut() {
+                for (_, terminal) in self.open_tabs.terminals_mut() {
                     terminal.grid_mut().set_word_wrap(enabled);
                 }
                 self.dirty = true;

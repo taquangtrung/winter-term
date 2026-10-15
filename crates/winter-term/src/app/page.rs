@@ -1,5 +1,5 @@
-//! Tool pages over panes: opening one in place, closing it, and offering it
-//! keys before the modal keymap sees them.
+//! Page tabs: opening one beside the focused tab, closing and reopening it,
+//! and offering it keys before the window keymap sees them.
 
 use std::path::PathBuf;
 use std::time::{Instant, SystemTime};
@@ -7,7 +7,6 @@ use std::time::{Instant, SystemTime};
 use crate::control::EditWaiter;
 use crate::model::input::{self, Key, KeyCode};
 use crate::model::layout::{Direction, LayoutTree, Rect, TabId};
-use crate::model::mode::Mode;
 use crate::model::page::{
     OpenTarget, Page, PageOutcome, PagePoint, PromptMode, PromptReply, PromptRequest,
 };
@@ -15,16 +14,16 @@ use crate::model::palette::{Palette, PaletteMode};
 use crate::model::textedit::field::TextField;
 use crate::model::textedit::modal::EditOutcome;
 use crate::model::textedit::recall::Recall;
-use crate::extensions::dir::DirPage;
-use crate::extensions::editor::{EditorPage, DIRTY_MARK};
-use crate::extensions::git::GitPage;
-use crate::extensions::grep::GrepPage;
-use crate::extensions::keys::KeysPage;
-use crate::extensions::pdf::PdfPage;
-use crate::extensions::proc::ProcPage;
-use crate::extensions::reltime;
-use crate::extensions::sys::SysPage;
-use crate::session::ExtensionSession;
+use crate::pages::dir::DirPage;
+use crate::pages::editor::{EditorPage, DIRTY_MARK};
+use crate::pages::git::GitPage;
+use crate::pages::grep::GrepPage;
+use crate::pages::keys::KeysPage;
+use crate::pages::pdf::PdfPage;
+use crate::pages::proc::ProcPage;
+use crate::pages::reltime;
+use crate::pages::sys::SysPage;
+use crate::session::PageSession;
 use winter_render::Grid;
 #[cfg(test)]
 use winter_render::InputView;
@@ -35,40 +34,8 @@ use super::{App, SPLIT_RATIO};
 // Constants
 // ========================================================================
 
-/// Extension name recorded for the directory listing, so its own chord toggles it.
-const DIR_EXTENSION: &str = "dir";
-const DIR_TOOL: &str = DIR_EXTENSION;
-
-/// Extension name recorded for the editor.
-pub(crate) const EDITOR_EXTENSION: &str = "editor";
-pub(crate) const EDITOR_TOOL: &str = EDITOR_EXTENSION;
-
-/// Extension name recorded for the git view.
-const GIT_EXTENSION: &str = "git";
-const GIT_TOOL: &str = GIT_EXTENSION;
-
-/// Extension name recorded for the text search.
-const GREP_EXTENSION: &str = "grep";
-const GREP_TOOL: &str = GREP_EXTENSION;
-
-/// View name recorded for the keys view.
-const KEYS_VIEW: &str = "keys";
-const KEYS_TOOL: &str = KEYS_VIEW;
-
-/// Extension name recorded for the PDF viewer.
-const PDF_EXTENSION: &str = "pdf";
-const PDF_TOOL: &str = PDF_EXTENSION;
-
-/// Extension name recorded for the process monitor.
-const PROC_EXTENSION: &str = "proc";
-const PROC_TOOL: &str = PROC_EXTENSION;
-
-/// Extension name recorded for the system monitor.
-const SYS_EXTENSION: &str = "sys";
-const SYS_TOOL: &str = SYS_EXTENSION;
-
 /// How many closed things are kept for reopening. The point of the stash is
-/// the tool just closed by accident, not a history of every tool ever closed,
+/// the page just closed by accident, not a history of every page ever closed,
 /// and each entry holds a whole page: an editor's buffers, a listing's rows.
 const MAX_CLOSED: usize = 8;
 
@@ -82,7 +49,7 @@ const MAX_CLOSED_UNSAVED: usize = 32;
 /// rather than written out, so the hint cannot name a key that is not bound.
 const REOPEN_COMMAND: &str = "reopen_page";
 
-/// What a row of the tool list is: a tool that is open somewhere, or one that
+/// What a row of the tab list is: a page that is open somewhere, or one that
 /// was closed. The rest of the row's action says which one.
 const OPEN_ROW: &str = "open:";
 const CLOSED_ROW: &str = "closed:";
@@ -94,7 +61,7 @@ const ASK_CLOSE_UNSAVED: &str = "close-unsaved";
 /// How a running program is named when the system does not say.
 const RUNNING_PROGRAM: &str = "a program";
 
-/// How a row of the tool list says where an open tool is: the tab showing
+/// How a row of the tab list says where an open page is: the tab showing
 /// in its pane, or one waiting on that pane's strip.
 const SHOWING_HINT: &str = "showing";
 const OPEN_HINT: &str = "open";
@@ -106,33 +73,34 @@ const CLOSED_TERMINAL_NOUN: &str = "terminal";
 
 /// Said when there is nothing to put back, rather than the key doing nothing
 /// at all.
-const NOTHING_CLOSED: &str = "no tool has been closed to reopen";
+const NOTHING_CLOSED: &str = "nothing has been closed to reopen";
 
 /// Said when the row picked stood for a page the stash has since dropped,
 /// which is the one way a list drawn a moment ago can be out of date.
-const GONE_FROM_LIST: &str = "that tool is no longer there to reopen";
+const GONE_FROM_LIST: &str = "that tab is no longer there to reopen";
 
 #[cfg(test)]
 const HINT_CONFIRM: &str = "y to confirm, any other key to cancel";
 #[cfg(test)]
 const HINT_TEXT: &str = "Enter to accept, Esc to cancel";
 
-/// The glyph each tool shows at the status bar's right edge. One
-/// line per tool, from the Font Awesome range every Nerd Font carries.
-const TOOL_ICONS: [(&str, char); 8] = [
-    (DIR_TOOL, '\u{f07b}'),
-    (EDITOR_TOOL, '\u{f044}'),
-    (GIT_TOOL, '\u{f1d3}'),
-    (GREP_TOOL, '\u{f002}'),
-    (KEYS_TOOL, '\u{f11c}'),
-    (PDF_TOOL, '\u{f1c1}'),
-    (PROC_TOOL, '\u{f080}'),
-    (SYS_TOOL, '\u{f2db}'),
-];
-
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// Which kind of page a tab holds: a peer of the terminal, opened by its own
+/// chord and toggled by it again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum PageKind {
+    Dir,
+    Editor,
+    Git,
+    Grep,
+    Keys,
+    Pdf,
+    Proc,
+    Sys,
+}
 
 /// A question a page asked, and the answer being typed for it.
 pub(crate) struct ActivePrompt {
@@ -174,7 +142,7 @@ pub(crate) enum PendingClose {
 /// Whether what is being closed is worth keeping for reopening.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum Closing {
-    /// The reader may want this back: a tool closed with `q`, a pane merged
+    /// The reader may want this back: a page closed with `q`, a pane merged
     /// away, a tab closed. These are the closes that turn out to be
     /// accidents.
     Keep,
@@ -185,10 +153,10 @@ pub(crate) enum Closing {
 
 /// Something closed that can be put back, oldest first in `App::closed`.
 pub(crate) enum Closed {
-    /// One tool page.
+    /// One page.
     Page(ClosedPage),
     /// Terminal tabs, or a whole pane: where they sat, what they were
-    /// running in, and the tool tabs that went with them.
+    /// running in, and the page tabs that went with them.
     Terminal(ClosedPane),
 }
 
@@ -199,16 +167,16 @@ pub(crate) enum Closed {
 /// pseudo-terminal and the child with it. What is kept is where they sat, so
 /// a merged-away split comes back rather than a fresh one wherever the reader
 /// now is, the directory each shell was in, so its replacement starts there,
-/// and the tool tabs that went with them, which are kept whole beside them.
+/// and the page tabs that went with them, which are kept whole beside them.
 pub(crate) struct ClosedPane {
     closed_at: i64,
     /// Whether the whole pane went, rather than tabs inside one that stayed.
-    group: bool,
+    whole_pane: bool,
     id: u64,
     /// The window's split tree as it was, the snapshot the tabs are put back
     /// into when the rest of the layout has not moved on since.
     layout: LayoutTree,
-    /// The tool tabs that went with them, by the id they are kept under in
+    /// The page tabs that went with them, by the id they are kept under in
     /// the same stash.
     pages: Vec<u64>,
     /// The terminal tabs, in strip order.
@@ -232,7 +200,7 @@ pub(crate) struct ClosedTerminal {
 /// reader lost by closing it.
 pub(crate) struct ClosedPage {
     /// When it was closed, in seconds since the epoch, for the age the list
-    /// of them shows: the order alone does not say whether the tool above was
+    /// of them shows: the order alone does not say whether the page above was
     /// closed a moment ago or an hour ago.
     closed_at: i64,
     /// Which closed page this is, so a row of the list means the same page
@@ -241,7 +209,73 @@ pub(crate) struct ClosedPage {
     page: Box<dyn Page>,
     /// The tab it was, so a layout snapshot naming it still finds it.
     tab: TabId,
-    tool: &'static str,
+    kind: PageKind,
+}
+
+// ========================================================================
+// PageKind
+// ========================================================================
+
+impl PageKind {
+    /// Every kind, for reading a stored name back.
+    const ALL: [PageKind; 8] = [
+        PageKind::Dir,
+        PageKind::Editor,
+        PageKind::Git,
+        PageKind::Grep,
+        PageKind::Keys,
+        PageKind::Pdf,
+        PageKind::Proc,
+        PageKind::Sys,
+    ];
+
+    /// The name a session file records and the icon tables are keyed by.
+    pub(crate) fn name(self) -> &'static str {
+        match self {
+            PageKind::Dir => "dir",
+            PageKind::Editor => "editor",
+            PageKind::Git => "git",
+            PageKind::Grep => "grep",
+            PageKind::Keys => "keys",
+            PageKind::Pdf => "pdf",
+            PageKind::Proc => "proc",
+            PageKind::Sys => "sys",
+        }
+    }
+
+    /// The kind a stored name stands for, or `None` for one no longer known.
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|kind| kind.name() == name)
+    }
+
+    /// How the title bar and the window title name the kind.
+    pub(crate) fn title(self) -> &'static str {
+        match self {
+            PageKind::Dir => "Dir",
+            PageKind::Editor => "Editor",
+            PageKind::Git => "Git",
+            PageKind::Grep => "Grep",
+            PageKind::Keys => "Keys",
+            PageKind::Pdf => "PDF",
+            PageKind::Proc => "Processes",
+            PageKind::Sys => "System",
+        }
+    }
+
+    /// The glyph the status bar draws on its right edge for the kind, from
+    /// the Font Awesome range every Nerd Font carries.
+    fn status_icon(self) -> char {
+        match self {
+            PageKind::Dir => '\u{f07b}',
+            PageKind::Editor => '\u{f044}',
+            PageKind::Git => '\u{f1d3}',
+            PageKind::Grep => '\u{f002}',
+            PageKind::Keys => '\u{f11c}',
+            PageKind::Pdf => '\u{f1c1}',
+            PageKind::Proc => '\u{f080}',
+            PageKind::Sys => '\u{f2db}',
+        }
+    }
 }
 
 // ========================================================================
@@ -283,8 +317,8 @@ impl Closed {
 
 impl ClosedPane {
     /// Whether the whole pane went, rather than tabs inside one that stayed.
-    pub(super) fn is_group(&self) -> bool {
-        self.group
+    pub(super) fn is_whole_pane(&self) -> bool {
+        self.whole_pane
     }
 
     /// The window's split tree as it was.
@@ -292,7 +326,7 @@ impl ClosedPane {
         self.layout.clone()
     }
 
-    /// The tool tabs that went with them.
+    /// The page tabs that went with them.
     pub(super) fn page_ids(&self) -> Vec<u64> {
         self.pages.clone()
     }
@@ -308,14 +342,14 @@ impl ClosedPane {
 // ========================================================================
 
 impl ClosedPage {
-    /// How the list of tools names this one.
+    /// How the tab list names this one.
     fn label(&self) -> String {
-        tool_row_label(self.tool, self.page.as_ref())
+        tab_row_label(self.kind, self.page.as_ref())
     }
 }
 
-/// A page covering one pane: the page itself, which tool opened it, and the
-/// mode the pane was in, so closing the page puts the pane back as it was.
+/// A page tab's contents: the page itself, which kind it is, and what the
+/// host keeps of its last frame.
 pub(crate) struct PageSlot {
     pub(crate) page: Box<dyn Page>,
     /// The row the page last banded as its cursor line, so a text cursor
@@ -325,7 +359,7 @@ pub(crate) struct PageSlot {
     /// over the tab reads what is on screen: a page has no terminal grid of
     /// its own to resolve a selection against.
     pub(crate) painted: Option<Grid>,
-    tool: &'static str,
+    kind: PageKind,
 }
 
 // ========================================================================
@@ -333,38 +367,50 @@ pub(crate) struct PageSlot {
 // ========================================================================
 
 impl PageSlot {
-    /// The tool name of this page (e.g. "dir", "editor", "git").
-    pub(crate) fn tool(&self) -> &'static str {
-        self.tool
-    }
-
-    /// The packed icon a pane strip draws before the tab's title. An editor
-    /// shows the type icon of the file it has open; every other tool its own.
-    pub(crate) fn tab_icon(&self) -> String {
-        match self.tool == EDITOR_TOOL {
-            true => crate::icons::file_icon(&self.page.title()),
-            false => crate::icons::tool_icon(self.tool),
+    /// A page of `kind` that has not been painted yet.
+    fn new(kind: PageKind, page: Box<dyn Page>) -> Self {
+        Self {
+            page,
+            cursor_line: None,
+            painted: None,
+            kind,
         }
     }
 
-    /// The glyph the status bar draws on its right edge for this tool, or
-    /// `None` for a tool with no entry in [`TOOL_ICONS`].
-    pub(crate) fn status_icon(&self) -> Option<char> {
-        TOOL_ICONS
-            .iter()
-            .find(|(tool, _)| *tool == self.tool)
-            .map(|(_, icon)| *icon)
+    /// Which kind of page this is.
+    pub(crate) fn kind(&self) -> PageKind {
+        self.kind
     }
 
-    /// How a pane strip names the tab. A tool whose icon already names it (an
+    /// The packed icon a pane strip draws before the tab's title. An editor
+    /// shows the type icon of the file it has open; every other kind its own.
+    pub(crate) fn tab_icon(&self) -> String {
+        match self.kind {
+            PageKind::Editor => crate::icons::file_icon(&self.page.title()),
+            PageKind::Dir
+            | PageKind::Git
+            | PageKind::Grep
+            | PageKind::Keys
+            | PageKind::Pdf
+            | PageKind::Proc
+            | PageKind::Sys => crate::icons::page_icon(self.kind.name()),
+        }
+    }
+
+    /// The glyph the status bar draws on its right edge for this page.
+    pub(crate) fn status_icon(&self) -> char {
+        self.kind.status_icon()
+    }
+
+    /// How a pane strip names the tab. A page whose icon already names it (an
     /// editor's file-type icon, `dir`'s folder) shows just the page's title; a
-    /// tool on the default file icon keeps its name in front, so the tab still
+    /// page on the default file icon keeps its kind in front, so the tab still
     /// says what is listing what.
     pub(crate) fn tab_label(&self) -> String {
         let title = self.page.title();
-        match self.tool == EDITOR_TOOL || crate::icons::has_tool_icon(self.tool) {
+        match self.kind == PageKind::Editor || crate::icons::has_page_icon(self.kind.name()) {
             true => title,
-            false => page_label(self.tool, &title),
+            false => page_label(self.kind, &title),
         }
     }
 }
@@ -375,7 +421,7 @@ impl PageSlot {
 
 /// Now, in seconds since the epoch, which is what an age is measured from. A
 /// clock that cannot answer reads as the epoch rather than failing a list of
-/// closed tools over a wrong timestamp.
+/// closed pages over a wrong timestamp.
 fn now_seconds() -> i64 {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -393,12 +439,12 @@ fn named(unsaved: &[String]) -> String {
     }
 }
 
-/// How a row of the extension list names one page: the extension, what it is showing, a
+/// How a row of the tab list names one page: its kind, what it is showing, a
 /// mark when it is holding edits that are on no disk, and the directory it is
 /// looking at. The directory is what tells two files of the same name apart,
 /// and what makes either findable by the tree it sits in.
-fn extension_row_label(extension: &str, page: &dyn Page) -> String {
-    let mut label = page_label(extension, &page.title());
+fn tab_row_label(kind: PageKind, page: &dyn Page) -> String {
+    let mut label = page_label(kind, &page.title());
     if page.is_dirty() {
         label.push_str(DIRTY_MARK);
     }
@@ -409,18 +455,14 @@ fn extension_row_label(extension: &str, page: &dyn Page) -> String {
     label
 }
 
-#[allow(dead_code)]
-fn tool_row_label(tool: &str, page: &dyn Page) -> String {
-    extension_row_label(tool, page)
-}
-
-/// How a page is named away from the page itself: the tool it was opened as
-/// and what it is showing. A title that merely restates the tool's name
+/// How a page is named away from the page itself: the kind it was opened as
+/// and what it is showing. A title that merely restates the kind's name
 /// ("Keys") is left to stand on its own rather than doubled up.
-fn page_label(tool: &str, title: &str) -> String {
-    match title.eq_ignore_ascii_case(tool) {
+fn page_label(kind: PageKind, title: &str) -> String {
+    let name = kind.name();
+    match title.eq_ignore_ascii_case(name) {
         true => title.to_string(),
-        false => format!("{tool}: {title}"),
+        false => format!("{name}: {title}"),
     }
 }
 
@@ -456,33 +498,36 @@ pub(crate) fn input_dialog(label: &str, input: &str, caret: usize, mode: PromptM
 }
 
 // ========================================================================
-// App: tool pages
+// App: pages
 // ========================================================================
 
 impl App {
     /// Open the keys page in a tab beside the focused one, or step away from
-    /// it when it is already the tab showing (see [`Self::toggle_tool`]).
+    /// it when it is already the tab showing (see [`Self::toggle_page`]).
     pub(crate) fn open_keys_page(&mut self) {
-        if self.toggle_tool(KEYS_TOOL) {
+        if self.toggle_page(PageKind::Keys) {
             return;
         }
         let page = KeysPage::new(&self.window_keymap);
-        self.show_page(KEYS_TOOL, Box::new(page));
+        self.show_page(PageKind::Keys, Box::new(page));
     }
 
     /// Open a directory listing in a tab beside the focused one, rooted where
     /// that tab is looking, or go to the listing the pane already has.
     pub(crate) fn open_dir_page(&mut self) {
-        if self.toggle_tool(DIR_TOOL) {
+        if self.toggle_page(PageKind::Dir) {
             return;
         }
-        self.show_page(DIR_TOOL, Box::new(DirPage::new(self.focused_start_dir())));
+        self.show_page(
+            PageKind::Dir,
+            Box::new(DirPage::new(self.focused_start_dir())),
+        );
     }
 
     /// List `dir` in a new tab beside the focused one, as a directory opened
     /// from the terminal's text is.
     pub(crate) fn open_dir_page_at(&mut self, dir: PathBuf) {
-        self.show_page(DIR_TOOL, Box::new(DirPage::new(dir)));
+        self.show_page(PageKind::Dir, Box::new(DirPage::new(dir)));
     }
 
     /// Open the working tree's state in a tab beside the focused one, for the
@@ -495,20 +540,20 @@ impl App {
                 start == root || start.starts_with(&root) || root.starts_with(&start)
             })
         };
-        if self.toggle_tool_matching(GIT_TOOL, &matches_repo) {
+        if self.toggle_page_matching(PageKind::Git, &matches_repo) {
             return;
         }
         // Where the view looks is decided by the pane it was asked from, before
         // focus moves to the one it opens in.
         self.prefer_other_pane();
-        if self.show_open_tool_matching(GIT_TOOL, &matches_repo) {
+        if self.show_open_page_matching(PageKind::Git, &matches_repo) {
             return;
         }
         let page = GitPage::new(start);
         // The view knows nothing until git answers, so its first request goes
         // out with it rather than waiting for a keystroke.
         let first = page.initial_request();
-        let tab_id = self.show_page_beside(GIT_TOOL, Box::new(page));
+        let tab_id = self.show_page_beside(PageKind::Git, Box::new(page));
         self.jobs.spawn(tab_id, first);
     }
 
@@ -521,27 +566,27 @@ impl App {
             })
         };
         let open_tab = self.layout().members().into_iter().find(|&member| {
-            self.pages.get(&member).is_some_and(|slot| {
-                slot.tool == GIT_TOOL && matches_repo(&*slot.page)
-            })
+            self.open_tabs
+                .page(&member)
+                .is_some_and(|slot| slot.kind == PageKind::Git && matches_repo(&*slot.page))
         });
         if let Some(tab) = open_tab {
             self.show_tab(tab);
         } else {
             let page = GitPage::new(repo);
             let first = page.initial_request();
-            let tab_id = self.show_page_beside(GIT_TOOL, Box::new(page));
+            let tab_id = self.show_page_beside(PageKind::Git, Box::new(page));
             self.jobs.spawn(tab_id, first);
         }
     }
 
     /// Move focus to another pane when the window has more than one, so what
-    /// opens next opens there: tools that are read beside the work, not over it.
+    /// opens next opens there: pages that are read beside the work, not over it.
     /// The pane beside this one in the same row is preferred, then the next in
     /// tree order. With a single pane [`Self::show_page_beside`] splits one off
     /// instead.
     pub(crate) fn prefer_other_pane(&mut self) {
-        if self.layout().panes().len() < 2 {
+        if self.layout().shown_tabs().len() < 2 {
             return;
         }
         let viewport = self.viewport_rect();
@@ -554,55 +599,47 @@ impl App {
     /// Show `page` beside the work: as a tab of the pane focus was moved to by
     /// [`Self::prefer_other_pane`], or, where there is only one pane, in a new
     /// one split off to its right.
-    fn show_page_beside(&mut self, tool: &'static str, page: Box<dyn Page>) -> TabId {
-        match self.layout().panes().len() > 1 {
-            true => self.show_page(tool, page),
-            false => self.show_page_split(tool, page),
+    fn show_page_beside(&mut self, kind: PageKind, page: Box<dyn Page>) -> TabId {
+        match self.layout().shown_tabs().len() > 1 {
+            true => self.show_page(kind, page),
+            false => self.show_page_split(kind, page),
         }
     }
 
     /// Split the focused pane vertically and show `page` in the new half, which
     /// takes focus.
-    fn show_page_split(&mut self, tool: &'static str, page: Box<dyn Page>) -> TabId {
+    fn show_page_split(&mut self, kind: PageKind, page: Box<dyn Page>) -> TabId {
         let tab_id = self.alloc_tab_id();
         self.layout_mut()
             .split(Direction::Vertical, SPLIT_RATIO, tab_id);
         self.layout_mut().balance();
-        self.pages.insert(
-            tab_id,
-            PageSlot {
-                page,
-                cursor_line: None,
-                painted: None,
-                tool,
-            },
-        );
-        self.modes.insert(tab_id, Mode::Page);
+        self.open_tabs
+            .insert_page(tab_id, PageSlot::new(kind, page));
         self.after_tab_change();
         tab_id
     }
 
-    /// Show `tool`'s tab matching `predicate` in the focused pane when it
+    /// Show the `kind` tab matching `predicate` in the focused pane when it
     /// already has one, whether or not it is the one showing. Returns whether
     /// there was one.
-    fn show_open_tool_matching(
+    fn show_open_page_matching(
         &mut self,
-        tool: &'static str,
+        kind: PageKind,
         predicate: &dyn Fn(&dyn Page) -> bool,
     ) -> bool {
         let focused = self.layout().focused();
         let open = self
             .layout()
-            .recent_in_group(focused)
+            .recent_in_pane(focused)
             .into_iter()
-            .find(|pane| {
-                self.pages
-                    .get(pane)
-                    .is_some_and(|slot| slot.tool == tool && predicate(&*slot.page))
+            .find(|tab| {
+                self.open_tabs
+                    .page(tab)
+                    .is_some_and(|slot| slot.kind == kind && predicate(&*slot.page))
             });
         match open {
-            Some(pane) => {
-                self.show_tab(pane);
+            Some(tab) => {
+                self.show_tab(tab);
                 true
             }
             None => false,
@@ -611,59 +648,63 @@ impl App {
 
     /// Search where the focused tab is looking for text, in a tab of its own.
     pub(crate) fn open_grep_page(&mut self) {
-        if self.toggle_tool(GREP_TOOL) {
+        if self.toggle_page(PageKind::Grep) {
             return;
         }
-        self.show_page(GREP_TOOL, Box::new(GrepPage::new(self.focused_start_dir())));
+        self.show_page(
+            PageKind::Grep,
+            Box::new(GrepPage::new(self.focused_start_dir())),
+        );
     }
 
     /// Show the machine's processes in a tab of their own. The monitor asks
     /// for its own first snapshot on the next tick.
     pub(crate) fn open_proc_page(&mut self) {
-        if self.toggle_tool(PROC_TOOL) {
+        if self.toggle_page(PageKind::Proc) {
             return;
         }
-        self.show_page(PROC_TOOL, Box::new(ProcPage::new()));
+        self.show_page(PageKind::Proc, Box::new(ProcPage::new()));
     }
 
     /// Show the machine's CPU, memory, disks, and GPUs in a tab of their own.
     pub(crate) fn open_sys_page(&mut self) {
-        if self.toggle_tool(SYS_TOOL) {
+        if self.toggle_page(PageKind::Sys) {
             return;
         }
-        self.show_page(SYS_TOOL, Box::new(SysPage::new()));
+        self.show_page(PageKind::Sys, Box::new(SysPage::new()));
     }
 
     /// Refresh each page that keeps itself current, and say when the earliest
     /// of them next wants to be asked.
     pub(crate) fn tick_pages(&mut self, now: Instant) -> Option<Instant> {
         let due: Vec<TabId> = self
-            .pages
-            .iter()
+            .open_tabs
+            .pages()
             .filter(|(_, slot)| slot.page.next_tick().is_some_and(|at| at <= now))
             .map(|(pane, _)| *pane)
             .collect();
         for tab_id in due {
-            let Some(slot) = self.pages.get_mut(&tab_id) else {
+            let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
                 continue;
             };
             let outcome = slot.page.on_tick(now);
             self.act_on_page_outcome(tab_id, outcome);
         }
-        self.pages
-            .values()
+        self.open_tabs
+            .pages()
+            .map(|(_, slot)| slot)
             .filter_map(|slot| slot.page.next_tick())
             .min()
     }
 
     /// Open `target`'s file in a tab beside the focused one, in whichever
-    /// tool can show it.
+    /// page can show it.
     ///
     /// A PDF is not text and the editor refuses it as binary, so it goes to
     /// the viewer instead. Everything else is the editor's.
     pub(crate) fn open_path_page(&mut self, target: OpenTarget) {
         if PdfPage::handles(&target.path) {
-            self.show_page(PDF_TOOL, Box::new(PdfPage::new(target.path)));
+            self.show_page(PageKind::Pdf, Box::new(PdfPage::new(target.path)));
             return;
         }
         self.open_editor_page(target);
@@ -678,15 +719,15 @@ impl App {
         // A file opened from inside the editor joins it as another buffer of
         // its own, rather than opening a second editor beside it.
         let tab_id = self.layout().focused();
-        if let Some(slot) = self.pages.get_mut(&tab_id) {
-            if slot.tool == EDITOR_TOOL && slot.page.open_file(target.clone()) {
+        if let Some(slot) = self.open_tabs.page_mut(&tab_id) {
+            if slot.kind == PageKind::Editor && slot.page.open_file(target.clone()) {
                 self.dirty = true;
                 return;
             }
         }
         match EditorPage::new(target.path, target.line) {
             Ok(page) => {
-                self.show_page(EDITOR_TOOL, Box::new(page));
+                self.show_page(PageKind::Editor, Box::new(page));
             }
             Err(e) => self.set_error(format!("{e}")),
         }
@@ -702,7 +743,8 @@ impl App {
         match EditorPage::new(path, None) {
             Ok(page) => {
                 let with_changes = page.edits_commit();
-                let editor = self.show_page_beside(EDITOR_TOOL, Box::new(page.with_waiter(waiter)));
+                let editor =
+                    self.show_page_beside(PageKind::Editor, Box::new(page.with_waiter(waiter)));
                 if with_changes {
                     self.show_staged_beside(editor, start);
                 }
@@ -718,7 +760,7 @@ impl App {
     fn show_staged_beside(&mut self, editor: TabId, start: PathBuf) {
         let page = GitPage::staged_diff(start);
         let first = page.initial_request();
-        let diff = self.show_page(GIT_TOOL, Box::new(page));
+        let diff = self.show_page(PageKind::Git, Box::new(page));
         self.layout_mut().focus(editor);
         self.commit_companions.insert(editor, diff);
         self.jobs.spawn(diff, first);
@@ -728,7 +770,7 @@ impl App {
     /// Open the file browser where the focused terminal points, else over its
     /// working directory (see [`Self::files_palette_at_point`]): the palette,
     /// listing a directory a row at a time. The chord that opened it closes
-    /// it again, as a tool's own chord does.
+    /// it again, as a page's own chord does.
     pub(crate) fn open_file_browser(&mut self) {
         let showing = self
             .palette
@@ -741,17 +783,15 @@ impl App {
         self.dirty = true;
     }
 
-    /// Open `page` in a new tab beside the focused one and show it. Returns
-    /// the tab it went into.
-    /// The extension or view tabs as a session saves them: each that can say where it was.
-    pub(crate) fn extension_sessions(&self) -> Vec<ExtensionSession> {
-        self.pages
-            .iter()
+    /// The page tabs as a session saves them: each that can say where it was.
+    pub(crate) fn page_sessions(&self) -> Vec<PageSession> {
+        self.open_tabs
+            .pages()
             .filter_map(|(id, slot)| {
                 let at = slot.page.snapshot()?;
-                Some(ExtensionSession {
+                Some(PageSession {
                     id: id.0 as usize,
-                    kind: slot.tool.to_string(),
+                    kind: slot.kind.name().to_string(),
                     line: at.line,
                     path: at.path.to_string_lossy().to_string(),
                 })
@@ -759,83 +799,66 @@ impl App {
             .collect()
     }
 
-    /// Backwards compatibility alias for [`App::extension_sessions`].
-    pub(crate) fn tool_sessions(&self) -> Vec<ExtensionSession> {
-        self.extension_sessions()
-    }
-
-    /// Open a saved extension tab again as tab `id`, outside the layout, which the
-    /// restore rebuilds from the session. `false` for an extension that cannot be
+    /// Open a saved page tab again as tab `id`, outside the layout, which the
+    /// restore rebuilds from the session. `false` for a page that cannot be
     /// opened there any more (a file since deleted, a kind no longer known).
-    pub(crate) fn restore_extension(&mut self, id: TabId, ext: &ExtensionSession) -> bool {
-        let path = PathBuf::from(&ext.path);
+    pub(crate) fn restore_page(&mut self, id: TabId, saved: &PageSession) -> bool {
+        let path = PathBuf::from(&saved.path);
         // A view that knows nothing until git answers has to ask, as it does
         // when opened; restored without the request it would wait for ever.
         let mut first = None;
-        let (key, page): (&'static str, Box<dyn Page>) = match ext.kind.as_str() {
-            DIR_EXTENSION if path.is_dir() => (DIR_EXTENSION, Box::new(DirPage::new(path))),
-            GIT_EXTENSION if path.is_dir() => {
+        let Some(kind) = PageKind::from_name(&saved.kind) else {
+            return false;
+        };
+        let page: Box<dyn Page> = match kind {
+            PageKind::Dir if path.is_dir() => Box::new(DirPage::new(path)),
+            PageKind::Git if path.is_dir() => {
                 let page = GitPage::new(path);
                 first = Some(page.initial_request());
-                (GIT_EXTENSION, Box::new(page))
+                Box::new(page)
             }
-            GREP_EXTENSION if path.is_dir() => (GREP_EXTENSION, Box::new(GrepPage::new(path))),
-            EDITOR_EXTENSION => match EditorPage::new(path, ext.line) {
-                Ok(page) => (EDITOR_EXTENSION, Box::new(page)),
+            PageKind::Grep if path.is_dir() => Box::new(GrepPage::new(path)),
+            PageKind::Editor => match EditorPage::new(path, saved.line) {
+                Ok(page) => Box::new(page),
                 Err(_) => return false,
             },
-            _ => return false,
+            PageKind::Dir
+            | PageKind::Git
+            | PageKind::Grep
+            | PageKind::Keys
+            | PageKind::Pdf
+            | PageKind::Proc
+            | PageKind::Sys => return false,
         };
-        self.pages.insert(
-            id,
-            PageSlot {
-                page,
-                cursor_line: None,
-                painted: None,
-                tool: key,
-            },
-        );
-        self.modes.insert(id, Mode::Page);
+        self.open_tabs.insert_page(id, PageSlot::new(kind, page));
         if let Some(first) = first {
             self.jobs.spawn(id, first);
         }
         true
     }
 
-    /// Backwards compatibility alias for [`App::restore_extension`].
-    #[allow(dead_code)]
-    pub(crate) fn restore_tool(&mut self, id: TabId, tool: &ExtensionSession) -> bool {
-        self.restore_extension(id, tool)
-    }
-
-    pub(crate) fn show_page(&mut self, tool: &'static str, page: Box<dyn Page>) -> TabId {
+    /// Open `page` in a new tab beside the focused one and show it. Returns
+    /// the tab it went into.
+    pub(crate) fn show_page(&mut self, kind: PageKind, page: Box<dyn Page>) -> TabId {
         let tab_id = self.alloc_tab_id();
-        self.insert_page_tab(tab_id, tool, page);
+        self.insert_page_tab(tab_id, kind, page);
         tab_id
     }
 
     /// Put `page` into the layout as tab `tab_id`, beside the focused tab.
-    fn insert_page_tab(&mut self, tab_id: TabId, tool: &'static str, page: Box<dyn Page>) {
-        self.pages.insert(
-            tab_id,
-            PageSlot {
-                page,
-                cursor_line: None,
-                painted: None,
-                tool,
-            },
-        );
-        self.modes.insert(tab_id, Mode::Page);
+    fn insert_page_tab(&mut self, tab_id: TabId, kind: PageKind, page: Box<dyn Page>) {
+        self.open_tabs
+            .insert_page(tab_id, PageSlot::new(kind, page));
         self.layout_mut().add_tab(tab_id);
         self.after_tab_change();
     }
 
-    /// Close the tool tab `tab_id`, keeping its page for reopening.
+    /// Close the page tab `tab_id`, keeping its page for reopening.
     pub(crate) fn close_page(&mut self, tab_id: TabId) {
         self.close_tab_now(tab_id, Closing::Keep);
     }
 
-    /// Ask before closing a pane whose tool tabs hold edits on no disk, or
+    /// Ask before closing a pane whose page tabs hold edits on no disk, or
     /// whose terminal has a program running in it.
     ///
     /// Returns whether the question was asked, which is the caller's cue to
@@ -843,13 +866,13 @@ impl App {
     /// prompt has nothing to lose, but a program in the way (an agent, an
     /// editor, a build) is ended with the pane.
     pub(crate) fn ask_before_closing_pane(&mut self, tab_id: TabId) -> bool {
-        let tabs = self.layout().group_members(tab_id);
+        let tabs = self.layout().tabs_in_pane(tab_id);
         self.ask_before_closing(&tabs, "pane", PendingClose::Terminal(tab_id))
     }
 
     /// The same, for every pane but the one holding `keep`.
     pub(crate) fn ask_before_closing_others(&mut self, keep: TabId) -> bool {
-        let kept = self.layout().group_members(keep);
+        let kept = self.layout().tabs_in_pane(keep);
         let others: Vec<TabId> = self
             .layout()
             .members()
@@ -863,7 +886,7 @@ impl App {
     pub(crate) fn ask_before_closing_other_tabs(&mut self, keep: TabId) -> bool {
         let others: Vec<TabId> = self
             .layout()
-            .group_members(keep)
+            .tabs_in_pane(keep)
             .into_iter()
             .filter(|tab| *tab != keep)
             .collect();
@@ -922,21 +945,22 @@ impl App {
     fn running_in(&self, panes: &[TabId]) -> Vec<String> {
         panes
             .iter()
-            .filter_map(|pane| self.terminals.get(pane))
-            .filter(|pane| pane.has_foreground_process())
-            .map(|pane| {
-                pane.foreground_process_name()
+            .filter_map(|pane| self.open_tabs.terminal(pane))
+            .filter(|terminal| terminal.has_foreground_process())
+            .map(|terminal| {
+                terminal
+                    .foreground_process_name()
                     .unwrap_or_else(|| RUNNING_PROGRAM.to_string())
             })
             .collect()
     }
 
-    /// What every tool tab among `panes` is holding that is on no disk,
+    /// What every page tab among `panes` is holding that is on no disk,
     /// named as the pages name themselves.
     fn unsaved_in(&self, panes: &[TabId]) -> Vec<String> {
         panes
             .iter()
-            .filter_map(|pane| self.pages.get(pane))
+            .filter_map(|pane| self.open_tabs.page(pane))
             .filter(|slot| slot.page.is_dirty())
             .map(|slot| slot.page.title())
             .collect()
@@ -966,18 +990,19 @@ impl App {
     /// Keep a closed page for reopening, and say once a session that closing
     /// one is not final.
     ///
-    /// An older entry naming the same thing is dropped: a tool opened and
+    /// An older entry naming the same thing is dropped: a page opened and
     /// closed over and over would otherwise fill the list with rows that are
     /// all the same page as far as a reader can tell. One holding unwritten
     /// edits is never the one dropped, however old it is.
     pub(crate) fn stash_closed_page(&mut self, tab: TabId, mut slot: PageSlot) -> u64 {
         slot.page.on_closed();
+        let kind = slot.kind;
         let closed = ClosedPage {
             closed_at: now_seconds(),
             id: self.take_closed_id(),
             page: slot.page,
             tab,
-            tool: slot.tool,
+            kind,
         };
         let label = closed.label();
         self.closed.retain(|other| match other {
@@ -987,30 +1012,30 @@ impl App {
         let id = closed.id;
         self.closed.push(Closed::Page(closed));
         self.trim_closed();
-        self.hint_at_reopening(slot.tool);
+        self.hint_at_reopening(kind);
         id
     }
 
     /// Keep closed terminal tabs: where they sat, what they were running in,
-    /// and which tool tabs went with them. `group` says the whole pane went.
+    /// and which page tabs went with them. `whole_pane` says the whole pane went.
     pub(crate) fn stash_closed_pane(
         &mut self,
         terminals: &[TabId],
         layout: LayoutTree,
         pages: Vec<u64>,
-        group: bool,
+        whole_pane: bool,
     ) {
         let terminals = terminals
             .iter()
             .map(|&tab| ClosedTerminal {
-                cwd: self.terminals.get(&tab).and_then(|p| p.cwd()),
+                cwd: self.open_tabs.terminal(&tab).and_then(|p| p.cwd()),
                 tab,
             })
             .collect();
         let id = self.take_closed_id();
         self.closed.push(Closed::Terminal(ClosedPane {
             closed_at: now_seconds(),
-            group,
+            whole_pane,
             id,
             layout,
             pages,
@@ -1043,7 +1068,7 @@ impl App {
     /// Say, once a session, that what was just closed can be brought back,
     /// naming the key that does it. A stash nobody knows about is no way back
     /// at all, and a key named where it is not bound would be worse.
-    fn hint_at_reopening(&mut self, tool: &str) {
+    fn hint_at_reopening(&mut self, kind: PageKind) {
         if self.reopen_hint_shown {
             return;
         }
@@ -1052,10 +1077,10 @@ impl App {
             return;
         }
         self.reopen_hint_shown = true;
-        self.set_notice(format!("{tool} closed. {chord} puts it back"));
+        self.set_notice(format!("{} closed. {chord} puts it back", kind.name()));
     }
 
-    /// Put the last closed thing back: a tool tab beside the focused one, or
+    /// Put the last closed thing back: a page tab beside the focused one, or
     /// terminal tabs where they sat when the layout still has room for them.
     pub(crate) fn reopen_last_closed(&mut self) {
         let Some(closed) = self.closed.pop() else {
@@ -1079,14 +1104,14 @@ impl App {
         self.restore_closed(closed);
     }
 
-    /// Act on a row of the extension list: go to an extension that is open somewhere, or
-    /// put back one that was closed.
-    pub(crate) fn choose_extension_row(&mut self, action: &str) {
-        if let Some(pane) = action
+    /// Act on a row of the tab list: go to a page that is open somewhere, or
+    /// put back what was closed.
+    pub(crate) fn choose_tab_row(&mut self, action: &str) {
+        if let Some(tab) = action
             .strip_prefix(OPEN_ROW)
             .and_then(|id| id.parse::<u64>().ok())
         {
-            self.switch_to_pane(TabId(pane));
+            self.switch_to_tab(TabId(tab));
             return;
         }
         if let Some(id) = action
@@ -1097,45 +1122,33 @@ impl App {
         }
     }
 
-    /// Backwards compatibility alias for [`App::choose_extension_row`].
-    #[allow(dead_code)]
-    pub(crate) fn choose_tool_row(&mut self, action: &str) {
-        self.choose_extension_row(action);
-    }
-
-    /// Show every extension as a list to pick from: the ones open somewhere first,
-    /// then the ones closed recently, newest first.
-    pub(crate) fn open_extension_palette(&mut self) {
-        let rows = self.extension_rows();
+    /// Show every page tab as a list to pick from: the ones open somewhere
+    /// first, then what was closed recently, newest first.
+    pub(crate) fn open_tab_list(&mut self) {
+        let rows = self.tab_rows();
         if rows.is_empty() {
             self.set_notice(NOTHING_CLOSED);
             return;
         }
-        self.palette = Some(Palette::open_extensions(rows));
+        self.palette = Some(Palette::open_tab_list(rows));
         self.dirty = true;
     }
 
-    /// Backwards compatibility alias for [`App::open_extension_palette`].
-    #[allow(dead_code)]
-    pub(crate) fn open_tool_palette(&mut self) {
-        self.open_extension_palette();
-    }
-
-    /// Every row of the extension list, as `(action, label, hint)`.
-    fn extension_rows(&self) -> Vec<(String, String, String)> {
+    /// Every row of the tab list, as `(action, label, hint)`.
+    fn tab_rows(&self) -> Vec<(String, String, String)> {
         let mut rows: Vec<(String, String, String)> = Vec::new();
-        let shown = self.layout().panes();
-        for pane in self.layout().members() {
-            let Some(slot) = self.pages.get(&pane) else {
+        let shown = self.layout().shown_tabs();
+        for tab in self.layout().members() {
+            let Some(slot) = self.open_tabs.page(&tab) else {
                 continue;
             };
-            let hint = match shown.contains(&pane) {
+            let hint = match shown.contains(&tab) {
                 true => SHOWING_HINT,
                 false => OPEN_HINT,
             };
             rows.push((
-                format!("{OPEN_ROW}{}", pane.0),
-                extension_row_label(slot.tool, slot.page.as_ref()),
+                format!("{OPEN_ROW}{}", tab.0),
+                tab_row_label(slot.kind, slot.page.as_ref()),
                 hint.to_string(),
             ));
         }
@@ -1152,15 +1165,10 @@ impl App {
         rows
     }
 
-    #[allow(dead_code)]
-    fn tool_rows(&self) -> Vec<(String, String, String)> {
-        self.extension_rows()
-    }
-
     /// How the list names closed terminals: where their shells were, and the
-    /// tools that went with them, so a row reads as more than "a pane".
+    /// pages that went with them, so a row reads as more than "a pane".
     fn closed_pane_label(&self, pane: &ClosedPane) -> String {
-        let what = match pane.group {
+        let what = match pane.whole_pane {
             true => CLOSED_PANE_NOUN,
             false => CLOSED_TERMINAL_NOUN,
         };
@@ -1173,18 +1181,18 @@ impl App {
             true => what.to_string(),
             false => format!("{what}: {}", cwds.join(", ")),
         };
-        let tools: Vec<&str> = pane
+        let pages: Vec<&str> = pane
             .pages
             .iter()
             .filter_map(|id| self.closed.iter().find(|closed| closed.id() == *id))
             .filter_map(|closed| match closed {
-                Closed::Page(page) => Some(page.tool),
+                Closed::Page(page) => Some(page.kind.name()),
                 Closed::Terminal(_) => None,
             })
             .collect();
-        match tools.is_empty() {
+        match pages.is_empty() {
             true => named,
-            false => format!("{named}  ({})", tools.join(", ")),
+            false => format!("{named}  ({})", pages.join(", ")),
         }
     }
 
@@ -1225,46 +1233,47 @@ impl App {
             true => self.alloc_tab_id(),
             false => closed.tab,
         };
-        self.insert_page_tab(tab_id, closed.tool, closed.page);
+        self.insert_page_tab(tab_id, closed.kind, closed.page);
         self.act_on_page_outcome(tab_id, outcome);
     }
 
-    /// Step between a tool and where the reader came from with the tool's own
-    /// chord: on the tool's tab, go back to the tab shown before it; with the
-    /// tool open elsewhere in the focused pane, go to it. Returns whether the
-    /// chord was spent that way, else the caller opens the tool.
-    fn toggle_tool(&mut self, tool: &'static str) -> bool {
-        self.toggle_tool_matching(tool, &|_| true)
+    /// Step between a page and where the reader came from with the page's own
+    /// chord: on the page's tab, go back to the tab shown before it; with the
+    /// page open elsewhere in the focused pane, go to it. Returns whether the
+    /// chord was spent that way, else the caller opens the page.
+    fn toggle_page(&mut self, kind: PageKind) -> bool {
+        self.toggle_page_matching(kind, &|_| true)
     }
 
-    /// Step between a tool matching `predicate` and where the reader came from:
-    /// on that tool's tab, go back to the tab shown before it; with that tool open
-    /// elsewhere in the focused pane, go to it. Returns whether the chord was spent.
-    fn toggle_tool_matching(
+    /// Step between a `kind` page matching `predicate` and where the reader
+    /// came from: on that page's tab, go back to the tab shown before it; with
+    /// it open elsewhere in the focused pane, go to it. Returns whether the
+    /// chord was spent.
+    fn toggle_page_matching(
         &mut self,
-        tool: &'static str,
+        kind: PageKind,
         predicate: &dyn Fn(&dyn Page) -> bool,
     ) -> bool {
         let focused = self.layout().focused();
-        let matches = |app: &App, pane: &TabId| {
-            app.pages
-                .get(pane)
-                .is_some_and(|slot| slot.tool == tool && predicate(&*slot.page))
+        let matches = |app: &App, tab: &TabId| {
+            app.open_tabs
+                .page(tab)
+                .is_some_and(|slot| slot.kind == kind && predicate(&*slot.page))
         };
         if matches(self, &focused) {
-            if let Some(&back) = self.layout().recent_in_group(focused).get(1) {
+            if let Some(&back) = self.layout().recent_in_pane(focused).get(1) {
                 self.show_tab(back);
             }
             return true;
         }
         let open = self
             .layout()
-            .recent_in_group(focused)
+            .recent_in_pane(focused)
             .into_iter()
-            .find(|pane| matches(self, pane));
+            .find(|tab| matches(self, tab));
         match open {
-            Some(pane) => {
-                self.show_tab(pane);
+            Some(tab) => {
+                self.show_tab(tab);
                 true
             }
             None => false,
@@ -1274,8 +1283,8 @@ impl App {
     /// Offer `key` to the page covering `tab_id`. Returns whether the key was
     /// spent, so a key the page declines still reaches the ordinary keymap.
     pub(crate) fn offer_key_to_page(&mut self, tab_id: TabId, key: &Key) -> bool {
-        // Wrap belongs to the pane, not the tool: every page gets the toggle,
-        // ahead of its own keys, so no tool has to claim it itself.
+        // Wrap belongs to the pane, not the page: every page gets the toggle,
+        // ahead of its own keys, so no page has to claim it itself.
         if key.alt && !key.ctrl && matches!(key.code, KeyCode::Char('z') | KeyCode::Char('Z')) {
             self.page_wrap = !self.page_wrap;
             self.dirty = true;
@@ -1283,12 +1292,16 @@ impl App {
         }
         let neighbors: Vec<PathBuf> = self
             .layout()
-            .panes()
+            .shown_tabs()
             .into_iter()
             .filter(|pane| *pane != tab_id)
-            .filter_map(|pane| self.pages.get(&pane).and_then(|slot| slot.page.root_dir()))
+            .filter_map(|pane| {
+                self.open_tabs
+                    .page(&pane)
+                    .and_then(|slot| slot.page.root_dir())
+            })
             .collect();
-        let Some(slot) = self.pages.get_mut(&tab_id) else {
+        let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
             return false;
         };
         slot.page.set_neighbors(neighbors);
@@ -1300,7 +1313,7 @@ impl App {
     /// the keyboard is the only thing that saw it.
     ///
     /// The page is offered it first, exactly as a key typed into any other
-    /// tool is, and what the page declines is resolved against the window
+    /// page is, and what the page declines is resolved against the window
     /// keymap, so the chords that split, zoom, and switch panes and tabs keep
     /// working from inside a document.
     ///
@@ -1312,7 +1325,7 @@ impl App {
             self.dirty = true;
             return;
         }
-        let mode = self.modes.get(&tab_id).copied().unwrap_or_default();
+        let mode = self.open_tabs.mode(&tab_id).unwrap_or_default();
         let action = input::resolve_with(
             mode,
             &key,
@@ -1330,7 +1343,7 @@ impl App {
     /// row and column of the pane it landed on. Returns whether the page took
     /// it, so a click it declines still reaches the pane underneath.
     pub(crate) fn offer_mouse_to_page(&mut self, tab_id: TabId, at: PagePoint) -> bool {
-        let Some(slot) = self.pages.get_mut(&tab_id) else {
+        let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
             return false;
         };
         let outcome = slot.page.on_mouse(at);
@@ -1339,7 +1352,7 @@ impl App {
 
     /// Offer a turn of the wheel to the page covering `tab_id`.
     pub(crate) fn offer_scroll_to_page(&mut self, tab_id: TabId, lines: isize) -> bool {
-        let Some(slot) = self.pages.get_mut(&tab_id) else {
+        let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
             return false;
         };
         let outcome = slot.page.on_scroll(lines);
@@ -1433,7 +1446,7 @@ impl App {
             answer,
             tag: prompt.request.tag,
         };
-        let Some(slot) = self.pages.get_mut(&tab_id) else {
+        let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
             return;
         };
         let outcome = slot.page.on_prompt(reply);
@@ -1447,7 +1460,7 @@ impl App {
         let Some(pick) = self.page_pick.take() else {
             return;
         };
-        let Some(slot) = self.pages.get_mut(&pick.tab) else {
+        let Some(slot) = self.open_tabs.page_mut(&pick.tab) else {
             return;
         };
         let outcome = slot.page.on_prompt(PromptReply {
@@ -1516,7 +1529,7 @@ impl App {
             }
             PageOutcome::Paste => {
                 let text = self.clipboard_text().unwrap_or_default();
-                let Some(slot) = self.pages.get_mut(&tab_id) else {
+                let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
                     return true;
                 };
                 let outcome = slot.page.on_paste(text);
@@ -1578,6 +1591,7 @@ mod tests {
     use crate::app::SPLIT_RATIO;
     use crate::model::input::KeyCode;
     use crate::model::layout::Direction;
+    use crate::model::mode::Mode;
     use crate::model::page::{PageContent, PageSpan};
     use std::cell::RefCell;
     use std::path::PathBuf;
@@ -1667,24 +1681,24 @@ mod tests {
     }
 
     #[test]
-    fn test_a_tool_opens_where_the_page_is_looking_not_where_the_shell_is() {
+    fn test_a_page_opens_where_the_page_is_looking_not_where_the_shell_is() {
         // Opening the file browser while reading a file used to start at the
         // shell's directory, which for a file opened from elsewhere is not
-        // even the same tree. The tool tab being looked at answers first.
+        // even the same tree. The page tab being looked at answers first.
         let mut app = App::new();
         let looking_at = PathBuf::from("/tmp/winter-test-somewhere-else");
-        app.show_page("located", Box::new(LocatedPage(looking_at.clone())));
+        app.show_page(PageKind::Dir, Box::new(LocatedPage(looking_at.clone())));
         assert_eq!(app.focused_start_dir(), looking_at);
     }
 
     #[test]
-    fn test_a_tool_tab_with_no_place_of_its_own_starts_where_its_shell_is() {
-        // A tool that says nothing about where it is looking defers to the
+    fn test_a_page_tab_with_no_place_of_its_own_starts_where_its_shell_is() {
+        // A page that says nothing about where it is looking defers to the
         // terminal it was opened from, so a tab opened from it does not land
         // in the process's own directory.
         let mut app = App::new();
         let from_shell = app.focused_start_dir();
-        app.show_page("counting", Box::new(CountingPage::default()));
+        app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
         assert_eq!(app.focused_start_dir(), from_shell);
     }
 
@@ -1699,7 +1713,7 @@ mod tests {
 
     fn app_with_open_page() -> (App, TabId) {
         let mut app = App::new();
-        let tab = app.show_page("counting", Box::new(CountingPage::default()));
+        let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
         (app, tab)
     }
 
@@ -1707,11 +1721,15 @@ mod tests {
     fn test_a_page_opens_as_a_tab_beside_the_terminal_without_splitting() {
         let mut app = App::new();
         let terminal = app.layout().focused();
-        let tab = app.show_page("counting", Box::new(CountingPage::default()));
+        let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
         assert_ne!(tab, terminal, "a tab of its own");
-        assert_eq!(app.layout().panes(), vec![tab], "showing in the same pane");
+        assert_eq!(
+            app.layout().shown_tabs(),
+            vec![tab],
+            "showing in the same pane"
+        );
         assert_eq!(app.layout().members(), vec![terminal, tab]);
-        assert_eq!(app.modes.get(&tab).copied(), Some(Mode::Page));
+        assert!(app.open_tabs.is_page(&tab));
     }
 
     #[test]
@@ -1731,12 +1749,15 @@ mod tests {
         let terminal = app.layout().focused();
         app.open_editor_page(OpenTarget::at_line(text, 2));
         let editor = app.layout().focused();
-        assert_eq!(app.pages.get(&editor).map(|slot| slot.tool), Some("editor"));
+        assert_eq!(
+            app.open_tabs.page(&editor).map(|slot| slot.kind),
+            Some(PageKind::Editor)
+        );
 
         app.close_page(editor);
         assert_eq!(app.layout().focused(), terminal);
         app.open_editor_page(OpenTarget::file(binary));
-        assert!(app.pages.is_empty(), "nothing was opened");
+        assert!(app.open_tabs.pages().next().is_none(), "nothing was opened");
         assert_eq!(app.layout().focused(), terminal);
 
         let _ = std::fs::remove_dir_all(&dir);
@@ -1747,11 +1768,11 @@ mod tests {
         // Opening a file from a listing and closing it again has to land back
         // on the listing, not on whichever tab sits next to it on the strip.
         let mut app = App::new();
-        let listing = app.show_page("counting", Box::new(CountingPage::default()));
+        let listing = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
         app.layout_mut().focus(TabId(0));
-        let other = app.show_page("other", Box::new(CountingPage::default()));
+        let other = app.show_page(PageKind::Proc, Box::new(CountingPage::default()));
         app.show_tab(listing);
-        let file = app.show_page("stacked", Box::new(CountingPage::default()));
+        let file = app.show_page(PageKind::Sys, Box::new(CountingPage::default()));
         assert_eq!(
             app.layout().members(),
             vec![TabId(0), other, listing, file],
@@ -1761,7 +1782,7 @@ mod tests {
         app.close_page(file);
         assert_eq!(app.layout().focused(), listing);
         assert!(
-            app.pages.contains_key(&listing),
+            app.open_tabs.is_page(&listing),
             "and the listing is as it was"
         );
     }
@@ -1772,21 +1793,29 @@ mod tests {
         // back in the mode it was in.
         let mut app = App::new();
         let terminal = app.layout().focused();
-        app.modes.insert(terminal, Mode::Normal);
-        let tab = app.show_page("counting", Box::new(CountingPage::default()));
+        let shell = crate::terminal::session::Terminal::with_command(
+            20,
+            5,
+            portable_pty::CommandBuilder::new("true"),
+            1000,
+        )
+        .expect("test terminal spawn");
+        app.open_tabs.insert_terminal(terminal, shell);
+        app.open_tabs.set_mode(&terminal, Mode::Normal);
+        let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
 
         app.close_page(tab);
-        assert!(app.pages.is_empty());
+        assert!(app.open_tabs.pages().next().is_none());
         assert_eq!(app.layout().members(), vec![terminal]);
-        assert_eq!(app.modes.get(&terminal).copied(), Some(Mode::Normal));
-        assert!(!app.modes.contains_key(&tab), "the page's tab is forgotten");
+        assert_eq!(app.open_tabs.mode(&terminal), Some(Mode::Normal));
+        assert!(!app.open_tabs.is_page(&tab), "the page's tab is forgotten");
     }
 
     /// Put `claimed` keys into the page covering `pane`, which is what makes
     /// one open page tell itself apart from another.
     fn tally(app: &mut App, tab: TabId, claimed: usize) {
         for _ in 0..claimed {
-            if let Some(slot) = app.pages.get_mut(&tab) {
+            if let Some(slot) = app.open_tabs.page_mut(&tab) {
                 slot.page.on_key(&press(KeyCode::Char('x')));
             }
         }
@@ -1795,49 +1824,49 @@ mod tests {
     /// What the focused pane's page calls itself, or nothing when no page
     /// covers it.
     fn showing(app: &App) -> Option<String> {
-        app.pages
-            .get(&app.layout().focused())
+        app.open_tabs
+            .page(&app.layout().focused())
             .map(|slot| slot.page.title())
     }
 
     #[test]
     fn test_a_closed_page_comes_back_the_page_it_was() {
         // The whole point of reopening: what was lost was the state, not the
-        // kind of tool. A rebuilt page of the same kind would come back at
+        // kind of page. A rebuilt page of the same kind would come back at
         // zero, which is the bug this catches.
         let (mut app, pane) = app_with_open_page();
         tally(&mut app, pane, 3);
         app.close_page(pane);
-        assert!(app.pages.is_empty(), "closed first");
+        assert!(app.open_tabs.pages().next().is_none(), "closed first");
 
         app.reopen_last_closed();
         assert_eq!(app.layout().focused(), pane, "under the tab id it had");
         assert_eq!(
-            app.pages.get(&pane).map(|slot| slot.tool),
-            Some("counting"),
-            "the tool it was opened as"
+            app.open_tabs.page(&pane).map(|slot| slot.kind),
+            Some(PageKind::Grep),
+            "the page it was opened as"
         );
         assert_eq!(showing(&app).as_deref(), Some("Counting 3"));
-        assert_eq!(app.modes.get(&pane).copied(), Some(Mode::Page));
+        assert!(app.open_tabs.is_page(&pane));
         assert!(app.closed.is_empty(), "and is spent by reopening");
     }
 
     #[test]
-    fn test_a_closed_pane_comes_back_with_the_tools_it_was_holding() {
-        // Merging a split away used to drop the pane and its tools both. One
+    fn test_a_closed_pane_comes_back_with_the_pages_it_was_holding() {
+        // Merging a split away used to drop the pane and its pages both. One
         // reopen puts the split back, in its place, with every tab it held.
         let mut app = App::new();
         let terminal = app.layout().focused();
-        let listing = app.show_page("counting", Box::new(CountingPage::default()));
+        let listing = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
         tally(&mut app, listing, 1);
-        let file = app.show_page("stacked", Box::new(CountingPage::default()));
+        let file = app.show_page(PageKind::Sys, Box::new(CountingPage::default()));
         tally(&mut app, file, 2);
 
         let sibling = app.alloc_tab_id();
         app.layout_mut()
             .split(Direction::Vertical, SPLIT_RATIO, sibling);
         app.close_pane(file);
-        assert!(app.pages.is_empty());
+        assert!(app.open_tabs.pages().next().is_none());
         assert_eq!(
             app.layout().members(),
             vec![sibling],
@@ -1845,21 +1874,27 @@ mod tests {
         );
 
         app.reopen_last_closed();
-        assert_eq!(app.layout().panes().len(), 2, "the split is back");
+        assert_eq!(app.layout().shown_tabs().len(), 2, "the split is back");
         assert_eq!(
             app.layout().members(),
             vec![terminal, listing, file, sibling],
             "in the place it was, with its tabs in their order"
         );
-        assert_eq!(app.pages[&file].page.title(), "Counting 2");
-        assert_eq!(app.pages[&listing].page.title(), "Counting 1");
+        assert_eq!(
+            app.open_tabs.page(&file).unwrap().page.title(),
+            "Counting 2"
+        );
+        assert_eq!(
+            app.open_tabs.page(&listing).unwrap().page.title(),
+            "Counting 1"
+        );
         assert!(app.closed.is_empty(), "and nothing left over to reopen");
     }
 
     #[test]
-    fn test_a_tool_chord_steps_between_the_tool_and_the_tab_before_it() {
-        // The chord that opened a tool takes the reader back to where they
-        // were, and then to the tool again, which keeps what it was showing
+    fn test_a_page_chord_steps_between_the_page_and_the_tab_before_it() {
+        // The chord that opened a page takes the reader back to where they
+        // were, and then to the page again, which keeps what it was showing
         // rather than starting over.
         let mut app = App::new();
         let terminal = app.layout().focused();
@@ -1874,18 +1909,18 @@ mod tests {
         );
         app.open_keys_page();
         assert_eq!(app.layout().focused(), keys, "and to the same tab again");
-        assert_eq!(app.pages.len(), 1, "never a second one");
+        assert_eq!(app.open_tabs.pages().count(), 1, "never a second one");
         assert!(app.closed.is_empty(), "nothing was closed");
     }
 
     #[test]
-    fn test_closing_the_same_tool_twice_leaves_one_row_for_it() {
+    fn test_closing_the_same_page_twice_leaves_one_row_for_it() {
         // Opening and closing a listing over and over would otherwise fill
-        // the list with rows a reader cannot tell apart, and push the tool
+        // the list with rows a reader cannot tell apart, and push the page
         // they actually lost off the end of it.
         let mut app = App::new();
         for _ in 0..3 {
-            let tab = app.show_page("counting", Box::new(CountingPage::default()));
+            let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
             app.close_page(tab);
         }
         assert_eq!(app.closed.len(), 1);
@@ -1897,10 +1932,10 @@ mod tests {
         // page holding the only copy of an edit is the one entry dropping
         // which would make it one.
         let mut app = App::new();
-        let tab = app.show_page("editor", Box::new(UnsavedPage("main.rs")));
+        let tab = app.show_page(PageKind::Editor, Box::new(UnsavedPage("main.rs")));
         app.close_page(tab);
         for claimed in 1..=MAX_CLOSED + 2 {
-            let tab = app.show_page("counting", Box::new(CountingPage::default()));
+            let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
             tally(&mut app, tab, claimed);
             app.close_page(tab);
         }
@@ -1916,13 +1951,13 @@ mod tests {
         // Closing a pane never went near the page's own close, so an editor
         // holding unwritten edits was merged away without a word.
         let mut app = App::new();
-        let tab = app.show_page("editor", Box::new(UnsavedPage("main.rs")));
+        let tab = app.show_page(PageKind::Editor, Box::new(UnsavedPage("main.rs")));
         let sibling = app.alloc_tab_id();
         app.layout_mut()
             .split(Direction::Vertical, SPLIT_RATIO, sibling);
 
         app.close_pane(tab);
-        assert_eq!(app.layout().panes().len(), 2, "nothing closed yet");
+        assert_eq!(app.layout().shown_tabs().len(), 2, "nothing closed yet");
         let asked = app.input_view().expect("the question is up");
         assert!(
             asked.label.contains("main.rs"),
@@ -1932,12 +1967,16 @@ mod tests {
 
         // Anything but yes leaves the pane exactly as it was.
         app.handle_prompt_key(&press(KeyCode::Char('n')));
-        assert_eq!(app.layout().panes().len(), 2);
-        assert!(app.pages.contains_key(&tab), "the editor is still there");
+        assert_eq!(app.layout().shown_tabs().len(), 2);
+        assert!(app.open_tabs.is_page(&tab), "the editor is still there");
 
         app.close_pane(tab);
         app.handle_prompt_key(&press(KeyCode::Char('y')));
-        assert_eq!(app.layout().panes(), vec![sibling], "and yes closes it");
+        assert_eq!(
+            app.layout().shown_tabs(),
+            vec![sibling],
+            "and yes closes it"
+        );
         assert!(
             app.closed.iter().any(|closed| closed.is_dirty()),
             "with the edits kept for reopening even so"
@@ -1948,7 +1987,7 @@ mod tests {
     fn test_the_first_close_of_a_session_says_how_to_undo_it() {
         // A way back nobody is told about is a way back nobody takes.
         let mut app = App::new();
-        let tab = app.show_page("counting", Box::new(CountingPage::default()));
+        let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
         app.close_page(tab);
         let said = app
             .notice
@@ -1958,31 +1997,31 @@ mod tests {
         assert!(said.contains("Ctrl-Shift-u"), "naming the key: {said}");
 
         app.notice = None;
-        let tab = app.show_page("counting", Box::new(CountingPage::default()));
+        let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
         app.close_page(tab);
         assert!(app.notice.is_none(), "and only says it once");
     }
 
     #[test]
-    fn test_the_tool_list_reaches_a_tool_that_is_open_elsewhere() {
-        // Half the point of one list: a tool already up in another pane is
+    fn test_the_tab_list_reaches_a_page_that_is_open_elsewhere() {
+        // Half the point of one list: a page already up in another pane is
         // gone to rather than opened a second time.
         let mut app = App::new();
-        let here = app.show_page("counting", Box::new(CountingPage::default()));
+        let here = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
         let sibling = app.alloc_tab_id();
         app.layout_mut()
             .split(Direction::Vertical, SPLIT_RATIO, sibling);
         app.layout_mut().focus(sibling);
 
-        app.open_tool_palette();
+        app.open_tab_list();
         let palette = app.palette.clone().expect("the list opens");
         let row = palette
             .entries
             .iter()
-            .find(|entry| entry.label.starts_with("counting"))
-            .expect("the open tool is listed");
+            .find(|entry| entry.label.starts_with("grep"))
+            .expect("the open page is listed");
         assert_eq!(row.action, format!("open:{}", here.0));
-        app.choose_tool_row(&row.action);
+        app.choose_tab_row(&row.action);
         assert_eq!(app.layout().focused(), here, "focus moved to it");
         assert!(app.closed.is_empty(), "and nothing was reopened");
     }
@@ -1990,10 +2029,10 @@ mod tests {
     #[test]
     fn test_the_stash_holds_the_last_few_closes_and_no_more() {
         // Each entry is a whole page, so the stash is a way back from an
-        // accident rather than a log of every tool ever closed.
+        // accident rather than a log of every page ever closed.
         let mut app = App::new();
         for claimed in 0..MAX_CLOSED + 2 {
-            let tab = app.show_page("counting", Box::new(CountingPage::default()));
+            let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
             tally(&mut app, tab, claimed);
             app.close_page(tab);
         }
@@ -2016,26 +2055,26 @@ mod tests {
     }
 
     #[test]
-    fn test_the_list_of_closed_tools_reads_newest_first() {
+    fn test_the_list_of_closed_tabs_reads_newest_first() {
         // The order is the whole point of a recency list, and a row has to say
-        // which tool and what it was showing: "counting" twice over would be
+        // which page and what it was showing: "counting" twice over would be
         // two rows a reader cannot choose between.
         let mut app = App::new();
         for claimed in 1..=2 {
-            let tab = app.show_page("counting", Box::new(CountingPage::default()));
+            let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
             tally(&mut app, tab, claimed);
             app.close_page(tab);
         }
 
-        app.open_tool_palette();
+        app.open_tab_list();
         let palette = app.palette.as_ref().expect("the list opens");
-        assert_eq!(palette.mode, PaletteMode::Extensions);
+        assert_eq!(palette.mode, PaletteMode::TabList);
         let labels: Vec<&str> = palette
             .entries
             .iter()
             .map(|entry| entry.label.as_str())
             .collect();
-        assert_eq!(labels, ["counting: Counting 2", "counting: Counting 1"]);
+        assert_eq!(labels, ["grep: Counting 2", "grep: Counting 1"]);
         assert!(
             palette
                 .entries
@@ -2052,13 +2091,13 @@ mod tests {
         // decoration over `Ctrl-Shift-u`.
         let mut app = App::new();
         for claimed in 1..=3 {
-            let tab = app.show_page("counting", Box::new(CountingPage::default()));
+            let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
             tally(&mut app, tab, claimed);
             app.close_page(tab);
         }
         let terminal = app.layout().focused();
 
-        app.open_tool_palette();
+        app.open_tab_list();
         let mut palette = app.palette.clone().expect("the list opens");
         // The oldest row, which is the last one in a newest-first list.
         palette.selected = palette.filtered.len() - 1;
@@ -2074,18 +2113,21 @@ mod tests {
         // onto, which for a full stash drops the oldest. That row must not
         // reopen whichever page took its place.
         let mut app = App::new();
-        let tab = app.show_page("counting", Box::new(CountingPage::default()));
+        let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
         app.close_page(tab);
         let gone = app.closed[0].id();
         for claimed in 0..MAX_CLOSED {
             // Each told apart from the rest, so none replaces another's row.
-            let tab = app.show_page("counting", Box::new(CountingPage::default()));
+            let tab = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
             tally(&mut app, tab, claimed + 1);
             app.close_page(tab);
         }
 
         app.reopen_closed_by_id(gone);
-        assert!(app.pages.is_empty(), "nothing was reopened in its place");
+        assert!(
+            app.open_tabs.pages().next().is_none(),
+            "nothing was reopened in its place"
+        );
         assert_eq!(
             app.notice.as_ref().map(|(text, _, _)| text.as_str()),
             Some(GONE_FROM_LIST)
@@ -2096,7 +2138,7 @@ mod tests {
     fn test_the_list_does_not_open_with_nothing_in_it() {
         // An empty panel over an empty stash says nothing about why.
         let mut app = App::new();
-        app.open_tool_palette();
+        app.open_tab_list();
         assert!(app.palette.is_none());
         assert_eq!(
             app.notice.as_ref().map(|(text, _, _)| text.as_str()),
@@ -2109,7 +2151,7 @@ mod tests {
         // A key that does nothing and says nothing reads as a broken binding.
         let mut app = App::new();
         app.reopen_last_closed();
-        assert!(app.pages.is_empty());
+        assert!(app.open_tabs.pages().next().is_none());
         assert_eq!(
             app.notice.as_ref().map(|(text, _, _)| text.as_str()),
             Some(NOTHING_CLOSED)
@@ -2225,22 +2267,25 @@ mod tests {
 
         let editor = app.layout().focused();
         assert_eq!(
-            app.pages.get(&editor).map(|slot| slot.tool),
-            Some(EDITOR_TOOL)
+            app.open_tabs.page(&editor).map(|slot| slot.kind),
+            Some(PageKind::Editor)
         );
         let diff = *app.commit_companions.get(&editor).expect("a tab beside it");
-        assert_eq!(app.pages.get(&diff).map(|slot| slot.tool), Some(GIT_TOOL));
+        assert_eq!(
+            app.open_tabs.page(&diff).map(|slot| slot.kind),
+            Some(PageKind::Git)
+        );
         assert_eq!(
             app.layout().members().len(),
             before + 2,
             "editor tab and diff tab"
         );
         assert!(
-            app.layout().group_members(editor).contains(&diff),
+            app.layout().tabs_in_pane(editor).contains(&diff),
             "the diff is a tab of the editor's pane, not a pane of its own"
         );
         assert_eq!(
-            app.layout().recent_in_group(editor).first(),
+            app.layout().recent_in_pane(editor).first(),
             Some(&editor),
             "and the editor is the one showing"
         );
@@ -2261,7 +2306,7 @@ mod tests {
         let tree = TempTree::new("commit-focus", &["COMMIT_EDITMSG"]);
         let mut app = App::new();
         let git_page = GitPage::new(tree.0.clone());
-        let git_tab = app.show_page(GIT_TOOL, Box::new(git_page));
+        let git_tab = app.show_page(PageKind::Git, Box::new(git_page));
 
         let (stream, _client) = UnixStream::pair().expect("socket pair");
         app.open_waited_editor(tree.0.join("COMMIT_EDITMSG"), EditWaiter::new(stream));
@@ -2290,7 +2335,7 @@ mod tests {
         if busy {
             terminal.feed_program_output(b"\x1b[?1049h");
         }
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         id
     }
 
@@ -2384,12 +2429,15 @@ mod tests {
         app.open_git_page();
 
         let git = app.layout().focused();
-        assert_eq!(app.pages.get(&git).map(|slot| slot.tool), Some(GIT_TOOL));
+        assert_eq!(
+            app.open_tabs.page(&git).map(|slot| slot.kind),
+            Some(PageKind::Git)
+        );
         assert!(
-            app.layout().group_members(c).contains(&git),
+            app.layout().tabs_in_pane(c).contains(&git),
             "in the pane beside"
         );
-        assert!(!app.layout().group_members(b).contains(&git));
+        assert!(!app.layout().tabs_in_pane(b).contains(&git));
     }
 
     #[test]
@@ -2398,12 +2446,15 @@ mod tests {
 
         app.open_git_page();
         let git = app.layout().focused();
-        assert_eq!(app.pages.get(&git).map(|slot| slot.tool), Some(GIT_TOOL));
+        assert_eq!(
+            app.open_tabs.page(&git).map(|slot| slot.kind),
+            Some(PageKind::Git)
+        );
         assert!(
-            app.layout().group_members(second).contains(&git),
+            app.layout().tabs_in_pane(second).contains(&git),
             "beside the work"
         );
-        assert!(!app.layout().group_members(first).contains(&git));
+        assert!(!app.layout().tabs_in_pane(first).contains(&git));
 
         app.layout_mut().focus(first);
         app.open_git_page();
@@ -2413,9 +2464,10 @@ mod tests {
             "the open view, not a second one"
         );
         let views = app
-            .pages
-            .values()
-            .filter(|slot| slot.tool == GIT_TOOL)
+            .open_tabs
+            .pages()
+            .map(|(_, slot)| slot)
+            .filter(|slot| slot.kind == PageKind::Git)
             .count();
         assert_eq!(views, 1);
     }
@@ -2432,18 +2484,21 @@ mod tests {
             winter_render::MAX_SCROLLBACK,
         )
         .expect("term a");
-        app.terminals.insert(first, term_a);
-        app.terminals
-            .get_mut(&first)
+        app.open_tabs.insert_terminal(first, term_a);
+        app.open_tabs
+            .terminal_mut(&first)
             .unwrap()
             .feed_program_output(b"\x1b]7;file://localhost/path/to/project_a\x1b\\");
 
         // Open git page for project A
         app.open_git_page();
         let git_a = app.layout().focused();
-        assert_eq!(app.pages.get(&git_a).map(|slot| slot.tool), Some(GIT_TOOL));
         assert_eq!(
-            app.pages.get(&git_a).unwrap().page.root_dir(),
+            app.open_tabs.page(&git_a).map(|slot| slot.kind),
+            Some(PageKind::Git)
+        );
+        assert_eq!(
+            app.open_tabs.page(&git_a).unwrap().page.root_dir(),
             Some(PathBuf::from("/path/to/project_a"))
         );
 
@@ -2456,9 +2511,9 @@ mod tests {
             winter_render::MAX_SCROLLBACK,
         )
         .expect("term b");
-        app.terminals.insert(second, term_b);
-        app.terminals
-            .get_mut(&second)
+        app.open_tabs.insert_terminal(second, term_b);
+        app.open_tabs
+            .terminal_mut(&second)
             .unwrap()
             .feed_program_output(b"\x1b]7;file://localhost/path/to/project_b\x1b\\");
 
@@ -2467,14 +2522,15 @@ mod tests {
         let git_b = app.layout().focused();
         assert_ne!(git_a, git_b, "opens a new git view for project B");
         assert_eq!(
-            app.pages.get(&git_b).unwrap().page.root_dir(),
+            app.open_tabs.page(&git_b).unwrap().page.root_dir(),
             Some(PathBuf::from("/path/to/project_b"))
         );
 
         let views = app
-            .pages
-            .values()
-            .filter(|slot| slot.tool == GIT_TOOL)
+            .open_tabs
+            .pages()
+            .map(|(_, slot)| slot)
+            .filter(|slot| slot.kind == PageKind::Git)
             .count();
         assert_eq!(views, 2, "two distinct git views open for two projects");
     }
@@ -2487,9 +2543,12 @@ mod tests {
         app.open_git_page();
 
         let git = app.layout().focused();
-        assert_eq!(app.pages.get(&git).map(|slot| slot.tool), Some(GIT_TOOL));
-        assert_eq!(app.layout().panes().len(), 2, "the work and the view");
-        assert!(!app.layout().group_members(only).contains(&git));
+        assert_eq!(
+            app.open_tabs.page(&git).map(|slot| slot.kind),
+            Some(PageKind::Git)
+        );
+        assert_eq!(app.layout().shown_tabs().len(), 2, "the work and the view");
+        assert!(!app.layout().tabs_in_pane(only).contains(&git));
     }
 
     #[test]
@@ -2506,11 +2565,11 @@ mod tests {
 
         let editor = app.layout().focused();
         assert_eq!(
-            app.pages.get(&editor).map(|slot| slot.tool),
-            Some(EDITOR_TOOL)
+            app.open_tabs.page(&editor).map(|slot| slot.kind),
+            Some(PageKind::Editor)
         );
-        assert_eq!(app.layout().panes().len(), 2);
-        assert!(!app.layout().group_members(only).contains(&editor));
+        assert_eq!(app.layout().shown_tabs().len(), 2);
+        assert!(!app.layout().tabs_in_pane(only).contains(&editor));
     }
 
     #[test]
@@ -2526,16 +2585,16 @@ mod tests {
 
         let editor = app.layout().focused();
         assert_eq!(
-            app.pages.get(&editor).map(|slot| slot.tool),
-            Some(EDITOR_TOOL)
+            app.open_tabs.page(&editor).map(|slot| slot.kind),
+            Some(PageKind::Editor)
         );
-        assert!(app.layout().group_members(second).contains(&editor));
-        assert!(!app.layout().group_members(first).contains(&editor));
+        assert!(app.layout().tabs_in_pane(second).contains(&editor));
+        assert!(!app.layout().tabs_in_pane(first).contains(&editor));
     }
 
     #[test]
     fn test_closing_the_commit_editor_answers_git_even_though_the_page_is_kept_for_reopening() {
-        // Regression: a closed tool is kept so it can be reopened, and the
+        // Regression: a closed page is kept so it can be reopened, and the
         // editor kept its waiter with it, so git was never told the edit was
         // over. The commit hung for as long as the window lived, and the Git
         // tab that started it spun the whole time.
@@ -2581,7 +2640,7 @@ mod tests {
     fn test_each_file_opened_from_a_listing_gets_a_tab_of_its_own() {
         let tree = TempTree::new("two-files", &["one.txt", "two.txt"]);
         let mut app = App::new();
-        let listing = app.show_page("counting", Box::new(CountingPage::default()));
+        let listing = app.show_page(PageKind::Grep, Box::new(CountingPage::default()));
 
         app.open_editor_page(OpenTarget::file(tree.0.join("one.txt")));
         let one = app.layout().focused();
@@ -2590,8 +2649,14 @@ mod tests {
         let two = app.layout().focused();
 
         assert_ne!(one, two, "two editor tabs");
-        assert_eq!(app.pages.get(&one).map(|slot| slot.tool), Some(EDITOR_TOOL));
-        assert_eq!(app.pages.get(&two).map(|slot| slot.tool), Some(EDITOR_TOOL));
+        assert_eq!(
+            app.open_tabs.page(&one).map(|slot| slot.kind),
+            Some(PageKind::Editor)
+        );
+        assert_eq!(
+            app.open_tabs.page(&two).map(|slot| slot.kind),
+            Some(PageKind::Editor)
+        );
     }
 
     #[test]
@@ -2602,7 +2667,7 @@ mod tests {
         let mut app = App::new();
         app.open_editor_page(OpenTarget::file(tree.0.join("one.txt")));
         app.open_editor_page(OpenTarget::file(tree.0.join("two.txt")));
-        assert_eq!(app.pages.len(), 1, "one editor, not two");
+        assert_eq!(app.open_tabs.pages().count(), 1, "one editor, not two");
     }
 
     #[test]
@@ -2628,18 +2693,22 @@ mod tests {
         assert!(app.palette.is_none(), "the browser is done");
         let tab = app.layout().focused();
         assert_eq!(
-            app.pages.get(&tab).map(|slot| slot.tool),
-            Some(EDITOR_TOOL),
+            app.open_tabs.page(&tab).map(|slot| slot.kind),
+            Some(PageKind::Editor),
             "and the file is open in a tab of the pane"
         );
     }
 
     #[test]
-    fn test_another_tool_opens_beside_the_first_instead_of_toggling() {
+    fn test_another_page_opens_beside_the_first_instead_of_toggling() {
         let mut app = App::new();
         app.open_keys_page();
         app.open_dir_page();
-        assert_eq!(app.pages.len(), 2, "each tool has a tab of its own");
+        assert_eq!(
+            app.open_tabs.pages().count(),
+            2,
+            "each page has a tab of its own"
+        );
         assert_eq!(app.layout().members().len(), 3);
     }
 
@@ -2658,7 +2727,10 @@ mod tests {
             winit::keyboard::Key::Character("C".into()),
             winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyC),
         );
-        assert_eq!(app.pages[&pane].page.title(), "Counting 1");
+        assert_eq!(
+            app.open_tabs.page(&pane).unwrap().page.title(),
+            "Counting 1"
+        );
     }
 
     #[test]
@@ -2672,7 +2744,7 @@ mod tests {
     fn test_a_page_closing_itself_closes_its_tab() {
         let (mut app, pane) = app_with_open_page();
         assert!(app.offer_key_to_page(pane, &press(KeyCode::Char('q'))));
-        assert!(app.pages.is_empty(), "the page is gone");
+        assert!(app.open_tabs.pages().next().is_none(), "the page is gone");
         assert_eq!(app.layout().members().len(), 1, "the terminal tab is not");
     }
 
@@ -2684,7 +2756,7 @@ mod tests {
         let tabs_before = app.layout().members().len();
 
         assert!(app.offer_key_to_page(pane, &press(KeyCode::Char('r'))));
-        assert!(app.pages.is_empty(), "the page closed");
+        assert!(app.open_tabs.pages().next().is_none(), "the page closed");
         assert_eq!(
             app.layout().members().len(),
             tabs_before,
@@ -2703,7 +2775,7 @@ mod tests {
 
     #[test]
     fn test_alt_z_toggles_wrapping_without_reaching_the_page() {
-        // Wrapping belongs to the pane rather than any one tool, so the host
+        // Wrapping belongs to the pane rather than any one page, so the host
         // spends the toggle itself: the key is claimed rather than declined,
         // which would otherwise hand it to the ordinary keymap.
         let (mut app, pane) = app_with_open_page();
@@ -2749,7 +2821,7 @@ mod tests {
         let mut app = App::new();
         let heard: Rc<RefCell<Vec<Option<String>>>> = Rc::default();
         let tab = app.show_page(
-            "asking",
+            PageKind::Grep,
             Box::new(AskingPage {
                 heard: Rc::clone(&heard),
             }),
@@ -2794,7 +2866,7 @@ mod tests {
 
         app.handle_prompt_key(&press(KeyCode::Enter));
         assert!(app.page_prompt.is_none(), "the prompt closes on Enter");
-        assert!(app.pages.contains_key(&pane), "and the page stays open");
+        assert!(app.open_tabs.is_page(&pane), "and the page stays open");
         assert_eq!(heard.borrow().as_slice(), [Some("see!".to_string())]);
     }
 
@@ -2819,28 +2891,28 @@ mod tests {
     }
 
     #[test]
-    fn test_a_saved_tool_tab_opens_again_where_it_was() {
-        let dir = std::env::temp_dir().join(format!("winter-restore-tool-{}", std::process::id()));
+    fn test_a_saved_page_tab_opens_again_where_it_was() {
+        let dir = std::env::temp_dir().join(format!("winter-restore-pages-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
         let file = dir.join("notes.md");
         std::fs::write(&file, "one\ntwo\nthree\n").expect("write");
         let mut app = App::new();
-        app.show_page(DIR_TOOL, Box::new(DirPage::new(dir.clone())));
+        app.show_page(PageKind::Dir, Box::new(DirPage::new(dir.clone())));
         app.open_path_page(OpenTarget::at_line(file.clone(), 3));
-        let saved = app.tool_sessions();
-        assert_eq!(saved.len(), 2, "both tools say where they were: {saved:?}");
+        let saved = app.page_sessions();
+        assert_eq!(saved.len(), 2, "both pages say where they were: {saved:?}");
 
         let mut fresh = App::new();
-        for tool in &saved {
+        for page in &saved {
             assert!(
-                fresh.restore_tool(TabId(100 + tool.id as u64), tool),
-                "{tool:?}"
+                fresh.restore_page(TabId(100 + page.id as u64), page),
+                "{page:?}"
             );
         }
         let editor = saved
             .iter()
-            .find(|tool| tool.kind == EDITOR_TOOL)
+            .find(|page| page.kind == PageKind::Editor.name())
             .expect("the editor");
         assert_eq!(editor.line, Some(3), "at the line it was on");
         let _ = std::fs::remove_dir_all(&dir);
@@ -2850,26 +2922,26 @@ mod tests {
     fn test_a_restored_git_tab_asks_git_for_its_repository() {
         let dir = std::env::temp_dir().join(format!("winter-restore-git-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
-        let tool = ExtensionSession {
+        let page = PageSession {
             id: 7,
-            kind: GIT_TOOL.to_string(),
+            kind: PageKind::Git.name().to_string(),
             line: None,
             path: dir.to_string_lossy().to_string(),
         };
         let mut app = App::new();
         assert!(!app.jobs.is_busy());
-        assert!(app.restore_tool(TabId(7), &tool));
+        assert!(app.restore_page(TabId(7), &page));
         assert!(
             app.jobs.is_busy(),
             "its first read is under way, not awaited"
         );
 
-        let dir_tool = ExtensionSession {
-            kind: DIR_TOOL.to_string(),
-            ..tool
+        let dir_page = PageSession {
+            kind: PageKind::Dir.name().to_string(),
+            ..page
         };
         let mut app = App::new();
-        assert!(app.restore_tool(TabId(8), &dir_tool));
+        assert!(app.restore_page(TabId(8), &dir_page));
         assert!(!app.jobs.is_busy(), "a listing reads on its own");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -2978,11 +3050,11 @@ mod tests {
     }
 
     #[test]
-    fn test_resize_leaves_a_tool_tab_showing_its_page() {
+    fn test_resize_leaves_a_page_tab_showing_its_page() {
         // Resizing walks every laid-out pane and reflows the grids of the
-        // terminals; a tool tab, which has none, must survive the pass.
+        // terminals; a page tab, which has none, must survive the pass.
         let (mut app, pane) = app_with_open_page();
         app.resize_all_panes();
-        assert!(app.pages.contains_key(&pane));
+        assert!(app.open_tabs.is_page(&pane));
     }
 }

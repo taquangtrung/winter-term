@@ -36,7 +36,7 @@ impl App {
     }
 
     fn generate_quick_labels(&self, focused: TabId) -> Option<Vec<QuickLabel>> {
-        let terminal = self.terminals.get(&focused)?;
+        let terminal = self.open_tabs.terminal(&focused)?;
         let grid = terminal.grid();
         let scrollback = terminal.scrollback();
         let cols = grid.cols();
@@ -79,7 +79,7 @@ impl App {
             None => return,
         };
 
-        let terminal = match self.terminals.get(&focused) {
+        let terminal = match self.open_tabs.terminal(&focused) {
             Some(p) => p,
             None => return,
         };
@@ -102,7 +102,7 @@ impl App {
             let live_row = block_start - sb_len;
             let current_row = terminal.grid().cursor().0;
             if live_row > current_row {
-                if let Some(terminal) = self.terminals.get_mut(&focused) {
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                     terminal
                         .grid_mut()
                         .scroll_up_history(live_row - current_row);
@@ -110,7 +110,7 @@ impl App {
             }
         } else if block_start > 0 || diff > 0 {
             let target_scroll = sb_len.saturating_sub(block_start);
-            if let Some(terminal) = self.terminals.get_mut(&focused) {
+            if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                 terminal.grid_mut().set_scroll_offset(target_scroll);
             }
         }

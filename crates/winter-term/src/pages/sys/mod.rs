@@ -21,7 +21,7 @@ use crate::model::page::{
 };
 use crate::model::system::SystemSample;
 use crate::model::vim::nav::{VimKey, VimNav};
-use crate::extensions::refresh::RefreshTimer;
+use crate::pages::refresh::RefreshTimer;
 
 use self::usage::{Usage, UsageTracker};
 use self::view::sections;

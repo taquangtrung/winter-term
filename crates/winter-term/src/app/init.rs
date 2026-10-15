@@ -209,8 +209,8 @@ impl App {
         let (cols, rows) = renderer.grid_size();
         let want_rows = content_rows(rows);
         let spawned = pane_handle.join().expect("PTY spawn thread panicked");
-        let mut pane = match spawned {
-            Ok(pane) => pane,
+        let mut terminal = match spawned {
+            Ok(terminal) => terminal,
             Err(e) => {
                 // The configured shell failed even before the window opened
                 // (bad path, fd exhaustion, ...); retry once with the OS
@@ -227,7 +227,7 @@ impl App {
                     max_scrollback,
                     cwd_override.as_deref(),
                 ) {
-                    Ok(pane) => pane,
+                    Ok(terminal) => terminal,
                     Err(e2) => {
                         eprintln!("winter: could not start a shell: {e2}");
                         event_loop.exit();
@@ -237,12 +237,12 @@ impl App {
             }
         };
         if cols != pane_init_cols || want_rows != pane_init_rows {
-            pane.resize(cols, want_rows);
+            terminal.resize(cols, want_rows);
         }
         let (cell_w, cell_h) = renderer.cell_size();
-        pane.set_cell_size(cell_w, cell_h);
+        terminal.set_cell_size(cell_w, cell_h);
         let focused = self.layout().focused();
-        self.terminals.insert(focused, pane);
+        self.open_tabs.insert_terminal(focused, terminal);
 
         self.window = Some(window);
         self.renderer = Some(renderer);

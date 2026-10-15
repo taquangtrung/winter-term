@@ -22,7 +22,7 @@ impl App {
     /// `{{ app_name }}`, `{{ pane_title }}`, and `{{ cwd }}` placeholders.
     pub(crate) fn render_window_title(&self) -> String {
         let focused = self.layout().focused();
-        let terminal = self.terminals.get(&focused);
+        let terminal = self.open_tabs.terminal(&focused);
         expand_window_title_template(
             &self.config.window_title_template,
             &WindowTitleVars {
@@ -30,20 +30,9 @@ impl App {
                 app_name: terminal
                     .and_then(|p| p.foreground_process_name())
                     .or_else(|| {
-                        self.pages.get(&focused).map(|slot| {
-                            match slot.tool() {
-                                "dir" => "Dir",
-                                "editor" => "Editor",
-                                "git" => "Git",
-                                "grep" => "Grep",
-                                "keys" => "Keys View",
-                                "pdf" => "PDF",
-                                "proc" => "Processes",
-                                "sys" => "System",
-                                other => other,
-                            }
-                            .to_string()
-                        })
+                        self.open_tabs
+                            .page(&focused)
+                            .map(|slot| slot.kind().title().to_string())
                     })
                     .unwrap_or_default(),
                 pane_title: self
@@ -54,8 +43,8 @@ impl App {
                 cwd: terminal
                     .and_then(|p| p.cwd().map(|c| tabbar::clean_cwd(&c)))
                     .or_else(|| {
-                        self.pages
-                            .get(&focused)
+                        self.open_tabs
+                            .page(&focused)
                             .and_then(|slot| slot.page.cwd())
                             .map(|p| tabbar::clean_cwd(&p.to_string_lossy()))
                     })

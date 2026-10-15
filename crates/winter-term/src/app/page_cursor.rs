@@ -1,4 +1,4 @@
-//! A Vim-style text cursor over a tool page, for selecting and copying rows.
+//! A Vim-style text cursor over a page, for selecting and copying rows.
 //!
 //! A page binds most of the Vim vocabulary for its own navigation: `j` and `k`
 //! step entries, `g` and `G` jump, `/` searches. A cursor for selecting *text*
@@ -52,8 +52,8 @@ impl App {
     /// extends a selection instead of silently selecting nothing.
     pub(crate) fn start_page_cursor(&mut self, tab: TabId) {
         let row = self
-            .pages
-            .get(&tab)
+            .open_tabs
+            .page(&tab)
             .and_then(|slot| slot.cursor_line)
             .unwrap_or(0);
         let col = self
@@ -74,7 +74,7 @@ impl App {
     /// Drop the text cursor and any selection it was building.
     pub(crate) fn stop_page_cursor(&mut self) {
         if let Some(cursor) = self.page_cursor.take() {
-            self.drop_selection_in_pane(cursor.tab);
+            self.drop_selection_in_tab(cursor.tab);
         }
         self.dirty = true;
     }
@@ -94,14 +94,14 @@ impl App {
         let Some(cursor) = self.page_cursor.as_ref() else {
             return false;
         };
-        let pane = cursor.tab;
-        // Focus moved on while the cursor was up, so it belongs to a pane the
+        let tab = cursor.tab;
+        // Focus moved on while the cursor was up, so it belongs to a tab the
         // keys are no longer going to.
-        if pane != self.layout().focused() {
+        if tab != self.layout().focused() {
             self.stop_page_cursor();
             return false;
         }
-        let Some(grid) = self.selection_grid(pane) else {
+        let Some(grid) = self.selection_grid(tab) else {
             self.stop_page_cursor();
             return true;
         };
@@ -173,8 +173,8 @@ impl App {
             return;
         };
         let Some((anchor_row, anchor_col)) = cursor.anchor else {
-            let pane = cursor.tab;
-            self.drop_selection_in_pane(pane);
+            let tab = cursor.tab;
+            self.drop_selection_in_tab(tab);
             return;
         };
         let last_col = self
@@ -251,15 +251,19 @@ fn next_word(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::page::PageKind;
     use crate::model::input::WindowKeymap;
-    use crate::extensions::keys::KeysPage;
+    use crate::pages::keys::KeysPage;
     use winter_render::Grid;
 
     /// An app whose focused tab is a page already painted with `lines`,
     /// which is what a real frame would have left on the slot.
     fn app_with_painted_page(lines: &[&str]) -> (App, TabId) {
         let mut app = App::new();
-        let tab = app.show_page("keys", Box::new(KeysPage::new(&WindowKeymap::default())));
+        let tab = app.show_page(
+            PageKind::Keys,
+            Box::new(KeysPage::new(&WindowKeymap::default())),
+        );
         let mut grid = Grid::new(40, lines.len().max(1));
         for (row, line) in lines.iter().enumerate() {
             grid.move_to(row, 0);
@@ -267,7 +271,7 @@ mod tests {
                 grid.print(ch);
             }
         }
-        if let Some(slot) = app.pages.get_mut(&tab) {
+        if let Some(slot) = app.open_tabs.page_mut(&tab) {
             slot.painted = Some(grid);
         }
         (app, tab)

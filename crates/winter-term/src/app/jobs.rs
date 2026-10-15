@@ -15,8 +15,8 @@ use crate::model::page::{
     CommandOutput, CommandRequest, JobReply, JobRequest, SearchHit, SearchRequest, SearchResult,
 };
 
-use crate::extensions::proc::collect;
-use crate::extensions::sys;
+use crate::pages::proc::collect;
+use crate::pages::sys;
 
 use super::App;
 
@@ -199,7 +199,7 @@ impl App {
         let finished = self.jobs.drain();
         let mut any = false;
         for (tab_id, reply) in finished {
-            let Some(slot) = self.pages.get_mut(&tab_id) else {
+            let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
                 continue;
             };
             let outcome = slot.page.on_job(reply);

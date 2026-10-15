@@ -171,7 +171,7 @@ pub fn parse_status(text: &str) -> Status {
     status
 }
 
-/// Parse the decorated log [`crate::tools::git::exec`] asks for: one commit per
+/// Parse the decorated log [`crate::pages::git::exec`] asks for: one commit per
 /// line, fields separated by US (`\x1f`) as `hash·decoration·author·time·subject`.
 ///
 /// A unit separator rather than git's own bracket decoration, because a subject

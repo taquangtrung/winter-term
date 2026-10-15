@@ -824,7 +824,7 @@ mod tests {
     fn test_every_default_named_chord_dispatches_to_a_real_command() {
         // A chord bound to a name nothing answers to is a dead key: pressing it
         // does nothing at all, and a test of one binding at a time never sees
-        // it. Every tool chord arrives this way.
+        // it. Every page chord arrives this way.
         let keymap = WindowKeymap::default();
         let commands: Vec<String> = crate::model::palette::builtin_commands(&keymap)
             .into_iter()

@@ -4,7 +4,6 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 
 use crate::model::layout::{Direction, Layout, TabId};
-use crate::model::mode::Mode;
 use crate::terminal::session::Terminal;
 
 use super::page::{ClosedPane, ClosedTerminal, Closing};
@@ -16,19 +15,19 @@ use super::{DEFAULT_COLS, DEFAULT_ROWS, SPLIT_RATIO};
 // ========================================================================
 
 impl App {
-    /// Allocate the next globally-unique pane id.
+    /// Allocate the next globally-unique tab id.
     pub(crate) fn alloc_tab_id(&mut self) -> TabId {
         let id = TabId(self.next_tab_id);
         self.next_tab_id += 1;
         id
     }
-    /// Spawns a pane, retrying with the OS default shell (ignoring `shell`)
+    /// Spawns a terminal, retrying with the OS default shell (ignoring `shell`)
     /// if the first attempt fails, so a bad `shell`/`shell-*` setting or a
     /// session-restore command that no longer exists surfaces as a
     /// status-bar error instead of crashing the app. `None` only when the
     /// fallback also fails (e.g. the OS itself is out of resources), in
-    /// which case the caller must not proceed as if a pane was created.
-    pub(crate) fn spawn_pane_or_notify(
+    /// which case the caller must not proceed as if a terminal was created.
+    pub(crate) fn spawn_terminal_or_notify(
         &mut self,
         cols: usize,
         rows: usize,
@@ -37,13 +36,13 @@ impl App {
         cwd: Option<&str>,
     ) -> Option<Terminal> {
         match Terminal::new_with_cwd(cols, rows, shell, scrollback, cwd) {
-            Ok(pane) => Some(pane),
+            Ok(terminal) => Some(terminal),
             Err(e) => {
                 self.set_error(format!(
                     "shell failed to start ({e}), trying the default shell"
                 ));
                 match Terminal::new_with_cwd(cols, rows, None, scrollback, cwd) {
-                    Ok(pane) => Some(pane),
+                    Ok(terminal) => Some(terminal),
                     Err(e2) => {
                         self.set_error(format!("could not start a shell: {e2}"));
                         None
@@ -57,19 +56,20 @@ impl App {
     /// pane or tab in the same directory.
     pub(crate) fn focused_cwd(&self) -> Option<String> {
         let focused = self.layout().focused();
-        self.layout()
-            .recent_in_group(focused)
-            .iter()
-            .find_map(|id| self.terminals.get(id).and_then(|terminal| terminal.cwd()))
+        self.layout().recent_in_pane(focused).iter().find_map(|id| {
+            self.open_tabs
+                .terminal(id)
+                .and_then(|terminal| terminal.cwd())
+        })
     }
-    /// Where an action launched from the focused tab starts: a tool tab knows
+    /// Where an action launched from the focused tab starts: a page tab knows
     /// what is being looked at and answers first, and only without one does
     /// a shell's own directory decide.
     pub(crate) fn focused_start_dir(&self) -> PathBuf {
         let focused = self.layout().focused();
         let dir = self
-            .pages
-            .get(&focused)
+            .open_tabs
+            .page(&focused)
             .and_then(|slot| slot.page.cwd())
             .or_else(|| self.focused_cwd().map(PathBuf::from))
             .or_else(|| {
@@ -94,8 +94,8 @@ impl App {
     }
     pub(crate) fn split_pane(&mut self, direction: Direction) {
         // Captured before the layout split so the new pane opens where the
-        // focused one was being used, which for a pane under a tool is the
-        // directory that tool is looking at rather than the shell's own.
+        // focused one was being used, which for a page tab is the directory
+        // that page is looking at rather than a shell's own.
         let cwd = self.focused_start_cwd();
         self.split_pane_at(direction, cwd);
     }
@@ -123,7 +123,7 @@ impl App {
             .config
             .scrollback_lines
             .unwrap_or(winter_render::MAX_SCROLLBACK);
-        let Some(terminal) = self.spawn_pane_or_notify(
+        let Some(terminal) = self.spawn_terminal_or_notify(
             pane_cols.max(1),
             pane_rows.max(1),
             shell.as_deref(),
@@ -137,8 +137,7 @@ impl App {
             self.dirty = true;
             return None;
         };
-        self.terminals.insert(new_id, terminal);
-        self.modes.insert(new_id, Mode::default());
+        self.open_tabs.insert_terminal(new_id, terminal);
 
         if self.renderer.is_some() {
             self.resize_all_panes();
@@ -185,7 +184,7 @@ impl App {
     /// Close the pane holding `tab_id`, every tab in it. The last pane of
     /// the window is never closed this way.
     pub(crate) fn close_pane(&mut self, tab_id: TabId) {
-        // Edits nowhere but in a tool tab of this pane are the one thing
+        // Edits nowhere but in a page tab of this pane are the one thing
         // closing it cannot give back on its own, so they are asked about
         // first. The pane closes on the answer, not here.
         if self.ask_before_closing_pane(tab_id) {
@@ -197,19 +196,19 @@ impl App {
     /// Close the pane holding `tab_id` without asking, which is what an
     /// answered question and a pane with nothing to lose both come down to.
     ///
-    /// The pane is kept, not just its tools: where it sat and what its
+    /// The pane is kept, not just its pages: where it sat and what its
     /// shells were running in are what a split merged back by accident
     /// costs, and one key puts all of it back.
     pub(crate) fn close_pane_now(&mut self, tab_id: TabId) {
-        let tabs = self.layout().group_members(tab_id);
-        if tabs.is_empty() || self.layout().panes().len() <= 1 {
+        let tabs = self.layout().tabs_in_pane(tab_id);
+        if tabs.is_empty() || self.layout().shown_tabs().len() <= 1 {
             return;
         }
         let snapshot = self.layout().export_tree();
         let mut pages = Vec::new();
         let mut terminals = Vec::new();
         for &tab in &tabs {
-            match self.pages.remove(&tab) {
+            match self.open_tabs.remove_page(&tab) {
                 Some(slot) => pages.push(self.stash_closed_page(tab, slot)),
                 None => terminals.push(tab),
             }
@@ -226,7 +225,7 @@ impl App {
         self.after_tab_change();
     }
 
-    /// Put closed terminals back: shells where their own were, the tool tabs
+    /// Put closed terminals back: shells where their own were, the page tabs
     /// that went with them, and the split they sat in.
     ///
     /// The shells themselves cannot come back, since closing them dropped
@@ -241,25 +240,25 @@ impl App {
         let before: HashSet<TabId> = self.layout().members().into_iter().collect();
         let mut restored: Vec<TabId> = Vec::new();
         for terminal in closed.terminals() {
-            if let Some(pane) = self.spawn_closed_terminal(&terminal) {
-                restored.push(pane);
+            if let Some(tab) = self.spawn_closed_terminal(&terminal) {
+                restored.push(tab);
             }
         }
-        // No shell could be started, so there is nowhere to put the tools:
+        // No shell could be started, so there is nowhere to put the pages:
         // they stay in the stash rather than going down with the failure,
-        // which `spawn_pane_or_notify` has already reported.
+        // which `spawn_terminal_or_notify` has already reported.
         if restored.is_empty() {
             return;
         }
         let pages = self.take_closed_pages(&closed.page_ids());
         let first = restored[0];
-        if closed.is_group() {
+        if closed.is_whole_pane() {
             self.split_layout_for(first);
         } else {
             self.layout_mut().add_tab(first);
         }
-        for &pane in &restored[1..] {
-            self.layout_mut().add_tab(pane);
+        for &tab in &restored[1..] {
+            self.layout_mut().add_tab(tab);
         }
         for page in pages {
             self.restore_closed_page(page);
@@ -282,19 +281,18 @@ impl App {
             .config
             .scrollback_lines
             .unwrap_or(winter_render::MAX_SCROLLBACK);
-        let pane = self.spawn_pane_or_notify(
+        let spawned = self.spawn_terminal_or_notify(
             cols.max(1),
             rows.max(1),
             shell.as_deref(),
             scrollback,
             terminal.cwd.as_deref(),
         )?;
-        self.terminals.insert(tab_id, pane);
-        self.modes.insert(tab_id, Mode::default());
+        self.open_tabs.insert_terminal(tab_id, spawned);
         Some(tab_id)
     }
 
-    /// Give `pane` a group of its own beside the focused one.
+    /// Give `tab` a pane of its own beside the focused one.
     fn split_layout_for(&mut self, tab: TabId) {
         self.layout_mut()
             .split(Direction::Vertical, SPLIT_RATIO, tab);
@@ -329,10 +327,10 @@ impl App {
 
     /// The same, once the question has been answered or there was none.
     pub(crate) fn close_other_panes_now(&mut self, focused: TabId) {
-        let kept = self.layout().group_members(focused);
+        let kept = self.layout().tabs_in_pane(focused);
         let others: Vec<TabId> = self
             .layout()
-            .panes()
+            .shown_tabs()
             .into_iter()
             .filter(|id| !kept.contains(id))
             .collect();
@@ -342,7 +340,7 @@ impl App {
     }
 
     /// Show and focus `tab_id`, wherever it is.
-    pub(crate) fn switch_to_pane(&mut self, tab_id: TabId) {
+    pub(crate) fn switch_to_tab(&mut self, tab_id: TabId) {
         self.show_tab(tab_id);
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -357,8 +355,8 @@ impl App {
     /// would leave the dead tab to ask again on the next frame.
     pub(crate) fn reap_dead_panes(&mut self) {
         let dead: Vec<TabId> = self
-            .terminals
-            .iter_mut()
+            .open_tabs
+            .terminals_mut()
             .filter_map(|(id, pane)| if pane.is_alive() { None } else { Some(*id) })
             .collect();
         for id in dead {
@@ -393,10 +391,10 @@ impl App {
         // apply the policy would silently over-grant. Setting it here costs a
         // field write per pane and cannot be missed.
         let max_trust = self.config.security.block_max_trust;
-        for (_, terminal) in self.terminals.iter_mut() {
+        for (_, terminal) in self.open_tabs.terminals_mut() {
             terminal.block_queue_mut().set_max_trust(max_trust);
         }
-        for (id, terminal) in self.terminals.iter_mut() {
+        for (id, terminal) in self.open_tabs.terminals_mut() {
             for remap in terminal.take_row_remaps() {
                 remapped.push((*id, remap));
             }
@@ -469,7 +467,7 @@ impl App {
                 .unwrap_or_default();
             let response = crate::terminal::session::osc52_read_response(&text);
             for id in clipboard_reads {
-                if let Some(terminal) = self.terminals.get_mut(&id) {
+                if let Some(terminal) = self.open_tabs.terminal_mut(&id) {
                     terminal.write(&response);
                 }
             }
@@ -506,7 +504,7 @@ impl App {
             .collect();
 
         for (id, cols, rows) in sizes {
-            if let Some(terminal) = self.terminals.get_mut(&id) {
+            if let Some(terminal) = self.open_tabs.terminal_mut(&id) {
                 // A resize reflows the grid, which snaps the view back to the live
                 // bottom; put the pane back where the user was reading. Starting or
                 // ending a `/` search toggles the forced status bar, resizing every

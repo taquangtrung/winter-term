@@ -414,7 +414,7 @@ impl WebViewManager {
     ///
     /// A tile whose pane is absent from `viewports` is hidden. That covers a
     /// pane in a background tab, a pane an alternate-screen app owns, and a
-    /// pane a tool page covers: none of them paints the grid the tile is
+    /// page tab: none of them paints the grid the tile is
     /// anchored to, and a block left over it hides what does.
     ///
     /// A tile straddling a pane edge is clipped to the pane rather than

@@ -141,7 +141,7 @@ impl App {
         } else {
             return;
         };
-        let Some(terminal) = self.terminals.get_mut(&tab_id) else {
+        let Some(terminal) = self.open_tabs.terminal_mut(&tab_id) else {
             return;
         };
 

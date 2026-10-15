@@ -57,8 +57,8 @@ impl App {
     pub(crate) fn update_spinners(&mut self, now: Instant) -> Option<Instant> {
         let mut busy = self.jobs.busy_tabs();
         busy.extend(
-            self.terminals
-                .iter()
+            self.open_tabs
+                .terminals()
                 .filter(|(_, terminal)| terminal.command_running())
                 .map(|(tab, _)| *tab),
         );

@@ -28,7 +28,7 @@ use crate::model::page::{
 };
 use crate::model::process::{ProcState, ProcessSample};
 use crate::model::vim::nav::{VimKey, VimNav};
-use crate::extensions::refresh::RefreshTimer;
+use crate::pages::refresh::RefreshTimer;
 
 use self::act::{Signal, TAG_RENICE, TAG_SIGNAL};
 use self::cpu::CpuTracker;

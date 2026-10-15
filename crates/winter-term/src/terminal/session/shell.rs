@@ -1,4 +1,4 @@
-//! Shell resolution and the small OSC/process helpers a pane needs.
+//! Shell resolution and the small OSC/process helpers a terminal needs.
 
 use base64::Engine;
 

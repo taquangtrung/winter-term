@@ -3,7 +3,7 @@
 
 use crate::model::page::{PageRow, PageSpan, PageStyle};
 use crate::model::system::{CoreReading, DiskReading, GpuReading, MemoryReading, SystemSample};
-use crate::extensions::proc::format::{format_kb, format_percent};
+use crate::pages::proc::format::{format_kb, format_percent};
 
 use super::usage::Usage;
 

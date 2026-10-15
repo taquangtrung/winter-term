@@ -47,7 +47,7 @@ impl App {
     /// Open the next reference the last command printed (`forward`), or the
     /// one before, starting a fresh walk whenever there is newer output.
     pub(crate) fn step_error(&mut self, focused: TabId, forward: bool) {
-        let tab = match self.terminals.contains_key(&focused) {
+        let tab = match self.open_tabs.is_terminal(&focused) {
             true => focused,
             false => match &self.error_walk {
                 Some(walk) => walk.tab,
@@ -96,7 +96,7 @@ impl App {
     /// The newest command block in `tab` that printed a reference to a file
     /// that exists, with every such reference in it.
     fn latest_references(&self, tab: TabId) -> Option<(usize, Vec<OpenTarget>)> {
-        let terminal = self.terminals.get(&tab)?;
+        let terminal = self.open_tabs.terminal(&tab)?;
         let blocks = terminal.scrollback().blocks();
         blocks.iter().enumerate().rev().find_map(|(index, block)| {
             let targets = references(&block.plain_text(), block.cwd.as_deref());

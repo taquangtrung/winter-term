@@ -3,7 +3,6 @@
 use portable_pty::CommandBuilder;
 
 use crate::model::layout::{Layout, TabId};
-use crate::model::mode::Mode;
 use crate::session::Session;
 use crate::terminal::session::{Terminal, MUX_COMMAND_PREFIX, MUX_REMOTE_COMMAND_PREFIX};
 
@@ -24,8 +23,8 @@ impl App {
         // Programs the previous process image left running and handed on are
         // taken over as they are, ahead of anything that would start a new one.
         let mut handovers = session.take_handovers();
-        let extensions = session.take_extensions();
-        let (tree, focused, pane_map) = session.into_parts();
+        let pages = session.take_pages();
+        let (tree, focused, terminal_map) = session.into_parts();
 
         let (cols, rows) = if let Some(r) = &self.renderer {
             r.grid_size()
@@ -49,17 +48,17 @@ impl App {
             .unwrap_or(winter_render::MAX_SCROLLBACK);
         let shell = self.config.active_shell().map(String::from);
         let mut failed_ids: Vec<TabId> = Vec::new();
-        for (id, (cmd, cwd)) in &pane_map {
+        for (id, (cmd, cwd)) in &terminal_map {
             let adopted = handovers
                 .remove(id)
                 .and_then(|handover| self.adopt_handed_over(handover, cmd.clone(), max_scrollback));
-            let pane = if adopted.is_some() {
+            let terminal = if adopted.is_some() {
                 adopted
             } else if let Some(host_session) = cmd
                 .as_deref()
                 .and_then(|c| c.strip_prefix(MUX_REMOTE_COMMAND_PREFIX))
             {
-                // A saved remote-mux pane re-attaches over ssh instead of
+                // A saved remote-mux terminal re-attaches over ssh instead of
                 // spawning a local shell.
                 match host_session.split_once('|') {
                     Some((host, session)) => match Terminal::new_mux_remote(
@@ -69,7 +68,7 @@ impl App {
                         session,
                         max_scrollback,
                     ) {
-                        Ok(pane) => Some(pane),
+                        Ok(terminal) => Some(terminal),
                         Err(e) => {
                             self.set_error(format!(
                                 "re-attaching to '{host}:{session}' failed ({e})"
@@ -86,7 +85,7 @@ impl App {
                 // A saved mux pane re-attaches to its session instead of
                 // spawning a local shell.
                 match Terminal::new_mux(cols.max(1), want_rows.max(1), session, max_scrollback) {
-                    Ok(pane) => Some(pane),
+                    Ok(terminal) => Some(terminal),
                     Err(e) => {
                         self.set_error(format!(
                             "re-attaching to mux session '{session}' failed ({e})"
@@ -103,12 +102,12 @@ impl App {
                 }
                 match Terminal::with_command(cols.max(1), want_rows.max(1), builder, max_scrollback)
                 {
-                    Ok(pane) => Some(pane),
+                    Ok(terminal) => Some(terminal),
                     Err(e) => {
                         self.set_error(format!(
                             "restoring a pane failed ({e}), trying the default shell"
                         ));
-                        self.spawn_pane_or_notify(
+                        self.spawn_terminal_or_notify(
                             cols.max(1),
                             want_rows.max(1),
                             shell.as_deref(),
@@ -118,41 +117,38 @@ impl App {
                     }
                 }
             };
-            match pane {
-                Some(mut pane) => {
-                    pane.set_cell_size(cw, ch);
-                    self.terminals.insert(*id, pane);
-                    self.modes.insert(*id, Mode::default());
+            match terminal {
+                Some(mut terminal) => {
+                    terminal.set_cell_size(cw, ch);
+                    self.open_tabs.insert_terminal(*id, terminal);
                 }
                 None => failed_ids.push(*id),
             }
         }
-        // The extension tabs come back where they were looking; one that cannot
+        // The page tabs come back where they were looking; one that cannot
         // (its file gone, say) is dropped like a terminal that would not spawn.
-        let restored: Vec<TabId> = extensions
+        let restored: Vec<TabId> = pages
             .iter()
-            .filter_map(|ext| {
-                let id = TabId(ext.id as u64);
-                self.restore_extension(id, ext).then_some(id)
+            .filter_map(|saved| {
+                let id = TabId(saved.id as u64);
+                self.restore_page(id, saved).then_some(id)
             })
             .collect();
         // A terminal that could not be respawned is dropped from the layout,
-        // and a group left with none collapses into its sibling.
+        // and a pane left with none collapses into its sibling.
         let spawned = |id: TabId| {
-            (pane_map.contains_key(&id) && !failed_ids.contains(&id)) || restored.contains(&id)
+            (terminal_map.contains_key(&id) && !failed_ids.contains(&id)) || restored.contains(&id)
         };
         let layout = Layout::from_tree(tree.retain(&spawned), focused);
         // A terminal the layout does not place would run on unseen.
-        for id in pane_map.keys() {
+        for id in terminal_map.keys() {
             if !layout.as_ref().is_some_and(|l| l.contains(*id)) && !failed_ids.contains(id) {
-                self.terminals.remove(id);
-                self.modes.remove(id);
+                self.open_tabs.remove(id);
             }
         }
         for id in &restored {
             if !layout.as_ref().is_some_and(|l| l.contains(*id)) {
-                self.pages.remove(id);
-                self.modes.remove(id);
+                self.open_tabs.remove_page(id);
             }
         }
         let Some(layout) = layout else {
@@ -164,11 +160,10 @@ impl App {
         // calls don't collide with them.
         let bootstrap_id = self.layout().focused();
         if !layout.contains(bootstrap_id) {
-            self.terminals.remove(&bootstrap_id);
-            self.modes.remove(&bootstrap_id);
+            self.open_tabs.remove(&bootstrap_id);
         }
         self.tabs.layout = layout;
-        let max_id = pane_map
+        let max_id = terminal_map
             .keys()
             .chain(restored.iter())
             .map(|id| id.0)
@@ -181,9 +176,9 @@ impl App {
         self.resize_all_panes();
         // Every program taken over is asked to draw itself again at the size it
         // now has, whatever it was drawing when the screen was copied.
-        for pane in self.terminals.values_mut() {
-            if pane.take_adopted() {
-                pane.nudge_redraw();
+        for (_, terminal) in self.open_tabs.terminals_mut() {
+            if terminal.take_adopted() {
+                terminal.nudge_redraw();
             }
         }
         self.dirty = true;
@@ -197,7 +192,7 @@ impl App {
     #[cfg(unix)]
     fn adopt_handed_over(
         &mut self,
-        handover: crate::session::PaneHandover,
+        handover: crate::session::TerminalHandover,
         command: Option<String>,
         max_scrollback: usize,
     ) -> Option<Terminal> {
@@ -210,10 +205,10 @@ impl App {
             max_scrollback,
             command,
         ) {
-            Ok(mut pane) => {
-                pane.restore_screen(handover.screen.as_bytes());
-                pane.mark_adopted();
-                Some(pane)
+            Ok(mut terminal) => {
+                terminal.restore_screen(handover.screen.as_bytes());
+                terminal.mark_adopted();
+                Some(terminal)
             }
             Err(e) => {
                 self.set_error(format!("keeping a running program failed ({e})"));
@@ -225,7 +220,7 @@ impl App {
     #[cfg(not(unix))]
     fn adopt_handed_over(
         &mut self,
-        _handover: crate::session::PaneHandover,
+        _handover: crate::session::TerminalHandover,
         _command: Option<String>,
         _max_scrollback: usize,
     ) -> Option<Terminal> {

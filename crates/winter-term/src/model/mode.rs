@@ -18,10 +18,6 @@ pub enum Mode {
     Insert,
     /// Winter intercepts keys to traverse the block list.
     Normal,
-    /// Keys route to the tool page the pane holds instead of a terminal. A pane
-    /// enters this mode when its page opens and leaves it only by closing, so
-    /// no keystroke can be handed to a PTY that was never spawned.
-    Page,
     /// Like Normal, but motions extend a text selection (vim Visual).
     Visual,
 }
@@ -84,16 +80,6 @@ impl Mode {
                 | ModeEvent::FocusBlock
                 | ModeEvent::ToInsert,
             ) => Mode::BlockFocus,
-            // A page tab has no PTY and no block list, so every mode-changing
-            // event is inert: the page owns its keys until the pane closes.
-            (
-                Mode::Page,
-                ModeEvent::EnterNormal
-                | ModeEvent::EnterVisual
-                | ModeEvent::Escape
-                | ModeEvent::FocusBlock
-                | ModeEvent::ToInsert,
-            ) => Mode::Page,
         }
     }
 }
@@ -124,21 +110,6 @@ mod tests {
         // navigation can't be dropped back into the shell by a stray Esc.
         assert_eq!(Mode::Normal.apply(ModeEvent::Escape), Mode::Normal);
         assert_eq!(Mode::Normal.apply(ModeEvent::ToInsert), Mode::Insert);
-    }
-
-    #[test]
-    fn test_page_mode_absorbs_every_mode_event() {
-        // Letting `i` out of Page would route the next keystroke to a pane that
-        // has no PTY behind it at all.
-        for event in [
-            ModeEvent::EnterNormal,
-            ModeEvent::EnterVisual,
-            ModeEvent::Escape,
-            ModeEvent::FocusBlock,
-            ModeEvent::ToInsert,
-        ] {
-            assert_eq!(Mode::Page.apply(event), Mode::Page);
-        }
     }
 
     #[test]

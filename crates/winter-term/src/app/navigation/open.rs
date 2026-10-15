@@ -391,13 +391,13 @@ impl App {
     /// 4. The rightmost reference on the last non-blank line above it.
     ///
     /// URLs count wherever a cursor rests; the last-line scan finds files and
-    /// directories only. A pane covered by a tool page points at nothing:
+    /// directories only. A page tab points at nothing:
     /// the terminal text underneath is not what the user is looking at.
     pub(crate) fn target_at_point(&self, focused: TabId) -> Option<OpenTarget> {
-        if self.pages.contains_key(&focused) {
+        if self.open_tabs.is_page(&focused) {
             return None;
         }
-        let terminal = self.terminals.get(&focused)?;
+        let terminal = self.open_tabs.terminal(&focused)?;
         let cwd = terminal.cwd();
         let cwd = cwd.as_deref();
         let grid = terminal.grid();
@@ -430,8 +430,8 @@ impl App {
 
     /// The file browser Find File opens: rooted where the focused terminal
     /// points (see [`Self::target_at_point`]), on the file itself when it
-    /// names one, else at the working directory (a tool page's own, when one
-    /// covers the pane).
+    /// names one, else at the working directory (a page's own, when the
+    /// focused tab is a page).
     pub(crate) fn files_palette_at_point(&self) -> Palette {
         match self.target_at_point(self.layout().focused()) {
             Some(OpenTarget::File { path, .. }) if path.is_dir() => Palette::open_files(path),
@@ -486,11 +486,11 @@ impl App {
         let Some((tab_id, rect)) = self.pane_at_pixel(x, y) else {
             return false;
         };
-        // A tool page covers the terminal text underneath it.
-        if self.pages.contains_key(&tab_id) {
+        // A page tab has no terminal text to point at.
+        if self.open_tabs.is_page(&tab_id) {
             return false;
         }
-        let Some(terminal) = self.terminals.get(&tab_id) else {
+        let Some(terminal) = self.open_tabs.terminal(&tab_id) else {
             return false;
         };
         let (row, col) = self.pixel_to_cell(x, y, rect);
@@ -549,7 +549,7 @@ impl App {
             .scrollback_lines
             .unwrap_or(winter_render::MAX_SCROLLBACK);
         match Terminal::with_command(cols.max(1), rows.max(1), command, scrollback) {
-            Ok(pane) => self.push_new_tab(id, pane),
+            Ok(terminal) => self.push_new_tab(id, terminal),
             Err(e) => self.set_error(format!("could not start {name}: {e}")),
         }
     }
@@ -559,12 +559,12 @@ impl App {
     /// in the status bar.
     pub(crate) fn copy_pane_cwd(&mut self, focused: TabId) {
         let reference = self
-            .pages
-            .get(&focused)
+            .open_tabs
+            .page(&focused)
             .and_then(|slot| slot.page.file_reference())
             .or_else(|| {
-                self.terminals
-                    .get(&focused)
+                self.open_tabs
+                    .terminal(&focused)
                     .and_then(|p| p.cwd())
                     .map(|c| crate::model::path::format_file_reference(&c))
             })

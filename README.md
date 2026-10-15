@@ -13,11 +13,11 @@ See the [usage guide](docs/usage-guide.md) for how to drive Winter, and the [pro
 - **Structured command blocks:** OSC 133 shell integration organizes your session into discrete, foldable units with exit codes and durations clearly marked. Jump between blocks with `]b`/`[b`, yank block output with `y`, or target blocks with quick-select (`q`).
 - **Rich inline MIME blocks (TBP):** Render tables, interactive Vega charts, LaTeX math, PDFs, and images inline via the Terminal Block Protocol, backed by a real web engine with secure CSP sandboxing and automatic plain-text fallbacks.
 - **Prompt-line integration:** Normal-mode operators (`dw`, `ci"`, `x`) act directly on your active shell prompt line, accompanied by which-key hints that display pending keybindings dynamically.
-- **Tool panes:** `Ctrl-Shift-d` opens a tree-style directory listing with marks, file operations, and background directory sizes; `Ctrl-Shift-g` opens the working tree, where hunks stage and discard one at a time and transient menus drive branch, commit, merge, rebase, stash, tag, log, and blame; `Ctrl-Shift-s` searches the tree for text and opens any match at its line; `Ctrl-Shift-f` walks the working directory in the command palette, a directory at a time, and opens the file you land on; a `.pdf` opens in a viewer that renders it inline and offline, read with vim's own motions: counts, `gg`/`G`, `zt`/`zz`/`zb`, and `i` for a cursor in the text with `w`/`b`/`e`, `f`/`t`, visual selection, and the `y` operator. A tool covers the focused pane rather than replacing it, so the shell underneath keeps running and comes back the moment you close it, and `/`, `n`, and `N` search whichever tool is up.
+- **Page tabs:** `Ctrl-Shift-d` opens a tree-style directory listing with marks, file operations, and background directory sizes; `Ctrl-Shift-g` opens the working tree, where hunks stage and discard one at a time and transient menus drive branch, commit, merge, rebase, stash, tag, log, and blame; `Ctrl-Shift-s` searches the tree for text and opens any match at its line; `Ctrl-Shift-f` walks the working directory in the command palette, a directory at a time, and opens the file you land on; a `.pdf` opens in a viewer that renders it inline and offline, read with vim's own motions: counts, `gg`/`G`, `zt`/`zz`/`zb`, and `i` for a cursor in the text with `w`/`b`/`e`, `f`/`t`, visual selection, and the `y` operator. Each opens as a tab of its own in the focused pane's strip, beside the terminal it was opened from, which keeps running and is one tab away; `/`, `n`, and `N` search whichever page is up.
 
 ## Core keybindings
 
-A Winter pane is always in one of five modes: **Insert** (owns the PTY), **Normal** (owns the keyboard for navigation and operators), **Visual** (extends selections), **Block-Focus** (hands input to a rich block's WebView), or **Page** (a tool covers the pane and owns the keys it binds).
+A Winter window is split into panes, each a strip of tabs, and every tab is a terminal or a page. A terminal tab is always in one of four modes: **Insert** (owns the PTY), **Normal** (owns the keyboard for navigation and operators), **Visual** (extends selections), or **Block-Focus** (hands input to a rich block's WebView). A page tab is in no mode: it owns the keys it binds, and the status bar shows it as `P`.
 
 | Mode / Area | Keys | Action |
 |---|---|---|
@@ -47,10 +47,10 @@ A Winter pane is always in one of five modes: **Insert** (owns the PTY), **Norma
 | **Window** | `Ctrl-Shift-Alt-n` | New window |
 | **Tabs** | `Ctrl-Shift-n` / `Ctrl-Shift-w` | New tab, close tab |
 | | `gt` / `gT` | Next tab, previous tab |
-| **Tools** | `Ctrl-Shift-d` / `Ctrl-Shift-g` | Directory listing, git status |
+| **Pages** | `Ctrl-Shift-d` / `Ctrl-Shift-g` | Directory listing, git status |
 | | `Ctrl-Shift-f` | Browse files in the palette, and open one |
 | | `Ctrl-Shift-s` | Search the tree for text |
-| | `/` then `n` / `N` | Search an open tool, next and previous match |
+| | `/` then `n` / `N` | Search an open page, next and previous match |
 | **Palette** | `Alt-x` | Open command palette |
 
 See the [keybinding reference](docs/usage-guide.md#keybinding-reference) in the usage guide for the complete keymap.

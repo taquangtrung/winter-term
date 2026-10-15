@@ -1,13 +1,12 @@
 //! Tabs within a pane: opening, showing, cycling, reordering, and closing them,
-//! and the recency walk across the focused group's strip.
+//! and the recency walk across the focused pane's strip.
 
 use std::collections::HashMap;
 
 use crate::model::layout::{FocusDir, Layout, Rect, TabId};
-use crate::model::mode::Mode;
 use crate::terminal::session::Terminal;
 
-use super::page::Closing;
+use super::page::{Closing, PageKind};
 use super::strip::StripHit;
 use super::App;
 use super::{DEFAULT_COLS, DEFAULT_ROWS};
@@ -17,7 +16,7 @@ use winter_render::TabbarHit;
 // Data Structures
 // ========================================================================
 
-/// The window's layout of tab groups and the state of the strips drawn over
+/// The window's layout of panes and the state of the strips drawn over
 /// them: hover, an in-progress drag, the rename prompt, and a recency walk.
 pub(crate) struct TabsState {
     /// The tab being dragged along its strip and the pointer (x, y) position when
@@ -27,11 +26,11 @@ pub(crate) struct TabsState {
     /// Title-bar element currently under the cursor; drives hover highlights.
     pub(crate) hover: TabbarHit,
     pub(crate) hover_pos: Option<(f32, f32)>,
-    /// The split tree of tab groups.
+    /// The split tree of panes.
     pub(crate) layout: Layout,
     /// User-set custom names for tabs. Take priority over OSC-set titles.
     pub(crate) names: HashMap<TabId, String>,
-    /// The focused group's recency order, frozen while the recency commands
+    /// The focused pane's recency order, frozen while the recency commands
     /// step through it, so repeated steps walk usage history instead of
     /// reshuffling it. `None` once a deliberate switch ends the walk.
     pub(crate) recent_walk: Option<RecentWalk>,
@@ -49,7 +48,7 @@ pub(crate) struct RecentWalk {
 }
 
 impl Default for TabsState {
-    /// A fresh window: one group holding one tab.
+    /// A fresh window: one pane holding one tab.
     fn default() -> Self {
         Self {
             drag_start: None,
@@ -91,8 +90,8 @@ impl App {
     pub(crate) fn new_tab(&mut self) {
         let id = self.alloc_tab_id();
         // Open the new tab where the focused tab was being used rather than
-        // at the process default (usually `$HOME`): beside a tool that is the
-        // directory the tool is looking at, not a shell's own.
+        // at the process default (usually `$HOME`): beside a page that is the
+        // directory the page is looking at, not a shell's own.
         let cwd = self.focused_start_cwd();
         let (cols, rows) = self.focused_grid_size();
         let shell = self.config.active_shell().map(String::from);
@@ -100,7 +99,7 @@ impl App {
             .config
             .scrollback_lines
             .unwrap_or(winter_render::MAX_SCROLLBACK);
-        let Some(terminal) = self.spawn_pane_or_notify(
+        let Some(terminal) = self.spawn_terminal_or_notify(
             cols.max(1),
             rows.max(1),
             shell.as_deref(),
@@ -143,9 +142,9 @@ impl App {
             .scrollback_lines
             .unwrap_or(winter_render::MAX_SCROLLBACK);
         match Terminal::new_mux_at(path, cols.max(1), rows.max(1), session, scrollback) {
-            Ok(pane) => {
+            Ok(terminal) => {
                 self.set_notice(format!("attached to mux session '{session}'"));
-                self.push_new_tab(id, pane);
+                self.push_new_tab(id, terminal);
             }
             Err(e) => self.set_error(format!(
                 "could not attach to '{session}' ({e}); start the server with 'winter mux serve'"
@@ -163,9 +162,9 @@ impl App {
             .scrollback_lines
             .unwrap_or(winter_render::MAX_SCROLLBACK);
         match Terminal::new_mux_remote(host, cols.max(1), rows.max(1), session, scrollback) {
-            Ok(pane) => {
+            Ok(terminal) => {
                 self.set_notice(format!("attached to '{host}:{session}'"));
-                self.push_new_tab(id, pane);
+                self.push_new_tab(id, terminal);
             }
             Err(e) => self.set_error(format!("could not reach '{host}' over ssh ({e})")),
         }
@@ -176,13 +175,12 @@ impl App {
     /// them get the same bookkeeping: mode default, tile repositioning,
     /// resize, and title update.
     pub(crate) fn push_new_tab(&mut self, id: TabId, terminal: Terminal) {
-        self.terminals.insert(id, terminal);
-        self.modes.insert(id, Mode::default());
+        self.open_tabs.insert_terminal(id, terminal);
         self.layout_mut().add_tab(id);
         self.after_tab_change();
     }
 
-    /// The grid a new tab in the focused group starts at, before
+    /// The grid a new tab in the focused pane starts at, before
     /// [`Self::resize_all_panes`] fixes the exact size once it is placed.
     fn focused_grid_size(&self) -> (usize, usize) {
         let focused = self.layout().focused();
@@ -211,31 +209,31 @@ impl App {
         self.after_tab_change();
     }
 
-    /// Show the most recently shown terminal of the focused group, for the way
-    /// back from a tool tab to the shell it was opened from. A terminal that
-    /// is already showing stays showing; a group with none says so.
+    /// Show the most recently shown terminal of the focused pane, for the way
+    /// back from a page tab to the shell it was opened from. A terminal that
+    /// is already showing stays showing; a pane with none says so.
     pub(crate) fn reveal_recent_terminal(&mut self) {
         let focused = self.layout().focused();
         let terminal = self
             .layout()
-            .recent_in_group(focused)
+            .recent_in_pane(focused)
             .into_iter()
-            .find(|tab| self.terminals.contains_key(tab) && !self.pages.contains_key(tab));
+            .find(|tab| self.open_tabs.is_terminal(tab) && !self.open_tabs.is_page(tab));
         match terminal {
             Some(tab) => self.show_tab(tab),
             None => self.set_notice("no terminal in this pane"),
         }
     }
 
-    /// Show the tab at strip position `index` (0-based) of the focused group.
+    /// Show the tab at strip position `index` (0-based) of the focused pane.
     pub(crate) fn switch_tab(&mut self, index: usize) {
-        let members = self.layout().group_members(self.layout().focused());
+        let members = self.layout().tabs_in_pane(self.layout().focused());
         if let Some(&pane) = members.get(index) {
             self.show_tab(pane);
         }
     }
 
-    /// Show the next (`forward`) or previous tab of the focused group by
+    /// Show the next (`forward`) or previous tab of the focused pane by
     /// strip position, wrapping around.
     pub(crate) fn cycle_tab(&mut self, forward: bool) {
         if self.layout_mut().cycle_tab(forward) {
@@ -244,7 +242,7 @@ impl App {
         }
     }
 
-    /// Step through the focused group's tabs in most-recently-shown order:
+    /// Step through the focused pane's tabs in most-recently-shown order:
     /// `forward` steps toward more recently shown, otherwise toward less,
     /// wrapping around. The order is held still across consecutive calls (a
     /// "walk") so the user can step back and forth through usage history; the
@@ -255,7 +253,7 @@ impl App {
             Some(walk) if walk.order.contains(&focused) => walk,
             _ => RecentWalk {
                 at: 0,
-                order: self.layout().recent_in_group(focused),
+                order: self.layout().recent_in_pane(focused),
             },
         };
         let count = walk.order.len();
@@ -266,8 +264,8 @@ impl App {
             true => (walk.at + count - 1) % count,
             false => (walk.at + 1) % count,
         };
-        let pane = walk.order[at];
-        self.layout_mut().focus(pane);
+        let tab = walk.order[at];
+        self.layout_mut().focus(tab);
         self.tabs.recent_walk = Some(RecentWalk {
             at,
             order: walk.order,
@@ -289,9 +287,9 @@ impl App {
         }
     }
 
-    /// Move `tab` into the group holding `target_group_tab`, at the end of that group.
-    pub(crate) fn move_tab_to_group(&mut self, tab: TabId, target_group_tab: TabId) {
-        if self.layout_mut().move_tab_to_group(tab, target_group_tab) {
+    /// Move `tab` into the pane holding `target_pane_tab`, at the end of that pane.
+    pub(crate) fn move_tab_to_pane(&mut self, tab: TabId, target_pane_tab: TabId) {
+        if self.layout_mut().move_tab_to_pane(tab, target_pane_tab) {
             self.after_tab_change();
         }
     }
@@ -305,7 +303,7 @@ impl App {
         let layout_vp = Rect::new(viewport.x, viewport.y, viewport.width, viewport.height);
         if let Some(target) = self.layout().pane_in_direction(direction, layout_vp) {
             let focused = self.layout().focused();
-            self.move_tab_to_group(focused, target);
+            self.move_tab_to_pane(focused, target);
         }
     }
 
@@ -316,7 +314,7 @@ impl App {
     /// Close one tab. Closing the last tab of the window asks for the app to
     /// exit instead.
     ///
-    /// Unwritten edits in a tool tab are asked about first, and the tab
+    /// Unwritten edits in a page tab are asked about first, and the tab
     /// closes on the answer rather than here.
     pub(crate) fn close_tab(&mut self, tab: TabId) {
         if self.ask_before_closing_tab(tab) {
@@ -337,7 +335,7 @@ impl App {
     pub(crate) fn close_other_tabs_now(&mut self, keep: TabId) {
         let others: Vec<TabId> = self
             .layout()
-            .group_members(keep)
+            .tabs_in_pane(keep)
             .into_iter()
             .filter(|tab| *tab != keep)
             .collect();
@@ -347,7 +345,7 @@ impl App {
     }
 
     /// Close one tab without asking, keeping what it held for reopening or
-    /// not. A group left with no tabs merges back into its sibling.
+    /// not. A pane left with no tabs merges back into its sibling.
     pub(crate) fn close_tab_now(&mut self, tab: TabId, closing: Closing) {
         if !self.layout().contains(tab) {
             return;
@@ -357,33 +355,36 @@ impl App {
             return;
         }
         let snapshot = self.layout().export_tree();
-        let group_gone = self.layout().group_members(tab).len() <= 1;
+        let pane_gone = self.layout().tabs_in_pane(tab).len() <= 1;
         let is_commit_editor = self.commit_companions.contains_key(&tab)
-            || self.pages.get(&tab).is_some_and(|slot| {
-                slot.tool() == super::page::EDITOR_TOOL && slot.page.is_commit_editor()
+            || self.open_tabs.page(&tab).is_some_and(|slot| {
+                slot.kind() == PageKind::Editor && slot.page.is_commit_editor()
             });
         let commit_repo = if is_commit_editor {
-            self.pages.get(&tab).and_then(|slot| slot.page.cwd()).map(|p| {
-                if p.file_name().is_some_and(|n| n == ".git") {
-                    p.parent().unwrap_or(&p).to_path_buf()
-                } else {
-                    p
-                }
-            })
+            self.open_tabs
+                .page(&tab)
+                .and_then(|slot| slot.page.cwd())
+                .map(|p| {
+                    if p.file_name().is_some_and(|n| n == ".git") {
+                        p.parent().unwrap_or(&p).to_path_buf()
+                    } else {
+                        p
+                    }
+                })
         } else {
             None
         };
-        if let Some(slot) = self.pages.remove(&tab) {
+        if let Some(slot) = self.open_tabs.remove_page(&tab) {
             if closing == Closing::Keep {
                 self.stash_closed_page(tab, slot);
             }
         } else if closing == Closing::Keep {
-            self.stash_closed_pane(&[tab], snapshot, Vec::new(), group_gone);
+            self.stash_closed_pane(&[tab], snapshot, Vec::new(), pane_gone);
         }
         self.drop_tab_state(tab);
         self.layout_mut().close(tab);
-        if group_gone {
-            // Rebalance the remaining groups so they stay evenly spaced,
+        if pane_gone {
+            // Rebalance the remaining panes so they stay evenly spaced,
             // without reshaping the tree.
             self.layout_mut().balance();
         }
@@ -404,7 +405,7 @@ impl App {
         self.jobs.cancel_for(tab);
         self.commit_companions
             .retain(|_, companion| *companion != tab);
-        self.pages.remove(&tab);
+        self.open_tabs.remove_page(&tab);
         if self.page_prompt.as_ref().is_some_and(|p| p.tab == tab) {
             self.page_prompt = None;
             self.prompt_debounce = None;
@@ -420,9 +421,7 @@ impl App {
             self.stop_page_cursor();
         }
         self.webview_mgr.remove_surface(tab);
-        self.terminals.remove(&tab);
-        self.modes.remove(&tab);
-        self.nav_cursors.remove(&tab);
+        self.open_tabs.remove(&tab);
         self.vim.jump_lists.remove(&tab);
         self.vim.change_lists.remove(&tab);
         self.vim.last_changes.remove(&tab);
@@ -463,12 +462,12 @@ impl App {
         };
         // Size the session to the focused pane so the first frame fits.
         let (cols, rows) = self
-            .terminals
-            .get(&focused)
-            .map(|pane| {
+            .open_tabs
+            .terminal(&focused)
+            .map(|terminal| {
                 (
-                    pane.grid().cols().max(1) as u16,
-                    pane.grid().rows().max(1) as u16,
+                    terminal.grid().cols().max(1) as u16,
+                    terminal.grid().rows().max(1) as u16,
                 )
             })
             .unwrap_or((80, 24));
@@ -513,7 +512,7 @@ impl App {
             .selection
             .span
             .take()
-            .filter(|s| self.layout().panes().contains(&s.tab));
+            .filter(|s| self.layout().shown_tabs().contains(&s.tab));
         self.close_menu();
         // Force a tile reposition so hidden tabs' WebViews are hidden and the
         // shown tabs' are placed (the layout key alone may not have changed).

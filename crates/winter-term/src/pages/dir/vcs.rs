@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use crate::model::page::{CommandRequest, PageStyle};
-use crate::extensions::git::parse::{parse_status, Section};
+use crate::pages::git::parse::{parse_status, Section};
 
 // ========================================================================
 // Constants

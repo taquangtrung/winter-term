@@ -34,15 +34,15 @@ pub enum PaletteMode {
     Files,
     /// Recalling an earlier query.
     History,
-    /// Every extension: the ones open somewhere, then the ones closed recently.
+    /// Every page tab: the ones open somewhere, then what was closed recently.
     /// Selecting an open one goes to it, and a closed one comes back as the
-    /// page it was rather than as a fresh extension of its kind.
-    Extensions,
+    /// page it was rather than as a fresh page of its kind.
+    TabList,
     /// Pane switcher: selecting an entry focuses that pane.
     Panes,
     /// `cd` target picker: selecting an entry executes `cd <dir>` immediately.
     RecentDirs,
-    /// A tool page's own list: the branches to check out, the tags to delete.
+    /// A page's own list: the branches to check out, the tags to delete.
     /// Selecting an entry answers the page's question rather than running a
     /// command of the host's.
     PagePick,
@@ -180,15 +180,15 @@ impl Palette {
         }
     }
 
-    /// Open the palette over every extension: the ones open somewhere first, then
-    /// the ones closed recently, newest first.
+    /// Open the palette over every page tab: the ones open somewhere first,
+    /// then what was closed recently, newest first.
     ///
     /// Each entry is `(action, label, hint)`. The action says which pane a
     /// row goes to or which closed thing it puts back, named rather than
     /// numbered by position, so a row means the same thing however the list
     /// has changed since it was drawn.
-    pub fn open_extensions(extensions: Vec<(String, String, String)>) -> Self {
-        let entries = extensions
+    pub fn open_tab_list(rows: Vec<(String, String, String)>) -> Self {
+        let entries = rows
             .into_iter()
             .map(|(action, label, hint)| PaletteEntry {
                 action,
@@ -206,17 +206,12 @@ impl Palette {
             history: EditHistory::new(String::new()),
             history_index: None,
             live_query: String::new(),
-            mode: PaletteMode::Extensions,
+            mode: PaletteMode::TabList,
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
             title: None,
         }
-    }
-
-    /// Backwards compatibility alias for [`Palette::open_extensions`].
-    pub fn open_tools(tools: Vec<(String, String, String)>) -> Self {
-        Self::open_extensions(tools)
     }
 
     /// Open the palette in pane switcher mode.
@@ -247,7 +242,7 @@ impl Palette {
         }
     }
 
-    /// Open the palette over a tool page's own list, where each entry stands
+    /// Open the palette over a page's own list, where each entry stands
     /// for itself: what is chosen is the text of the row.
     pub fn open_pick(items: Vec<String>) -> Self {
         let entries = items
@@ -950,10 +945,9 @@ pub(crate) fn builtin_commands(keymap: &WindowKeymap) -> Vec<PaletteEntry> {
         ("recent_tab_back", "Recent Tab (Backward)", ""),
         ("recent_tab_forward", "Recent Tab (Forward)", ""),
         ("reload", "Reload Window", ""),
-        ("reopen_page", "Extension: Reopen Last Closed", ""),
+        ("reopen_page", "Reopen Closed Tab", ""),
         ("reveal_terminal", "Terminal: Reveal Most Recent", ""),
-        ("tool_list", "Extension: Go To or Reopen...", ""),
-        ("extension_list", "Extension: Go To or Reopen...", ""),
+        ("tool_list", "Go To or Reopen Tab...", ""),
         ("search", "Search Blocks", ""),
         ("select_pane", "Go to Pane", ""),
         ("scroll_page_up", "Scroll Page Up", ""),

@@ -161,32 +161,32 @@ impl App {
         // Outside every pane: the drag still belongs to the pane it started
         // in, named by the press, or by the span already being extended when
         // the button has been held since before this window had focus.
-        let pane = self
+        let tab = self
             .pointer
             .press_cell
             .map(|(id, _, _)| id)
             .or_else(|| self.selection.span.as_ref().map(|sel| sel.tab))?;
-        let rect = self.pane_rect(pane)?;
-        let grid = self.terminals.get(&pane)?.grid();
+        let rect = self.pane_rect(tab)?;
+        let grid = self.open_tabs.terminal(&tab)?.grid();
         let last_row = grid.rows().saturating_sub(1);
         let last_col = grid.cols().saturating_sub(1);
         if y < rect.y {
-            return Some((pane, 0, 0));
+            return Some((tab, 0, 0));
         }
         if y >= rect.y + rect.height {
-            return Some((pane, last_row, last_col));
+            return Some((tab, last_row, last_col));
         }
         // Beside the pane rather than above or below it: the row the pointer
         // is level with still counts, with the column pinned to the edge.
         let clamped_x = x.clamp(rect.x, rect.x + rect.width);
         let (row, col) = self.pixel_to_cell(clamped_x, y, rect);
-        Some((pane, row.min(last_row), col.min(last_col)))
+        Some((tab, row.min(last_row), col.min(last_col)))
     }
 
     /// The hyperlink URL of the cell currently under the pointer, if any.
     pub(crate) fn hovered_link_at(&self, x: f32, y: f32) -> Option<String> {
         let (tab_id, pane_rect) = self.pane_at_pixel(x, y)?;
-        let terminal = self.terminals.get(&tab_id)?;
+        let terminal = self.open_tabs.terminal(&tab_id)?;
         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
         crate::app::navigation::open::find_url_at(terminal.grid(), row, col)
     }
@@ -224,7 +224,7 @@ mod tests {
         let mut app = App::new();
         // The default tab lays out a single pane, `TabId(0)`.
         let terminal = TabId(0);
-        app.terminals.insert(
+        app.open_tabs.insert_terminal(
             terminal,
             crate::terminal::session::Terminal::with_command(
                 40,
@@ -237,7 +237,7 @@ mod tests {
         app.pointer.press_cell = Some((terminal, 0, 5));
         let rect = app.pane_rect(terminal).expect("the pane is laid out");
         let (cols, rows) = {
-            let grid = app.terminals[&terminal].grid();
+            let grid = app.open_tabs.terminal(&terminal).unwrap().grid();
             (grid.cols(), grid.rows())
         };
 

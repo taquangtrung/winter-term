@@ -14,7 +14,7 @@ use crate::model::page::{
 use crate::model::textedit::field::TextField;
 use crate::model::textedit::modal::{EditMode, EditOutcome};
 use crate::model::vim::nav::buffer_end;
-use crate::extensions::editor::file;
+use crate::pages::editor::file;
 
 // ========================================================================
 // Constants
@@ -554,7 +554,7 @@ impl Page for GrepPage {
                 PageOutcome::Consumed
             }
             // `n` and `N` mean the next and previous match here, as they do in
-            // every other tool: the list is already the search, so there is
+            // every other page: the list is already the search, so there is
             // nothing else for them to step through.
             KeyCode::Char('n') => {
                 self.move_to_row(true, false);
@@ -805,7 +805,7 @@ mod tests {
 
     #[test]
     fn test_the_start_directory_follows_the_hit_under_the_cursor() {
-        // A tool opened from a result should land beside the file being read,
+        // A page opened from a result should land beside the file being read,
         // not at the top of whatever tree was searched, so stepping onto a
         // hit in another directory has to move the answer with it.
         let mut page = page_with(vec![

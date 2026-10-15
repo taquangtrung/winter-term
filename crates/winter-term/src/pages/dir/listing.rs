@@ -99,7 +99,7 @@ fn compare_by_name(a: &Entry, b: &Entry) -> Ordering {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::extensions::dir::entry::{EntryKind, Meta};
+    use crate::pages::dir::entry::{EntryKind, Meta};
     use std::path::PathBuf;
     use std::time::{Duration, SystemTime};
 

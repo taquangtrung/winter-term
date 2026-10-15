@@ -14,7 +14,7 @@ use super::parse::{Commit, FileStatus, RefKind, Section, Stash, Status};
 use super::progress::Operation;
 use super::progress::Progress;
 use super::words::{decorate, Segment};
-use crate::extensions::reltime;
+use crate::pages::reltime;
 
 // ========================================================================
 // Constants
@@ -1159,8 +1159,8 @@ fn blank_row() -> ViewRow {
 mod tests {
     use super::*;
 
-    use crate::extensions::git::diff::parse_diff;
-    use crate::extensions::git::parse::Ref;
+    use crate::pages::git::diff::parse_diff;
+    use crate::pages::git::parse::Ref;
 
     fn file(section: Section, path: &str, code: char) -> FileStatus {
         FileStatus {

@@ -17,6 +17,7 @@ use crate::session::Session;
 use crate::terminal::webview::WebViewManager;
 
 use super::navigation::{SearchState, VimState};
+use super::open_tabs::OpenTabs;
 use super::pointer::{PointerState, SelectionState};
 use super::tabbar::MenuState;
 use super::tabs::TabsState;
@@ -30,9 +31,6 @@ use super::CURSOR_BLINK_PERIOD;
 impl App {
     /// An app holding its first tab and pane, before any window or GPU exists.
     pub fn new() -> Self {
-        let mut modes = HashMap::new();
-        modes.insert(TabId(0), Mode::default());
-
         let (config, config_error) = Config::load_checked();
         let window_keymap = WindowKeymap::from_config(
             config.keybindings.get("window"),
@@ -58,7 +56,6 @@ impl App {
             yank_flash: None,
             pending_config_error: config_error,
             clipboard: None,
-            folded_blocks: HashMap::new(),
             suppress_synthesized_keys: false,
             window_focused: true,
             last_find: None,
@@ -69,7 +66,6 @@ impl App {
             quit_confirmed: false,
             pending_reload: false,
             control_rx: control::spawn_listener(),
-            nav_cursors: HashMap::new(),
             nav_resync_pending: false,
             next_image_id: 0,
             icon_textures: HashMap::new(),
@@ -84,14 +80,11 @@ impl App {
             page_cursor: None,
             page_wrap: false,
             commit_companions: HashMap::new(),
-            pages: HashMap::new(),
+            open_tabs: OpenTabs::default(),
             closed: Vec::new(),
             next_closed_id: 0,
             reopen_hint_shown: false,
             pending_close: None,
-            terminals: HashMap::new(),
-            pending_tab_completion: HashSet::new(),
-            prompt_shadows: HashMap::new(),
             palette: None,
             tab_titles: HashMap::new(),
             theme_name_input: None,
@@ -104,7 +97,6 @@ impl App {
             swoop_initial_cursor: None,
             palette_history: crate::config::load_state().palette_history,
             next_tab_id: 1,
-            modes,
             webview_mgr: WebViewManager::new(),
             window: None,
             window_keymap,
@@ -177,14 +169,14 @@ impl App {
                 self.reveal_recent_terminal();
             }
             "toggle_mode" => {
-                let mode = self.modes.get(&focused).copied().unwrap_or_default();
-                let new_mode = match mode {
-                    Mode::Insert => Mode::Normal,
-                    Mode::Normal | Mode::Visual | Mode::BlockFocus => Mode::Insert,
-                    // A page tab has no terminal to toggle into.
-                    Mode::Page => Mode::Page,
-                };
-                self.modes.insert(focused, new_mode);
+                // A page tab has no mode to toggle, and is left as it is.
+                if let Some(mode) = self.open_tabs.mode(&focused) {
+                    let new_mode = match mode {
+                        Mode::Insert => Mode::Normal,
+                        Mode::Normal | Mode::Visual | Mode::BlockFocus => Mode::Insert,
+                    };
+                    self.open_tabs.set_mode(&focused, new_mode);
+                }
             }
             "split_horizontal" => {
                 self.split_pane(Direction::Horizontal);
@@ -220,7 +212,7 @@ impl App {
                 self.reopen_last_closed();
             }
             "tool_list" | "extension_list" => {
-                self.open_extension_palette();
+                self.open_tab_list();
             }
             "copy_cwd" => {
                 self.copy_pane_cwd(focused);
@@ -279,11 +271,13 @@ impl App {
                 self.yank_block_source(focused);
             }
             "toggle_fold" => {
-                let folded = self.folded_blocks.entry(focused).or_default();
-                if folded.is_empty() {
-                    folded.insert(0);
-                } else {
-                    folded.clear();
+                if let Some(tab) = self.open_tabs.terminal_tab_mut(&focused) {
+                    let folded = &mut tab.folded_blocks;
+                    if folded.is_empty() {
+                        folded.insert(0);
+                    } else {
+                        folded.clear();
+                    }
                 }
                 self.dirty = true;
             }
@@ -314,8 +308,8 @@ impl App {
             }
             "cd_recent" => {
                 let dirs = self
-                    .terminals
-                    .get(&focused)
+                    .open_tabs
+                    .terminal(&focused)
                     .map(|p| {
                         let mut seen = std::collections::HashSet::new();
                         p.scrollback()
@@ -339,12 +333,12 @@ impl App {
             }
             "select_pane" => {
                 let mut panes_list = Vec::new();
-                for (pane_index, &shown) in self.layout().panes().iter().enumerate() {
+                for (pane_index, &shown) in self.layout().shown_tabs().iter().enumerate() {
                     // Name each tab after the pane holding it ("<pane
                     // number>: <title>"); its place on that pane's strip goes
                     // on the right.
                     for (tab_index, tab_id) in
-                        self.layout().group_members(shown).into_iter().enumerate()
+                        self.layout().tabs_in_pane(shown).into_iter().enumerate()
                     {
                         let label = format!("{}: {}", pane_index + 1, self.tab_title(tab_id));
                         panes_list.push((tab_id, label, (tab_index + 1).to_string()));
@@ -417,9 +411,9 @@ impl App {
             }
             "mux_detach_session" => {
                 let session = self
-                    .terminals
-                    .get(&focused)
-                    .and_then(|pane| pane.mux_session().map(str::to_string));
+                    .open_tabs
+                    .terminal(&focused)
+                    .and_then(|terminal| terminal.mux_session().map(str::to_string));
                 match session {
                     Some(name) => {
                         if self.layout().members().len() <= 1 {
@@ -457,10 +451,14 @@ impl App {
             return;
         }
         if self.config.restore_session {
-            Session::save(&self.tabs.layout, &self.terminals, self.tool_sessions());
+            Session::save(
+                &self.tabs.layout,
+                &self.open_tabs.terminal_map(),
+                self.page_sessions(),
+            );
         }
         self.save_app_state();
-        self.terminals.clear();
+        self.open_tabs.clear_terminals();
         event_loop.exit();
     }
     /// Replace this window with the binary now on disk, keeping the session.
@@ -481,11 +479,15 @@ impl App {
         }
         #[cfg(not(unix))]
         {
-            Session::save(&self.tabs.layout, &self.terminals, self.tool_sessions());
+            Session::save(
+                &self.tabs.layout,
+                &self.open_tabs.terminal_map(),
+                self.page_sessions(),
+            );
             if let Ok(exe) = std::env::current_exe() {
                 let _ = std::process::Command::new(exe).spawn();
             }
-            self.terminals.clear();
+            self.open_tabs.clear_terminals();
             event_loop.exit();
         }
     }
@@ -502,10 +504,14 @@ impl App {
         };
         // What the programs have already written belongs on the screen that is
         // copied, not in a channel that goes with this image.
-        for terminal in self.terminals.values_mut() {
+        for (_, terminal) in self.open_tabs.terminals_mut() {
             terminal.drain_output();
         }
-        Session::save_handover(&self.tabs.layout, &self.terminals, self.tool_sessions());
+        Session::save_handover(
+            &self.tabs.layout,
+            &self.open_tabs.terminal_map(),
+            self.page_sessions(),
+        );
         crate::session::announce_handover();
         let error = std::process::Command::new(&exe)
             .args(std::env::args_os().skip(1))

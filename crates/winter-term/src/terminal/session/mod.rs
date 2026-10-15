@@ -1,4 +1,4 @@
-//! Interactive terminal pane: a cell grid fed by a [`CombinedPerformer`]
+//! Interactive terminal: a cell grid fed by a [`CombinedPerformer`]
 //! (unified `vte` performer that drives both the visual grid and the block
 //! parser), with bytes arriving either from a locally spawned PTY child
 //! or from a named session on an external mux server.
@@ -45,7 +45,7 @@ const SYNC_OUTPUT_MODE: u16 = 2026;
 const SYNC_OUTPUT_END: &[u8] = b"\x1b[?2026l";
 
 /// The longest a frame is held for before it is shown regardless: a program
-/// that began one and never ended it must not freeze the pane.
+/// that began one and never ended it must not freeze the terminal.
 const SYNC_OUTPUT_TIMEOUT: Duration = Duration::from_millis(35);
 
 /// The most bytes held for one frame, for the same reason.
@@ -71,12 +71,12 @@ const RIS: u8 = b'c';
 /// under it, without desyncing the shell's cursor.
 pub(crate) const BLOCK_RESERVE_ROWS: usize = 12;
 
-/// Prefix marking a pane label as a mux session name rather than a shell
-/// or command path; session restore re-attaches these panes instead of
+/// Prefix marking a terminal label as a mux session name rather than a shell
+/// or command path; session restore re-attaches these terminals instead of
 /// spawning a local shell.
 pub(crate) const MUX_COMMAND_PREFIX: &str = "mux:";
 
-/// Prefix marking a pane label as `host|session` for a session attached
+/// Prefix marking a terminal label as `host|session` for a session attached
 /// over SSH; session restore re-attaches these to the remote host instead
 /// of the local mux server.
 pub(crate) const MUX_REMOTE_COMMAND_PREFIX: &str = "mux-remote:";
@@ -95,31 +95,31 @@ pub(crate) const MAX_IMAGE_ROWS: usize = 24;
 // ========================================================================
 
 // ========================================================================
-// Pane
+// Terminal
 // ========================================================================
 
-/// One interactive pane: a terminal cell grid whose bytes arrive from a
+/// One interactive terminal: a terminal cell grid whose bytes arrive from a
 /// local PTY or a mux session. Local PTY reads happen on a background
-/// thread; the main thread drains pending output via [`Pane::drain_output`].
+/// thread; the main thread drains pending output via [`Terminal::drain_output`].
 pub struct Terminal {
     block_queue: BlockQueue,
-    /// The shell or command path used to spawn this pane, or the mux
-    /// session label for a pane attached to a local or SSH-remote session.
+    /// The shell or command path used to spawn this terminal, or the mux
+    /// session label for a terminal attached to a local or SSH-remote session.
     command: String,
     combined: CombinedPerformer,
     parser: vte::Parser,
-    /// Whether this pane's program was taken over from an earlier process image
-    /// and has not yet been asked to redraw (see [`Pane::nudge_redraw`]).
+    /// Whether this terminal's program was taken over from an earlier process image
+    /// and has not yet been asked to redraw (see [`Terminal::nudge_redraw`]).
     adopted: bool,
     /// The rest of a frame the program began with `CSI ? 2026 h`, kept unparsed
     /// until it ends so the grid never shows the frame half drawn.
     sync_hold: Option<SyncHold>,
-    /// Row remaps from grid resizes since the last [`Pane::take_row_remaps`]:
+    /// Row remaps from grid resizes since the last [`Terminal::take_row_remaps`]:
     /// the app's own anchors (image blocks, WebView tiles, selections) must
-    /// be pushed through them, the same way the pane's internal ones already
-    /// were inside [`Pane::apply_grid_resize`].
+    /// be pushed through them, the same way the terminal's internal ones already
+    /// were inside [`Terminal::apply_grid_resize`].
     row_remaps: Vec<winter_render::RowRemap>,
-    transport: PaneTransport,
+    transport: TerminalTransport,
 }
 
 /// The bytes of a synchronized frame held back, and since when.
@@ -128,9 +128,9 @@ struct SyncHold {
     since: Instant,
 }
 
-/// Where a pane's bytes come from and go to: a locally spawned PTY
+/// Where a terminal's bytes come from and go to: a locally spawned PTY
 /// child, or a named session owned by an external mux server.
-enum PaneTransport {
+enum TerminalTransport {
     Local {
         child: Box<dyn portable_pty::Child + Send>,
         master: Box<dyn portable_pty::MasterPty + Send>,
@@ -159,7 +159,7 @@ impl Terminal {
 
     /// Spawn the default shell under a PTY, starting the child in `cwd` when
     /// given. Used so a split/new tab opens in the same working directory as the
-    /// pane it was spawned from instead of the process default (usually `$HOME`).
+    /// terminal it was spawned from instead of the process default (usually `$HOME`).
     pub fn new_with_cwd(
         cols: usize,
         rows: usize,
@@ -275,8 +275,8 @@ impl Terminal {
         Self::from_pty(cols, rows, child, pair.master, max_scrollback, command_str)
     }
 
-    /// A pane over a pty and the child on its slave side, with the thread that
-    /// reads the master and hands what it reads to [`Pane::drain_output`].
+    /// A terminal over a pty and the child on its slave side, with the thread that
+    /// reads the master and hands what it reads to [`Terminal::drain_output`].
     fn from_pty(
         cols: usize,
         rows: usize,
@@ -317,7 +317,7 @@ impl Terminal {
             row_remaps: Vec::new(),
             sync_hold: None,
             adopted: false,
-            transport: PaneTransport::Local {
+            transport: TerminalTransport::Local {
                 child,
                 master,
                 rx,
@@ -327,8 +327,8 @@ impl Terminal {
         })
     }
 
-    /// A pane over a pty and child that an earlier incarnation of this process
-    /// started and handed on across `exec` (see [`Pane::hand_over`]): `fd` is
+    /// A terminal over a pty and child that an earlier incarnation of this process
+    /// started and handed on across `exec` (see [`Terminal::hand_over`]): `fd` is
     /// the pty's master end, still open here, and `pid` the child on the other
     /// side, still this process's child.
     #[cfg(unix)]
@@ -345,12 +345,12 @@ impl Terminal {
         Self::from_pty(cols, rows, child, master, max_scrollback, command)
     }
 
-    /// What it takes to adopt this pane's program in a new process image: the
+    /// What it takes to adopt this terminal's program in a new process image: the
     /// master descriptor, made to survive `exec`, and the child's process id.
-    /// `None` for a pane that is not a local pty.
+    /// `None` for a terminal that is not a local pty.
     #[cfg(unix)]
     pub fn hand_over(&self) -> Option<(std::os::fd::RawFd, u32)> {
-        let PaneTransport::Local { master, child, .. } = &self.transport else {
+        let TerminalTransport::Local { master, child, .. } = &self.transport else {
             return None;
         };
         let fd = master.as_raw_fd()?;
@@ -358,7 +358,7 @@ impl Terminal {
         Some((fd, child.process_id()?))
     }
 
-    /// Attach a new pane to a named session on the default mux server.
+    /// Attach a new terminal to a named session on the default mux server.
     pub fn new_mux(
         cols: usize,
         rows: usize,
@@ -374,7 +374,7 @@ impl Terminal {
         )
     }
 
-    /// Attach a new pane to a named session on the mux server at `path`.
+    /// Attach a new terminal to a named session on the mux server at `path`.
     /// The session's buffered output replays into the grid as it arrives.
     pub fn new_mux_at(
         path: &str,
@@ -387,7 +387,7 @@ impl Terminal {
         if !client.is_connected() {
             anyhow::bail!("could not connect to the mux server at {path}");
         }
-        let mut pane = Self {
+        let mut terminal = Self {
             block_queue: BlockQueue::new(),
             command: format!("{MUX_COMMAND_PREFIX}{session}"),
             combined: CombinedPerformer::new(cols.max(1), rows.max(1), max_scrollback),
@@ -395,19 +395,19 @@ impl Terminal {
             row_remaps: Vec::new(),
             sync_hold: None,
             adopted: false,
-            transport: PaneTransport::Mux {
+            transport: TerminalTransport::Mux {
                 client,
                 exited: false,
                 session: session.to_string(),
             },
         };
         // The server sizes a fresh session at its default geometry; tell
-        // it this pane's real size so the remote PTY matches the grid.
-        pane.transport_resize(cols.max(1), rows.max(1));
-        Ok(pane)
+        // it this terminal's real size so the remote PTY matches the grid.
+        terminal.transport_resize(cols.max(1), rows.max(1));
+        Ok(terminal)
     }
 
-    /// Attach a new pane to a named session on a mux server reached over
+    /// Attach a new terminal to a named session on a mux server reached over
     /// SSH at `host`. The session's buffered output replays into the grid
     /// as it arrives.
     pub fn new_mux_remote(
@@ -421,7 +421,7 @@ impl Terminal {
         if !client.is_connected() {
             anyhow::bail!("could not reach '{host}' over ssh");
         }
-        let mut pane = Self {
+        let mut terminal = Self {
             block_queue: BlockQueue::new(),
             command: format!("{MUX_REMOTE_COMMAND_PREFIX}{host}|{session}"),
             combined: CombinedPerformer::new(cols.max(1), rows.max(1), max_scrollback),
@@ -429,14 +429,14 @@ impl Terminal {
             row_remaps: Vec::new(),
             sync_hold: None,
             adopted: false,
-            transport: PaneTransport::Mux {
+            transport: TerminalTransport::Mux {
                 client,
                 exited: false,
                 session: session.to_string(),
             },
         };
-        pane.transport_resize(cols.max(1), rows.max(1));
-        Ok(pane)
+        terminal.transport_resize(cols.max(1), rows.max(1));
+        Ok(terminal)
     }
 
     /// Drain all pending PTY output into the cell grid and block parser.
@@ -447,7 +447,7 @@ impl Terminal {
         // or arbitration): applied after the transport borrow ends.
         let mut session_geometry: Option<(usize, usize)> = None;
         match &mut self.transport {
-            PaneTransport::Local { rx, .. } => {
+            TerminalTransport::Local { rx, .. } => {
                 while let Ok(chunk) = rx.try_recv() {
                     chunks.push(chunk);
                 }
@@ -470,7 +470,7 @@ impl Terminal {
                     }
                 }
             }
-            PaneTransport::Mux { client, exited, .. } => {
+            TerminalTransport::Mux { client, exited, .. } => {
                 while let Some(msg) = client.recv() {
                     match msg {
                         ServerMessage::Output { bytes, .. }
@@ -517,7 +517,7 @@ impl Terminal {
         got_any
     }
 
-    /// The terminal output that rebuilds this pane's screen in a fresh pane of
+    /// The terminal output that rebuilds this terminal's screen in a fresh terminal of
     /// the same size: the grid (see [`Grid::dump_ansi`]) and the keyboard
     /// protocol the program on it negotiated, which a program asks for once
     /// at startup and would not ask for again.
@@ -533,7 +533,7 @@ impl Terminal {
         bytes
     }
 
-    /// Build this pane's screen from a [`Pane::dump_screen`] taken elsewhere.
+    /// Build this terminal's screen from a [`Terminal::dump_screen`] taken elsewhere.
     /// It goes straight to the parser, ahead of anything the program says next.
     pub fn restore_screen(&mut self, dump: &[u8]) {
         self.parser.advance(&mut self.combined, dump);
@@ -543,8 +543,8 @@ impl Terminal {
         let _ = self.combined.take_block_anchors();
     }
 
-    /// Note that this pane's program was taken over from an earlier process
-    /// image, so [`Pane::take_adopted`] reports it once.
+    /// Note that this terminal's program was taken over from an earlier process
+    /// image, so [`Terminal::take_adopted`] reports it once.
     pub fn mark_adopted(&mut self) {
         self.adopted = true;
     }
@@ -554,7 +554,7 @@ impl Terminal {
         std::mem::take(&mut self.adopted)
     }
 
-    /// Make the program on this pane redraw, by changing the pty's size and
+    /// Make the program on this terminal redraw, by changing the pty's size and
     /// changing it back: the program is signalled (`SIGWINCH`) either way, and
     /// a same-size resize alone signals nothing.
     pub fn nudge_redraw(&mut self) {
@@ -629,7 +629,7 @@ impl Terminal {
             .map(|hold| hold.since + SYNC_OUTPUT_TIMEOUT)
     }
 
-    /// Current Kitty keyboard protocol flags active in this pane (0 = legacy).
+    /// Current Kitty keyboard protocol flags active in this terminal (0 = legacy).
     pub fn kitty_flags(&self) -> u32 {
         self.combined.kitty_flags()
     }
@@ -642,11 +642,11 @@ impl Terminal {
     /// Write bytes to the PTY (keyboard input).
     pub fn write(&mut self, bytes: &[u8]) {
         match &mut self.transport {
-            PaneTransport::Local { writer, .. } => {
+            TerminalTransport::Local { writer, .. } => {
                 let _ = writer.write_all(bytes);
                 let _ = writer.flush();
             }
-            PaneTransport::Mux { client, .. } => {
+            TerminalTransport::Mux { client, .. } => {
                 let _ = client.send_input(bytes);
             }
         }
@@ -672,7 +672,7 @@ impl Terminal {
     /// server's default geometry regardless of this grid's size.
     fn transport_resize(&mut self, cols: usize, rows: usize) {
         match &mut self.transport {
-            PaneTransport::Local { master, .. } => {
+            TerminalTransport::Local { master, .. } => {
                 let _ = master.resize(PtySize {
                     rows: rows as u16,
                     cols: cols as u16,
@@ -680,7 +680,7 @@ impl Terminal {
                     pixel_height: 0,
                 });
             }
-            PaneTransport::Mux { client, .. } => {
+            TerminalTransport::Mux { client, .. } => {
                 let _ = client.resize(cols as u16, rows as u16);
             }
         }
@@ -689,13 +689,13 @@ impl Terminal {
     /// Apply a grid size change: a no-op at the same size, otherwise a
     /// reflow that preserves any scrolling region the child set (restored
     /// via `CSI r` so full-screen apps keep their bounds). Used both for
-    /// layout-driven resizes ([`Pane::resize`]) and for mux
+    /// layout-driven resizes ([`Terminal::resize`]) and for mux
     /// session-geometry sync, where the PTY lives server-side and only the
     /// grid must follow.
     /// Apply a grid size change: a no-op at the same size, otherwise a
     /// reflow that preserves any scrolling region the child set (restored
     /// via `CSI r` so full-screen apps keep their bounds). Used both for
-    /// layout-driven resizes ([`Pane::resize`]) and for mux
+    /// layout-driven resizes ([`Terminal::resize`]) and for mux
     /// session-geometry sync, where the PTY lives server-side and only the
     /// grid must follow.
     fn apply_grid_resize(&mut self, cols: usize, rows: usize) {
@@ -708,7 +708,7 @@ impl Terminal {
         };
         let remap = self.combined.resize(cols, rows);
         // The reflow rebuilt the live screen; the queued block anchors and
-        // the app's anchors (see [`Pane::take_row_remaps`]) must follow the
+        // the app's anchors (see [`Terminal::take_row_remaps`]) must follow the
         // rows their bands now occupy, or a re-wrapped line above a block
         // leaves the block drawn over it.
         if let Some(remap) = &remap {
@@ -750,7 +750,7 @@ impl Terminal {
     }
 
     /// Advance the parser with bytes as if the program on the PTY had written
-    /// them, through the same path [`Pane::drain_output`] uses. Test-only:
+    /// them, through the same path [`Terminal::drain_output`] uses. Test-only:
     /// lets tests fake shell-integration output without a real shell.
     #[cfg(test)]
     pub(crate) fn feed_program_output(&mut self, bytes: &[u8]) {
@@ -769,14 +769,14 @@ impl Terminal {
     /// True when no full-screen process is running. Uses the alternate screen as
     /// a proxy: full-screen apps (vim, fzf, less) enter it; the shell prompt does
     /// not. When the shell emits OSC 133 integration marks, the mark-driven
-    /// phase refines this: a command owns the pane even on the primary screen
+    /// phase refines this: a command owns the terminal even on the primary screen
     /// (see [`Self::is_at_prompt`]'s integration branch).
     pub fn is_at_prompt(&self) -> bool {
         // Shell-integration marks (OSC 133), when the shell emits them, are
         // authoritative: the prompt and command phases mean the shell itself
         // is waiting for input, the output phase means a command owns the
-        // pane even on the primary screen - a REPL, an agent CLI, an
-        // `exec`ed program sharing the shell's process group, a mux pane
+        // terminal even on the primary screen - a REPL, an agent CLI, an
+        // `exec`ed program sharing the shell's process group, a mux terminal
         // whose process table lives on the server. Without marks, fall back
         // to the alt-screen heuristic.
         if self.scrollback().shell_integration_active() {
@@ -786,7 +786,7 @@ impl Terminal {
     }
 
     /// True while a foreground process other than the shell itself owns the
-    /// pane: a full-screen program (via [`Self::is_at_prompt`]) or, on Linux,
+    /// terminal: a full-screen program (via [`Self::is_at_prompt`]) or, on Linux,
     /// any other foreground process group leader (via
     /// [`Self::foreground_process_name`]). A bare Escape in Normal mode, with
     /// nothing of Winter's to put away, is forwarded to it.
@@ -840,7 +840,7 @@ impl Terminal {
         self.combined.take_bell()
     }
 
-    /// The rich blocks this pane has emitted.
+    /// The rich blocks this terminal has emitted.
     pub fn block_queue(&self) -> &BlockQueue {
         &self.block_queue
     }
@@ -925,31 +925,31 @@ impl Terminal {
     /// Whether the child process has exited.
     pub fn is_alive(&mut self) -> bool {
         match &mut self.transport {
-            PaneTransport::Local { child, .. } => match child.try_wait() {
+            TerminalTransport::Local { child, .. } => match child.try_wait() {
                 Ok(Some(_)) => false,
                 Ok(None) => true,
                 Err(_) => false,
             },
-            PaneTransport::Mux { exited, .. } => !*exited,
+            TerminalTransport::Mux { exited, .. } => !*exited,
         }
     }
 
-    /// The shell or command path used to spawn this pane.
+    /// The shell or command path used to spawn this terminal.
     pub fn shell_command(&self) -> &str {
         &self.command
     }
 
-    /// The mux session this pane is attached to, if any.
+    /// The mux session this terminal is attached to, if any.
     pub fn mux_session(&self) -> Option<&str> {
         match &self.transport {
-            PaneTransport::Mux { session, .. } => Some(session),
-            PaneTransport::Local { .. } => None,
+            TerminalTransport::Mux { session, .. } => Some(session),
+            TerminalTransport::Local { .. } => None,
         }
     }
 
-    /// Working directory of the foreground process running in this pane.
+    /// Working directory of the foreground process running in this terminal.
     /// On Linux this reads `/proc/{pid}/cwd`; returns `None` on other
-    /// platforms, for a mux pane (the process runs on the server's
+    /// platforms, for a mux terminal (the process runs on the server's
     /// machine), or when the PID is not available.
     pub fn cwd(&self) -> Option<String> {
         if let Some(cwd) = self.combined.cwd() {
@@ -957,7 +957,7 @@ impl Terminal {
         }
         #[cfg(target_os = "windows")]
         {
-            let PaneTransport::Local { child, .. } = &self.transport else {
+            let TerminalTransport::Local { child, .. } = &self.transport else {
                 return None;
             };
             let pid = child.process_id()?;
@@ -965,7 +965,7 @@ impl Terminal {
         }
         #[cfg(target_os = "linux")]
         {
-            let PaneTransport::Local { child, .. } = &self.transport else {
+            let TerminalTransport::Local { child, .. } = &self.transport else {
                 return None;
             };
             let pid = child.process_id()?;
@@ -979,12 +979,12 @@ impl Terminal {
         }
     }
 
-    /// Name of the foreground process running in this pane, if any. A mux
-    /// pane has no local foreground process, so it reports none.
+    /// Name of the foreground process running in this terminal, if any. A mux
+    /// terminal has no local foreground process, so it reports none.
     pub fn foreground_process_name(&self) -> Option<String> {
         #[cfg(target_os = "linux")]
         {
-            let PaneTransport::Local { child, .. } = &self.transport else {
+            let TerminalTransport::Local { child, .. } = &self.transport else {
                 return None;
             };
             let shell_pid = child.process_id()?;
@@ -1002,12 +1002,12 @@ impl Terminal {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        if let PaneTransport::Local { child, writer, .. } = &mut self.transport {
+        if let TerminalTransport::Local { child, writer, .. } = &mut self.transport {
             writer.flush().ok();
             let _ = child.kill();
             let _ = child.wait();
         }
-        // A mux pane detaches implicitly: dropping the client closes the
+        // A mux terminal detaches implicitly: dropping the client closes the
         // connection, and the session keeps running server-side.
     }
 }
@@ -1020,7 +1020,7 @@ impl Drop for Terminal {
 /// or replaced.
 const DELETED_EXE_NOTE: &str = " (deleted)";
 
-/// The `GIT_EDITOR` that makes `git commit` in a pane edit its message in
+/// The `GIT_EDITOR` that makes `git commit` in a terminal edit its message in
 /// Winter's own editor: this binary's `--edit-wait`, quoted for the shell git
 /// runs it through. `None` when the binary's path is not known.
 pub(crate) fn git_editor_command() -> Option<String> {
@@ -1184,7 +1184,7 @@ mod tests {
         let pid = child.process_id().expect("pid");
         let raw = pair.master.as_raw_fd().expect("master fd");
         // The old image's handle is forgotten, not closed: the descriptor is
-        // the adopting pane's from here, as it is after an `exec`.
+        // the adopting terminal's from here, as it is after an `exec`.
         std::mem::forget(pair.master);
         drop(pair.slave);
 
@@ -1208,7 +1208,7 @@ mod tests {
 
     #[test]
     fn test_a_binary_replaced_while_running_is_run_from_its_path_not_its_deleted_note() {
-        // Regression: after an install over the running window, new panes got
+        // Regression: after an install over the running window, new terminals got
         // `GIT_EDITOR='/usr/bin/winter (deleted)' --edit-wait`, which git could
         // not run, so `git commit` never reached the commit editor.
         assert_eq!(
@@ -1232,7 +1232,7 @@ mod tests {
     /// How long to sleep between polls, so waiting does not spin a core.
     const POLL_STEP: std::time::Duration = std::time::Duration::from_millis(20);
 
-    /// A pane over `cat`, which stays quiet on its own so a test can feed it
+    /// A terminal over `cat`, which stays quiet on its own so a test can feed it
     /// the bytes a program would have written.
     fn quiet_pane() -> Terminal {
         Terminal::with_command(20, 4, CommandBuilder::new("cat"), MAX_SCROLLBACK)
@@ -1323,7 +1323,7 @@ mod tests {
 
     #[test]
     fn test_shell_integration_marks_drive_prompt_state_and_line_start() {
-        // A shell emitting OSC 133: the pane's prompt state follows the marks
+        // A shell emitting OSC 133: the terminal's prompt state follows the marks
         // rather than the alt-screen heuristic, and the B mark records where
         // the editable command line begins.
         let mut terminal = Terminal::with_command(
@@ -1350,7 +1350,7 @@ mod tests {
             "command text starts after \"$ \""
         );
 
-        // The C mark means a command owns the pane even though it never
+        // The C mark means a command owns the terminal even though it never
         // entered the alt screen - a REPL or agent CLI on the primary screen.
         terminal.feed_program_output(b"ls\x1b]133;C\x1b\\");
         assert!(!terminal.is_at_prompt());
@@ -1442,7 +1442,7 @@ mod tests {
             ] {
                 conn.write_all(&frame).unwrap();
             }
-            // The pane sends a Resize for its real geometry right after
+            // The terminal sends a Resize for its real geometry right after
             // attach, then whatever the user types; wait for the Input.
             let mut saw_matching_resize = false;
             loop {
@@ -1506,7 +1506,7 @@ mod tests {
     #[test]
     fn test_mux_session_geometry_snaps_the_grid() {
         // The server owns the session's real geometry (the smallest among
-        // attached clients). A pane whose layout is larger must follow it,
+        // attached clients). A terminal whose layout is larger must follow it,
         // letterboxing within the layout: instead of rendering a stream
         // wrapped for a width it doesn't have.
         use crate::mux::protocol;
@@ -1557,7 +1557,7 @@ mod tests {
                 rows: 3,
             }))
             .unwrap();
-            // Hold the connection open until the pane has drained.
+            // Hold the connection open until the terminal has drained.
             thread::sleep(std::time::Duration::from_millis(300));
         });
 

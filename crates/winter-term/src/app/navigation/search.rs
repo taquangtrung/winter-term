@@ -83,7 +83,7 @@ impl App {
         let Some((row, col)) = self.nav_cursor(focused) else {
             return;
         };
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let line = line_chars(terminal.grid(), row);
@@ -109,8 +109,8 @@ impl App {
     /// ends (`SearchCancel`, or leaving Normal mode).
     pub(crate) fn set_search_origin(&mut self, focused: TabId) {
         let pos = self
-            .terminals
-            .get(&focused)
+            .open_tabs
+            .terminal(&focused)
             .map(|terminal| {
                 let grid = terminal.grid();
                 let (row, col) = self.nav_cursor(focused).unwrap_or_else(|| grid.cursor());
@@ -118,7 +118,7 @@ impl App {
                 (grid.to_absolute_row(row), col)
             })
             .or_else(|| {
-                self.pages.get(&focused).and_then(|slot| {
+                self.open_tabs.page(&focused).and_then(|slot| {
                     let grid = slot.painted.as_ref()?;
                     let row = slot.cursor_line.unwrap_or(0);
                     let col = slot.page.caret().map(|c| c.col).unwrap_or(0);
@@ -184,7 +184,7 @@ impl App {
 
         // Both the match list and the scan origin are read under one immutable
         // borrow of the pane, before the counters below take `&mut self`.
-        let Some((matches, start)) = self.terminals.get(&focused).map(|terminal| {
+        let Some((matches, start)) = self.open_tabs.terminal(&focused).map(|terminal| {
             let grid = terminal.grid();
             (
                 buffer_match_starts(grid, &query),
@@ -257,13 +257,13 @@ impl App {
                 .as_ref()
                 .is_some_and(|p| p.request.tag == "search-back");
 
-        let (matches, start) = if let Some(terminal) = self.terminals.get(&focused) {
+        let (matches, start) = if let Some(terminal) = self.open_tabs.terminal(&focused) {
             let grid = terminal.grid();
             (
                 buffer_match_starts(grid, &query),
                 self.search_start_pos(focused, SearchFrom::Origin, grid),
             )
-        } else if let Some(slot) = self.pages.get(&focused) {
+        } else if let Some(slot) = self.open_tabs.page(&focused) {
             if let Some(grid) = slot.painted.as_ref() {
                 let start_row = slot.cursor_line.unwrap_or(0);
                 let start_col = slot.page.caret().map(|c| c.col).unwrap_or(0);
@@ -334,7 +334,7 @@ impl App {
             Some(q) if !q.is_empty() => q.clone(),
             _ => return,
         };
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -358,9 +358,10 @@ impl App {
         };
 
         let ((abs_start_row, start_col), (abs_end_row, end_col)) = spans[target_idx];
-        self.modes.insert(focused, crate::model::mode::Mode::Visual);
+        self.open_tabs
+            .set_mode(&focused, crate::model::mode::Mode::Visual);
         self.reveal_position(focused, (abs_end_row, end_col));
-        if let Some(terminal) = self.terminals.get(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal(&focused) {
             let grid = terminal.grid();
             let top = grid.scrollback_len() - grid.scroll_offset().min(grid.scrollback_len());
             let view_r2 = abs_end_row
@@ -380,7 +381,7 @@ impl App {
             Some(q) if !q.is_empty() => q.clone(),
             _ => return,
         };
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -420,7 +421,8 @@ impl App {
             },
             focused,
         );
-        self.modes.insert(focused, crate::model::mode::Mode::Insert);
+        self.open_tabs
+            .set_mode(&focused, crate::model::mode::Mode::Insert);
         self.selection.span = None;
         self.selection.visual_anchor = None;
         self.dirty = true;
@@ -433,7 +435,7 @@ impl App {
             Some(q) if !q.is_empty() => q.clone(),
             _ => return,
         };
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let grid = terminal.grid();
@@ -676,8 +678,8 @@ mod tests {
         // resize; headless (no window) that resize collapses the pane to a
         // single row and shoves the fixture into scrollback.
         app.config.status_bar.enabled = true;
-        let id = app.layout().panes()[0];
-        app.terminals.insert(id, pane_with_lines(lines));
+        let id = app.layout().shown_tabs()[0];
+        app.open_tabs.insert_terminal(id, pane_with_lines(lines));
         app.set_nav_cursor(id, (0, 0));
         app.search.query = Some(query.to_string());
         (app, id)
@@ -812,7 +814,7 @@ mod tests {
     fn test_search_scrolls_a_match_in_scrollback_into_view() {
         let mut app = crate::app::App::new();
         app.config.status_bar.enabled = true;
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let mut terminal = pane_with_lines(&["ink here"]);
         // Push the match off the top of the screen into scrollback.
         let rows = terminal.grid().rows();
@@ -820,13 +822,13 @@ mod tests {
             terminal.grid_mut().line_feed();
         }
         assert!(terminal.grid().scrollback_len() >= rows);
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         app.search.query = Some("ink".to_string());
 
         app.search_in_pane(id, input::BlockNav::Next);
 
         assert_eq!(app.search.match_total, 1);
-        let grid = app.terminals[&id].grid();
+        let grid = app.open_tabs.terminal(&id).unwrap().grid();
         let (row, col) = app.nav_cursor(id).unwrap();
         let visible: String = (0..3)
             .filter_map(|k| grid.visible_cell(row, col + k))
@@ -985,7 +987,10 @@ mod tests {
         app.handle_action(input::Action::SelectSearchMatch { forward: true }, id);
 
         // Mode is Visual
-        assert_eq!(app.modes.get(&id), Some(&crate::model::mode::Mode::Visual));
+        assert_eq!(
+            app.open_tabs.mode(&id),
+            Some(crate::model::mode::Mode::Visual)
+        );
         // Visual anchor is at (0, 6), nav cursor is at (0, 10)
         assert_eq!(app.selection.visual_anchor, Some((0, 6)));
         assert_eq!(app.nav_cursor(id), Some((0, 10)));
@@ -1000,7 +1005,10 @@ mod tests {
         app.handle_action(input::Action::ChangeSearchMatch { forward: true }, id);
 
         // Transitions to Mode::Insert
-        assert_eq!(app.modes.get(&id), Some(&crate::model::mode::Mode::Insert));
+        assert_eq!(
+            app.open_tabs.mode(&id),
+            Some(crate::model::mode::Mode::Insert)
+        );
     }
 
     #[test]

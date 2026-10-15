@@ -69,7 +69,10 @@ impl App {
             return;
         };
         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
-        let sgr = self.terminals.get(&focused).is_some_and(|p| p.mouse_sgr());
+        let sgr = self
+            .open_tabs
+            .terminal(&focused)
+            .is_some_and(|p| p.mouse_sgr());
 
         let btn_code = match button {
             MouseButton::Left => 0,
@@ -91,7 +94,7 @@ impl App {
             format!("\x1b[M{}{}{}", cb as char, cv as char, ch as char).into_bytes()
         };
 
-        if let Some(terminal) = self.terminals.get_mut(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
             terminal.write(&bytes);
         }
     }
@@ -102,7 +105,10 @@ impl App {
             return;
         };
         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
-        let sgr = self.terminals.get(&focused).is_some_and(|p| p.mouse_sgr());
+        let sgr = self
+            .open_tabs
+            .terminal(&focused)
+            .is_some_and(|p| p.mouse_sgr());
 
         let btn_code = 0;
         let cb_code = 32 + btn_code;
@@ -116,7 +122,7 @@ impl App {
             format!("\x1b[M{}{}{}", cb as char, cv as char, ch as char).into_bytes()
         };
 
-        if let Some(terminal) = self.terminals.get_mut(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
             terminal.write(&bytes);
         }
     }
@@ -129,7 +135,7 @@ impl App {
     /// whether the pane is on the alternate screen, i.e. whether the app
     /// took the scroll.
     pub(crate) fn scroll_app_view(&mut self, focused: TabId, lines: isize) -> bool {
-        let Some(terminal) = self.terminals.get_mut(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal_mut(&focused) else {
             return false;
         };
         if !terminal.grid().is_alt_screen() {
@@ -159,12 +165,15 @@ impl App {
             return;
         };
         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
-        let sgr = self.terminals.get(&focused).is_some_and(|p| p.mouse_sgr());
+        let sgr = self
+            .open_tabs
+            .terminal(&focused)
+            .is_some_and(|p| p.mouse_sgr());
 
         // Only the direction carries: `scroll_lines` is how far *Winter* would
         // scroll its own view for this notch, which is not the app's business.
         let bytes = wheel_bytes(sgr, scroll_lines > 0, col, row);
-        if let Some(terminal) = self.terminals.get_mut(&focused) {
+        if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
             terminal.write(&bytes);
         }
     }

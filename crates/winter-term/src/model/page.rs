@@ -1,4 +1,4 @@
-//! Tool pages: pane content Winter paints itself, as styled text rows instead
+//! Pages: tab content Winter paints itself, as styled text rows instead
 //! of terminal output.
 
 use std::path::PathBuf;
@@ -170,7 +170,7 @@ pub struct PickRequest {
 /// A question a page answers from a list rather than from typing, held while
 /// the list itself is gathered.
 ///
-/// The gathering differs per tool — a git branch list is a command away, a
+/// The gathering differs per page: a git branch list is a command away, a
 /// directory's own rows are already in hand — but what happens to the answer
 /// does not: it arrives under [`PickQuestion::tag`] as the reply to the same
 /// question a [`PromptRequest`] would have asked. A list that comes back
@@ -794,8 +794,8 @@ pub fn wrap_window(
 // Traits
 // ========================================================================
 
-/// Non-terminal pane content. A page paints itself as rows of styled text and
-/// gets first refusal on keys while its pane is focused.
+/// What a page tab holds. A page paints itself as rows of styled text and
+/// gets first refusal on keys while its tab is focused.
 pub trait Page {
     /// A short label for the pane title.
     fn title(&self) -> String;
@@ -809,7 +809,7 @@ pub trait Page {
     /// Where the title bar says this page is: one fixed location, written
     /// with `~` for home, that no cursor movement, line, or page changes.
     /// `None` for a page tied to nowhere on disk, which the bar then names by
-    /// its tool alone.
+    /// its kind alone.
     fn address(&self) -> Option<String> {
         None
     }
@@ -895,7 +895,7 @@ pub trait Page {
         None
     }
 
-    /// Where a tool or shell opened from this page starts: the directory it
+    /// Where a page or shell opened from this page starts: the directory it
     /// is looking at, following the cursor rather than its root. Pages tied
     /// to nowhere on disk never implement it.
     fn cwd(&self) -> Option<PathBuf> {
@@ -903,7 +903,7 @@ pub trait Page {
     }
 
     /// Where the page is looking, for opening it there again after a restart:
-    /// the directory a tool is rooted in or the file an editor has open, and
+    /// the directory a page is rooted in or the file an editor has open, and
     /// the line its cursor is on. `None` for a page that cannot be reopened
     /// from a place alone.
     fn snapshot(&self) -> Option<OpenTarget> {

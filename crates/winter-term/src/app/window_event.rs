@@ -75,13 +75,13 @@ impl App {
         };
         if state == ElementState::Released {
             let kitty_flags = self
-                .terminals
-                .get(&focused)
+                .open_tabs
+                .terminal(&focused)
                 .map(|p| p.kitty_flags())
                 .unwrap_or(0);
             let bytes = input::encode_release(&key, kitty_flags);
             if !bytes.is_empty() {
-                if let Some(terminal) = self.terminals.get_mut(&focused) {
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                     terminal.write(&bytes);
                 }
                 if let Some(window) = &self.window {
@@ -105,7 +105,10 @@ impl App {
             self.blink_next_flip = Instant::now() + CURSOR_BLINK_PERIOD;
         }
 
-        let mode = self.modes.get(&focused).copied().unwrap_or_default();
+        // A page tab takes its own keys rather than being in a mode; `mode` is
+        // the terminal's, and only means anything when the tab is not a page.
+        let page_focused = self.open_tabs.is_page(&focused);
+        let mode = self.open_tabs.mode(&focused).unwrap_or_default();
 
         // While a tab rename is in progress, intercept all keyboard
         // input: Enter confirms, Escape cancels, other keys edit the name.
@@ -255,9 +258,9 @@ impl App {
             return false;
         }
 
-        // A tool page owns the keys it binds, and only those: anything it
-        // declines falls through to the pane's ordinary keymap below, so the
-        // vim vocabulary reads the same in a page as in a terminal.
+        // A page owns the keys it binds, and only those: anything it declines
+        // falls through to the window chords below, so the vim vocabulary
+        // reads the same in a page as in a terminal.
         if self.offer_key_to_page(focused, &key) {
             self.update_window_title();
             if let Some(window) = &self.window {
@@ -266,14 +269,9 @@ impl App {
             return false;
         }
 
-        // `v` in a page the tool did not bind it in starts a text cursor, the
-        // way it starts a Visual selection in a terminal pane.
-        if mode == Mode::Page
-            && key.code == KeyCode::Char('v')
-            && !key.alt
-            && !key.ctrl
-            && !key.shift
-        {
+        // `v` in a page that did not bind it starts a text cursor, the way it
+        // starts a Visual selection in a terminal.
+        if page_focused && key.code == KeyCode::Char('v') && !key.alt && !key.ctrl && !key.shift {
             self.start_page_cursor(focused);
             if let Some(window) = &self.window {
                 window.request_redraw();
@@ -289,47 +287,53 @@ impl App {
         // through to the PTY. Normal mode is entered via Alt-Escape or Ctrl-Shift-Space.
         let bare_esc = key.code == KeyCode::Escape && !key.alt && !key.ctrl && !key.shift;
         if bare_esc && mode == Mode::Normal && !self.escape_has_winter_target() {
-            let pending_tab_completion = self.pending_tab_completion.remove(&focused);
+            let pending_tab_completion = self
+                .open_tabs
+                .terminal_tab_mut(&focused)
+                .is_some_and(|tab| std::mem::take(&mut tab.pending_tab_completion));
             let has_foreground_process = self
-                .terminals
-                .get(&focused)
+                .open_tabs
+                .terminal(&focused)
                 .is_some_and(|p| p.has_foreground_process());
             if escape_forwarded_to_pty(has_foreground_process, pending_tab_completion) {
-                if let Some(terminal) = self.terminals.get_mut(&focused) {
+                if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                     terminal.write(&[0x1b]);
                 }
                 return false;
             }
         }
         let at_prompt = self
-            .terminals
-            .get(&focused)
+            .open_tabs
+            .terminal(&focused)
             .is_some_and(|p| p.is_at_prompt());
         let kitty_flags = self
-            .terminals
-            .get(&focused)
+            .open_tabs
+            .terminal(&focused)
             .map(|p| p.kitty_flags())
             .unwrap_or(0);
         let modify_other_keys = self
-            .terminals
-            .get(&focused)
+            .open_tabs
+            .terminal(&focused)
             .map(|p| p.modify_other_keys())
             .unwrap_or(None);
         let is_alt_screen = self
-            .terminals
-            .get(&focused)
+            .open_tabs
+            .terminal(&focused)
             .map(|p| p.grid().is_alt_screen())
             .unwrap_or(false);
         let prev_pending = self.pending;
-        let action = input::resolve_with(
-            mode,
-            &key,
-            &mut self.pending,
-            &self.window_keymap,
-            kitty_flags,
-            modify_other_keys,
-            is_alt_screen,
-        );
+        let action = match page_focused {
+            true => input::resolve_page(&key, &self.window_keymap),
+            false => input::resolve_with(
+                mode,
+                &key,
+                &mut self.pending,
+                &self.window_keymap,
+                kitty_flags,
+                modify_other_keys,
+                is_alt_screen,
+            ),
+        };
         if self.pending != prev_pending {
             self.pending_since = if self.pending.hint().is_some() {
                 Some(Instant::now())
@@ -345,7 +349,7 @@ impl App {
         // unmodeled ones); `Edit`/undo/redo update it in their handlers.
         // Mode switches, focus and tab commands leave this line untouched,
         // so the shadow is preserved (undo still works in Normal mode).
-        if mode == Mode::Insert && forwarded_to_pty(&action) {
+        if !page_focused && mode == Mode::Insert && forwarded_to_pty(&action) {
             self.record_insert_key(focused, &key, &action, at_prompt);
             // Deliberately does NOT queue an automatic switch to
             // Normal mode once a submitted command's new prompt
@@ -368,14 +372,14 @@ impl App {
     /// take precedence over the panes, so a click on chrome never reaches a
     /// pane underneath it.
     /// Whether the global copy chord, with nothing selected, should pass to
-    /// the tool page covering `focused` instead: with nothing to copy it
+    /// the page in tab `focused` instead: with nothing to copy it
     /// would do nothing, and a page may bind the same chord (the Git page
     /// commits on `Ctrl-Shift-c`). A page that declines it still reaches the
     /// ordinary keymap, where it resolves to the same harmless copy.
     fn is_copy_yielded_to_page(&self, action: &input::Action, focused: TabId) -> bool {
         *action == input::Action::Copy
             && self.palette.is_none()
-            && self.pages.contains_key(&focused)
+            && self.open_tabs.is_page(&focused)
             && self.selected_text().is_none()
     }
 
@@ -465,8 +469,8 @@ impl App {
         // full-screen app (vim, htop) that has turned on mouse reporting.
         // Hold Shift to forward the click to that app's mouse handling instead.
         let mouse_active = self
-            .terminals
-            .get(&focused)
+            .open_tabs
+            .terminal(&focused)
             .is_some_and(|p| p.mouse_tracking())
             && self.modifiers.state().shift_key();
 
@@ -533,7 +537,7 @@ impl App {
                         let pr = Self::layout_rect_to_pane(rect);
                         let sb_x = pr.x + pr.width - SCROLLBAR_CLICK_WIDTH;
                         if x >= sb_x && x <= pr.x + pr.width && y >= pr.y && y < pr.y + pr.height {
-                            if let Some(terminal) = self.terminals.get_mut(&id) {
+                            if let Some(terminal) = self.open_tabs.terminal_mut(&id) {
                                 let sbl = terminal.grid().scrollback_len();
                                 if sbl > 0 {
                                     let rows = terminal.grid().rows();
@@ -555,8 +559,8 @@ impl App {
                     if let Some((tab_id, pane_rect)) = self.pane_at_pixel(x, y) {
                         self.layout_mut().focus(tab_id);
                         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
-                        // A page covering the pane owns what is drawn there,
-                        // so the click is its to answer before the grid's.
+                        // A page tab owns what is drawn there, so the click is
+                        // its to answer before the grid's.
                         let at = PagePoint {
                             col,
                             drag: false,
@@ -649,14 +653,15 @@ impl App {
                     .find(|(id, _)| *id == sb_pane_id)
                 {
                     let pr = Self::layout_rect_to_pane(rect);
-                    if let Some(pane) = self.terminals.get_mut(&sb_pane_id) {
-                        let sbl = pane.grid().scrollback_len();
+                    if let Some(terminal) = self.open_tabs.terminal_mut(&sb_pane_id) {
+                        let sbl = terminal.grid().scrollback_len();
                         if sbl > 0 {
-                            let rows = pane.grid().rows();
+                            let rows = terminal.grid().rows();
                             let total = (rows + sbl) as f32;
                             let frac = ((y - pr.y) / pr.height).clamp(0.0, 1.0);
                             let top_virtual = (frac * total) as usize;
-                            pane.grid_mut()
+                            terminal
+                                .grid_mut()
                                 .set_scroll_offset(sbl.saturating_sub(top_virtual));
                             self.dirty = true;
                             if let Some(window) = &self.window {
@@ -707,8 +712,8 @@ impl App {
         let focused = self.layout().focused();
         if self.pointer.mouse_down
             && self
-                .terminals
-                .get(&focused)
+                .open_tabs
+                .terminal(&focused)
                 .is_some_and(|p| p.mouse_drag_tracking())
             && self.modifiers.state().shift_key()
         {
@@ -831,24 +836,24 @@ impl App {
             return;
         }
         if self
-            .terminals
-            .get(&focused)
+            .open_tabs
+            .terminal(&focused)
             .is_some_and(|p| p.mouse_tracking())
         {
-            self.drop_selection_in_pane(focused);
+            self.drop_selection_in_tab(focused);
             self.forward_mouse_scroll(scroll_lines, focused);
             return;
         }
 
         if scroll_lines != 0 {
             let alt_screen = self
-                .terminals
-                .get(&focused)
+                .open_tabs
+                .terminal(&focused)
                 .is_some_and(|p| p.grid().is_alt_screen());
             if alt_screen {
-                self.drop_selection_in_pane(focused);
+                self.drop_selection_in_tab(focused);
             }
-            if let Some(terminal) = self.terminals.get_mut(&focused) {
+            if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
                 // Alt-screen apps (vim, less, etc.) own their viewport: send
                 // arrow keys so they respond to the scroll gesture instead of
                 // us scrolling their non-existent scrollback.
@@ -893,8 +898,8 @@ mod tests {
     #[test]
     fn test_the_wheel_scrolls_the_pane_under_the_pointer_not_the_focused_one() {
         let (mut app, left) = app_pane_and_id();
-        app.terminals
-            .get_mut(&left)
+        app.open_tabs
+            .terminal_mut(&left)
             .expect("pane")
             .grid_mut()
             .scroll_up(20);
@@ -909,8 +914,8 @@ mod tests {
         )
         .expect("test pane spawn");
         terminal.grid_mut().scroll_up(20);
-        app.terminals.insert(right, terminal);
-        app.modes.insert(right, Mode::Insert);
+        app.open_tabs.insert_terminal(right, terminal);
+        app.open_tabs.set_mode(&right, Mode::Insert);
 
         // Focus is on `right` after the split; point at `left`.
         assert_eq!(app.layout().focused(), right);
@@ -919,7 +924,7 @@ mod tests {
 
         app.on_mouse_wheel(MouseScrollDelta::LineDelta(0.0, 1.0));
 
-        let offset = |app: &App, id| app.terminals[&id].grid().scroll_offset();
+        let offset = |app: &App, id| app.open_tabs.terminal(&id).unwrap().grid().scroll_offset();
         assert!(
             offset(&app, left) > 0,
             "the pane under the pointer scrolled"
@@ -934,7 +939,7 @@ mod tests {
         let mut app = App::new();
         // Isolate from the developer's own ~/.config keybindings.
         app.window_keymap = crate::model::input::WindowKeymap::default();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let terminal = Terminal::with_command(
             40,
             10,
@@ -942,8 +947,8 @@ mod tests {
             winter_render::MAX_SCROLLBACK,
         )
         .expect("test pane spawn");
-        app.terminals.insert(id, terminal);
-        app.modes.insert(id, Mode::Insert);
+        app.open_tabs.insert_terminal(id, terminal);
+        app.open_tabs.set_mode(&id, Mode::Insert);
         (app, id)
     }
 
@@ -959,7 +964,7 @@ mod tests {
     fn echoed_escape(app: &mut App, id: crate::model::layout::TabId, wait: Duration) -> bool {
         let deadline = Instant::now() + wait;
         while Instant::now() < deadline {
-            let terminal = app.terminals.get_mut(&id).expect("pane");
+            let terminal = app.open_tabs.terminal_mut(&id).expect("pane");
             terminal.drain_output();
             if terminal.grid().to_text().contains("^[") {
                 return true;
@@ -973,8 +978,8 @@ mod tests {
     fn test_bare_escape_in_insert_mode_reaches_program_in_full_screen_app() {
         let (mut app, id) = app_pane_and_id();
         app.config.status_bar.enabled = false;
-        app.terminals
-            .get_mut(&id)
+        app.open_tabs
+            .terminal_mut(&id)
             .unwrap()
             .grid_mut()
             .enter_alt_screen();
@@ -983,7 +988,7 @@ mod tests {
         assert!(!app.handle_key(ElementState::Pressed, logical, physical));
 
         assert_eq!(
-            app.modes[&id],
+            app.open_tabs.mode(&id).unwrap(),
             Mode::Insert,
             "bare Escape belongs to the program, so Winter stays in Insert"
         );
@@ -997,8 +1002,8 @@ mod tests {
     #[test]
     fn test_alt_escape_switches_to_normal_mode() {
         let (mut app, id) = app_pane_and_id();
-        app.terminals
-            .get_mut(&id)
+        app.open_tabs
+            .terminal_mut(&id)
             .unwrap()
             .grid_mut()
             .enter_alt_screen();
@@ -1007,23 +1012,23 @@ mod tests {
         let (logical, physical) = esc();
         assert!(!app.handle_key(ElementState::Pressed, logical, physical));
 
-        assert_eq!(app.modes[&id], Mode::Normal);
+        assert_eq!(app.open_tabs.mode(&id).unwrap(), Mode::Normal);
     }
 
     #[test]
     fn test_escape_in_normal_mode_reaches_the_program_when_winter_has_nothing_to_cancel() {
         let (mut app, id) = app_pane_and_id();
-        app.terminals
-            .get_mut(&id)
+        app.open_tabs
+            .terminal_mut(&id)
             .unwrap()
             .grid_mut()
             .enter_alt_screen();
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
 
         let (logical, physical) = esc();
         assert!(!app.handle_key(ElementState::Pressed, logical, physical));
 
-        assert_eq!(app.modes[&id], Mode::Normal);
+        assert_eq!(app.open_tabs.mode(&id).unwrap(), Mode::Normal);
         assert!(
             echoed_escape(&mut app, id, Duration::from_secs(3)),
             "the program received the Escape"
@@ -1033,12 +1038,12 @@ mod tests {
     #[test]
     fn test_escape_in_normal_mode_cancels_a_half_typed_command_before_the_program_sees_it() {
         let (mut app, id) = app_pane_and_id();
-        app.terminals
-            .get_mut(&id)
+        app.open_tabs
+            .terminal_mut(&id)
             .unwrap()
             .grid_mut()
             .enter_alt_screen();
-        app.modes.insert(id, Mode::Normal);
+        app.open_tabs.set_mode(&id, Mode::Normal);
         app.pending = crate::model::input::PendingPrefix::Count(3);
 
         let (logical, physical) = esc();
@@ -1055,8 +1060,8 @@ mod tests {
     fn test_mode_switch_is_silent_while_the_status_bar_is_shown() {
         let (mut app, id) = app_pane_and_id();
         app.config.status_bar.enabled = true;
-        app.terminals
-            .get_mut(&id)
+        app.open_tabs
+            .terminal_mut(&id)
             .unwrap()
             .grid_mut()
             .enter_alt_screen();
@@ -1070,7 +1075,7 @@ mod tests {
             PhysicalKey::Code(WinitKeyCode::Space),
         );
         assert!(!app.handle_key(ElementState::Pressed, logical, physical));
-        assert_eq!(app.modes[&id], Mode::Normal);
+        assert_eq!(app.open_tabs.mode(&id).unwrap(), Mode::Normal);
         assert!(app.notice.is_none());
     }
 
@@ -1095,7 +1100,7 @@ mod tests {
         // child, Alt-Escape switches modes.
         let mut app = App::new();
         app.window_keymap = crate::model::input::WindowKeymap::default();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let mut terminal = Terminal::with_command(
             40,
             10,
@@ -1110,19 +1115,19 @@ mod tests {
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        app.terminals.insert(id, terminal);
-        app.modes.insert(id, Mode::Insert);
+        app.open_tabs.insert_terminal(id, terminal);
+        app.open_tabs.set_mode(&id, Mode::Insert);
         app.modifiers = winit::keyboard::ModifiersState::ALT.into();
         let (logical, physical) = esc();
         assert!(!app.handle_key(ElementState::Pressed, logical, physical));
-        assert_eq!(app.modes[&id], Mode::Normal);
+        assert_eq!(app.open_tabs.mode(&id).unwrap(), Mode::Normal);
     }
 
     #[test]
     fn test_entry_chord_switches_to_normal_even_inside_a_full_screen_app() {
         let (mut app, id) = app_pane_and_id();
-        app.terminals
-            .get_mut(&id)
+        app.open_tabs
+            .terminal_mut(&id)
             .unwrap()
             .grid_mut()
             .enter_alt_screen();
@@ -1134,6 +1139,6 @@ mod tests {
             Key::Named(NamedKey::Space),
             PhysicalKey::Code(WinitKeyCode::Space)
         ));
-        assert_eq!(app.modes[&id], Mode::Normal);
+        assert_eq!(app.open_tabs.mode(&id).unwrap(), Mode::Normal);
     }
 }

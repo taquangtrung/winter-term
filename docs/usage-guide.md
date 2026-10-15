@@ -6,7 +6,7 @@ For what Winter is and how to install it, see the [README](../README.md). For ho
 
 ## Modes
 
-A Winter pane is always in exactly one of five modes, and each pane keeps its own. The status bar is shown by default (`status-bar { show #false }` hides it and frees its row), and the mode indicator can be enabled in it via `status-bar { show-mode #true }` (hidden by default).
+A window is split into panes, each a strip of tabs, and every tab is a terminal or a page. A terminal tab is always in exactly one of four modes, and each keeps its own; a page tab is in none, since it owns the keys it binds. The status bar is shown by default (`status-bar { show #false }` hides it and frees its row), and the mode indicator can be enabled in it via `status-bar { show-mode #true }` (hidden by default).
 
 | Mode | Who owns the keyboard | Enter it with |
 |---|---|---|
@@ -14,7 +14,6 @@ A Winter pane is always in exactly one of five modes, and each pane keeps its ow
 | **Normal** | Winter. Motions, operators, layout commands. | `Alt-Esc` or `Ctrl-Shift-Space` from Insert |
 | **Visual** | Normal, but motions extend a selection. | `v` `V` `Ctrl-v` from Normal |
 | **Block-Focus** | A rich block's WebView. | `Enter` from Normal, on a block |
-| **Page** | A tool page, such as Dir. | Opening a tool; the pane holds it until closed |
 
 Insert is the default, so Winter behaves like a normal terminal until you ask it not to.
 
@@ -204,10 +203,10 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 | `Ctrl-Shift-c` / `Ctrl-Shift-v` | Copy selection, paste |
 | `Ctrl-,` | Open settings |
 | `Ctrl-=` / `Ctrl--` / `Ctrl-0` | Font bigger, smaller, reset |
-| `Ctrl-Shift-d` | Show Dir over the focused pane (toggle) |
-| `Ctrl-Shift-g` | Show Git over the focused pane (toggle) |
-| `Ctrl-Shift-u` | Put back the last thing closed: a tool, or a whole pane |
-| `Ctrl-Shift-e` | Pick from every tool: the open ones, then the closed ones |
+| `Ctrl-Shift-d` | Open Dir as a tab in the focused pane (toggle) |
+| `Ctrl-Shift-g` | Open Git as a tab beside the work (toggle) |
+| `Ctrl-Shift-u` | Put back the last thing closed: a tab, or a whole pane |
+| `Ctrl-Shift-e` | Pick from every page tab: the open ones, then the closed ones |
 | `Alt-x` | Command palette |
 | `Ctrl-Shift-r` | History palette |
 | `Ctrl-Shift-z` | Pane switcher (then press the digit shown on a pane) |
@@ -216,25 +215,25 @@ These work in any mode and are configurable in `keybindings.kdl`. `C` is Ctrl, `
 
 A single-chord binding whose action is not one of the built-in window actions is looked up against the command palette instead, so `"M+q" "mux_new_session"` works.
 
-## Tools
+## Pages
 
-A tool opens over the focused pane, covering it. The shell underneath keeps running and comes back the moment you close its tab with `Ctrl-Shift-q`, or by pressing the tool's own chord again. The window chords all still work while a tool is up: split, zoom, close, and `Alt-h/j/k/l` to move focus. For a tool beside your shell rather than over it, split first and open it in the new pane.
+A page is a tab Winter paints itself: Dir, Git, Grep, the editor, a PDF, Processes, System, and Keys. Each opens as a tab of its own in a pane's strip, a peer of the terminal tabs beside it, and the terminal it was opened from keeps running one tab away. Close a page's tab with `Ctrl-Shift-q`, or press its own chord again to step back to the tab you came from. The window chords all still work from a page: split, zoom, close, and `Alt-h/j/k/l` to move focus.
 
-`Ctrl-Shift-u` (`Tool: Reopen Last Closed`) puts back the last thing that was closed. For a tool closed, that is the page itself coming back and not a fresh one of its kind: the editor's buffers and the edits never written to them, where a listing's cursor was and what it had folded, the page a document was turned to. It re-reads what it was showing on the way back, the same way a covered page does when the page over it closes.
+`Ctrl-Shift-u` (`Reopen Closed Tab`) puts back the last thing that was closed. For a page, that is the page itself coming back and not a fresh one of its kind: the editor's buffers and the edits never written to them, where a listing's cursor was and what it had folded, the page a document was turned to. It re-reads what it was showing on the way back.
 
-For a pane, it is the pane: the split comes back where it was, with a shell in the directory the old one was in and every tool it was holding stacked back over it in the order they were. The shell itself cannot come back, since closing a pane ends the process; everything around it can. Pressing the key again reaches whatever was closed before that, up to the last eight. A tool toggled off by its own chord is not one of them, because the same chord toggles it back on and keeping those would only bury the closes you cannot undo any other way.
+For a pane, it is the pane: the split comes back where it was, with a shell in the directory the old one was in and every page it was holding back in its strip. The shell itself cannot come back, since closing a pane ends the process; everything around it can. Pressing the key again reaches whatever was closed before that, up to the last eight. A page toggled off by its own chord is not one of them, because the same chord toggles it back on and keeping those would only bury the closes you cannot undo any other way.
 
-`Ctrl-Shift-e` (`Tool: Go To or Reopen...`) shows every tool as a list to pick from, in the fuzzy panel every other list in Winter is picked from: the ones open somewhere first, labelled with the tab they are in, then the ones closed recently, newest first, each saying how long ago it was closed. Every row names the tool, what the page is showing, a `[+]` where it is holding edits that are on no disk, and the directory it is looking at, so typing `main` finds the editor that was on `main.rs` and `win` finds the listing of a tree with that in its path. `Enter` on an open tool goes to it rather than opening a second one; `Enter` on a closed one puts it back and leaves the rest closed. `Esc` changes nothing.
+`Ctrl-Shift-e` (`Go To or Reopen Tab...`) shows every page tab as a list to pick from, in the fuzzy panel every other list in Winter is picked from: the ones open somewhere first, labelled with the tab they are in, then what was closed recently, newest first, each saying how long ago it was closed. Every row names the kind of page, what it is showing, a `[+]` where it is holding edits that are on no disk, and the directory it is looking at, so typing `main` finds the editor that was on `main.rs` and `win` finds the listing of a tree with that in its path. `Enter` on an open page goes to it rather than opening a second one; `Enter` on a closed one puts it back and leaves the rest closed. `Esc` changes nothing.
 
-Closing a pane or a tab over a tool holding unwritten edits asks first, naming what would go with it. Answering `y` closes it and keeps the page anyway, so the edits are still a `Ctrl-Shift-u` away; anything else leaves everything as it was. A tool holding unsaved edits is never the entry the stash drops when it fills up, and the first close of a session says in the status bar which key brings it back.
+Closing a pane or a tab with a page holding unwritten edits asks first, naming what would go with it. Answering `y` closes it and keeps the page anyway, so the edits are still a `Ctrl-Shift-u` away; anything else leaves everything as it was. A page holding unsaved edits is never the entry the stash drops when it fills up, and the first close of a session says in the status bar which key brings it back.
 
-Every tool asks the same way, in the middle of the window. A question with a known set of answers opens a picker: what the list is of on top, a filter line under it, and the matches below, narrowing as you type. `Up`/`Down` or `Ctrl-p`/`Ctrl-n` move through them, `Enter` takes the highlighted one, and `Esc` answers nothing. A question with no list to offer, or one whose answer is a name that does not exist yet, opens the same panel without the list: the question, the line it is answered on, and how to answer it. A question that cannot be undone is answered by a single key rather than a line, and says so instead of drawing a caret. Either way the question is where the eye already is, and the status bar is left to what it was saying.
+Every page asks the same way, in the middle of the window. A question with a known set of answers opens a picker: what the list is of on top, a filter line under it, and the matches below, narrowing as you type. `Up`/`Down` or `Ctrl-p`/`Ctrl-n` move through them, `Enter` takes the highlighted one, and `Esc` answers nothing. A question with no list to offer, or one whose answer is a name that does not exist yet, opens the same panel without the list: the question, the line it is answered on, and how to answer it. A question that cannot be undone is answered by a single key rather than a line, and says so instead of drawing a caret. Either way the question is where the eye already is, and the status bar is left to what it was saying.
 
-Every tool answers to `Alt-Shift-,` and `Alt-Shift-.` for the top and the bottom of what it is showing, which are emacs' `M-<` and `M->` under the fingers, so a page is read with either set of habits: the Vim `gg` and `G` reach the same two rows.
+Every page answers to `Alt-Shift-,` and `Alt-Shift-.` for the top and the bottom of what it is showing, which are emacs' `M-<` and `M->` under the fingers, so a page is read with either set of habits: the Vim `gg` and `G` reach the same two rows.
 
-Right-clicking inside a tool opens that tool's own menu, rather than the terminal's: over a listing there is nothing to paste into, and the entries that would mean something act on rows the terminal knows nothing about. The click moves the cursor to the row it landed on before the menu opens, so what is chosen acts on what was clicked. What the menu offers follows that row, because a commit cannot be staged and a section heading has no path to copy. Each entry is a key the tool already binds, shown by name, so the menu is a way of finding a command rather than a second set of them.
+Right-clicking inside a page opens that page's own menu, rather than the terminal's: over a listing there is nothing to paste into, and the entries that would mean something act on rows the terminal knows nothing about. The click moves the cursor to the row it landed on before the menu opens, so what is chosen acts on what was clicked. What the menu offers follows that row, because a commit cannot be staged and a section heading has no path to copy. Each entry is a key the page already binds, shown by name, so the menu is a way of finding a command rather than a second set of them.
 
-Every tool searches the same way. `/` asks for text and moves the cursor to the next row holding it, `n` and `N` step through the rest of the matches and wrap at the ends, and a search that finds nothing says so instead of sitting still. Matching is literal and pays no attention to case: a directory listing matches on the entry's name, every other tool on the whole row as it is painted, so a chord is as findable as the command beside it. A search moves the cursor and nothing else: marks, folds, and everything staged stay as they were. Grep is the one exception to the first part, since its rows already are a search: `/` there asks for a new one.
+Every page searches the same way. `/` asks for text and moves the cursor to the next row holding it, `n` and `N` step through the rest of the matches and wrap at the ends, and a search that finds nothing says so instead of sitting still. Matching is literal and pays no attention to case: a directory listing matches on the entry's name, every other page on the whole row as it is painted, so a chord is as findable as the command beside it. A search moves the cursor and nothing else: marks, folds, and everything staged stay as they were. Grep is the one exception to the first part, since its rows already are a search: `/` there asks for a new one.
 
 **Dir** (`Ctrl-Shift-d`, or `Dir: Open Working Directory`) lists a directory, rooted at the working directory of the pane it opened from.
 
@@ -281,7 +280,7 @@ In a git checkout, each changed entry carries git's letter after its name (`M` m
 
 `Ctrl-x Ctrl-q` turns every listed name into editable text, in the manner of Emacs' `wdired`, to rename many entries at once. The names take the editor's keys: Vim in Normal and Visual mode, the Emacs chords while typing. Each name is a line that stands for its entry, so nothing adds or removes one: `dd` empties a name rather than pulling the ones below it up, and `o`, `J`, and a line-joining `Ctrl-k` do nothing. `ZZ`, `Ctrl-s`, or `Enter` while typing applies the differences as renames, refusing the whole batch if any name is not a name or two land on the same one, before anything moves. A batch of more than one rename is listed for a yes first. Swapping two names, or a longer cycle, goes through: entries waiting for a name another still holds are parked under a temporary one until it is free; `q` with nothing part-typed, `ZQ`, or a second `Ctrl-x Ctrl-q` throws them away. The same Emacs chords edit the answer in any prompt a tool asks, such as a search or a new name, and `Up` and `Down` (or `Ctrl-p` and `Ctrl-n`) bring back what that same question was answered with before, newest first, the way a shell's history does.
 
-Directories sort before files whatever the key, and moving the root, toggling a view option, or folding keeps the cursor on the entry it was already on. A block cursor sits on the active row's first non-blank column and follows it as you move, so a tool pane shows where a selection would start before you ask for one. `v` starts selecting from there, for copying out of a listing: `hjkl` and the arrows move and extend, `w` and `b` step words, `0`, `$`, `g` and `G` jump, `V` switches to whole lines, a second `v` drops the selection, `y` or `Enter` copies and leaves, and `Esc` cancels. While selecting it answers every key ahead of the tool, so the motions mean what they do in Vim rather than what the listing binds them to; chorded keys still reach the window, so splitting, zooming, and moving focus work from inside it. Dragging with the mouse selects the same rows.
+Directories sort before files whatever the key, and moving the root, toggling a view option, or folding keeps the cursor on the entry it was already on. A block cursor sits on the active row's first non-blank column and follows it as you move, so a page shows where a selection would start before you ask for one. `v` starts selecting from there, for copying out of a listing: `hjkl` and the arrows move and extend, `w` and `b` step words, `0`, `$`, `g` and `G` jump, `V` switches to whole lines, a second `v` drops the selection, `y` or `Enter` copies and leaves, and `Esc` cancels. While selecting it answers every key ahead of the tool, so the motions mean what they do in Vim rather than what the listing binds them to; chorded keys still reach the window, so splitting, zooming, and moving focus work from inside it. Dragging with the mouse selects the same rows.
 
 Each entry carries an icon for what it is. The `icons` setting chooses where it comes from: `"svg"` (the default) draws bundled artwork keyed by extension, exact filename, or directory name, which needs nothing of the terminal font; `"font"` draws a Nerd Font glyph for the entry's broad category, which scales, themes, and copies like any other character but needs a patched font, as the status bar's own mode glyphs already do; `"none"` draws neither.
 
@@ -324,7 +323,7 @@ The view is read by color as much as by name, the way magic-vscode's own git vie
 
 When git is part-way through something — a merge, a rebase, a cherry-pick, a revert, a bisect — a `State:` line in the header says so, what it is working on, how far along it is where git counts the steps, and the keys that finish it. Nothing in a porcelain status reports any of that, so without the line the only sign of an open rebase is a section of conflicts and no reason for them. It is read from the files git writes it in, under the repository's own directory.
 
-Closing a tab, a pane, the other tabs or panes, or the whole window asks first when a terminal has a program running in it (an agent such as Claude Code, an editor, a build; a shell sitting at its prompt does not count), and when a tool tab holds edits that are on no disk. Answer `y` to close; any other key keeps things as they are. Naming the running program uses the process list, so on platforms without `/proc` the question says "a program" instead, and a program that does not own the screen may not be noticed there.
+Closing a tab, a pane, the other tabs or panes, or the whole window asks first when a terminal has a program running in it (an agent such as Claude Code, an editor, a build; a shell sitting at its prompt does not count), and when a page tab holds edits that are on no disk. Answer `y` to close; any other key keeps things as they are. Naming the running program uses the process list, so on platforms without `/proc` the question says "a program" instead, and a program that does not own the screen may not be noticed there.
 
 With more than one pane, the status view and the commit editor open in another pane rather than over the one you are working in: the one beside it in the same row (to its right first, else its left) if there is one, otherwise the next in order, and asking for the status view again goes to the one already open there. With a single pane, one is split off to its right for them.
 
@@ -423,7 +422,7 @@ Signals go through the system's own `kill`, `renice`, and `taskkill`, so Winter 
 | `n` / `N` | Jump to the next, previous section |
 | `r` / `p` | Refresh now, pause or resume the refreshing |
 
-**Editor** opens the file a tool was pointing at, as editable text. It is not reached by a chord of its own: `Enter` on a file in Dir, Git, or Grep opens it, at the line that tool knew about. It opens *over* the tool rather than in place of it, so closing it puts the listing back where you left it, re-read in case what you just saved changed what it says.
+**Editor** opens the file a page was pointing at, as editable text. It is not reached by a chord of its own: `Enter` on a file in Dir, Git, or Grep opens it, at the line that page knew about. It opens as a tab right after the page it was reached from, so closing it puts the listing back where you left it.
 
 | Key | Action |
 |---|---|
@@ -509,7 +508,7 @@ It opens where the terminal points, when it points at a file or directory that e
 
 Directories come first, then files, with the hidden ones after each group and `../` at the top, so a listing opens on what is usually wanted and typing reaches the rest. The path being browsed is shown above the list, and a directory's row says `dir` where a file's says its size. It reads one directory at a time rather than walking the tree, so it opens instantly however large the tree below it is.
 
-**PDF** opens wherever a file does, on any path ending in `.pdf`: `Enter` in Dir, Git, or Grep, the file browser, or a `gx` reference. Like the editor it has no chord of its own and opens over the tool it was reached from, so closing it puts the listing back. The document itself is drawn by a web engine rather than by Winter, because a rendered page is not text and cannot be painted as rows; the header above it is Winter's own, in the terminal's font and theme, and says which file and which page of how many. The renderer is packed into the binary, along with the fourteen standard fonts a PDF is allowed to name without carrying, so a document opens with nothing installed and no network access and draws the right shapes on a machine with no fonts of its own. The viewer can read nothing but the file it was opened on.
+**PDF** opens wherever a file does, on any path ending in `.pdf`: `Enter` in Dir, Git, or Grep, the file browser, or a `gx` reference. Like the editor it has no chord of its own and opens as a tab beside the page it was reached from, so closing it puts the listing back. The document itself is drawn by a web engine rather than by Winter, because a rendered page is not text and cannot be painted as rows; the header above it is Winter's own, in the terminal's font and theme, and says which file and which page of how many. The renderer is packed into the binary, along with the fourteen standard fonts a PDF is allowed to name without carrying, so a document opens with nothing installed and no network access and draws the right shapes on a machine with no fonts of its own. The viewer can read nothing but the file it was opened on.
 
 | Key | Action |
 |---|---|
@@ -583,7 +582,7 @@ Changes apply on save, without a restart. `winter --reload` asks a running insta
 
 ### Updating Winter without losing your session
 
-After installing a new binary, run `winter --reload` (or the `reload` command in the palette) in a running window. On Unix (tested on Linux) the window replaces itself with the new binary in place: every program running in a terminal pane (Claude Code, an editor, a build, a remote shell) keeps running with its process id and its pty, the layout and focus come back, and each pane's screen and scrollback are rebuilt from a copy taken at the moment of the reload. Each program is then asked to redraw by a resize, so full-screen programs repaint themselves. What does not come back: tool tabs other than Dir, Git, Grep, and the editor, block history and folds, and the text of anything a program wrote in the instant between the copy and the replacement. If the new binary cannot be started, the window stays as it is and says so.
+After installing a new binary, run `winter --reload` (or the `reload` command in the palette) in a running window. On Unix (tested on Linux) the window replaces itself with the new binary in place: every program running in a terminal pane (Claude Code, an editor, a build, a remote shell) keeps running with its process id and its pty, the layout and focus come back, and each pane's screen and scrollback are rebuilt from a copy taken at the moment of the reload. Each program is then asked to redraw by a resize, so full-screen programs repaint themselves. What does not come back: page tabs other than Dir, Git, Grep, and the editor, block history and folds, and the text of anything a program wrote in the instant between the copy and the replacement. If the new binary cannot be started, the window stays as it is and says so.
 
 The window you are running must already contain this feature: a window started from an older build still reloads by starting fresh shells, so restart it once. Windows keeps the older behavior, since its pseudo-terminals cannot be handed to another process image.
 
@@ -615,7 +614,7 @@ The window you are running must already contain this feature: a window started f
 | `wrap-indent` | Hang the continuation of a soft-wrapped line under its start (primary screen only; a full-screen app lays out its own continuations) |
 | `wrap-words` | Break soft wraps at word boundaries instead of mid-word |
 | `prompt-edit-bindings` | `"emacs"` (default) or `"none"`, see above |
-| `icons` | Tool-pane entry icons: `"svg"` (default), `"font"`, or `"none"` |
+| `icons` | Page entry icons: `"svg"` (default), `"font"`, or `"none"` |
 | `cursor { ... }` | `blink`, `hide-in-inactive`, plus the shape per mode: `insert`, `normal`, `visual`, `block-focus` |
 | `status-bar { ... }` | `show` (default on), `show-mode` (default off), and the per-mode icons |
 | `clipboard-read` | Let programs read the clipboard through OSC 52 |

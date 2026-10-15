@@ -9,7 +9,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
-use crate::model::layout::{Direction, GroupTree, Layout, LayoutTree, TabId};
+use crate::model::layout::{Direction, Layout, LayoutTree, PaneTree, TabId};
 use crate::terminal::session::Terminal;
 
 // ========================================================================
@@ -18,75 +18,76 @@ use crate::terminal::session::Terminal;
 
 /// Per-pane reconstruction metadata recovered from a session snapshot:
 /// `TabId -> (command, cwd)`.
-pub type PaneMetaMap = HashMap<TabId, (Option<String>, Option<String>)>;
+pub type TerminalMetaMap = HashMap<TabId, (Option<String>, Option<String>)>;
 
 /// A restart snapshot: the window's split layout, the terminals inside it,
-/// and the tool tabs that can be opened again from where they were (a
+/// and the page tabs that can be opened again from where they were (a
 /// listing, the git view, a search, a file in the editor).
 ///
-/// A tool that cannot say where it was is not saved, and a group that held
+/// A page that cannot say where it was is not saved, and a pane that held
 /// nothing else is dropped from the snapshot. A file written before tabs
 /// moved into panes also carries a `tabs` list; it is ignored, and the layout
 /// of the tab that was active is the one restored.
+///
+/// The file keeps the key names it was first written with, so a snapshot
+/// reads the same across a reload in either direction between versions.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Session {
     /// The tab focused when the session was saved.
     pub focused: usize,
-    /// The split tree, its leaves the tab groups.
+    /// The split tree, its leaves the panes.
     pub layout: SessionTree,
-    /// Every terminal in the snapshot.
-    pub panes: Vec<PaneSession>,
-    /// Every extension tab in the snapshot. Absent from files written before extensions
+    /// Every page tab in the snapshot. Absent from files written before pages
     /// were saved, which restore with terminals only.
-    #[serde(default, alias = "tools")]
-    pub extensions: Vec<ExtensionSession>,
+    #[serde(default, rename = "extensions", alias = "tools")]
+    pub pages: Vec<PageSession>,
+    /// Every terminal in the snapshot.
+    #[serde(rename = "panes")]
+    pub terminals: Vec<TerminalSession>,
 }
 
-/// One extension tab's snapshot: which extension, and where it was looking.
+/// One page tab's snapshot: which kind of page, and where it was looking.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
-pub struct ExtensionSession {
+pub struct PageSession {
     /// Identifier tying this tab to a leaf of the layout tree.
     pub id: usize,
-    /// Which extension: `dir`, `git`, `grep`, or `editor`.
+    /// Which kind of page: `dir`, `git`, `grep`, or `editor`.
     pub kind: String,
     /// The line an editor had its cursor on, counting from one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<usize>,
-    /// The directory the extension was rooted in, or the file the editor had open.
+    /// The directory the page was rooted in, or the file the editor had open.
     pub path: String,
 }
-
-/// Backwards compatibility alias for [`ExtensionSession`].
-pub type ToolSession = ExtensionSession;
 
 /// A terminal whose program is still running and is carried into the next
 /// incarnation of this process by `exec` (see [`Session::save_handover`]).
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct PaneHandover {
-    /// Columns of the pane's grid.
+pub struct TerminalHandover {
+    /// Columns of the terminal's grid.
     pub cols: usize,
-    /// The master end of the pane's pty, still open across the `exec`.
+    /// The master end of the terminal's pty, still open across the `exec`.
     pub fd: i32,
     /// The program on the other end, still this process's child.
     pub pid: u32,
-    /// Rows of the pane's grid.
+    /// Rows of the terminal's grid.
     pub rows: usize,
     /// What the screen showed, as terminal output that rebuilds it.
     pub screen: String,
 }
 
-/// One pane's snapshot: the command it ran and the directory it ran in.
+/// One terminal's snapshot: the command it ran and the directory it ran in.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub struct PaneSession {
-    /// The command the pane ran; `None` means the default shell.
+pub struct TerminalSession {
+    /// The command the terminal ran; `None` means the default shell.
     pub command: Option<String>,
-    /// The pane's working directory when the snapshot was taken.
+    /// The terminal's working directory when the snapshot was taken.
     pub cwd: Option<String>,
     /// Present only in a snapshot written for a reload that keeps programs
     /// running; a snapshot from a quit has none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub handover: Option<PaneHandover>,
-    /// Identifier tying this pane to a leaf of the layout tree.
+    pub handover: Option<TerminalHandover>,
+    /// Identifier tying this terminal to a leaf of the layout tree.
     pub id: usize,
 }
 
@@ -94,16 +95,18 @@ pub struct PaneSession {
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "t")]
 pub enum SessionTree {
-    /// A leaf holding a group of tabs.
-    Group {
-        /// The tab the group was showing.
+    /// A pane: a leaf holding a strip of tabs.
+    #[serde(rename = "Group")]
+    Pane {
+        /// The tab the pane was showing.
         active: usize,
-        /// Every tab of the group, in strip order.
+        /// Every tab of the pane, in strip order.
         ids: Vec<usize>,
     },
-    /// A leaf holding one pane, as files from before tab groups wrote it.
-    Pane {
-        /// The pane this leaf refers to.
+    /// A leaf holding one tab, as files from before panes held strips wrote it.
+    #[serde(rename = "Pane")]
+    SingleTab {
+        /// The tab this leaf refers to.
         id: usize,
     },
     /// A split of two child trees.
@@ -125,12 +128,8 @@ pub enum SessionTree {
 
 impl Session {
     /// Write a snapshot of the current layout to the state directory.
-    pub fn save(
-        layout: &Layout,
-        panes: &HashMap<TabId, Terminal>,
-        extensions: Vec<ExtensionSession>,
-    ) {
-        Self::write(&Self::capture(layout, panes, extensions));
+    pub fn save(layout: &Layout, terminals: &HashMap<TabId, &Terminal>, pages: Vec<PageSession>) {
+        Self::write(&Self::capture(layout, terminals, pages));
     }
 
     fn write(session: &Self) {
@@ -145,23 +144,23 @@ impl Session {
 
     /// Write a snapshot for a reload that keeps the programs running: as
     /// [`Session::save`], plus for every local terminal what the next process
-    /// image needs to take its program over (see [`Pane::hand_over`]) and what
+    /// image needs to take its program over (see [`Terminal::hand_over`]) and what
     /// its screen shows. The caller then replaces the process image.
     #[cfg(unix)]
     pub fn save_handover(
         layout: &Layout,
-        panes: &HashMap<TabId, Terminal>,
-        extensions: Vec<ExtensionSession>,
+        terminals: &HashMap<TabId, &Terminal>,
+        pages: Vec<PageSession>,
     ) {
-        let mut session = Self::capture(layout, panes, extensions);
-        for entry in &mut session.panes {
-            let Some(tab) = panes.get(&TabId(entry.id as u64)) else {
+        let mut session = Self::capture(layout, terminals, pages);
+        for entry in &mut session.terminals {
+            let Some(tab) = terminals.get(&TabId(entry.id as u64)) else {
                 continue;
             };
             let Some((fd, pid)) = tab.hand_over() else {
                 continue;
             };
-            entry.handover = Some(PaneHandover {
+            entry.handover = Some(TerminalHandover {
                 cols: tab.grid().cols(),
                 fd,
                 pid,
@@ -175,9 +174,9 @@ impl Session {
     /// Take out of this snapshot the programs handed over to this process,
     /// leaving it a plain one. Empty unless this process was started in place
     /// of the one that wrote them (see [`handover_expected`]).
-    pub fn take_handovers(&mut self) -> HashMap<TabId, PaneHandover> {
+    pub fn take_handovers(&mut self) -> HashMap<TabId, TerminalHandover> {
         let valid = handover_expected();
-        self.panes
+        self.terminals
             .iter_mut()
             .filter_map(|entry| {
                 let handover = entry.handover.take()?;
@@ -203,51 +202,45 @@ impl Session {
 
     fn capture(
         layout: &Layout,
-        panes: &HashMap<TabId, Terminal>,
-        extensions: Vec<ExtensionSession>,
+        terminals: &HashMap<TabId, &Terminal>,
+        pages: Vec<PageSession>,
     ) -> Self {
         let kept = |id: TabId| {
-            panes.contains_key(&id)
-                || extensions.iter().any(|ext| ext.id == id.0 as usize)
+            terminals.contains_key(&id) || pages.iter().any(|page| page.id == id.0 as usize)
         };
         let tree = layout.export_tree().retain(&kept);
-        let pane_sessions: Vec<PaneSession> = panes
+        let terminal_sessions: Vec<TerminalSession> = terminals
             .iter()
-            .map(|(id, pane)| PaneSession {
+            .map(|(id, terminal)| TerminalSession {
                 id: id.0 as usize,
-                command: Some(pane.shell_command().to_string()),
-                cwd: pane.cwd(),
+                command: Some(terminal.shell_command().to_string()),
+                cwd: terminal.cwd(),
                 handover: None,
             })
             .collect();
         Session {
             focused: layout.focused().0 as usize,
             layout: layout_tree_to_session(&tree),
-            panes: pane_sessions,
-            extensions,
+            pages,
+            terminals: terminal_sessions,
         }
     }
 
-    /// Take the extension tabs out of this snapshot, to be opened again.
-    pub fn take_extensions(&mut self) -> Vec<ExtensionSession> {
-        std::mem::take(&mut self.extensions)
-    }
-
-    /// Backwards compatibility alias for [`Session::take_extensions`].
-    pub fn take_tools(&mut self) -> Vec<ExtensionSession> {
-        self.take_extensions()
+    /// Take the page tabs out of this snapshot, to be opened again.
+    pub fn take_pages(&mut self) -> Vec<PageSession> {
+        std::mem::take(&mut self.pages)
     }
 
     /// Split this snapshot into the layout to rebuild, the tab to focus, and a
     /// map of `TabId -> (command, cwd)` for the terminals to respawn.
-    pub fn into_parts(self) -> (LayoutTree, TabId, PaneMetaMap) {
-        let pane_map: PaneMetaMap = self
-            .panes
+    pub fn into_parts(self) -> (LayoutTree, TabId, TerminalMetaMap) {
+        let terminal_map: TerminalMetaMap = self
+            .terminals
             .into_iter()
-            .map(|p| (TabId(p.id as u64), (p.command, p.cwd)))
+            .map(|t| (TabId(t.id as u64), (t.command, t.cwd)))
             .collect();
         let focused = TabId(self.focused as u64);
-        (session_to_layout_tree(&self.layout), focused, pane_map)
+        (session_to_layout_tree(&self.layout), focused, terminal_map)
     }
 }
 
@@ -291,9 +284,9 @@ pub fn handover_announced() -> bool {
 
 fn layout_tree_to_session(tree: &LayoutTree) -> SessionTree {
     match tree {
-        LayoutTree::Group(group) => SessionTree::Group {
-            active: group.active.0 as usize,
-            ids: group.members.iter().map(|id| id.0 as usize).collect(),
+        LayoutTree::Pane(pane) => SessionTree::Pane {
+            active: pane.active.0 as usize,
+            ids: pane.members.iter().map(|id| id.0 as usize).collect(),
         },
         LayoutTree::Split {
             direction,
@@ -314,11 +307,11 @@ fn layout_tree_to_session(tree: &LayoutTree) -> SessionTree {
 
 fn session_to_layout_tree(tree: &SessionTree) -> LayoutTree {
     match tree {
-        SessionTree::Group { active, ids } => LayoutTree::Group(GroupTree {
+        SessionTree::Pane { active, ids } => LayoutTree::Pane(PaneTree {
             active: TabId(*active as u64),
             members: ids.iter().map(|id| TabId(*id as u64)).collect(),
         }),
-        SessionTree::Pane { id } => LayoutTree::single(TabId(*id as u64)),
+        SessionTree::SingleTab { id } => LayoutTree::single(TabId(*id as u64)),
         SessionTree::Split {
             dir,
             ratio,
@@ -366,19 +359,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_a_file_from_before_tools_were_saved_still_loads() {
+    fn test_a_file_from_before_pages_were_saved_still_loads() {
         let old = r#"{"focused":0,"layout":{"t":"Pane","id":0},"panes":[{"command":null,"cwd":null,"id":0}]}"#;
         let session: Session = serde_json::from_str(old).expect("loads");
-        assert!(session.extensions.is_empty());
+        assert!(session.pages.is_empty());
     }
 
     #[test]
-    fn test_backward_compatibility_tools_key_loads_into_extensions() {
+    fn test_an_old_tools_key_loads_into_pages() {
         let old = r#"{"focused":0,"layout":{"t":"Pane","id":0},"panes":[],"tools":[{"id":1,"kind":"git","path":"/repo"}]}"#;
         let mut session: Session = serde_json::from_str(old).expect("loads");
-        assert_eq!(session.extensions.len(), 1);
-        assert_eq!(session.extensions[0].kind, "git");
-        let taken = session.take_extensions();
+        assert_eq!(session.pages.len(), 1);
+        assert_eq!(session.pages[0].kind, "git");
+        let taken = session.take_pages();
         assert_eq!(taken.len(), 1);
     }
 
@@ -386,14 +379,14 @@ mod tests {
     fn test_session_round_trip() {
         let session = Session {
             focused: 1,
-            panes: vec![
-                PaneSession {
+            terminals: vec![
+                TerminalSession {
                     id: 0,
                     command: Some("/bin/bash".into()),
                     cwd: Some("/home/user".into()),
                     handover: None,
                 },
-                PaneSession {
+                TerminalSession {
                     id: 1,
                     command: None,
                     cwd: None,
@@ -403,13 +396,13 @@ mod tests {
             layout: SessionTree::Split {
                 dir: "v".into(),
                 ratio: 0.5,
-                first: Box::new(SessionTree::Pane { id: 0 }),
-                second: Box::new(SessionTree::Group {
+                first: Box::new(SessionTree::SingleTab { id: 0 }),
+                second: Box::new(SessionTree::Pane {
                     active: 1,
                     ids: vec![1, 2],
                 }),
             },
-            extensions: vec![ExtensionSession {
+            pages: vec![PageSession {
                 id: 2,
                 kind: "editor".into(),
                 line: Some(40),
@@ -419,12 +412,12 @@ mod tests {
         let json = serde_json::to_string_pretty(&session).unwrap();
         let restored: Session = serde_json::from_str(&json).unwrap();
         assert_eq!(
-            restored.extensions, session.extensions,
-            "the extension tab comes back where it was"
+            restored.pages, session.pages,
+            "the page tab comes back where it was"
         );
         assert_eq!(restored.focused, 1);
-        assert_eq!(restored.panes.len(), 2);
-        assert_eq!(restored.panes[0].command.as_deref(), Some("/bin/bash"));
+        assert_eq!(restored.terminals.len(), 2);
+        assert_eq!(restored.terminals[0].command.as_deref(), Some("/bin/bash"));
         assert!(matches!(restored.layout, SessionTree::Split { .. }));
     }
 
@@ -445,7 +438,7 @@ mod tests {
     }
 
     #[test]
-    fn test_a_file_from_before_tab_groups_restores_its_active_layout() {
+    fn test_a_file_from_before_panes_held_strips_restores_its_active_layout() {
         // Written when the window had its own tabs: `layout`/`focused` held
         // the active tab, and the `tabs` list is no longer read.
         let json = r#"{
@@ -456,11 +449,11 @@ mod tests {
             "tabs": [{"focused": 1, "layout": {"t": "Pane", "id": 1}}]
         }"#;
         let session: Session = serde_json::from_str(json).unwrap();
-        let (tree, focused, pane_map) = session.into_parts();
+        let (tree, focused, terminal_map) = session.into_parts();
         let layout = Layout::from_tree(tree, focused).unwrap();
         assert_eq!(layout.members(), vec![TabId(2)]);
         assert_eq!(layout.focused(), TabId(2));
-        assert_eq!(pane_map[&TabId(2)].0.as_deref(), Some("/bin/zsh"));
+        assert_eq!(terminal_map[&TabId(2)].0.as_deref(), Some("/bin/zsh"));
     }
 
     #[test]
@@ -468,11 +461,11 @@ mod tests {
         let tree = SessionTree::Split {
             dir: "h".into(),
             ratio: 0.3,
-            first: Box::new(SessionTree::Group {
+            first: Box::new(SessionTree::Pane {
                 active: 11,
                 ids: vec![10, 11],
             }),
-            second: Box::new(SessionTree::Group {
+            second: Box::new(SessionTree::Pane {
                 active: 12,
                 ids: vec![12],
             }),
@@ -531,9 +524,9 @@ mod tests {
             .expect("spawn");
             terminal.write(b"before\n");
             assert!(wait_for(&mut terminal, "before"), "the program echoed");
-            let mut panes = HashMap::new();
-            panes.insert(id, terminal);
-            Session::save_handover(&Layout::with_root(id), &panes, Vec::new());
+            let mut terminals = HashMap::new();
+            terminals.insert(id, &terminal);
+            Session::save_handover(&Layout::with_root(id), &terminals, Vec::new());
             announce_handover();
             let error = std::process::Command::new(std::env::current_exe().expect("exe"))
                 .args(["--exact", "session::tests::handover_probe", "--nocapture"])

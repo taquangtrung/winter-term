@@ -1,22 +1,24 @@
-//! Extensions: self-contained capabilities and applications a pane can hold instead of a terminal.
+//! Pages: the tabs Winter paints itself, peers of the terminal in a pane's
+//! strip.
 //!
-//! One module per extension (with focused views such as [`keys`]). Everything in an
-//! extension stays pure and std-only except the modules named for their side effects,
-//! so logic is testable without a window, a filesystem, or a repository.
+//! One module per kind of page (with focused views such as [`keys`]), beside
+//! the helpers they share. Everything in a page stays pure and std-only
+//! except the modules named for their side effects, so logic is testable
+//! without a window, a filesystem, or a repository.
 //!
 //! - [`dir`]: a directory listing.
 //! - [`editor`]: one file as editable text.
 //! - [`git`]: the working tree's state.
 //! - [`gpu`]: asking `nvidia-smi` about the GPU.
 //! - [`grep`]: the lines under a directory holding some text.
-//! - [`keys`]: the command list and the chord bound to each command (Keys View).
+//! - [`keys`]: the command list and the chord bound to each command.
 //! - [`pdf`]: one PDF document, drawn by a WebView the page owns.
 //! - [`proc`]: the machine's processes, with the actions of a task manager.
 //! - [`refresh`]: the schedule of a page that keeps itself current.
 //! - [`run`]: running a program for the text it prints.
 //! - [`sys`]: the machine's CPU, memory, disks, and GPUs.
 //!
-//! [`reltime`] is shared rather than an extension of its own: a git log and a list
+//! [`reltime`] is shared rather than a page of its own: a git log and a list
 //! of what was closed recently both have an age to word.
 
 pub mod dir;

@@ -1,7 +1,7 @@
 //! The strip of tabs along the top of every pane: where each tab sits on it,
 //! what a click there lands on, and the pane area left below it.
 
-use crate::model::layout::{GroupArea, Rect, TabId};
+use crate::model::layout::{PaneArea, Rect, TabId};
 
 use super::App;
 
@@ -13,7 +13,7 @@ use super::App;
 /// it rather than counting as a click.
 pub(crate) const DRAG_THRESHOLD_PX: f32 = 10.0;
 
-/// How far apart, in pixels, two group edges can sit and still count as
+/// How far apart, in pixels, two pane edges can sit and still count as
 /// shared, covering a rounding gap between neighbors.
 const EDGE_TOLERANCE_PX: f32 = 1.0;
 
@@ -50,16 +50,16 @@ pub(crate) struct StripFrame {
 // Functions
 // ========================================================================
 
-/// Which sides of the group at `rect` carry a divider across its strip. The
-/// right side does whenever another of `groups` sits against it. The left side
-/// does only when no group there has its strip at the same height, since such
+/// Which sides of the pane at `rect` carry a divider across its strip. The
+/// right side does whenever another of `panes` sits against it. The left side
+/// does only when no pane there has its strip at the same height, since such
 /// a neighbor draws that divider as its own right side.
-fn strip_edges(rect: Rect, groups: &[Rect]) -> winter_render::PaneStripEdges {
+fn strip_edges(rect: Rect, panes: &[Rect]) -> winter_render::PaneStripEdges {
     let touches = |a: f32, b: f32| (a - b).abs() <= EDGE_TOLERANCE_PX;
     let overlaps = |a0: f32, a1: f32, b0: f32, b1: f32| a0.max(b0) < a1.min(b1);
     let mut edges = winter_render::PaneStripEdges::default();
     let mut left_aligned = false;
-    for other in groups {
+    for other in panes {
         let rows = overlaps(
             rect.y,
             rect.y + rect.height,
@@ -92,16 +92,16 @@ impl App {
         winter_render::pane_strip_height_px(ch)
     }
 
-    /// Every tab group of the layout, with its strip's area.
-    pub(crate) fn strip_areas(&self) -> Vec<(GroupArea, Rect)> {
+    /// Every pane of the layout, with its strip's area.
+    pub(crate) fn strip_areas(&self) -> Vec<(PaneArea, Rect)> {
         self.strip_areas_in(self.content_viewport())
     }
 
     /// The same, laid out within `viewport`.
-    pub(crate) fn strip_areas_in(&self, viewport: Rect) -> Vec<(GroupArea, Rect)> {
+    pub(crate) fn strip_areas_in(&self, viewport: Rect) -> Vec<(PaneArea, Rect)> {
         let height = self.strip_height();
         self.layout()
-            .groups(viewport)
+            .panes(viewport)
             .into_iter()
             .map(|area| {
                 let rect = area.rect;
@@ -111,7 +111,7 @@ impl App {
             .collect()
     }
 
-    /// Each shown tab paired with the area it draws in: its group's area
+    /// Each shown tab paired with the area it draws in: its pane's area
     /// below the strip.
     pub(crate) fn pane_rects(&self) -> Vec<(TabId, Rect)> {
         self.pane_rects_in(self.content_viewport())
@@ -226,34 +226,34 @@ impl App {
             .collect()
     }
 
-    /// Build the GPU `PaneTab`s for group `area`.
-    pub(crate) fn pane_tabs(&self, area: &GroupArea) -> Vec<winter_render::PaneTab> {
+    /// Build the GPU `PaneTab`s for pane `area`.
+    pub(crate) fn pane_tabs(&self, area: &PaneArea) -> Vec<winter_render::PaneTab> {
         let focused = self.layout().focused();
         let (cx, cy) = self.pointer.cursor_pos;
-        let dragging_tab = self.tabs.drag_start.and_then(|(pane, sx, sy)| {
+        let dragging_tab = self.tabs.drag_start.and_then(|(tab, sx, sy)| {
             let dist = ((cx - sx).powi(2) + (cy - sy).powi(2)).sqrt();
             if dist >= DRAG_THRESHOLD_PX {
-                Some(pane)
+                Some(tab)
             } else {
                 None
             }
         });
         area.members
             .iter()
-            .map(|&pane| winter_render::PaneTab {
-                active: pane == area.active,
-                dragging: dragging_tab == Some(pane),
-                focused: pane == focused,
-                icon: self.tab_icon(pane),
-                tab_id: pane.0,
-                title: self.strip_title(pane),
+            .map(|&tab| winter_render::PaneTab {
+                active: tab == area.active,
+                dragging: dragging_tab == Some(tab),
+                focused: tab == focused,
+                icon: self.tab_icon(tab),
+                tab_id: tab.0,
+                title: self.strip_title(tab),
             })
             .collect()
     }
 
     /// The SVG naming what `pane` holds: a terminal's, or its page's.
     fn tab_icon(&self, tab: TabId) -> Option<Vec<u8>> {
-        let name = match self.pages.get(&tab) {
+        let name = match self.open_tabs.page(&tab) {
             Some(slot) => slot.tab_icon(),
             None => crate::icons::terminal_icon(),
         };
@@ -273,8 +273,8 @@ impl App {
         }
     }
 
-    /// The strip under the point `(x, y)`, with its group.
-    fn strip_at(&self, x: f32, y: f32) -> Option<(GroupArea, Rect)> {
+    /// The strip under the point `(x, y)`, with its pane.
+    fn strip_at(&self, x: f32, y: f32) -> Option<(PaneArea, Rect)> {
         self.strip_areas().into_iter().find(|(_, rect)| {
             let r = Self::layout_rect_to_pane(*rect);
             x >= r.x && x < r.x + r.width && y >= r.y && y < r.y + r.height
@@ -358,10 +358,10 @@ impl App {
             }
             _ => {
                 if let Some((area, _)) = self.strip_at(x, y) {
-                    self.move_tab_to_group(pane, area.active);
+                    self.move_tab_to_pane(pane, area.active);
                 } else if let Some((target_pane, _)) = self.pane_at_pixel(x, y) {
-                    if !self.layout().same_group(pane, target_pane) {
-                        self.move_tab_to_group(pane, target_pane);
+                    if !self.layout().same_pane(pane, target_pane) {
+                        self.move_tab_to_pane(pane, target_pane);
                     }
                 }
             }
@@ -379,15 +379,15 @@ mod tests {
 
     #[test]
     fn test_a_strip_beside_a_strip_at_another_height_draws_its_own_left_divider() {
-        // Left group full height; right column split into top and bottom.
+        // Left pane full height; right column split into top and bottom.
         let left = Rect::new(0.0, 0.0, 100.0, 200.0);
         let top_right = Rect::new(100.0, 0.0, 100.0, 100.0);
         let bottom_right = Rect::new(100.0, 100.0, 100.0, 100.0);
-        let groups = [left, top_right, bottom_right];
+        let panes = [left, top_right, bottom_right];
 
-        let left_edges = strip_edges(left, &groups);
-        let top_edges = strip_edges(top_right, &groups);
-        let bottom_edges = strip_edges(bottom_right, &groups);
+        let left_edges = strip_edges(left, &panes);
+        let top_edges = strip_edges(top_right, &panes);
+        let bottom_edges = strip_edges(bottom_right, &panes);
 
         assert!(left_edges.right && !left_edges.left);
         assert!(!top_edges.left, "the left strip draws this one");
@@ -403,30 +403,30 @@ mod tests {
         let second = app.layout().focused();
         assert_ne!(first, second);
 
-        let first_area = GroupArea {
+        let first_area = PaneArea {
             active: first,
             members: vec![first],
             rect: Rect::new(0.0, 0.0, 100.0, 50.0),
         };
         let first_tabs = app.pane_tabs(&first_area);
         assert_eq!(first_tabs.len(), 1);
-        assert!(first_tabs[0].active, "tab is active in its group");
+        assert!(first_tabs[0].active, "tab is active in its pane");
         assert!(
             !first_tabs[0].focused,
-            "tab in unfocused group should not be marked focused"
+            "tab in unfocused pane should not be marked focused"
         );
 
-        let second_area = GroupArea {
+        let second_area = PaneArea {
             active: second,
             members: vec![second],
             rect: Rect::new(0.0, 50.0, 100.0, 50.0),
         };
         let second_tabs = app.pane_tabs(&second_area);
         assert_eq!(second_tabs.len(), 1);
-        assert!(second_tabs[0].active, "tab is active in its group");
+        assert!(second_tabs[0].active, "tab is active in its pane");
         assert!(
             second_tabs[0].focused,
-            "tab in focused group should be marked focused"
+            "tab in focused pane should be marked focused"
         );
     }
 
@@ -457,9 +457,9 @@ mod tests {
         let tab2 = app.layout().focused();
 
         // Pane 1 has [tab0, tab1], Pane 2 has [tab2]
-        assert_eq!(app.layout().panes().len(), 2);
-        assert_eq!(app.layout().group_members(tab0), vec![tab0, tab1]);
-        assert_eq!(app.layout().group_members(tab2), vec![tab2]);
+        assert_eq!(app.layout().shown_tabs().len(), 2);
+        assert_eq!(app.layout().tabs_in_pane(tab0), vec![tab0, tab1]);
+        assert_eq!(app.layout().tabs_in_pane(tab2), vec![tab2]);
 
         // Drag tab1 into pane 2's strip over tab2
         let pane2_rect = app.pane_rect(tab2).expect("pane 2 rect");
@@ -468,9 +468,9 @@ mod tests {
         app.pointer.cursor_pos = (pane2_rect.x + 20.0, strip2_y);
 
         app.finalize_tab_drag();
-        assert_eq!(app.layout().panes().len(), 2);
-        assert_eq!(app.layout().group_members(tab0), vec![tab0]);
-        assert_eq!(app.layout().group_members(tab2), vec![tab1, tab2]);
+        assert_eq!(app.layout().shown_tabs().len(), 2);
+        assert_eq!(app.layout().tabs_in_pane(tab0), vec![tab0]);
+        assert_eq!(app.layout().tabs_in_pane(tab2), vec![tab1, tab2]);
         assert_eq!(app.layout().focused(), tab1);
     }
 
@@ -480,7 +480,7 @@ mod tests {
         let tab0 = app.layout().focused();
         app.split_pane(crate::model::layout::Direction::Horizontal);
         let tab1 = app.layout().focused();
-        assert_eq!(app.layout().panes().len(), 2);
+        assert_eq!(app.layout().shown_tabs().len(), 2);
 
         // Drag tab0 into tab1's pane content area
         let pane1_rect = app.pane_rect(tab1).expect("pane 1 rect");
@@ -492,8 +492,8 @@ mod tests {
 
         app.finalize_tab_drag();
         // Since tab0 was the only tab in its pane, that pane collapses!
-        assert_eq!(app.layout().panes().len(), 1);
-        assert_eq!(app.layout().group_members(tab1), vec![tab1, tab0]);
+        assert_eq!(app.layout().shown_tabs().len(), 1);
+        assert_eq!(app.layout().tabs_in_pane(tab1), vec![tab1, tab0]);
         assert_eq!(app.layout().focused(), tab0);
     }
 
@@ -554,26 +554,26 @@ mod tests {
         app.split_pane(crate::model::layout::Direction::Vertical);
         let tab1 = app.layout().focused();
         assert_ne!(tab0, tab1);
-        assert_eq!(app.layout().panes().len(), 2);
+        assert_eq!(app.layout().shown_tabs().len(), 2);
 
         // Focus left pane (tab0) and add another tab (tab2) to tab0's pane
         app.layout_mut().focus(tab0);
         app.new_tab();
         let tab2 = app.layout().focused();
         assert_ne!(tab2, tab0);
-        assert_eq!(app.layout().group_members(tab2), vec![tab0, tab2]);
+        assert_eq!(app.layout().tabs_in_pane(tab2), vec![tab0, tab2]);
 
         // Move current tab (tab2) to the right pane
         app.move_tab_in_direction(crate::model::layout::FocusDir::Right);
-        // tab2 is now in tab1's group
-        assert_eq!(app.layout().group_members(tab2), vec![tab1, tab2]);
-        assert_eq!(app.layout().group_members(tab0), vec![tab0]);
+        // tab2 is now in tab1's pane
+        assert_eq!(app.layout().tabs_in_pane(tab2), vec![tab1, tab2]);
+        assert_eq!(app.layout().tabs_in_pane(tab0), vec![tab0]);
         assert_eq!(app.layout().focused(), tab2);
 
         // Move tab2 back to the left pane
         app.move_tab_in_direction(crate::model::layout::FocusDir::Left);
-        assert_eq!(app.layout().group_members(tab2), vec![tab0, tab2]);
-        assert_eq!(app.layout().group_members(tab1), vec![tab1]);
+        assert_eq!(app.layout().tabs_in_pane(tab2), vec![tab0, tab2]);
+        assert_eq!(app.layout().tabs_in_pane(tab1), vec![tab1]);
         assert_eq!(app.layout().focused(), tab2);
     }
 }

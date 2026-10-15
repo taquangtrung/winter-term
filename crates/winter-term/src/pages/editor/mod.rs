@@ -1,4 +1,4 @@
-//! Editor: one file as editable text in a pane, opened from whichever tool
+//! Editor: one file as editable text in a tab, opened from whichever page
 //! was pointing at it.
 //!
 //! - `comment`: commenting lines out and back in.
@@ -2119,7 +2119,7 @@ mod tests {
     }
 
     #[test]
-    fn test_the_file_opens_on_the_line_the_tool_was_pointing_at() {
+    fn test_the_file_opens_on_the_line_the_page_was_pointing_at() {
         // A grep hit opened at line one throws away what was searched for.
         let tmp = TempDir::new("line");
         let path = tmp.0.join("a.txt");
@@ -2149,7 +2149,7 @@ mod tests {
     #[test]
     fn test_the_window_chords_still_reach_the_window_from_either_mode() {
         // An Alt chord read as text types an `h` instead of moving focus, and
-        // in Normal mode `Alt-p` would paste: a tool that swallows the window
+        // in Normal mode `Alt-p` would paste: a page that swallows the window
         // chords traps the user inside it.
         let tmp = TempDir::new("alt");
         let alt = |c: char| Key {
@@ -2169,7 +2169,7 @@ mod tests {
         assert_eq!(page.on_key(&alt('h')), PageOutcome::Ignored);
         assert_eq!(page.buffer().lines(), ["two"], "and nothing was typed");
 
-        // The two buffer ends the shared layer claims are still the tool's.
+        // The two buffer ends the shared layer claims are still the page's.
         let mut ends = tmp.page("one\ntwo\nthree\n");
         let shifted = Key {
             alt: true,

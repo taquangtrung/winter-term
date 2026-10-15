@@ -1,4 +1,4 @@
-//! The native application: winit event loop, GPU renderer, and PTY panes wired
+//! The native application: winit event loop, GPU renderer, and tabs wired
 //! together. This is the `Winter` binary's core runtime: keyboard input drives
 //! the PTY, PTY output drives the cell grid, and the grid is rendered to the
 //! GPU surface every frame.
@@ -15,7 +15,8 @@
 //! - [`lifecycle`]: construction, state persistence, quit and reload.
 //! - [`navigation`]: vim-style cursor motions, search, quick-select.
 //! - [`notice`]: window title and transient status notices.
-//! - [`page`]: tool pages held by a pane instead of a terminal.
+//! - [`open_tabs`]: every open tab, terminal or page, and what it holds.
+//! - [`page`]: page tabs: opening, closing, and reopening them, and their keys.
 //! - [`palette`]: command palette and the pickers built on it.
 //! - [`panes`]: pane creation, splitting, closing, per-frame upkeep.
 //! - [`pointer`]: mouse hit-testing, selection, clipboard, PTY mouse forwarding.
@@ -35,6 +36,7 @@ mod jobs;
 mod lifecycle;
 pub(crate) mod navigation;
 mod notice;
+mod open_tabs;
 mod page;
 mod page_cursor;
 mod palette;
@@ -50,6 +52,7 @@ mod tabs;
 mod window_event;
 
 use navigation::{SearchFrom, SearchState, VimState};
+use open_tabs::OpenTabs;
 use pointer::{PointerState, SelectionState};
 use prompt_edit::PromptShadow;
 use tabbar::MenuState;
@@ -76,7 +79,6 @@ use crate::model::palette::Palette;
 use crate::model::settings_page::{ChoiceOption, SettingsPage};
 use crate::model::textedit::field::TextField;
 use crate::model::textedit::recall::Answers;
-use crate::terminal::session::Terminal;
 use crate::terminal::webview::{PaneViewport, WebViewManager};
 use winter_render::renderer::GpuRenderer;
 use winter_render::{NoticeKind, StatusBar, StatusNotice, StatusPrompt, StatusSearch, Theme};
@@ -208,21 +210,23 @@ pub(crate) fn edge_resize_direction_at(
     }
 }
 
+/// The status bar for the focused tab. `mode` is the terminal's, or `None`
+/// for a page, which is shown as `P` since it takes its own keys.
 fn status_bar(
-    mode: Mode,
+    mode: Option<Mode>,
     theme: &Theme,
     prompt: Option<StatusPrompt>,
     search: Option<StatusSearch>,
     notice: Option<StatusNotice>,
     config: &StatusBarConfig,
-    tool_icon: Option<char>,
+    page_icon: Option<char>,
 ) -> StatusBar {
     let (mode_name, accent) = match mode {
-        Mode::Insert => ("I", theme.ansi[12]),
-        Mode::Normal => ("N", theme.ansi[4]),
-        Mode::Visual => ("V", theme.ansi[6]),
-        Mode::BlockFocus => ("B", theme.ansi[5]),
-        Mode::Page => ("P", theme.ansi[2]),
+        Some(Mode::Insert) => ("I", theme.ansi[12]),
+        Some(Mode::Normal) => ("N", theme.ansi[4]),
+        Some(Mode::Visual) => ("V", theme.ansi[6]),
+        Some(Mode::BlockFocus) => ("B", theme.ansi[5]),
+        None => ("P", theme.ansi[2]),
     };
     let mode_label = if config.show_mode && prompt.is_none() {
         format!(" {mode_name}")
@@ -235,7 +239,7 @@ fn status_bar(
         notice,
         prompt,
         search,
-        tool_icon,
+        page_icon,
     }
 }
 
@@ -389,7 +393,7 @@ fn forwarded_to_pty(action: &Action) -> bool {
 }
 
 impl App {
-    /// Bookkeeping for one key forwarded to the PTY while the pane is in
+    /// Bookkeeping for one key forwarded to the PTY while the terminal is in
     /// Insert mode: keep the prompt shadow in step so `Ctrl-/`/`Ctrl-\\` can
     /// replay edits, and accumulate the exact bytes into the Insert session's
     /// `.`-repeat run (finalized when the pane leaves Insert: see
@@ -402,10 +406,15 @@ impl App {
         action: &Action,
         at_prompt: bool,
     ) {
-        self.prompt_shadows
-            .entry(focused)
-            .or_default()
-            .apply_insert_key(key, at_prompt);
+        if let Some(tab) = self.open_tabs.terminal_tab_mut(&focused) {
+            tab.prompt_shadow
+                .get_or_insert_with(PromptShadow::default)
+                .apply_insert_key(key, at_prompt);
+            // Tracks whether the tab may now be mid the shell's own
+            // tab-completion, so a following bare Escape can cancel it -
+            // see `escape_forwarded_to_pty`.
+            tab.pending_tab_completion = key.code == input::KeyCode::Tab;
+        }
         if let Action::SendBytes(bytes) = action {
             self.vim
                 .insert_sessions
@@ -413,14 +422,6 @@ impl App {
                 .or_default()
                 .run
                 .extend_from_slice(bytes);
-        }
-        // Tracks whether the pane may now be mid the shell's own
-        // tab-completion, so a following bare Escape can cancel it -
-        // see `escape_forwarded_to_pty`.
-        if key.code == input::KeyCode::Tab {
-            self.pending_tab_completion.insert(focused);
-        } else {
-            self.pending_tab_completion.remove(&focused);
         }
     }
 }
@@ -531,7 +532,6 @@ pub struct App {
     /// other apps; a fresh handle dropped right after writing loses them, so
     /// every copy/paste reuses this one instance.
     pub(crate) clipboard: Option<arboard::Clipboard>,
-    pub(crate) folded_blocks: HashMap<TabId, HashSet<usize>>,
     /// Raster-image blocks rendered natively on the GPU (instead of a WebView).
     pub(crate) image_blocks: Vec<ImageBlock>,
     /// Set when the window gains focus; cleared on the next `ModifiersChanged`
@@ -568,12 +568,6 @@ pub struct App {
     /// polled in `about_to_wait`. `None` when another instance already owns
     /// the control socket, so this instance doesn't accept reload requests.
     pub(crate) control_rx: Option<mpsc::Receiver<ControlRequest>>,
-    /// Per-pane Normal-mode traversal cursor, in viewport `(row, col)`. An entry
-    /// exists only while that pane is in Normal/Visual mode. Stored per pane (not
-    /// as a single shared field) so switching focus between panes can never leak
-    /// one pane's cursor coordinates into another: the bug that previously left
-    /// the cursor sitting before the destination pane's first typeable column.
-    pub(crate) nav_cursors: HashMap<TabId, (usize, usize)>,
     /// Set after a Vim prompt edit so the nav cursor is re-seeded to the shell
     /// cursor once the resulting PTY echo is drained.
     pub(crate) nav_resync_pending: bool,
@@ -587,14 +581,13 @@ pub struct App {
     pub(crate) icon_textures: HashMap<(String, u32, u32), Option<u64>>,
     /// The pixel box `icon_textures` was filled for.
     pub(crate) icon_texture_box: (u32, u32),
-    /// Tool tabs: each tab here is a page Winter paints itself, with no
-    /// terminal of its own. Every other tab is a terminal in `panes`.
-    pub(crate) pages: HashMap<TabId, page::PageSlot>,
+    /// Every open tab, terminal or page, by id.
+    pub(crate) open_tabs: OpenTabs,
     /// For each commit-message editor tab, the pane beside it showing what is
     /// staged, which closes with it.
     pub(crate) commit_companions: HashMap<TabId, TabId>,
     /// Panes and pages that were closed, oldest first, for reopening. A pane
-    /// or a tab closed with a tool on it used to drop the tool with no way
+    /// or a tab closed with a page on it used to drop the page with no way
     /// back, which for an editor meant dropping edits nothing had asked
     /// about.
     pub(crate) closed: Vec<page::Closed>,
@@ -602,14 +595,14 @@ pub struct App {
     /// stands for one page or pane rather than for a position in a list that
     /// moves.
     pub(crate) next_closed_id: u64,
-    /// Whether this session has said yet that a closed tool can be brought
+    /// Whether this session has said yet that a closed tab can be brought
     /// back. Said once, on the first close, and never again.
     pub(crate) reopen_hint_shown: bool,
     /// What the host is waiting to close, while it asks whether the unwritten
     /// edits over there are meant to go with it.
     pub(crate) pending_close: Option<page::PendingClose>,
-    /// Whether tool pages wrap rows wider than their pane onto the next
-    /// screen row, toggled by `Alt+Z` in every tool at once.
+    /// Whether pages wrap rows wider than their pane onto the next screen
+    /// row, toggled by `Alt+Z` in every page at once.
     pub(crate) page_wrap: bool,
     /// Slow work pages have asked for, and the answers coming back.
     pub(crate) jobs: jobs::Jobs,
@@ -629,15 +622,6 @@ pub struct App {
     /// The Vim-style text cursor over a page, while one is up. At most one
     /// exists: it belongs to whichever page tab `v` was pressed in.
     pub(crate) page_cursor: Option<page_cursor::PageCursor>,
-    pub(crate) terminals: HashMap<TabId, Terminal>,
-    /// Panes whose last PTY-forwarded Insert-mode key was Tab - likely mid the
-    /// shell's own tab-completion (e.g. zsh's menu-select). Lets a bare Escape
-    /// in Normal mode, with nothing of Winter's to cancel, reach the PTY and
-    /// close it - see `escape_forwarded_to_pty` and its use in `window_event`.
-    pub(crate) pending_tab_completion: HashSet<TabId>,
-    /// Per-pane shadow model of the editable prompt line, powering `Ctrl-/`
-    /// undo and `Ctrl-\` redo at the shell prompt.
-    pub(crate) prompt_shadows: HashMap<TabId, PromptShadow>,
     pub(crate) palette: Option<Palette>,
     pub(crate) tab_titles: HashMap<TabId, String>,
     /// In-progress "create new theme" name input, set while the user is
@@ -661,7 +645,6 @@ pub struct App {
     pub(crate) palette_history: Vec<String>,
     /// Next free globally-unique pane id; allocated by [`Self::alloc_tab_id`].
     pub(crate) next_tab_id: u64,
-    pub(crate) modes: HashMap<TabId, Mode>,
     pub(crate) webview_mgr: WebViewManager,
     pub(crate) window: Option<Arc<Window>>,
     /// Configurable split/close/focus key bindings (the `window` keybindings
@@ -702,12 +685,12 @@ pub struct App {
 pub(crate) enum ContextAction {
     Copy,
     OpenLink(String),
-    /// An entry a tool page offered, standing for a key that page binds.
+    /// An entry a page offered, standing for a key that page binds.
     PageKey(PageKeyAction),
     Paste,
 }
 
-/// A menu entry a tool page offered: what it is called, and the key of its
+/// A menu entry a page offered: what it is called, and the key of its
 /// own the page runs when it is chosen.
 #[derive(Clone)]
 pub(crate) struct PageKeyAction {
@@ -811,7 +794,7 @@ impl Default for App {
 impl App {
     /// Copy the focused pane's full scrollback and visible text to clipboard.
     pub(crate) fn copy_scrollback(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let text = navigation::export::export_scrollback_plain(terminal.grid());
@@ -829,7 +812,7 @@ impl App {
 
     /// Export scrollback with ANSI color escape codes to a file and open it.
     pub(crate) fn export_scrollback_ansi(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let theme = self
@@ -854,7 +837,7 @@ impl App {
 
     /// Export scrollback and open in a new tab running $VISUAL / $EDITOR.
     pub(crate) fn export_scrollback_editor(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let text = navigation::export::export_scrollback_plain(terminal.grid());
@@ -873,7 +856,7 @@ impl App {
 
     /// Export scrollback as HTML and open it in the default web browser.
     pub(crate) fn export_scrollback_html(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let theme = self
@@ -1070,10 +1053,10 @@ impl ApplicationHandler for App {
                     }
                 }
                 let focused_pane = self.layout().focused();
-                if let Some(terminal) = self.terminals.get(&focused_pane) {
+                if let Some(terminal) = self.open_tabs.terminal(&focused_pane) {
                     if terminal.focus_event() {
                         let seq = if focused { "\x1b[I" } else { "\x1b[O" };
-                        if let Some(terminal) = self.terminals.get_mut(&focused_pane) {
+                        if let Some(terminal) = self.open_tabs.terminal_mut(&focused_pane) {
                             terminal.write(seq.as_bytes());
                         }
                     }
@@ -1153,7 +1136,7 @@ impl ApplicationHandler for App {
             // shell's new cursor position so it tracks the edited line.
             if self.nav_resync_pending {
                 let focused = self.layout().focused();
-                if self.modes.get(&focused) == Some(&Mode::Normal) {
+                if self.open_tabs.mode(&focused) == Some(Mode::Normal) {
                     self.init_nav_cursor(focused);
                 }
                 self.nav_resync_pending = false;
@@ -1235,7 +1218,7 @@ impl ApplicationHandler for App {
                 if let Some(prompt) = self.page_prompt.as_ref() {
                     let query = prompt.field.text().to_string();
                     let tag = prompt.request.tag;
-                    if let Some(slot) = self.pages.get_mut(&tab) {
+                    if let Some(slot) = self.open_tabs.page_mut(&tab) {
                         let outcome = slot.page.on_prompt_input(&query, tag);
                         self.act_on_page_outcome(tab, outcome);
                     }
@@ -1288,7 +1271,7 @@ impl ApplicationHandler for App {
         }
         // If any terminal is holding back synchronized output, wake up promptly
         // when its hold deadline expires so the frame is released without lag.
-        for terminal in self.terminals.values() {
+        for (_, terminal) in self.open_tabs.terminals() {
             if let Some(deadline) = terminal.sync_hold_deadline() {
                 wakeup = wakeup.min(deadline);
             }
@@ -1314,6 +1297,7 @@ mod tests {
     use super::*;
     use crate::model::layout::{Direction, Rect};
     use crate::model::palette::PaletteMode;
+    use crate::terminal::session::Terminal;
 
     #[test]
     fn test_render_window_title_expands_pane_placeholders() {
@@ -1357,17 +1341,21 @@ mod tests {
             terminal.grid_mut().line_feed();
         }
         terminal.grid_mut().scroll_up_history(6);
-        app.terminals.insert(focused, terminal);
+        app.open_tabs.insert_terminal(focused, terminal);
 
         app.resize_all_panes();
 
         assert_ne!(
-            app.terminals[&focused].grid().rows(),
+            app.open_tabs.terminal(&focused).unwrap().grid().rows(),
             8,
             "fixture must actually be resized for this to prove anything"
         );
         assert_eq!(
-            app.terminals[&focused].grid().scroll_offset(),
+            app.open_tabs
+                .terminal(&focused)
+                .unwrap()
+                .grid()
+                .scroll_offset(),
             6,
             "the pane should stay where it was scrolled to"
         );
@@ -1389,10 +1377,10 @@ mod tests {
         for _ in 0..20 {
             terminal.grid_mut().line_feed();
         }
-        app.terminals.insert(focused, terminal);
+        app.open_tabs.insert_terminal(focused, terminal);
 
-        app.terminals
-            .get_mut(&focused)
+        app.open_tabs
+            .terminal_mut(&focused)
             .expect("terminal")
             .grid_mut()
             .scroll_up_history(6);
@@ -1400,15 +1388,31 @@ mod tests {
             crate::model::input::Action::SendBytes(b"a".to_vec()),
             focused,
         );
-        assert_eq!(app.terminals[&focused].grid().scroll_offset(), 0, "typed");
+        assert_eq!(
+            app.open_tabs
+                .terminal(&focused)
+                .unwrap()
+                .grid()
+                .scroll_offset(),
+            0,
+            "typed"
+        );
 
-        app.terminals
-            .get_mut(&focused)
+        app.open_tabs
+            .terminal_mut(&focused)
             .expect("terminal")
             .grid_mut()
             .scroll_up_history(6);
         app.paste_text("b");
-        assert_eq!(app.terminals[&focused].grid().scroll_offset(), 0, "pasted");
+        assert_eq!(
+            app.open_tabs
+                .terminal(&focused)
+                .unwrap()
+                .grid()
+                .scroll_offset(),
+            0,
+            "pasted"
+        );
     }
 
     #[test]
@@ -1473,18 +1477,22 @@ mod tests {
                 5,
                 "fixture must start scrolled up"
             );
-            app.terminals.insert(focused, terminal);
-            app.modes.insert(focused, Mode::Normal);
+            app.open_tabs.insert_terminal(focused, terminal);
+            app.open_tabs.set_mode(&focused, Mode::Normal);
             app.set_nav_cursor(focused, (0, 0));
 
             app.handle_action(action.clone(), focused);
 
             assert_eq!(
-                app.terminals[&focused].grid().scroll_offset(),
+                app.open_tabs
+                    .terminal(&focused)
+                    .unwrap()
+                    .grid()
+                    .scroll_offset(),
                 0,
                 "{action:?} should scroll back down to the prompt"
             );
-            assert_eq!(app.modes.get(&focused), Some(&Mode::Insert));
+            assert_eq!(app.open_tabs.mode(&focused), Some(Mode::Insert));
         }
     }
 
@@ -1495,13 +1503,14 @@ mod tests {
         // the search highlight goes, the mode does not.
         let mut app = App::new();
         let focused = app.layout().focused();
-        app.modes.insert(focused, Mode::Normal);
+        app.open_tabs.insert_terminal(focused, idle_terminal());
+        app.open_tabs.set_mode(&focused, Mode::Normal);
         app.search.query = Some("foo".to_string());
         app.search.match_total = 2;
 
         app.handle_action(input::Action::SearchCancel, focused);
 
-        assert_eq!(app.modes.get(&focused), Some(&Mode::Normal));
+        assert_eq!(app.open_tabs.mode(&focused), Some(Mode::Normal));
         assert!(app.search.query.is_none());
         assert_eq!(app.search.match_total, 0);
     }
@@ -1518,14 +1527,15 @@ mod tests {
         ] {
             let mut app = App::new();
             let focused = app.layout().focused();
-            app.modes.insert(focused, mode);
+            app.open_tabs.insert_terminal(focused, idle_terminal());
+            app.open_tabs.set_mode(&focused, mode);
             app.set_nav_cursor(focused, (0, 0));
 
             app.handle_action(input::Action::EnterInsert(at), focused);
 
             assert_eq!(
-                app.modes.get(&focused),
-                Some(&Mode::Insert),
+                app.open_tabs.mode(&focused),
+                Some(Mode::Insert),
                 "{at:?} from {mode:?} should reach Insert"
             );
             assert_eq!(app.nav_cursor(focused), None, "the nav cursor is dropped");
@@ -1535,8 +1545,8 @@ mod tests {
     #[test]
     fn test_app_default_has_one_pane() {
         let app = App::new();
-        assert_eq!(app.layout().panes(), vec![TabId(0)]);
-        assert!(app.terminals.is_empty());
+        assert_eq!(app.layout().shown_tabs(), vec![TabId(0)]);
+        assert!(app.open_tabs.terminals().next().is_none());
     }
 
     #[test]
@@ -1544,11 +1554,13 @@ mod tests {
         // Regression: the Normal-mode traversal cursor used to be a single shared
         // field, so switching focus between two panes leaked the source pane's
         // cursor coordinates into the destination, landing the cursor before the
-        // destination pane's first typeable column. Now it is stored per pane, so
-        // each pane's cursor is read only for that pane.
+        // destination pane's first typeable column. Now it is kept with its
+        // tab, so each tab's cursor is read only for that tab.
         let mut app = App::new();
         let a = TabId(1);
         let b = TabId(2);
+        app.open_tabs.insert_terminal(a, idle_terminal());
+        app.open_tabs.insert_terminal(b, idle_terminal());
         app.set_nav_cursor(a, (5, 3));
         app.set_nav_cursor(b, (1, 9));
         // Pane A's cursor never bleeds into pane B and vice versa.
@@ -1556,7 +1568,7 @@ mod tests {
         assert_eq!(app.nav_cursor(b), Some((1, 9)));
         // A pane with no cursor reads as None, regardless of other panes' cursors.
         assert_eq!(app.nav_cursor(TabId(99)), None);
-        // Clearing one pane's cursor does not disturb the other's.
+        // Clearing one tab's cursor does not disturb the other's.
         app.clear_nav_cursor(a);
         assert_eq!(app.nav_cursor(a), None);
         assert_eq!(app.nav_cursor(b), Some((1, 9)));
@@ -1651,7 +1663,8 @@ mod tests {
         let mut app = app_with_tabs(1);
         app.config.status_bar.enabled = false;
         let focused = app.layout().focused();
-        app.modes.insert(focused, Mode::Normal);
+        app.open_tabs.insert_terminal(focused, idle_terminal());
+        app.open_tabs.set_mode(&focused, Mode::Normal);
 
         // Search executed, now browsing matches in Normal mode: the bar is
         // forced visible even though it's configured off.
@@ -1677,20 +1690,20 @@ mod tests {
             ..StatusBarConfig::default()
         };
         assert_eq!(
-            status_bar(Mode::Insert, &theme, None, None, None, &cfg, None).mode,
+            status_bar(Some(Mode::Insert), &theme, None, None, None, &cfg, None).mode,
             " I"
         );
         assert_eq!(
-            status_bar(Mode::Normal, &theme, None, None, None, &cfg, None).mode,
+            status_bar(Some(Mode::Normal), &theme, None, None, None, &cfg, None).mode,
             " N"
         );
         assert_eq!(
-            status_bar(Mode::BlockFocus, &theme, None, None, None, &cfg, None).mode,
+            status_bar(Some(Mode::BlockFocus), &theme, None, None, None, &cfg, None).mode,
             " B"
         );
         assert_ne!(
-            status_bar(Mode::Insert, &theme, None, None, None, &cfg, None).accent,
-            status_bar(Mode::Normal, &theme, None, None, None, &cfg, None).accent
+            status_bar(Some(Mode::Insert), &theme, None, None, None, &cfg, None).accent,
+            status_bar(Some(Mode::Normal), &theme, None, None, None, &cfg, None).accent
         );
     }
 
@@ -1698,14 +1711,30 @@ mod tests {
     fn test_status_bar_show_mode_toggle_hides_mode_label() {
         let theme = Theme::dark();
         let default_cfg = StatusBarConfig::default();
-        let bar = status_bar(Mode::Normal, &theme, None, None, None, &default_cfg, None);
+        let bar = status_bar(
+            Some(Mode::Normal),
+            &theme,
+            None,
+            None,
+            None,
+            &default_cfg,
+            None,
+        );
         assert_eq!(bar.mode, "");
 
         let enabled_cfg = StatusBarConfig {
             show_mode: true,
             ..StatusBarConfig::default()
         };
-        let bar_enabled = status_bar(Mode::Normal, &theme, None, None, None, &enabled_cfg, None);
+        let bar_enabled = status_bar(
+            Some(Mode::Normal),
+            &theme,
+            None,
+            None,
+            None,
+            &enabled_cfg,
+            None,
+        );
         assert_eq!(bar_enabled.mode, " N");
     }
 
@@ -1722,7 +1751,7 @@ mod tests {
             value: "foo".to_string(),
         };
         let bar = status_bar(
-            Mode::Normal,
+            Some(Mode::Normal),
             &theme,
             Some(prompt),
             None,
@@ -1739,7 +1768,7 @@ mod tests {
         let theme = Theme::dark();
         let cfg = StatusBarConfig::default();
         let active = status_bar(
-            Mode::Normal,
+            Some(Mode::Normal),
             &theme,
             None,
             Some(StatusSearch {
@@ -1754,7 +1783,7 @@ mod tests {
         );
         assert!(active.search.is_some());
 
-        let inactive = status_bar(Mode::Normal, &theme, None, None, None, &cfg, None);
+        let inactive = status_bar(Some(Mode::Normal), &theme, None, None, None, &cfg, None);
         assert!(inactive.search.is_none());
     }
 
@@ -1840,7 +1869,7 @@ mod tests {
     fn test_search_debounce_scheduling_and_cancellation() {
         let mut app = app_with_tabs(1);
         let focused = app.layout().focused();
-        app.modes.insert(focused, Mode::Normal);
+        app.open_tabs.set_mode(&focused, Mode::Normal);
 
         app.handle_action(input::Action::SearchStart, focused);
         assert_eq!(app.search.query, Some(String::new()));
@@ -2067,7 +2096,15 @@ mod tests {
             kind: NoticeKind::Info,
             text: "oops".to_string(),
         };
-        let bar = status_bar(Mode::Normal, &theme, None, None, Some(notice), &cfg, None);
+        let bar = status_bar(
+            Some(Mode::Normal),
+            &theme,
+            None,
+            None,
+            Some(notice),
+            &cfg,
+            None,
+        );
         assert_eq!(bar.notice.map(|n| n.text), Some("oops".to_string()));
     }
 
@@ -2086,10 +2123,10 @@ mod tests {
     #[test]
     fn test_close_pane_keeps_last_pane_of_the_window() {
         let mut app = app_with_tabs(1);
-        let pane = app.layout().panes()[0];
+        let pane = app.layout().shown_tabs()[0];
         app.close_pane(pane);
         // The sole pane is preserved, not closed.
-        assert!(app.layout().panes().contains(&pane));
+        assert!(app.layout().shown_tabs().contains(&pane));
     }
 
     #[test]
@@ -2150,15 +2187,18 @@ mod tests {
         // The bootstrap tab plus the new mux tab, side by side in one pane.
         assert_eq!(app.layout().members().len(), 2);
         let focused = app.layout().focused();
-        assert_eq!(app.terminals[&focused].mux_session(), Some("work"));
+        assert_eq!(
+            app.open_tabs.terminal(&focused).unwrap().mux_session(),
+            Some("work")
+        );
 
         let deadline = Instant::now() + Duration::from_secs(5);
         let mut text = String::new();
         while Instant::now() < deadline {
-            if let Some(terminal) = app.terminals.get_mut(&focused) {
+            if let Some(terminal) = app.open_tabs.terminal_mut(&focused) {
                 terminal.drain_output();
             }
-            text = app.terminals[&focused].grid().to_text();
+            text = app.open_tabs.terminal(&focused).unwrap().grid().to_text();
             if text.contains("mux tab live") {
                 break;
             }
@@ -2178,7 +2218,7 @@ mod tests {
             1,
             "the mux tab must be closed"
         );
-        assert!(!app.terminals.contains_key(&focused));
+        assert!(!app.open_tabs.is_terminal(&focused));
         assert!(app.active_notice().is_some());
 
         let _ = server.join();
@@ -2208,7 +2248,7 @@ mod tests {
             }
             std::thread::sleep(POLL_STEP);
         }
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
     }
 
     #[test]
@@ -2224,7 +2264,7 @@ mod tests {
     #[test]
     fn test_reap_dead_panes_requests_exit_when_the_last_tab_dies() {
         let mut app = app_with_tabs(1);
-        let dead_id = app.layout().panes()[0];
+        let dead_id = app.layout().shown_tabs()[0];
         insert_dead_pane(&mut app, dead_id);
         app.reap_dead_panes();
         // Nothing else to fall back to, so this requests the app quit rather
@@ -2238,7 +2278,7 @@ mod tests {
         app.switch_tab(2);
         assert_eq!(app.layout().focused(), TabId(2));
         assert_eq!(
-            app.layout().recent_in_group(TabId(2)),
+            app.layout().recent_in_pane(TabId(2)),
             vec![TabId(2), TabId(0), TabId(1)]
         );
         assert!(app.tabs.recent_walk.is_none());
@@ -2271,7 +2311,7 @@ mod tests {
         assert!(app.tabs.recent_walk.is_some());
         app.switch_tab(2);
         assert!(app.tabs.recent_walk.is_none());
-        assert_eq!(app.layout().recent_in_group(TabId(2))[0], TabId(2));
+        assert_eq!(app.layout().recent_in_pane(TabId(2))[0], TabId(2));
     }
 
     #[test]
@@ -2325,14 +2365,14 @@ mod tests {
         let second = app.layout().focused();
         assert_ne!(first, second);
         assert_eq!(
-            app.layout().panes(),
+            app.layout().shown_tabs(),
             vec![second],
             "one pane, showing the new tab"
         );
 
-        app.switch_to_pane(first);
+        app.switch_to_tab(first);
         assert_eq!(app.layout().focused(), first);
-        assert_eq!(app.layout().panes(), vec![first]);
+        assert_eq!(app.layout().shown_tabs(), vec![first]);
     }
 
     #[test]
@@ -2415,6 +2455,13 @@ mod tests {
         app.viewport_rect().y + AUTO_SCROLL_EDGE_MARGIN - 1.0
     }
 
+    /// A terminal running a program that exits at once, for a tab whose mode
+    /// is all a test is about.
+    fn idle_terminal() -> Terminal {
+        Terminal::with_command(20, 5, portable_pty::CommandBuilder::new("true"), 1000)
+            .expect("test terminal spawn")
+    }
+
     fn pane_with_scrollback() -> Terminal {
         let mut terminal = Terminal::with_command(
             40,
@@ -2435,7 +2482,7 @@ mod tests {
     fn test_auto_scroll_selection_scrolls_up_when_pointer_near_top_edge() {
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_scrollback());
+        app.open_tabs.insert_terminal(id, pane_with_scrollback());
         app.pointer.mouse_down = true;
         app.selection.span = Some(Selection {
             block: false,
@@ -2453,16 +2500,16 @@ mod tests {
 
         app.auto_scroll_selection();
 
-        let pane = &app.terminals[&id];
+        let terminal = &app.open_tabs.terminal(&id).unwrap();
         assert_eq!(
-            pane.grid().scroll_offset(),
+            terminal.grid().scroll_offset(),
             1,
             "should scroll one line into history"
         );
         let sel = app.selection.span.as_ref().expect("selection still active");
         assert_eq!(
             (sel.end_row, sel.end_col),
-            (pane.grid().to_absolute_row(0), 0),
+            (terminal.grid().to_absolute_row(0), 0),
             "drag end follows the new top row's absolute address"
         );
     }
@@ -2477,9 +2524,14 @@ mod tests {
         // further from the start on every successful scroll tick.
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_scrollback());
+        app.open_tabs.insert_terminal(id, pane_with_scrollback());
         app.pointer.mouse_down = true;
-        let start_abs = app.terminals[&id].grid().to_absolute_row(5);
+        let start_abs = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(5);
         app.selection.span = Some(Selection {
             block: false,
             start_row: start_abs,
@@ -2501,7 +2553,10 @@ mod tests {
             ends[0] > ends[1] && ends[1] > ends[2],
             "end_row should move further back each tick, not reset: {ends:?}"
         );
-        assert_eq!(app.terminals[&id].grid().scroll_offset(), 3);
+        assert_eq!(
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset(),
+            3
+        );
     }
 
     #[test]
@@ -2514,7 +2569,7 @@ mod tests {
         let shallow = {
             let mut app = App::new();
             let id = TabId(1);
-            app.terminals.insert(id, pane_with_scrollback());
+            app.open_tabs.insert_terminal(id, pane_with_scrollback());
             app.pointer.mouse_down = true;
             app.selection.span = Some(Selection {
                 block: false,
@@ -2526,12 +2581,12 @@ mod tests {
             });
             app.pointer.cursor_pos = (10.0, just_inside_top_edge(&app));
             app.auto_scroll_selection();
-            app.terminals[&id].grid().scroll_offset()
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset()
         };
         let deep = {
             let mut app = App::new();
             let id = TabId(1);
-            app.terminals.insert(id, pane_with_scrollback());
+            app.open_tabs.insert_terminal(id, pane_with_scrollback());
             app.pointer.mouse_down = true;
             app.selection.span = Some(Selection {
                 block: false,
@@ -2543,7 +2598,7 @@ mod tests {
             });
             app.pointer.cursor_pos = (10.0, 0.0);
             app.auto_scroll_selection();
-            app.terminals[&id].grid().scroll_offset()
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset()
         };
         assert_eq!(shallow, 1, "barely inside the margin scrolls one line");
         assert_eq!(
@@ -2564,11 +2619,11 @@ mod tests {
         // Content is written directly to the grid (no live shell) so each
         // row holds a known, distinguishable number instead of depending on
         // PTY timing.
-        let mut pane =
+        let mut terminal =
             Terminal::with_command(10, 3, portable_pty::CommandBuilder::new("true"), 1000)
-                .expect("test pane spawn");
+                .expect("test terminal spawn");
         {
-            let grid = pane.grid_mut();
+            let grid = terminal.grid_mut();
             for n in 0..20 {
                 for ch in n.to_string().chars() {
                     grid.print(ch);
@@ -2577,15 +2632,20 @@ mod tests {
                 grid.line_feed();
             }
         }
-        let rows = pane.grid().rows();
+        let rows = terminal.grid().rows();
 
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, pane);
+        app.open_tabs.insert_terminal(id, terminal);
         app.pointer.mouse_down = true;
         // Anchor the drag on the live view's current top row (still holding
         // real numbers, not the fresh blank row the cursor just moved to).
-        let start_abs = app.terminals[&id].grid().to_absolute_row(0);
+        let start_abs = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(0);
         app.selection.span = Some(Selection {
             block: false,
             start_row: start_abs,
@@ -2603,8 +2663,8 @@ mod tests {
             app.auto_scroll_selection();
         }
         assert_eq!(
-            app.terminals[&id].grid().scroll_offset(),
-            app.terminals[&id].grid().scrollback_len(),
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset(),
+            app.open_tabs.terminal(&id).unwrap().grid().scrollback_len(),
             "should have scrolled all the way back"
         );
 
@@ -2627,7 +2687,7 @@ mod tests {
     fn test_auto_scroll_selection_throttles_repeated_ticks() {
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_scrollback());
+        app.open_tabs.insert_terminal(id, pane_with_scrollback());
         app.pointer.mouse_down = true;
         app.selection.span = Some(Selection {
             block: false,
@@ -2644,14 +2704,17 @@ mod tests {
 
         // The second call lands before `pointer.auto_scroll_next`, so it must not
         // advance the scrollback a second time.
-        assert_eq!(app.terminals[&id].grid().scroll_offset(), 1);
+        assert_eq!(
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset(),
+            1
+        );
     }
 
     #[test]
     fn test_auto_scroll_selection_noop_when_pointer_not_near_an_edge() {
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_scrollback());
+        app.open_tabs.insert_terminal(id, pane_with_scrollback());
         app.pointer.mouse_down = true;
         app.selection.span = Some(Selection {
             block: false,
@@ -2665,14 +2728,17 @@ mod tests {
 
         app.auto_scroll_selection();
 
-        assert_eq!(app.terminals[&id].grid().scroll_offset(), 0);
+        assert_eq!(
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset(),
+            0
+        );
     }
 
     #[test]
     fn test_auto_scroll_selection_noop_when_mouse_not_held() {
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(id, pane_with_scrollback());
+        app.open_tabs.insert_terminal(id, pane_with_scrollback());
         app.pointer.mouse_down = false;
         app.selection.span = Some(Selection {
             block: false,
@@ -2686,7 +2752,10 @@ mod tests {
 
         app.auto_scroll_selection();
 
-        assert_eq!(app.terminals[&id].grid().scroll_offset(), 0);
+        assert_eq!(
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset(),
+            0
+        );
     }
 
     #[test]
@@ -2700,12 +2769,12 @@ mod tests {
         let mut app = App::new();
         // The default tab lays out a single pane, `TabId(0)`.
         let id = TabId(0);
-        let mut pane = pane_with_scrollback();
-        pane.grid_mut().enter_alt_screen();
+        let mut terminal = pane_with_scrollback();
+        terminal.grid_mut().enter_alt_screen();
         // DECSET ?1000: the app asks for mouse reporting, so the wheel is
         // forwarded to it rather than scrolling Winter's own view.
-        pane.grid_mut().set_private_mode(1000, true);
-        app.terminals.insert(id, pane);
+        terminal.grid_mut().set_private_mode(1000, true);
+        app.open_tabs.insert_terminal(id, terminal);
         app.selection.span = Some(Selection {
             block: false,
             start_row: 3,
@@ -2733,11 +2802,16 @@ mod tests {
         // started on and would not grow.
         let mut app = App::new();
         let id = TabId(1);
-        let mut pane = pane_with_scrollback();
-        pane.grid_mut().enter_alt_screen();
-        app.terminals.insert(id, pane);
+        let mut terminal = pane_with_scrollback();
+        terminal.grid_mut().enter_alt_screen();
+        app.open_tabs.insert_terminal(id, terminal);
         app.pointer.mouse_down = true;
-        let anchor = app.terminals[&id].grid().to_absolute_row(0);
+        let anchor = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(0);
         app.selection.span = Some(Selection {
             block: false,
             start_row: anchor,
@@ -2751,7 +2825,7 @@ mod tests {
         app.auto_scroll_selection();
 
         assert_eq!(
-            app.terminals[&id].grid().scroll_offset(),
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset(),
             0,
             "the retained scrollback belongs to the primary buffer, so a \
              full-screen app's viewport must not scroll into it"
@@ -2772,7 +2846,7 @@ mod tests {
         // top-left cell.
         let mut app = App::new();
         let id = TabId(1);
-        app.terminals.insert(
+        app.open_tabs.insert_terminal(
             id,
             Terminal::with_command(
                 40,
@@ -2783,12 +2857,17 @@ mod tests {
             .expect("test pane spawn"),
         );
         assert_eq!(
-            app.terminals[&id].grid().scrollback_len(),
+            app.open_tabs.terminal(&id).unwrap().grid().scrollback_len(),
             0,
             "fixture needs a pane with no history to consume"
         );
         app.pointer.mouse_down = true;
-        let anchor = app.terminals[&id].grid().to_absolute_row(0);
+        let anchor = app
+            .open_tabs
+            .terminal(&id)
+            .unwrap()
+            .grid()
+            .to_absolute_row(0);
         app.selection.span = Some(Selection {
             block: false,
             start_row: anchor,

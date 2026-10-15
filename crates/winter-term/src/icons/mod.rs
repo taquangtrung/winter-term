@@ -31,20 +31,20 @@ const FILE_SET: &str = "file";
 /// Set prefix for the Git status icons.
 const GIT_SET: &str = "git";
 
-/// Tool name to the packed icon naming it. A tool not listed gets
-/// [`FALLBACK_TOOL_ICON`].
-const TOOL_ICONS: [(&str, &str); 4] = [
+/// Page kind to the packed icon naming it. A kind not listed gets
+/// [`FALLBACK_PAGE_ICON`].
+const PAGE_ICONS: [(&str, &str); 4] = [
     ("dir", "file/default_folder"),
     ("git", "file/file_git"),
     ("grep", "file/file_search"),
     ("pdf", "file/file_pdf"),
 ];
 
-/// The icon for a terminal pane.
+/// The icon for a terminal tab.
 const TERMINAL_ICON: &str = "file/file_terminal";
 
-/// The icon for a tool with no artwork of its own.
-const FALLBACK_TOOL_ICON: &str = "file/default_file";
+/// The icon for a page with no artwork of its own.
+const FALLBACK_PAGE_ICON: &str = "file/default_file";
 
 // ========================================================================
 // Free functions
@@ -106,22 +106,23 @@ pub(crate) fn git_icon(status: &str) -> String {
     qualified(GIT_SET, status)
 }
 
-/// The icon naming a tool (`dir`, `git`, ...), or the default file icon when
-/// the tool has none of its own.
-pub(crate) fn tool_icon(tool: &str) -> String {
-    TOOL_ICONS
+/// The icon naming a kind of page (`dir`, `git`, ...), or the default file
+/// icon when the kind has none of its own.
+pub(crate) fn page_icon(kind: &str) -> String {
+    PAGE_ICONS
         .iter()
-        .find(|(name, _)| *name == tool)
-        .map_or(FALLBACK_TOOL_ICON, |(_, icon)| icon)
+        .find(|(name, _)| *name == kind)
+        .map_or(FALLBACK_PAGE_ICON, |(_, icon)| icon)
         .to_string()
 }
 
-/// Whether a tool has artwork of its own, rather than the default file icon.
-pub(crate) fn has_tool_icon(tool: &str) -> bool {
-    TOOL_ICONS.iter().any(|(name, _)| *name == tool)
+/// Whether a kind of page has artwork of its own, rather than the default
+/// file icon.
+pub(crate) fn has_page_icon(kind: &str) -> bool {
+    PAGE_ICONS.iter().any(|(name, _)| *name == kind)
 }
 
-/// The icon naming a terminal pane.
+/// The icon naming a terminal tab.
 pub(crate) fn terminal_icon() -> String {
     TERMINAL_ICON.to_string()
 }
@@ -286,13 +287,13 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_icons_are_all_packed() {
-        for (tool, icon) in TOOL_ICONS {
-            assert_eq!(tool_icon(tool), icon);
+    fn test_page_icons_are_all_packed() {
+        for (kind, icon) in PAGE_ICONS {
+            assert_eq!(page_icon(kind), icon);
             assert!(contains(icon), "{icon} is not packed");
         }
         assert!(contains(TERMINAL_ICON));
-        assert!(contains(FALLBACK_TOOL_ICON));
-        assert_eq!(tool_icon("keys"), FALLBACK_TOOL_ICON);
+        assert!(contains(FALLBACK_PAGE_ICON));
+        assert_eq!(page_icon("keys"), FALLBACK_PAGE_ICON);
     }
 }

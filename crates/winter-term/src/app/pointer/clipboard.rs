@@ -33,8 +33,8 @@ fn copy_confirmation(text: &str) -> String {
 // ========================================================================
 
 impl App {
-    /// The grid a selection over `pane` reads: the rows a page last painted
-    /// when one covers the pane, else the pane's own terminal grid.
+    /// The grid a selection over `tab` reads: the rows a page last painted,
+    /// else the terminal's own grid.
     ///
     /// A page draws over a pane whose shell keeps running underneath, so the
     /// two grids hold different text. Resolving against the terminal's meant a
@@ -44,10 +44,17 @@ impl App {
     /// Both are addressed the same way afterwards: a page's grid has no
     /// scrollback, so `to_absolute_row` over it is the identity and
     /// `absolute_cell` is an ordinary cell lookup.
-    pub(crate) fn selection_grid(&self, pane: TabId) -> Option<&winter_render::Grid> {
-        match self.pages.get(&pane).and_then(|slot| slot.painted.as_ref()) {
+    pub(crate) fn selection_grid(&self, tab: TabId) -> Option<&winter_render::Grid> {
+        match self
+            .open_tabs
+            .page(&tab)
+            .and_then(|slot| slot.painted.as_ref())
+        {
             Some(painted) => Some(painted),
-            None => self.terminals.get(&pane).map(|pane| pane.grid()),
+            None => self
+                .open_tabs
+                .terminal(&tab)
+                .map(|terminal| terminal.grid()),
         }
     }
 
@@ -62,7 +69,7 @@ impl App {
     /// would yield text the user never pointed at, so the selection is dropped
     /// at the gesture that is about to cause the repaint. Other terminals
     /// resolve the same problem the same way.
-    pub(crate) fn drop_selection_in_pane(&mut self, tab: TabId) {
+    pub(crate) fn drop_selection_in_tab(&mut self, tab: TabId) {
         if self
             .selection
             .span
@@ -172,10 +179,10 @@ impl App {
             self.selection.span = None;
             return;
         };
-        let Some(pane) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
-        let grid = pane.grid();
+        let grid = terminal.grid();
         let last_col = grid.cols().saturating_sub(1);
         // The anchor is already absolute; only the live cursor is a viewport row.
         let abs_cr = grid.to_absolute_row(cr);
@@ -256,10 +263,10 @@ impl App {
         let text = self.get_primary_text();
         let Some(text) = text else { return };
         let focused = self.layout().focused();
-        if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+        if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
             shadow.desync();
         }
-        let Some(terminal) = self.terminals.get_mut(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal_mut(&focused) else {
             return;
         };
         // Pasting is typing: show the prompt it lands on.
@@ -297,10 +304,10 @@ impl App {
 
     pub(crate) fn paste_text(&mut self, text: &str) {
         let focused = self.layout().focused();
-        if let Some(shadow) = self.prompt_shadows.get_mut(&focused) {
+        if let Some(shadow) = self.open_tabs.prompt_shadow_mut(&focused) {
             shadow.desync();
         }
-        let Some(terminal) = self.terminals.get_mut(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal_mut(&focused) else {
             return;
         };
         // Pasting is typing: show the prompt it lands on.
@@ -420,7 +427,7 @@ mod tests {
     fn app_with_visual_selection(line: &str, anchor: usize, cursor: usize) -> crate::app::App {
         let mut app = crate::app::App::new();
         app.config.status_bar.enabled = true;
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let mut terminal = crate::terminal::session::Terminal::with_command(
             20,
             4,
@@ -435,8 +442,9 @@ mod tests {
                 grid.print(ch);
             }
         }
-        app.terminals.insert(id, terminal);
-        app.modes.insert(id, crate::model::mode::Mode::Visual);
+        app.open_tabs.insert_terminal(id, terminal);
+        app.open_tabs
+            .set_mode(&id, crate::model::mode::Mode::Visual);
         app.selection.visual_anchor = Some((0, anchor));
         app.set_nav_cursor(id, (0, cursor));
         app.update_visual_selection(id);
@@ -447,7 +455,7 @@ mod tests {
     /// into scrollback once they overflow the viewport.
     fn app_with_scrollback(lines: &[&str], rows: usize) -> (App, TabId) {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let mut terminal = crate::terminal::session::Terminal::with_command(
             20,
             rows,
@@ -467,10 +475,11 @@ mod tests {
                 }
             }
         }
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         // Normal, not Visual: `Action::EnterVisual` toggles, so a pane already
         // in Visual would leave it instead of anchoring.
-        app.modes.insert(id, crate::model::mode::Mode::Normal);
+        app.open_tabs
+            .set_mode(&id, crate::model::mode::Mode::Normal);
         (app, id)
     }
 
@@ -494,7 +503,7 @@ mod tests {
             app.handle_action(Action::MoveCursor(CursorMove::Up), id);
         }
         assert_eq!(
-            app.terminals[&id].grid().scroll_offset(),
+            app.open_tabs.terminal(&id).unwrap().grid().scroll_offset(),
             2,
             "the motion should have scrolled history"
         );
@@ -523,7 +532,7 @@ mod tests {
     #[test]
     fn test_selected_text_joins_soft_wrapped_lines_and_skips_hanging_indent() {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let mut terminal = crate::terminal::session::Terminal::with_command(
             10,
             4,
@@ -540,8 +549,9 @@ mod tests {
                 grid.print(ch);
             }
         }
-        app.terminals.insert(id, terminal);
-        app.modes.insert(id, crate::model::mode::Mode::Visual);
+        app.open_tabs.insert_terminal(id, terminal);
+        app.open_tabs
+            .set_mode(&id, crate::model::mode::Mode::Visual);
         // Anchor at row 0, col 0; cursor at row 1, col 4 ("Z")
         app.selection.visual_anchor = Some((0, 0));
         app.set_nav_cursor(id, (1, 4));
@@ -557,7 +567,7 @@ mod tests {
         // break consumed lives in no cell, so the join has to reinsert it or
         // the copied line glues two words together.
         let mut app = App::new();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let mut terminal = crate::terminal::session::Terminal::with_command(
             10,
             4,
@@ -573,8 +583,9 @@ mod tests {
                 grid.print(ch);
             }
         }
-        app.terminals.insert(id, terminal);
-        app.modes.insert(id, crate::model::mode::Mode::Visual);
+        app.open_tabs.insert_terminal(id, terminal);
+        app.open_tabs
+            .set_mode(&id, crate::model::mode::Mode::Visual);
         // Anchor at row 0, col 0; cursor at row 1, col 6 (the last b)
         app.selection.visual_anchor = Some((0, 0));
         app.set_nav_cursor(id, (1, 6));

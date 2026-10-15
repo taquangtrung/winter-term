@@ -11,7 +11,7 @@ use super::App;
 
 impl App {
     pub(crate) fn yank_block_source(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let blocks = terminal.scrollback().blocks();
@@ -42,7 +42,7 @@ impl App {
 
     /// Export the plain-text content of the focused block to the system clipboard.
     pub(crate) fn export_focused_block_text(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let blocks = terminal.scrollback().blocks();
@@ -77,7 +77,7 @@ impl App {
 
     /// Export the SVG graphic in the focused block (if any) to a temporary file and open it.
     pub(crate) fn export_focused_block_svg(&mut self, focused: TabId) {
-        let Some(terminal) = self.terminals.get(&focused) else {
+        let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
         let blocks = terminal.scrollback().blocks();
@@ -113,7 +113,7 @@ impl App {
     }
 
     pub(crate) fn toggle_fold(&mut self, focused: TabId) {
-        let terminal = match self.terminals.get(&focused) {
+        let terminal = match self.open_tabs.terminal(&focused) {
             Some(p) => p,
             None => return,
         };
@@ -132,12 +132,13 @@ impl App {
             return;
         };
 
-        let folded = self.folded_blocks.entry(focused).or_default();
-        if folded.contains(&idx) {
-            folded.remove(&idx);
+        let Some(tab) = self.open_tabs.terminal_tab_mut(&focused) else {
+            return;
+        };
+        if tab.folded_blocks.remove(&idx) {
             self.webview_mgr.unfold_block(focused, idx);
         } else {
-            folded.insert(idx);
+            tab.folded_blocks.insert(idx);
             self.webview_mgr.fold_block(focused, idx);
         }
         self.last_tile_layout = None;
@@ -145,13 +146,13 @@ impl App {
     }
 
     pub(crate) fn is_block_folded(&self, tab_id: TabId, block_index: usize) -> bool {
-        self.folded_blocks
-            .get(&tab_id)
-            .is_some_and(|set| set.contains(&block_index))
+        self.open_tabs
+            .terminal_tab(&tab_id)
+            .is_some_and(|tab| tab.folded_blocks.contains(&block_index))
     }
 
     pub(crate) fn focus_block(&mut self, nav: input::BlockNav, focused: TabId) {
-        let terminal = match self.terminals.get(&focused) {
+        let terminal = match self.open_tabs.terminal(&focused) {
             Some(p) => p,
             None => return,
         };
@@ -177,7 +178,7 @@ impl App {
                 .unwrap_or(0),
         };
         let diff = target_row.abs_diff(current_offset);
-        let grid = self.terminals.get_mut(&focused).unwrap().grid_mut();
+        let grid = self.open_tabs.terminal_mut(&focused).unwrap().grid_mut();
         if target_row > current_offset {
             grid.scroll_up_history(diff);
         } else {

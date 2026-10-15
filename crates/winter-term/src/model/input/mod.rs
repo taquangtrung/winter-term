@@ -552,12 +552,15 @@ pub fn resolve_with(
         Mode::Normal => resolve_normal(key, pending, window),
         Mode::Visual => resolve_visual(key, pending, window),
         Mode::BlockFocus => resolve_block_focus(key, flags, window, is_alt_screen),
-        // A page was already offered this key and declined it, so only the
-        // window-layout chords are left to honor: splitting, closing, zooming,
-        // and moving focus all still have to work from a page tab. Anything
-        // else would act on a pane that has no grid and no PTY.
-        Mode::Page => window.direct_action(key, false).unwrap_or(Action::Ignore),
     }
+}
+
+/// Resolve a key a page tab was offered and declined. Only the window-layout
+/// chords are left to honor: splitting, closing, zooming, and moving focus
+/// all still have to work from a page tab. Anything else would act on a
+/// terminal the tab does not have.
+pub fn resolve_page(key: &Key, window: &WindowKeymap) -> Action {
+    window.direct_action(key, false).unwrap_or(Action::Ignore)
 }
 
 // ---- xterm baseline encoding ------------------------------------------------
@@ -662,9 +665,9 @@ mod tests {
     }
 
     #[test]
-    fn test_page_mode_still_honors_the_window_layout_chords() {
+    fn test_a_page_tab_still_honors_the_window_layout_chords() {
         // A page tab has to stay manageable: `Alt-h` moves focus off it and
-        // `Shift-Alt-\\` splits beside it, exactly as from a terminal pane.
+        // `Shift-Alt-\\` splits beside it, exactly as from a terminal tab.
         let focus_left = Key {
             alt: true,
             code: KeyCode::Char('h'),
@@ -672,7 +675,7 @@ mod tests {
             shift: false,
         };
         assert_eq!(
-            resolve_simple(Mode::Page, &focus_left),
+            resolve_page(&focus_left, &WindowKeymap::default()),
             Action::FocusPane(FocusDir::Left)
         );
     }
@@ -688,9 +691,10 @@ mod tests {
             shift: true,
         };
         let expected = Action::RunCommand("dir_page".to_string());
-        for mode in [Mode::Insert, Mode::Normal, Mode::Page, Mode::Visual] {
+        for mode in [Mode::Insert, Mode::Normal, Mode::Visual] {
             assert_eq!(resolve_simple(mode, &chord), expected, "mode {mode:?}");
         }
+        assert_eq!(resolve_page(&chord, &WindowKeymap::default()), expected);
     }
 
     #[test]
@@ -711,7 +715,7 @@ mod tests {
 
     #[test]
     fn test_the_reopen_chords_answer_from_any_mode() {
-        // The keys that put back a tool closed by accident have to answer from
+        // The keys that put back a tab closed by accident have to answer from
         // inside whatever is showing instead of it, which after a pane was
         // merged away is a terminal in Insert mode.
         for (key, command) in [('u', "reopen_page"), ('e', "tool_list")] {
@@ -722,23 +726,31 @@ mod tests {
                 shift: true,
             };
             let expected = Action::RunCommand(command.to_string());
-            for mode in [Mode::Insert, Mode::Normal, Mode::Page, Mode::Visual] {
+            for mode in [Mode::Insert, Mode::Normal, Mode::Visual] {
                 assert_eq!(resolve_simple(mode, &chord), expected, "{key} in {mode:?}");
             }
+            assert_eq!(
+                resolve_page(&chord, &WindowKeymap::default()),
+                expected,
+                "{key} in a page"
+            );
         }
     }
 
     #[test]
-    fn test_page_mode_swallows_keys_the_page_declined() {
-        // `i` in Page mode must not reach the Normal-mode resolver: switching a
-        // page tab to Insert would leave its keystrokes with nowhere to go.
+    fn test_a_page_tab_swallows_keys_the_page_declined() {
+        // `i` in a page tab must not reach the Normal-mode resolver: switching
+        // a page tab to Insert would leave its keystrokes with nowhere to go.
         let insert = Key {
             alt: false,
             code: KeyCode::Char('i'),
             ctrl: false,
             shift: false,
         };
-        assert_eq!(resolve_simple(Mode::Page, &insert), Action::Ignore);
+        assert_eq!(
+            resolve_page(&insert, &WindowKeymap::default()),
+            Action::Ignore
+        );
     }
 
     // ---- Kitty keyboard protocol encoding -----------------------------------

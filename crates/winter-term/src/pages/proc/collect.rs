@@ -10,8 +10,8 @@ use std::time::Instant;
 
 use crate::model::process::{CpuReading, ProcessSample, RawProcess};
 
-use crate::extensions::gpu;
-use crate::extensions::run::run_text;
+use crate::pages::gpu;
+use crate::pages::run::run_text;
 
 use super::parse;
 

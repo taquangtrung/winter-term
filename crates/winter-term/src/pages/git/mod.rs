@@ -31,7 +31,7 @@ use crate::model::page::{
     PromptRequest, SpawnRequest,
 };
 use crate::model::vim::nav::{buffer_end, VimKey, VimNav};
-use crate::extensions::refresh::RefreshTimer;
+use crate::pages::refresh::RefreshTimer;
 
 use commit::{CommitContent, CommitFile};
 use diff::{FileDiff, Hunk};
@@ -2102,7 +2102,7 @@ impl Page for GitPage {
     }
 
     fn cwd(&self) -> Option<PathBuf> {
-        // The file under the cursor decides it, so a tool opened from a diff
+        // The file under the cursor decides it, so a page opened from a diff
         // starts beside that file rather than at the top of the repository.
         // Rows standing for a commit or a section name no file and leave the
         // repository root as the answer.
@@ -4152,7 +4152,7 @@ index aaa..bbb 100644
 
     #[test]
     fn test_q_leaves_the_log_for_the_status_view_rather_than_closing() {
-        // Closing the whole tool on `q` from a log would lose the view the user
+        // Closing the whole page on `q` from a log would lose the view the user
         // came from.
         let mut page = loaded_page();
         choose(&mut page, 'l', 'l');
@@ -4586,7 +4586,10 @@ index aaa..bbb 100644
             let row_str: String = r.iter().map(|s| s.text.as_str()).collect();
             row_str.contains("not found: absent") || row_str.contains("no search")
         });
-        assert!(!found, "notices must be routed to status bar, not printed into git view rows");
+        assert!(
+            !found,
+            "notices must be routed to status bar, not printed into git view rows"
+        );
     }
 
     #[test]

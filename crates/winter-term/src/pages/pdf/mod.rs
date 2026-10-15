@@ -25,7 +25,7 @@ use crate::model::page::{
 /// document does not butt against it.
 const HEADER_ROWS: usize = 2;
 
-/// What the header calls each mode, in the place the other tools put a state
+/// What the header calls each mode, in the place the other pages put a state
 /// word. Normal mode says nothing: it is the one you are in unless told
 /// otherwise.
 const LABEL_CURSOR: &str = "CURSOR";
@@ -40,7 +40,7 @@ const HINT: &str = "i cursor, / search, j/k scroll, Ctrl-d/u half, gg/G ends, {n
 const ASK_SEARCH: &str = "search";
 const ASK_SEARCH_BACK: &str = "search-back";
 
-/// Left margin the title starts at, matching the other tools.
+/// Left margin the title starts at, matching the other pages.
 const LEFT_PAD: usize = 2;
 
 /// Fraction of the viewport `Ctrl-d` and `Ctrl-u` move, the half-screen step
@@ -1631,7 +1631,7 @@ mod tests {
 
     #[test]
     fn test_a_search_asks_the_host_for_what_to_look_for() {
-        // `/` is Winter's one convention that holds in every tool, and the
+        // `/` is Winter's one convention that holds in every page, and the
         // question belongs to the terminal's own prompt rather than to any
         // chrome the surface could draw for itself.
         let mut pdf = page();

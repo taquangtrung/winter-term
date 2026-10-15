@@ -22,6 +22,7 @@ use winter_render::{
     StatusPrompt, StatusSearch, Style, Theme, ThemeRgb,
 };
 
+use super::open_tabs::OpenTabs;
 use super::{status_bar, App, ImageBlock, ReflowSource};
 
 /// Base texture ID for rasterized pane tab strips (below chrome overlay IDs).
@@ -34,10 +35,10 @@ const PANE_STRIP_TEXTURE_BASE: u64 = u64::MAX - 200;
 /// Raster image MIME types rendered natively on the GPU. Other rich types
 /// (HTML, markdown, ...) still go to the WebView.
 const RASTER_MIMES: [&str; 4] = ["image/gif", "image/jpeg", "image/png", "image/webp"];
-/// What the extension list is headed by. A list of commands needs no naming, but
-/// rows naming extensions and directories do not say on their own what picking one
+/// What the tab list is headed by. A list of commands needs no naming, but
+/// rows naming pages and directories do not say on their own what picking one
 /// would do.
-const EXTENSIONS_TITLE: &str = "Extensions: open, then recently closed";
+const TAB_LIST_TITLE: &str = "Tabs: open, then recently closed";
 
 const CSV_MIME: &str = "text/csv";
 const JSON_MIME: &str = "application/json";
@@ -143,20 +144,18 @@ struct PaneViewInput<'a> {
     focused_bands: &'a [(usize, usize)],
     hovered_pane: Option<TabId>,
     hovered_url: Option<&'a str>,
-    modes: &'a std::collections::HashMap<TabId, Mode>,
-    nav_cursors: &'a std::collections::HashMap<TabId, (usize, usize)>,
     overlays: &'a PaneOverlays,
     page_paints: &'a [PagePaint],
     /// Where each page's caret sits, and whether it is typing there.
     page_cursors: &'a std::collections::HashMap<TabId, PaneCaret>,
-    /// The open pages, for the grid each one last painted into.
-    pages: &'a std::collections::HashMap<TabId, super::page::PageSlot>,
     /// Whether an overlay has the keyboard: the palette, or a question being
     /// answered in the input dialog.
     overlay_open: bool,
-    panes: &'a std::collections::HashMap<TabId, crate::terminal::session::Terminal>,
     rects: &'a [(TabId, Rect)],
     selection: Option<&'a super::Selection>,
+    /// Every open tab: the grid each page last painted into, and each
+    /// terminal with its mode.
+    tabs: &'a OpenTabs,
     window_focused: bool,
 }
 
@@ -180,24 +179,21 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
         focused_bands,
         hovered_pane,
         hovered_url,
-        modes,
-        nav_cursors,
         overlays,
         page_cursors,
         page_paints,
-        pages,
         overlay_open,
-        panes,
         rects,
         selection,
+        tabs,
         window_focused,
     } = input;
     let mut views: Vec<PaneView> = Vec::new();
     for (i, (id, rect)) in rects.iter().enumerate() {
-        // A page covers the pane's terminal while it is open, so it is checked
-        // first: the grid underneath keeps updating, unseen.
+        // A page tab paints a grid of its own; every other tab drawn is a
+        // terminal.
         if let Some(paint) = page_paints.iter().find(|paint| paint.tab == *id) {
-            if let Some(grid) = pages.get(id).and_then(|slot| slot.painted.as_ref()) {
+            if let Some(grid) = tabs.page(id).and_then(|slot| slot.painted.as_ref()) {
                 views.push(page_pane_view(
                     paint,
                     grid,
@@ -212,7 +208,7 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                     &overlays.search_current[i],
                 ));
             }
-        } else if let Some(pane) = panes.get(id) {
+        } else if let Some(terminal) = tabs.terminal(id) {
             let (sel_tuple, sel_block) = match selection {
                 Some(s) if s.tab == *id => (
                     Some((s.start_row, s.start_col, s.end_row, s.end_col)),
@@ -225,15 +221,13 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
             } else {
                 None
             };
-            // Each pane's cursor follows its own mode (stored per pane), so a
-            // non-focused pane shows the configured shape for its mode rather
+            // Each terminal's cursor follows its own mode (stored per terminal), so a
+            // non-focused terminal shows the configured shape for its mode rather
             // than always reverting to a stale Block the shell reported via
             // DECSCUSR.
-            let pane_mode = modes.get(id).copied().unwrap_or_default();
+            let pane_mode = tabs.mode(id).unwrap_or_default();
             let nav_cursor = if *id == focused && matches!(pane_mode, Mode::Normal | Mode::Visual) {
-                // Direct field access (not the method) so only `nav_cursors`
-                // is borrowed, avoiding a conflict with the live `pane` borrow.
-                nav_cursors.get(id).copied()
+                tabs.nav_cursor(id)
             } else {
                 None
             };
@@ -243,43 +237,41 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
             // an edge the image itself is cropped at.
             let block_band = nav_cursor.and_then(|(nav_row, _)| {
                 focused_bands.iter().find_map(|&(abs_row, band_rows)| {
-                    let top = pane.grid().to_viewport_row(abs_row);
+                    let top = terminal.grid().to_viewport_row(abs_row);
                     let bottom = top + band_rows as isize;
-                    let rows = pane.grid().rows() as isize;
+                    let rows = terminal.grid().rows() as isize;
                     let (start, end) = (top.max(0), bottom.min(rows));
                     let nav = nav_row as isize;
                     (nav >= start && nav < end)
                         .then(|| (start.max(0) as usize, (end - start).max(1) as usize))
                 })
             });
-            // The cursor-line band is not focus-gated: a pane left in Normal
+            // The cursor-line band is not focus-gated: a terminal left in Normal
             // mode keeps showing where its cursor is, so switching panes (and
             // back) doesn't lose your place. Only the cursor block itself is
-            // drawn for the focused pane alone.
-            let cursor_line_row = cursor_line_row(pane_mode, nav_cursors.get(id).copied());
+            // drawn for the focused terminal alone.
+            let cursor_line_row = cursor_line_row(pane_mode, tabs.nav_cursor(id));
             let config_shape = match pane_mode {
                 Mode::Insert => config.cursor.insert,
                 Mode::Normal => config.cursor.normal,
                 Mode::Visual => config.cursor.visual,
                 Mode::BlockFocus => config.cursor.block_focus,
-                // Unreachable for a terminal pane, whose mode is never Page.
-                Mode::Page => config.cursor.normal,
             };
             let cursor_shape = effective_cursor_shape(
-                !pane.is_at_prompt(),
-                pane.grid().reported_cursor_shape(),
+                !terminal.is_at_prompt(),
+                terminal.grid().reported_cursor_shape(),
                 config_shape,
             );
             let hovered_link = if hovered_pane == Some(*id) {
                 hovered_url
-                    .map(|url| pane.grid().find_link_id(url))
+                    .map(|url| terminal.grid().find_link_id(url))
                     .unwrap_or(0)
             } else {
                 0
             };
             let is_focused = *id == focused;
             let cursor_unfocused = is_focused && !window_focused;
-            let cursor_visible = if overlay_open || !pane.grid().cursor_visible() {
+            let cursor_visible = if overlay_open || !terminal.grid().cursor_visible() {
                 // An overlay with the keyboard has the cursor too, and DECTCEM
                 // (CSI ?25l) lets a full-screen app like btop hide it outright.
                 false
@@ -301,7 +293,7 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                 cursor_visible,
                 dim: !is_focused && config.dim_inactive,
                 focused: is_focused,
-                grid: pane.grid(),
+                grid: terminal.grid(),
                 hovered_link,
                 labels,
                 find_labels: if *id == focused {
@@ -317,8 +309,8 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                 // lacks focus.
                 nav_cursor_visible: cursor_unfocused || !config.cursor.blink || blink_phase,
                 rect: App::layout_rect_to_pane(*rect),
-                scroll_offset: pane.grid().scroll_offset(),
-                scrollback_len: pane.grid().scrollback_len(),
+                scroll_offset: terminal.grid().scroll_offset(),
+                scrollback_len: terminal.grid().scrollback_len(),
                 search_matches: &overlays.search_matches[i],
                 search_current: &overlays.search_current[i],
                 sentence_spans: &overlays.sentence_spans[i],
@@ -337,8 +329,8 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
 /// A page has no terminal caret of its own, so the cursor is parked out of
 /// bounds (suppressing it) and the cursor line marks where the page's own
 /// selection sits. A text selection over the page is drawn here the same way a
-/// terminal pane draws one: the rows it names are the page's, so it has to be
-/// resolved against the grid the page painted rather than the pane's.
+/// terminal draws one: the rows it names are the page's, so it has to be
+/// resolved against the grid the page painted.
 /// Where a pane's caret is drawn and how it reads: the cell it is on, and
 /// whether what is happening there is typing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -542,7 +534,7 @@ fn band_has_room(terminal: &Terminal, abs_row: usize, extra: usize) -> bool {
 /// and preserving aspect, cropping any part outside the pane's content area.
 fn image_placements(
     blocks: &[ImageBlock],
-    panes: &std::collections::HashMap<TabId, crate::terminal::session::Terminal>,
+    tabs: &OpenTabs,
     rects: &[(TabId, Rect)],
     cell_height: f32,
     covered: &[PagePaint],
@@ -552,23 +544,23 @@ fn image_placements(
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == img.tab_id) else {
             continue;
         };
-        // A tool page owns every row of the pane it covers, the same way an
+        // A page owns every row of its tab, the same way an
         // alternate-screen app does below.
         if covered.iter().any(|paint| paint.tab == img.tab_id) {
             continue;
         }
-        let Some(pane) = panes.get(&img.tab_id) else {
+        let Some(terminal) = tabs.terminal(&img.tab_id) else {
             continue;
         };
         // While the pane shows the alternate screen, a full-screen app owns
         // every row of the viewport. A primary-screen block painted on top
         // would hide the app's own rows (four lines of vim, a htop gauge)
         // until it exits, so it is not drawn at all until the pane returns.
-        if pane.grid().is_alt_screen() {
+        if terminal.grid().is_alt_screen() {
             continue;
         }
         let pane_rect = App::layout_rect_to_pane(*rect);
-        let top_row = pane.grid().to_viewport_row(img.abs_row);
+        let top_row = terminal.grid().to_viewport_row(img.abs_row);
         let nat_w = img.nat_w as f32;
         let nat_h = img.nat_h as f32;
         if nat_w <= 0.0 || nat_h <= 0.0 {
@@ -611,7 +603,7 @@ fn image_placements(
 /// behind them, and the empty-state message matching what it searches over.
 fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) -> PaletteView {
     let empty_message = match palette.mode {
-        PaletteMode::Extensions => "No matching extensions",
+        PaletteMode::TabList => "No matching tabs",
         PaletteMode::Files => "Nothing here by that name",
         PaletteMode::History => "No matching history",
         PaletteMode::PagePick => "Nothing matches",
@@ -635,7 +627,7 @@ fn palette_view(palette: &Palette, match_underline: bool, pick: Option<&str>) ->
             Some(title) => title.clone(),
             None => match &palette.dir {
                 Some(dir) => dir.display().to_string(),
-                None if palette.mode == PaletteMode::Extensions => EXTENSIONS_TITLE.to_string(),
+                None if palette.mode == PaletteMode::TabList => TAB_LIST_TITLE.to_string(),
                 None => pick.unwrap_or_default().to_string(),
             },
         },
@@ -762,16 +754,16 @@ impl App {
         let rects = self.pane_rects_in(viewport);
         let focused = self.tabs.layout.focused();
         let strip_frames = self.strip_frames(viewport, (cw, ch));
-        let mode = self.modes.get(&focused).copied().unwrap_or_default();
+        let mode = self.open_tabs.mode(&focused);
         // Pages paint themselves into a grid of their own, so the renderer
-        // draws a tool pane through exactly the path a terminal pane takes. A
+        // draws a page tab through exactly the path a terminal tab takes. A
         // page is handed its row count first, so it can window a listing longer
         // than the pane around its own cursor.
         let icon_style = self.config.icons;
         let mut page_paints: Vec<PagePaint> = Vec::new();
         for (id, rect) in &rects {
             let (cols, rows) = renderer.grid_size_for(App::layout_rect_to_pane(*rect));
-            let Some(slot) = self.pages.get_mut(id) else {
+            let Some(slot) = self.open_tabs.page_mut(id) else {
                 continue;
             };
             let content = slot.page.content(rows, cols, self.page_wrap);
@@ -822,7 +814,7 @@ impl App {
                     }
                 })
             });
-        let tool_icon = self.pages.get(&focused).and_then(|slot| slot.status_icon());
+        let page_icon = self.open_tabs.page(&focused).map(|slot| slot.status_icon());
         let status = status_bar(
             mode,
             renderer.theme(),
@@ -830,7 +822,7 @@ impl App {
             search,
             notice,
             &self.config.status_bar,
-            tool_icon,
+            page_icon,
         );
         let status = status_enabled.then_some(&status);
         let palette_view = self.palette.as_ref().map(|p| {
@@ -842,11 +834,11 @@ impl App {
         });
         // A page part-way through a multi-key command says so through the
         // same card the terminal's own prefixes use, and says it at once: the
-        // menus are how the tools are learned, where the terminal's hints
+        // menus are how the pages are learned, where the terminal's hints
         // wait to see whether the typing stalls.
         let which_key_view = self
-            .pages
-            .get(&focused)
+            .open_tabs
+            .page(&focused)
             .and_then(|slot| slot.page.hint())
             .map(|hint| winter_render::WhichKeyView {
                 items: hint.items,
@@ -864,8 +856,8 @@ impl App {
         // the cursor says which cell a selection would start from, and without
         // it a page looks like it has no cursor at all.
         let page_cursors: std::collections::HashMap<TabId, PaneCaret> = self
-            .pages
-            .iter()
+            .open_tabs
+            .pages()
             .filter_map(|(id, slot)| {
                 if let Some(cursor) = self.page_cursor.as_ref().filter(|c| c.tab == *id) {
                     return Some((*id, PaneCaret::at(cursor.row, cursor.col)));
@@ -898,7 +890,7 @@ impl App {
         reflow_width_wrapped_blocks(&mut self.image_blocks, &rects, renderer);
         let mut placements = image_placements(
             &self.image_blocks,
-            &self.terminals,
+            &self.open_tabs,
             &rects,
             ch,
             &page_paints,
@@ -925,16 +917,13 @@ impl App {
             focused_bands: &focused_bands,
             hovered_pane,
             hovered_url: self.pointer.hovered_url.as_deref(),
-            modes: &self.modes,
-            nav_cursors: &self.nav_cursors,
             overlays: &overlays,
             page_cursors: &page_cursors,
             page_paints: &page_paints,
-            pages: &self.pages,
             overlay_open: self.palette.is_some(),
-            panes: &self.terminals,
             rects: &rects,
             selection: self.selection.span.as_ref(),
+            tabs: &self.open_tabs,
             window_focused: self.window_focused,
         });
         renderer.render(
@@ -1039,10 +1028,14 @@ impl App {
             .iter()
             .map(|(id, _)| {
                 let grid = self
-                    .terminals
-                    .get(id)
-                    .map(|pane| pane.grid())
-                    .or_else(|| self.pages.get(id).and_then(|slot| slot.painted.as_ref()));
+                    .open_tabs
+                    .terminal(id)
+                    .map(|terminal| terminal.grid())
+                    .or_else(|| {
+                        self.open_tabs
+                            .page(id)
+                            .and_then(|slot| slot.painted.as_ref())
+                    });
                 match (query_str, grid) {
                     (Some(qs), Some(grid)) => {
                         crate::app::navigation::search::visible_match_cells(grid, qs)
@@ -1058,10 +1051,14 @@ impl App {
             .iter()
             .map(|(id, _)| {
                 let grid = self
-                    .terminals
-                    .get(id)
-                    .map(|pane| pane.grid())
-                    .or_else(|| self.pages.get(id).and_then(|slot| slot.painted.as_ref()));
+                    .open_tabs
+                    .terminal(id)
+                    .map(|terminal| terminal.grid())
+                    .or_else(|| {
+                        self.open_tabs
+                            .page(id)
+                            .and_then(|slot| slot.painted.as_ref())
+                    });
                 match (query_str, self.search.current, grid) {
                     (Some(qs), Some((tab_id, (abs_row, col))), Some(grid)) if tab_id == *id => {
                         let top = grid.to_absolute_row(0);
@@ -1081,8 +1078,8 @@ impl App {
             rects
                 .iter()
                 .map(|(id, _)| {
-                    if let Some(pane) = self.terminals.get(id) {
-                        super::navigation::reading::sentence_spans(pane.grid())
+                    if let Some(terminal) = self.open_tabs.terminal(id) {
+                        super::navigation::reading::sentence_spans(terminal.grid())
                             .into_iter()
                             .map(|s| (s.row, s.col_start, s.col_end, s.tone))
                             .collect()
@@ -1099,8 +1096,8 @@ impl App {
             rects
                 .iter()
                 .map(|(id, _)| {
-                    if let Some(pane) = self.terminals.get(id) {
-                        let marks = super::navigation::reading::bracket_marks(pane.grid());
+                    if let Some(terminal) = self.open_tabs.terminal(id) {
+                        let marks = super::navigation::reading::bracket_marks(terminal.grid());
                         super::navigation::reading::resolve_bracket_colors(&marks, theme)
                     } else {
                         vec![]
@@ -1250,7 +1247,7 @@ impl App {
 
         let mut showing: Vec<TabId> = Vec::new();
         for (tab_id, rect) in rects {
-            let Some(slot) = self.pages.get(tab_id) else {
+            let Some(slot) = self.open_tabs.page(tab_id) else {
                 continue;
             };
             let Some(surface) = slot.page.surface() else {
@@ -1287,7 +1284,7 @@ impl App {
     /// Run whatever the open pages have queued for their surfaces, and hand
     /// each page back what its own surface posted out.
     pub(crate) fn pump_page_surfaces(&mut self) {
-        for (tab_id, slot) in self.pages.iter_mut() {
+        for (tab_id, slot) in self.open_tabs.pages_mut() {
             if let Some(js) = slot.page.take_surface_script() {
                 self.webview_mgr.run_surface_script(*tab_id, &js);
             }
@@ -1296,7 +1293,7 @@ impl App {
             match message {
                 SurfaceMessage::Key(relayed) => self.route_surface_key(relayed.tab_id, relayed.key),
                 SurfaceMessage::Text(said) => {
-                    let Some(slot) = self.pages.get_mut(&said.tab_id) else {
+                    let Some(slot) = self.open_tabs.page_mut(&said.tab_id) else {
                         continue;
                     };
                     let outcome = slot.page.on_surface_message(said.body);
@@ -1312,17 +1309,17 @@ impl App {
     ///
     /// `rects` covers the active tab alone, so a background tab's panes are
     /// already out. Left out on top of those: a pane showing an
-    /// alternate-screen app, and a pane a tool page covers. Those are the
+    /// alternate-screen app, and a page tab. Those are the
     /// panes `image_placements` skips too, for the same reason: something
     /// else owns the viewport, and a primary-screen block painted over it
     /// would hide what does until it goes away.
     fn tile_viewports(&self, rects: &[(TabId, Rect)]) -> HashMap<TabId, PaneViewport> {
         let mut viewports = HashMap::new();
         for (tab_id, rect) in rects {
-            let Some(terminal) = self.terminals.get(tab_id) else {
+            let Some(terminal) = self.open_tabs.terminal(tab_id) else {
                 continue;
             };
-            if terminal.grid().is_alt_screen() || self.pages.contains_key(tab_id) {
+            if terminal.grid().is_alt_screen() || self.open_tabs.is_page(tab_id) {
                 continue;
             }
             let pane_rect = Self::layout_rect_to_pane(*rect);
@@ -1553,13 +1550,13 @@ impl App {
             let add = rows - have;
             let at = abs_row + have;
             if !self
-                .terminals
-                .get(&tab_id)
+                .open_tabs
+                .terminal(&tab_id)
                 .is_some_and(|p| band_has_room(p, at, add))
             {
                 return;
             }
-            if let Some(terminal) = self.terminals.get_mut(&tab_id) {
+            if let Some(terminal) = self.open_tabs.terminal_mut(&tab_id) {
                 terminal.insert_band_rows(at, add);
             }
             self.shift_blocks_at_or_below(tab_id, at, add as isize);
@@ -1568,7 +1565,7 @@ impl App {
             // The first row the block does not need; everything from there
             // down closes up against it.
             let at = abs_row + rows;
-            if let Some(terminal) = self.terminals.get_mut(&tab_id) {
+            if let Some(terminal) = self.open_tabs.terminal_mut(&tab_id) {
                 terminal.remove_band_rows(at, spare);
             }
             self.shift_blocks_at_or_below(tab_id, at, -(spare as isize));
@@ -1713,7 +1710,7 @@ impl App {
         let remote_assets = self.config.security.block_remote_assets;
 
         for (tab_id, entry_idx) in patched {
-            let entry = match self.terminals.get(tab_id) {
+            let entry = match self.open_tabs.terminal(tab_id) {
                 Some(p) => p.block_queue().entries().get(*entry_idx).cloned(),
                 None => None,
             };
@@ -1808,13 +1805,13 @@ impl App {
             }
             let insert_at = abs_row + reserved_rows;
             let has_room = self
-                .terminals
-                .get(&report.tab_id)
+                .open_tabs
+                .terminal(&report.tab_id)
                 .is_some_and(|p| band_has_room(p, insert_at, add));
             if !has_room {
                 continue;
             }
-            if let Some(terminal) = self.terminals.get_mut(&report.tab_id) {
+            if let Some(terminal) = self.open_tabs.terminal_mut(&report.tab_id) {
                 terminal.insert_band_rows(insert_at, add);
             }
             self.shift_blocks_at_or_below(report.tab_id, insert_at, add as isize);
@@ -3124,7 +3121,7 @@ mod tests {
         anchors: &[(usize, usize, usize)],
     ) -> (App, TabId, Vec<(TabId, Rect)>) {
         let mut app = App::new();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let terminal = crate::terminal::session::Terminal::with_command(
             40,
             8,
@@ -3132,7 +3129,7 @@ mod tests {
             winter_render::MAX_SCROLLBACK,
         )
         .expect("test pane spawn");
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         app.image_blocks = anchors
             .iter()
             .map(|&(abs_row, block_index, segment_index)| {
@@ -3150,26 +3147,26 @@ mod tests {
         // hiding the rows the full-screen app had drawn there.
         let (mut app, tab_id, rects) = app_with_image_blocks(&[(1, 0, 1)]);
 
-        let placements = image_placements(&app.image_blocks, &app.terminals, &rects, 20.0, &[]);
+        let placements = image_placements(&app.image_blocks, &app.open_tabs, &rects, 20.0, &[]);
         assert_eq!(placements.len(), 1, "fixture: the block places normally");
 
-        app.terminals
-            .get_mut(&tab_id)
+        app.open_tabs
+            .terminal_mut(&tab_id)
             .unwrap()
             .grid_mut()
             .enter_alt_screen();
-        let placements = image_placements(&app.image_blocks, &app.terminals, &rects, 20.0, &[]);
+        let placements = image_placements(&app.image_blocks, &app.open_tabs, &rects, 20.0, &[]);
         assert!(
             placements.is_empty(),
             "an alt-screen pane must not have primary-screen blocks painted over it"
         );
 
-        app.terminals
-            .get_mut(&tab_id)
+        app.open_tabs
+            .terminal_mut(&tab_id)
             .unwrap()
             .grid_mut()
             .leave_alt_screen();
-        let placements = image_placements(&app.image_blocks, &app.terminals, &rects, 20.0, &[]);
+        let placements = image_placements(&app.image_blocks, &app.open_tabs, &rects, 20.0, &[]);
         assert_eq!(
             placements.len(),
             1,
@@ -3210,7 +3207,7 @@ mod tests {
         // the re-wrapped line's last row. The reflow's row remap must carry
         // the anchor down to the band's own first blank row.
         let mut app = App::new();
-        let id = app.layout().panes()[0];
+        let id = app.layout().shown_tabs()[0];
         let mut terminal = crate::terminal::session::Terminal::with_command(
             20,
             8,
@@ -3234,16 +3231,16 @@ mod tests {
                 grid.print(ch); // row 5
             }
         }
-        app.terminals.insert(id, terminal);
+        app.open_tabs.insert_terminal(id, terminal);
         app.image_blocks.push(image_block(id, 2, 0, 1));
 
-        let terminal = app.terminals.get_mut(&id).unwrap();
+        let terminal = app.open_tabs.terminal_mut(&id).unwrap();
         terminal.resize(10, 8); // the 30 chars now wrap rows 0-2
         for remap in terminal.take_row_remaps() {
             app.remap_pane_anchors(id, &remap);
         }
 
-        let grid = app.terminals[&id].grid();
+        let grid = app.open_tabs.terminal(&id).unwrap().grid();
         assert_eq!(
             app.image_blocks[0].abs_row,
             grid.to_absolute_row(3),

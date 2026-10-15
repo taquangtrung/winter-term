@@ -1,4 +1,4 @@
-//! Terminal runtime: PTY pane management, block content queue, and rich-content
+//! Terminal runtime: PTY terminals, the block content queue, and rich-content
 //! WebView tiles.
 
 pub mod block_queue;

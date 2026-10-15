@@ -162,7 +162,7 @@ pub struct Config {
     pub font_weight: Option<String>,
     /// Weight used for bold text.
     pub font_weight_bold: Option<String>,
-    /// Where a tool page's per-entry icons come from. Default:
+    /// Where a page's per-entry icons come from. Default:
     /// [`IconStyle::Svg`], the icons Winter bundles, which draw whatever the
     /// terminal font is.
     pub icons: IconStyle,
@@ -230,7 +230,7 @@ pub struct Config {
     pub wrap_words: bool,
 }
 
-/// Where the icon beside an entry in a tool page comes from.
+/// Where the icon beside an entry in a page comes from.
 ///
 /// The two sources fail in opposite directions, which is why this is a setting
 /// rather than a choice made once. A glyph is a real cell: it scales with the
