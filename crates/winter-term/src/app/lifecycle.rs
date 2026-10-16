@@ -16,6 +16,8 @@ use crate::model::textedit::recall::Answers;
 use crate::session::Session;
 use crate::terminal::webview::WebViewManager;
 
+use super::blink::{BlinkTimer, TEXT_BLINK_PERIOD};
+use super::ime::ImeState;
 use super::navigation::{SearchState, VimState};
 use super::open_tabs::OpenTabs;
 use super::pointer::{PointerState, SelectionState};
@@ -104,6 +106,8 @@ impl App {
             base_font_size,
             blink_phase: true,
             blink_next_flip: Instant::now() + CURSOR_BLINK_PERIOD,
+            text_blink: BlinkTimer::new(TEXT_BLINK_PERIOD, Instant::now()),
+            ime: ImeState::default(),
             last_activity: Instant::now(),
             menus: MenuState::default(),
             tabs: TabsState::default(),
@@ -475,7 +479,6 @@ impl App {
         #[cfg(unix)]
         {
             self.exec_into_new_binary();
-            return;
         }
         #[cfg(not(unix))]
         {

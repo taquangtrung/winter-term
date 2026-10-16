@@ -1,11 +1,14 @@
 //! Background pass: cell, cursor, selection, and scrollbar quads, plus
 //! the wgpu pipelines that draw them.
 
+use std::f32::consts::TAU;
+
 use super::chrome::DIM_FACTOR;
 use super::colors::{grid_color_to_rgb, resolve_fg_linear};
+use super::display::{shown_cell, CellOverlay, ScreenPresentation};
 use super::glyphs::{is_braille, push_braille_dots};
 use super::PaneRect;
-use crate::grid::{Color as GridColor, CursorShape, Grid};
+use crate::grid::{Cell, Color as GridColor, CursorShape, Grid, UnderlineStyle};
 use crate::theme::Theme;
 use wgpu::{
     ColorTargetState, ColorWrites, Device, FragmentState, FrontFace, MultisampleState,
@@ -137,6 +140,12 @@ pub(super) struct BgParams<'a> {
     pub(super) labels: Option<&'a [(usize, usize, char)]>,
     pub(super) find_labels: &'a [(usize, usize, char)],
     pub(super) offset_x: f32,
+    /// Cells drawn over the grid in place of its own (see
+    /// [`PaneView::overlay`]).
+    pub(super) overlay: Option<&'a CellOverlay>,
+    /// The pane-wide state cells are shown under (reverse video, conceal,
+    /// the blink phase).
+    pub(super) presentation: ScreenPresentation,
     pub(super) offset_y: f32,
     /// The inclusive span of viewport rows to paint with [`Theme::cursor_line_bg`]
     ///: the Normal-mode cursor's logical line, which covers every row of a
@@ -213,6 +222,8 @@ pub(super) fn build_bg_vertices_offset(
         labels,
         find_labels,
         offset_x,
+        overlay,
+        presentation,
         offset_y,
         cursor_line,
         scroll_offset,
@@ -271,7 +282,8 @@ pub(super) fn build_bg_vertices_offset(
         );
 
         for col in 0..grid.cols() {
-            let cell = grid.visible_cell(row, col);
+            let shown = shown_cell(grid, overlay, row, col, presentation);
+            let cell = shown.as_deref();
             let is_cursor = !hide_cursor && row == cursor_row + scroll_offset && col == cursor_col;
             // The unfocused treatment is shape-aware: a Block cursor draws only
             // its outline (below, after this cell's own background is resolved
@@ -391,35 +403,40 @@ pub(super) fn build_bg_vertices_offset(
                 }
             }
 
-            // Underline bar for SGR 4 (style.underline) or, when enabled, link cells
-            // (auto-detected URL or OSC 8 hyperlink).
+            // Underline (SGR 4 and its `4:n` styles), or a link cell's plain
+            // underline when enabled; and the overline (SGR 53). Both draw in
+            // the underline color (SGR 58) if one is set.
             if let Some(cell) = cell {
-                if cell.style.underline || (cell.style.link != 0 && url_underline) {
-                    let ul_color = if hovered_link != 0 && cell.style.link == hovered_link {
+                let underline = match cell.style.underline {
+                    UnderlineStyle::None if cell.style.link != 0 && url_underline => {
+                        UnderlineStyle::Single
+                    }
+                    style => style,
+                };
+                if underline.is_drawn() || cell.style.overline {
+                    let line_color = if hovered_link != 0 && cell.style.link == hovered_link {
                         theme.cursor_bg.as_linear()
-                    } else if let GridColor::Default = cell.style.foreground {
-                        theme.foreground.as_linear()
                     } else {
-                        grid_color_to_rgb(&cell.style.foreground, theme)
+                        decoration_color(cell, theme)
                     };
-                    let (ur, ug, ub) = if dim {
-                        lerp_to_bg(ul_color, bg_lin)
+                    let color = if dim {
+                        lerp_to_bg(line_color, bg_lin)
                     } else {
-                        ul_color
+                        line_color
                     };
-                    let px0 = offset_x + col as f32 * cw;
-                    let py_top = offset_y + row as f32 * ch + ch
-                        - UNDERLINE_BOTTOM_OFFSET
-                        - UNDERLINE_THICKNESS;
-                    verts.extend_from_slice(&quad_vertices(
-                        px0,
-                        py_top,
-                        px0 + cw,
-                        py_top + UNDERLINE_THICKNESS,
-                        (ur, ug, ub),
-                        surface_w,
-                        surface_h,
-                    ));
+                    let x0 = offset_x + col as f32 * cw;
+                    let row_top = offset_y + row as f32 * ch;
+                    let mut quads =
+                        underline_quads(underline, x0, row_top + ch - UNDERLINE_BOTTOM_OFFSET, cw);
+                    if cell.style.overline {
+                        let y0 = row_top + OVERLINE_TOP_OFFSET;
+                        quads.push((x0, y0, x0 + cw, y0 + UNDERLINE_THICKNESS));
+                    }
+                    for (qx0, qy0, qx1, qy1) in quads {
+                        verts.extend_from_slice(&quad_vertices(
+                            qx0, qy0, qx1, qy1, color, surface_w, surface_h,
+                        ));
+                    }
                 }
             }
 
@@ -521,6 +538,83 @@ const UNDERLINE_THICKNESS: f32 = 1.0;
 const UNDERLINE_BOTTOM_OFFSET: f32 = 2.0;
 /// Height of the strikethrough bar drawn for SGR 9.
 const STRIKETHROUGH_THICKNESS: f32 = 1.0;
+/// Distance from the top of a cell to the top of its overline bar (SGR 53).
+const OVERLINE_TOP_OFFSET: f32 = 1.0;
+/// Space between the two bars of a double underline.
+const DOUBLE_UNDERLINE_GAP: f32 = 1.0;
+/// Horizontal period of a dotted underline: one dot, one gap.
+const DOTTED_UNDERLINE_PERIOD: f32 = 2.0 * UNDERLINE_THICKNESS;
+/// Dashes a dashed underline draws per cell, and the share of each dash's
+/// slot the dash fills.
+const DASHES_PER_CELL: usize = 2;
+const DASH_FILL: f32 = 0.6;
+/// Steps a curly underline's wave is drawn in per cell (one full period per
+/// cell, so neighbouring cells join), and how far it swings either way.
+const CURLY_UNDERLINE_STEPS: usize = 8;
+const CURLY_UNDERLINE_AMPLITUDE: f32 = 1.5;
+
+/// The color a cell's underline and overline draw in: the underline color
+/// it set (SGR 58), else its glyph's foreground.
+fn decoration_color(cell: &Cell, theme: &Theme) -> (f32, f32, f32) {
+    let color = match cell.style.underline_color {
+        GridColor::Default => cell.style.foreground,
+        explicit => explicit,
+    };
+    match color {
+        GridColor::Default => theme.foreground.as_linear(),
+        explicit => grid_color_to_rgb(&explicit, theme),
+    }
+}
+
+/// The bars `style` draws under one cell, as `(x0, y0, x1, y1)` quads, the
+/// cell `width` wide starting at `x0`, with the lowest bar's bottom at
+/// `bottom`. Empty for [`UnderlineStyle::None`].
+fn underline_quads(
+    style: UnderlineStyle,
+    x0: f32,
+    bottom: f32,
+    width: f32,
+) -> Vec<(f32, f32, f32, f32)> {
+    let x1 = x0 + width;
+    let top = bottom - UNDERLINE_THICKNESS;
+    match style {
+        UnderlineStyle::None => Vec::new(),
+        UnderlineStyle::Single => vec![(x0, top, x1, bottom)],
+        UnderlineStyle::Double => {
+            let upper_bottom = top - DOUBLE_UNDERLINE_GAP;
+            vec![
+                (x0, top, x1, bottom),
+                (x0, upper_bottom - UNDERLINE_THICKNESS, x1, upper_bottom),
+            ]
+        }
+        UnderlineStyle::Dotted => {
+            let dots = (width / DOTTED_UNDERLINE_PERIOD).ceil() as usize;
+            (0..dots)
+                .map(|i| x0 + i as f32 * DOTTED_UNDERLINE_PERIOD)
+                .map(|x| (x, top, (x + UNDERLINE_THICKNESS).min(x1), bottom))
+                .collect()
+        }
+        UnderlineStyle::Dashed => {
+            let slot = width / DASHES_PER_CELL as f32;
+            (0..DASHES_PER_CELL)
+                .map(|i| x0 + i as f32 * slot)
+                .map(|x| (x, top, x + slot * DASH_FILL, bottom))
+                .collect()
+        }
+        UnderlineStyle::Curly => {
+            let step = width / CURLY_UNDERLINE_STEPS as f32;
+            let centre = top - CURLY_UNDERLINE_AMPLITUDE;
+            (0..CURLY_UNDERLINE_STEPS)
+                .map(|i| {
+                    let phase = (i as f32 + 0.5) / CURLY_UNDERLINE_STEPS as f32;
+                    let y = centre + CURLY_UNDERLINE_AMPLITUDE * (phase * TAU).sin();
+                    let x = x0 + i as f32 * step;
+                    (x, y, x + step, y + UNDERLINE_THICKNESS)
+                })
+                .collect()
+        }
+    }
+}
 
 pub(super) fn lerp_to_bg(c: (f32, f32, f32), bg: (f32, f32, f32)) -> (f32, f32, f32) {
     (
@@ -1120,6 +1214,12 @@ pub(super) fn quad_vertices(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::Style;
+
+    const PLAIN_SCREEN: ScreenPresentation = ScreenPresentation {
+        blink_visible: true,
+        reverse_video: false,
+    };
     use crate::RgbColor;
 
     /// Every vertex's y coordinate, in surface pixels rather than NDC.
@@ -1258,6 +1358,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1296,6 +1398,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1334,6 +1438,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1384,6 +1490,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1445,6 +1553,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1515,6 +1625,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1568,6 +1680,8 @@ mod tests {
                 find_labels: &[],
                 cursor_line: Some((0, 0)),
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 scroll_offset: 0,
                 scrollback_len: 0,
@@ -1609,6 +1723,8 @@ mod tests {
                 find_labels: &[],
                 cursor_line: None,
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 scroll_offset: 0,
                 scrollback_len: 0,
@@ -1656,6 +1772,8 @@ mod tests {
                 find_labels: &[],
                 cursor_line: Some(grid.wrapped_row_span(1)),
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 scroll_offset: 0,
                 scrollback_len: 0,
@@ -1703,6 +1821,8 @@ mod tests {
                 labels: None,
                 find_labels,
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1772,6 +1892,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 100.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 50.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1804,6 +1926,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1912,6 +2036,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -1969,6 +2095,8 @@ mod tests {
             find_labels: &[],
             cursor_line: None,
             offset_x: 0.0,
+            overlay: None,
+            presentation: PLAIN_SCREEN,
             offset_y: 0.0,
             scroll_offset: grid.scroll_offset(),
             scrollback_len: grid.scrollback_len(),
@@ -2017,6 +2145,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -2049,6 +2179,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -2092,6 +2224,8 @@ mod tests {
                 labels: Some(labels),
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -2181,6 +2315,8 @@ mod tests {
                 labels: None,
                 find_labels: &[],
                 offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
                 offset_y: 0.0,
                 cursor_line: None,
                 scroll_offset: 0,
@@ -2199,5 +2335,69 @@ mod tests {
         );
         // 3 cells for sentence 1 + 6 cells for sentence 2 = 9 tinted cells * 6 verts = 54 verts
         assert_eq!(verts.len(), (3 + 6) * 6);
+    }
+
+    #[test]
+    fn test_each_underline_style_stays_inside_its_cell() {
+        let (x0, bottom, width) = (10.0, 20.0, 9.0);
+        for style in [
+            UnderlineStyle::Single,
+            UnderlineStyle::Double,
+            UnderlineStyle::Dotted,
+            UnderlineStyle::Dashed,
+            UnderlineStyle::Curly,
+        ] {
+            let quads = underline_quads(style, x0, bottom, width);
+            assert!(!quads.is_empty(), "{style:?} draws");
+            for (qx0, qy0, qx1, qy1) in quads {
+                assert!(qx0 >= x0 && qx1 <= x0 + width + f32::EPSILON, "{style:?} x");
+                assert!(qy0 < qy1 && qy1 <= bottom, "{style:?} y");
+            }
+        }
+        assert!(underline_quads(UnderlineStyle::None, x0, bottom, width).is_empty());
+    }
+
+    #[test]
+    fn test_double_underline_draws_two_separate_bars() {
+        let quads = underline_quads(UnderlineStyle::Double, 0.0, 20.0, 9.0);
+        assert_eq!(quads.len(), 2);
+        assert!(
+            quads[1].3 < quads[0].1,
+            "the upper bar ends above the lower"
+        );
+    }
+
+    #[test]
+    fn test_curly_underline_rises_and_falls_across_the_cell() {
+        let quads = underline_quads(UnderlineStyle::Curly, 0.0, 20.0, 8.0);
+        let tops: Vec<f32> = quads.iter().map(|q| q.1).collect();
+        let (low, high) = tops
+            .iter()
+            .fold((f32::MAX, f32::MIN), |(lo, hi), &y| (lo.min(y), hi.max(y)));
+        assert!(high - low > 1.0, "a wave, not a flat bar: {tops:?}");
+        assert_eq!(quads.last().map(|q| q.2), Some(8.0), "spans the whole cell");
+    }
+
+    #[test]
+    fn test_decoration_color_prefers_the_underline_color() {
+        let theme = Theme::default();
+        let red = GridColor::Indexed(1);
+        let cell = Cell {
+            style: Style {
+                foreground: GridColor::Indexed(2),
+                underline_color: red,
+                ..Default::default()
+            },
+            ..Cell::default()
+        };
+        assert_eq!(
+            decoration_color(&cell, &theme),
+            grid_color_to_rgb(&red, &theme)
+        );
+        let plain = Cell::default();
+        assert_eq!(
+            decoration_color(&plain, &theme),
+            theme.foreground.as_linear()
+        );
     }
 }

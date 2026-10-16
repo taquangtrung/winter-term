@@ -11,8 +11,9 @@ use super::background::{
 use super::chrome::{InputView, PaletteView, TabbarText, WhichKeyView, DIM_FACTOR};
 use super::colors::{
     block_cursor_cell, cell_text_fg, clear_color, cursor_contrast_fg, mix_rgb,
-    needs_dark_on_light_bold, theme_indexed_color, FAINT_FACTOR,
+    needs_dark_on_light_bold, FAINT_FACTOR,
 };
+use super::display::shown_cell;
 use super::glyphs::{
     base_family, effective_bold_weight, glyph_key, is_braille, needs_complex_shaping, parse_weight,
 };
@@ -171,6 +172,7 @@ impl GpuRenderer {
         toast: Option<&StatusNotice>,
         which_key: Option<&WhichKeyView>,
     ) {
+        self.drew_blinking_text = false;
         self.tabbar_enabled = tabbar.is_some();
         self.status_bar_enabled = status.is_some();
         if let Some(t) = tabbar {
@@ -342,6 +344,8 @@ impl GpuRenderer {
                 hide_cursor: !pane.cursor_visible || pane.nav_cursor.is_some(),
                 hovered_link: pane.hovered_link,
                 labels: pane.labels,
+                overlay: pane.overlay,
+                presentation: pane.presentation(),
                 find_labels: pane.find_labels,
                 offset_x: rect.x + crate::PANE_H_PAD,
                 offset_y: rect.y,
@@ -454,6 +458,7 @@ impl GpuRenderer {
         layers: &mut FrameLayers,
     ) -> Vec<PaneRow> {
         let grid = pane.grid;
+        let presentation = pane.presentation();
         let rect = pane.rect;
         let extent = pane_cell_extent(rect, self.cell_width, self.cell_height);
         let pane_cols = extent.cols;
@@ -535,7 +540,9 @@ impl GpuRenderer {
 
             for col in 0..grid.cols().min(pane_cols) {
                 let start = text.len();
-                let cell = grid.visible_cell(row, col);
+                let shown = shown_cell(grid, pane.overlay, row, col, presentation);
+                let cell = shown.as_deref();
+                self.drew_blinking_text |= cell.is_some_and(|c| c.style.blink);
 
                 // The right half of a double-width char carries no glyph; skip
                 // it so the wide glyph from the left half spans both columns.
@@ -795,7 +802,7 @@ impl GpuRenderer {
                     dim_toward_bg(rgb.r, rgb.g, rgb.b, self.theme.background, glyph.dim)
                 }
                 Some(GridColor::Indexed(idx)) => {
-                    let (r, g, b) = theme_indexed_color(&self.theme, idx);
+                    let (r, g, b) = self.theme.palette_color(idx);
                     dim_toward_bg(r, g, b, self.theme.background, glyph.dim)
                 }
                 None | Some(GridColor::Default) => {
@@ -847,7 +854,7 @@ impl GpuRenderer {
 
         let fg_rgb = match cell.style.foreground {
             GridColor::Rgb(rgb) => (rgb.r, rgb.g, rgb.b),
-            GridColor::Indexed(idx) => theme_indexed_color(&self.theme, idx),
+            GridColor::Indexed(idx) => self.theme.palette_color(idx),
             GridColor::Default => {
                 let fg = self.theme.foreground;
                 (fg.r, fg.g, fg.b)
@@ -855,7 +862,7 @@ impl GpuRenderer {
         };
         let bg_rgb = match cell.style.background {
             GridColor::Rgb(rgb) => (rgb.r, rgb.g, rgb.b),
-            GridColor::Indexed(idx) => theme_indexed_color(&self.theme, idx),
+            GridColor::Indexed(idx) => self.theme.palette_color(idx),
             GridColor::Default => {
                 let bg = self.theme.background;
                 (bg.r, bg.g, bg.b)

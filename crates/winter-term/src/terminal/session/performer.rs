@@ -1,10 +1,11 @@
 //! The unified vte performer driving both the cell grid and the block parser.
 
-use super::shell::is_safe_url_scheme;
-use super::{
-    BACKSPACE, BELL, BLOCK_RESERVE_ROWS, CARRIAGE_RETURN, HORIZONTAL_TAB, LINE_FEED,
-    MAX_IMAGE_ROWS, RIS,
+use super::reports::{
+    ansi_mode_report, color_reports, cursor_position_report, private_mode_report,
+    status_string_report, termcap_reports, window_ops_report, DcsRequest, Presentation,
 };
+use super::shell::is_safe_url_scheme;
+use super::{BELL, BLOCK_RESERVE_ROWS, MAX_IMAGE_ROWS, RIS};
 use crate::terminal::block_queue::BlockBand;
 use base64::Engine;
 use std::io::Cursor;
@@ -20,6 +21,14 @@ use winter_render::Grid;
 /// Maximum APC payload size to accumulate before aborting (guards against
 /// malformed or unterminated sequences bloating memory).
 pub(super) const APC_MAX_PAYLOAD: usize = 4 * 1024 * 1024;
+/// Largest DECRQSS / XTGETTCAP request kept: they name a setting or a few
+/// capabilities, so anything longer is junk and is cut off.
+const DCS_REQUEST_MAX: usize = 4 * 1024;
+/// DSR parameters: "are you OK?", and "where is the cursor?".
+const DSR_STATUS: u32 = 5;
+const DSR_CURSOR_POSITION: u32 = 6;
+/// The answer to DSR 5: "fine".
+const DSR_STATUS_OK: &[u8] = b"\x1b[0n";
 /// Raster image MIME types whose displayed height can be computed from their
 /// pixel dimensions at emit time (so they reserve an exact band).
 pub(super) const RASTER_MIMES: [&str; 4] = ["image/gif", "image/jpeg", "image/png", "image/webp"];
@@ -252,11 +261,10 @@ pub(super) struct CombinedPerformer {
     /// Grid rows (one per emitted block, in emission order) where the block was
     /// anchored, drained by [`Terminal::drain_output`] into the block queue.
     block_anchors: Vec<BlockBand>,
-    /// Pixel cell size, used to convert an image's pixel height into reserved
-    /// rows. Set by the app once the renderer is up; defaults are close enough
-    /// until then.
-    cell_height: f32,
-    cell_width: f32,
+    /// DCS string being collected between its hook and its String
+    /// Terminator, and which request it is.
+    dcs: Option<DcsRequest>,
+    dcs_buf: Vec<u8>,
     grid: Grid,
     /// Accumulated base64 payload across Kitty graphics chunks (`m=1` packets).
     kitty_b64: Vec<u8>,
@@ -285,6 +293,11 @@ pub(super) struct CombinedPerformer {
     /// clipboard by [`Terminal::take_clipboard_write`] after each parse batch.
     pending_clipboard_read: bool,
     pending_clipboard_write: Option<String>,
+    /// How the window shows this terminal: the pixel cell size that turns an
+    /// image's height into reserved rows and answers size queries, and the
+    /// colors color queries are answered with. Set by the app every pump;
+    /// the defaults are close enough until the renderer is up.
+    presentation: Presentation,
     /// Grid column where the shell's own prompt decoration ends and the
     /// editable command line begins, from the column the cursor sat at when
     /// OSC 133's `B` mark arrived. `None` while the decoration is being
@@ -293,11 +306,6 @@ pub(super) struct CombinedPerformer {
     /// at the prompt's own text is refused instead of mistranslating into
     /// readline chords that edit the wrong characters.
     prompt_line_start: Option<usize>,
-    /// Accumulated Sixel payload between `DCS <params> q` and the String
-    /// Terminator. Decoded and emitted as an image block on `unhook`.
-    sixel_buf: Vec<u8>,
-    /// True while inside a `DCS ... q ... ST` Sixel string.
-    sixel_in: bool,
 }
 impl CombinedPerformer {
     pub(super) fn new(cols: usize, rows: usize, max_scrollback: usize) -> Self {
@@ -307,9 +315,8 @@ impl CombinedPerformer {
             apc_pending_esc: false,
             bell: false,
             block_anchors: Vec::new(),
-            // Approximate defaults until the app sets the real cell size.
-            cell_height: 20.0,
-            cell_width: 9.0,
+            dcs: None,
+            dcs_buf: Vec::new(),
             grid: Grid::new(cols, rows).with_max_scrollback(max_scrollback),
             kitty_b64: Vec::new(),
             kitty_format: 100,
@@ -321,10 +328,9 @@ impl CombinedPerformer {
             performer: Performer::new(),
             pending_clipboard_read: false,
             pending_clipboard_write: None,
+            presentation: Presentation::default(),
             prompt_line_start: None,
             pending_responses: Vec::new(),
-            sixel_buf: Vec::new(),
-            sixel_in: false,
         }
     }
 
@@ -347,20 +353,6 @@ impl CombinedPerformer {
             &mut self.kitty_alt
         } else {
             &mut self.kitty_main
-        }
-    }
-
-    /// Whether DEC private mode `mode` is set, or `None` for a mode this
-    /// terminal does not report on.
-    fn private_mode_set(&self, mode: u32) -> Option<bool> {
-        let grid = self.grid();
-        match mode {
-            1004 => Some(grid.focus_event()),
-            1006 => Some(grid.mouse_sgr()),
-            1049 => Some(grid.is_alt_screen()),
-            2004 => Some(grid.bracketed_paste()),
-            2026 => Some(grid.synchronized_output()),
-            _ => None,
         }
     }
 
@@ -429,9 +421,13 @@ impl CombinedPerformer {
         }
     }
 
-    pub(super) fn set_cell_size(&mut self, width: f32, height: f32) {
-        self.cell_width = width;
-        self.cell_height = height;
+    /// How the window shows this terminal (see [`Self::presentation`]).
+    pub(super) fn presentation(&self) -> Presentation {
+        self.presentation
+    }
+
+    pub(super) fn set_presentation(&mut self, presentation: Presentation) {
+        self.presentation = presentation;
     }
 
     /// Rows to reserve for each renderable segment added since `before`:
@@ -442,10 +438,13 @@ impl CombinedPerformer {
         new_renderable_segments(self.performer.scrollback(), before, after)
             .iter()
             .map(|segment| match segment {
-                Segment::Content(emit) => {
-                    image_reserve_rows(emit, self.grid.cols(), self.cell_width, self.cell_height)
-                        .unwrap_or(BLOCK_RESERVE_ROWS)
-                }
+                Segment::Content(emit) => image_reserve_rows(
+                    emit,
+                    self.grid.cols(),
+                    self.presentation.cell_width_px,
+                    self.presentation.cell_height_px,
+                )
+                .unwrap_or(BLOCK_RESERVE_ROWS),
                 _ => BLOCK_RESERVE_ROWS,
             })
             .collect()
@@ -716,13 +715,7 @@ impl Perform for CombinedPerformer {
     }
 
     fn execute(&mut self, byte: u8) {
-        match byte {
-            LINE_FEED => self.grid.line_feed(),
-            CARRIAGE_RETURN => self.grid.carriage_return(),
-            BACKSPACE => self.grid.backspace(),
-            HORIZONTAL_TAB => self.grid.tab(),
-            _ => {}
-        }
+        Perform::execute(&mut self.grid, byte);
         Perform::execute(&mut self.performer, byte);
         if byte == BELL {
             self.bell = true;
@@ -813,37 +806,47 @@ impl Perform for CombinedPerformer {
         // the latter: e.g. a completion widget sizing a dropdown to the room
         // left below the prompt, and silently misplace their output if the
         // query times out unanswered instead of erroring.
-        if action == 'n' && intermediates.is_empty() {
+        // ... and its DEC form, CSI ? 6 n (DECXCPR), `ESC [ ? row ; col R`.
+        if action == 'n' && matches!(intermediates, [] | [b'?']) {
+            let private = !intermediates.is_empty();
             match csi_param_or_default(params, 0, 0) {
-                5 => {
-                    self.pending_responses.extend_from_slice(b"\x1b[0n");
+                DSR_STATUS if !private => {
+                    self.pending_responses.extend_from_slice(DSR_STATUS_OK);
                     return;
                 }
-                6 => {
-                    let (row, col) = self.grid.cursor();
-                    let resp = format!("\x1b[{};{}R", row + 1, col + 1);
-                    self.pending_responses.extend_from_slice(resp.as_bytes());
+                DSR_CURSOR_POSITION => {
+                    let report = cursor_position_report(&self.grid, private);
+                    self.pending_responses.extend_from_slice(report.as_bytes());
                     return;
                 }
                 _ => {}
             }
         }
 
-        // DECRQM for a DEC private mode: `CSI ? Ps $ p`, answered with
-        // `CSI ? Ps ; Pm $ y`, Pm being 1 when the mode is set, 2 when reset, 0
-        // when it is not one this terminal knows. Programs ask before relying
-        // on synchronized output (`?2026`) to draw a frame without flicker, and
-        // draw it piecemeal when nothing answers.
-        if action == 'p' && intermediates == [b'?', b'$'] {
-            let mode = csi_param_or_default(params, 0, 0);
-            let state = match self.private_mode_set(mode) {
-                Some(true) => 1,
-                Some(false) => 2,
-                None => 0,
+        // DECRQM: `CSI ? Ps $ p` for a DEC private mode, `CSI Ps $ p` for an
+        // ANSI one, answered with `CSI [?] Ps ; Pm $ y`, Pm being 1 when the
+        // mode is set, 2 when reset, 0 when it is not one this terminal knows.
+        // Programs ask before relying on synchronized output (`?2026`) to draw
+        // a frame without flicker, and draw it piecemeal when nothing answers.
+        if action == 'p' && matches!(intermediates, [b'?', b'$'] | [b'$']) {
+            let code = csi_param_or_default(params, 0, 0);
+            let report = if intermediates[0] == b'?' {
+                private_mode_report(&self.grid, code)
+            } else {
+                ansi_mode_report(&self.grid, code)
             };
-            let response = format!("\x1b[?{mode};{state}$y");
-            self.pending_responses
-                .extend_from_slice(response.as_bytes());
+            self.pending_responses.extend_from_slice(report.as_bytes());
+            return;
+        }
+
+        // XTWINOPS size queries (`CSI 14/16/18/19 t`), which image tools ask
+        // to size their output in pixels. Every other window operation is
+        // ignored (see `window_ops_report`).
+        if action == 't' && intermediates.is_empty() {
+            let op = csi_param_or_default(params, 0, 0);
+            if let Some(report) = window_ops_report(&self.grid, &self.presentation, op) {
+                self.pending_responses.extend_from_slice(report.as_bytes());
+            }
             return;
         }
 
@@ -883,6 +886,16 @@ impl Perform for CombinedPerformer {
     }
 
     fn osc_dispatch(&mut self, params: &[&[u8]], bell_terminated: bool) {
+        // The color OSCs: OSC 4 (the palette) and OSC 10/11/12 (the default
+        // foreground, background and cursor colors), and their resets.
+        // Programs ask for the background to pick a light or dark theme.
+        if let Some(reports) = color_reports(params, &self.presentation.colors, bell_terminated) {
+            for report in reports {
+                self.pending_responses.extend_from_slice(report.as_bytes());
+            }
+            return;
+        }
+
         // OSC 52: clipboard read/write. Handled here because it needs arboard
         // access (the core Performer crate does not depend on arboard).
         if params.first() == Some(&b"52".as_slice()) {
@@ -942,28 +955,38 @@ impl Perform for CombinedPerformer {
         Perform::esc_dispatch(&mut self.grid, intermediates, ignore, byte);
     }
 
-    fn hook(&mut self, _params: &Params, _intermediates: &[u8], _ignore: bool, action: char) {
-        // `DCS <params> q` begins a Sixel image; accumulate its payload until ST.
-        if action == 'q' {
-            self.sixel_in = true;
-            self.sixel_buf.clear();
-        }
+    fn hook(&mut self, _params: &Params, intermediates: &[u8], _ignore: bool, action: char) {
+        self.dcs = DcsRequest::from_hook(intermediates, action);
+        self.dcs_buf.clear();
     }
 
     fn put(&mut self, byte: u8) {
-        if self.sixel_in {
-            // Cap the payload to the same budget as APC images.
-            if self.sixel_buf.len() < APC_MAX_PAYLOAD {
-                self.sixel_buf.push(byte);
-            }
+        let cap = match self.dcs {
+            Some(DcsRequest::Sixel) => APC_MAX_PAYLOAD,
+            Some(DcsRequest::StatusString | DcsRequest::Termcap) => DCS_REQUEST_MAX,
+            None => return,
+        };
+        if self.dcs_buf.len() < cap {
+            self.dcs_buf.push(byte);
         }
     }
 
     fn unhook(&mut self) {
-        if self.sixel_in {
-            self.sixel_in = false;
-            let buf = std::mem::take(&mut self.sixel_buf);
-            self.finalize_sixel_image(&buf);
+        let Some(request) = self.dcs.take() else {
+            return;
+        };
+        let payload = std::mem::take(&mut self.dcs_buf);
+        match request {
+            DcsRequest::Sixel => self.finalize_sixel_image(&payload),
+            DcsRequest::StatusString => {
+                let report = status_string_report(&self.grid, &payload);
+                self.pending_responses.extend_from_slice(report.as_bytes());
+            }
+            DcsRequest::Termcap => {
+                for report in termcap_reports(&payload) {
+                    self.pending_responses.extend_from_slice(report.as_bytes());
+                }
+            }
         }
     }
 }
@@ -976,6 +999,12 @@ impl Perform for CombinedPerformer {
 mod tests {
     use super::super::MAX_SCROLLBACK;
     use super::*;
+    use winter_render::RgbColor;
+
+    const BACKSPACE: u8 = 0x08;
+    const CARRIAGE_RETURN: u8 = b'\r';
+    const HORIZONTAL_TAB: u8 = b'\t';
+    const LINE_FEED: u8 = b'\n';
 
     /// Each control byte must reach its own grid operation. A refactor that
     /// left these constants unimported turned every arm into a catch-all
@@ -1053,7 +1082,11 @@ mod tests {
         let data_b64 = base64::engine::general_purpose::STANDARD.encode(&png);
 
         let mut cp = CombinedPerformer::new(20, 200, MAX_SCROLLBACK);
-        cp.set_cell_size(10.0, 10.0);
+        cp.set_presentation(Presentation {
+            cell_height_px: 10.0,
+            cell_width_px: 10.0,
+            ..Presentation::default()
+        });
         let mut parser = vte::Parser::new();
 
         let mut bundle = MimeBundle::new();
@@ -1514,5 +1547,62 @@ mod tests {
             parser.advance(&mut cp, &[b]);
         }
         assert_eq!(cp.modify_other_keys(), None);
+    }
+
+    fn replies_to(cp: &mut CombinedPerformer, bytes: &[u8]) -> String {
+        let mut parser = vte::Parser::new();
+        parser.advance(cp, bytes);
+        String::from_utf8(cp.take_pending_responses()).expect("replies are text")
+    }
+
+    #[test]
+    fn test_status_and_termcap_requests_are_answered_not_decoded_as_sixel() {
+        // Regression: `DCS $ q` and `DCS + q` end in Sixel's `q`, and were
+        // collected and decoded as images instead of answered.
+        let mut cp = CombinedPerformer::new(10, 4, MAX_SCROLLBACK);
+        assert_eq!(
+            replies_to(&mut cp, b"\x1b[2;3r\x1bP$qr\x1b\\"),
+            "\x1bP1$r2;3r\x1b\\"
+        );
+        assert_eq!(
+            replies_to(&mut cp, b"\x1bP+q436F\x1b\\"),
+            "\x1bP1+r436F=323536\x1b\\"
+        );
+        assert!(cp.scrollback().blocks().iter().all(|b| b.output.is_empty()));
+    }
+
+    #[test]
+    fn test_color_queries_are_answered_with_the_presented_colors() {
+        let mut cp = CombinedPerformer::new(10, 2, MAX_SCROLLBACK);
+        let mut presentation = Presentation::default();
+        presentation.colors.background = RgbColor {
+            r: 0x12,
+            g: 0x34,
+            b: 0x56,
+        };
+        cp.set_presentation(presentation);
+        assert_eq!(
+            replies_to(&mut cp, b"\x1b]11;?\x07"),
+            "\x1b]11;rgb:1212/3434/5656\x07"
+        );
+    }
+
+    #[test]
+    fn test_ansi_decrqm_window_size_and_dec_cursor_reports() {
+        let mut cp = CombinedPerformer::new(80, 24, MAX_SCROLLBACK);
+        assert_eq!(replies_to(&mut cp, b"\x1b[4h\x1b[4$p"), "\x1b[4;1$y");
+        assert_eq!(replies_to(&mut cp, b"\x1b[18t"), "\x1b[8;24;80t");
+        assert_eq!(replies_to(&mut cp, b"\x1b[21t"), "", "no title echo");
+        assert_eq!(replies_to(&mut cp, b"\x1b[3;7H\x1b[?6n"), "\x1b[?3;7R");
+    }
+
+    #[test]
+    fn test_vertical_tab_and_form_feed_reach_the_grid_as_line_feeds() {
+        // The performer hands control bytes to the grid's own handler, so
+        // every one the grid knows is honored here too.
+        let mut cp = CombinedPerformer::new(10, 3, MAX_SCROLLBACK);
+        let mut parser = vte::Parser::new();
+        parser.advance(&mut cp, b"a\x0bb\x0cc");
+        assert_eq!(cp.grid().cursor(), (2, 3));
     }
 }

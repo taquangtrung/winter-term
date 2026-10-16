@@ -1,5 +1,6 @@
 //! The view types a caller fills in to describe one frame's contents.
 
+use super::display::CellOverlay;
 use crate::grid::{CursorShape, Grid};
 use crate::theme::Rgb;
 
@@ -21,6 +22,12 @@ pub struct PaneRect {
 }
 /// One pane's rendering input: where to draw and what grid to draw.
 pub struct PaneView<'a> {
+    /// Whether blinking text (SGR 5) is in its shown phase. It blinks on the
+    /// cursor's timer, so both go dark together.
+    pub blink_visible: bool,
+    /// Cells drawn over the grid in place of its own: an input method's
+    /// uncommitted text at the cursor.
+    pub overlay: Option<&'a CellOverlay>,
     /// Bracket glyphs to recolor by nesting depth, as viewport `(row, col)`
     /// plus the resolved RGB. Driven by the `rainbow-parens` config option;
     /// computed app-side (see `navigation::reading::bracket_marks`) so the

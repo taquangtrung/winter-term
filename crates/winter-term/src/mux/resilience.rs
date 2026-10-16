@@ -6,7 +6,7 @@
 use std::time::{Duration, Instant};
 
 use super::client::MuxClient;
-use super::protocol::ServerMessage;
+use super::protocol::{Geometry, ServerMessage};
 use super::remote::RemoteClient;
 
 // ========================================================================
@@ -36,7 +36,7 @@ pub struct ResilientClient {
     /// The last geometry this pane asked for, re-sent after a reconnect so
     /// the server's size arbitration sees this client's constraint again
     /// (a fresh connection starts with none).
-    last_resize: Option<(u16, u16)>,
+    last_resize: Option<Geometry>,
     last_attempt: Option<Instant>,
     max_backoff: Duration,
     retries: u32,
@@ -86,10 +86,10 @@ impl Transport {
         }
     }
 
-    fn resize(&mut self, session: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
+    fn resize(&mut self, session: &str, geometry: Geometry) -> anyhow::Result<()> {
         match self {
-            Transport::Local(client) => client.resize(session, cols, rows),
-            Transport::Remote(client) => client.resize(session, cols, rows),
+            Transport::Local(client) => client.resize(session, geometry),
+            Transport::Remote(client) => client.resize(session, geometry),
         }
     }
 
@@ -153,10 +153,10 @@ impl ResilientClient {
     }
 
     /// Report geometry, reconnecting first when the connection is down.
-    pub fn resize(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
-        self.last_resize = Some((cols, rows));
+    pub fn resize(&mut self, geometry: Geometry) -> anyhow::Result<()> {
+        self.last_resize = Some(geometry);
         if let Some(ref mut client) = self.inner {
-            let result = client.resize(&self.session, cols, rows);
+            let result = client.resize(&self.session, geometry);
             if result.is_err() {
                 self.connected = false;
             }
@@ -213,8 +213,8 @@ impl ResilientClient {
         self.retries += 1;
 
         if let Ok(mut client) = Transport::connect(&self.endpoint, &self.session) {
-            if let Some((cols, rows)) = self.last_resize {
-                let _ = client.resize(&self.session, cols, rows);
+            if let Some(geometry) = self.last_resize {
+                let _ = client.resize(&self.session, geometry);
             }
             self.inner = Some(client);
             self.connected = true;
@@ -249,7 +249,13 @@ mod tests {
     #[test]
     fn test_resilient_client_resize_succeeds_gracefully() {
         let mut client = ResilientClient::new("/tmp/nonexistent.sock", "default");
-        assert!(client.resize(80, 24).is_ok());
+        assert!(client
+            .resize(Geometry {
+                cell_px: None,
+                cols: 80,
+                rows: 24,
+            })
+            .is_ok());
     }
 
     #[test]

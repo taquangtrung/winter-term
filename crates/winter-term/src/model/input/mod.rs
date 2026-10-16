@@ -13,7 +13,7 @@ mod normal;
 mod pending;
 mod visual;
 
-pub use insert::encode_release;
+pub use insert::{apply_cursor_key_mode, encode_release};
 pub use keymap::{format_key, EditAction, EditBinding, WindowAction, WindowKeymap};
 pub(crate) use keymap::{window_action_by_name, DEFAULT_LEADER};
 pub use motion::{
@@ -471,12 +471,9 @@ impl Key {
         match (self.glyph(), !self.ctrl && !self.alt && !self.sup) {
             (KeyCode::Space, true) => Self {
                 code: KeyCode::Char(' '),
-                ..self.clone()
+                ..*self
             },
-            (code, _) => Self {
-                code,
-                ..self.clone()
-            },
+            (code, _) => Self { code, ..*self },
         }
     }
 
@@ -495,16 +492,16 @@ impl Key {
             KeyCode::Char(c) if c.is_ascii_uppercase() => Self {
                 code: KeyCode::Char(c.to_ascii_lowercase()),
                 shift: true,
-                ..self.clone()
+                ..*self
             },
             // A symbol that is itself the shifted glyph (`?`, `+`, `(`) is
             // shifted wherever it came from: the shifted key, a layout with it
             // unshifted, the keypad, or a chord written `M-?`.
             KeyCode::Char(c) if keymap::is_shifted_symbol(c) => Self {
                 shift: true,
-                ..self.clone()
+                ..*self
             },
-            _ => self.clone(),
+            _ => *self,
         }
     }
 

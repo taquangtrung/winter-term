@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 #[cfg(windows)]
 use uds_windows::UnixStream;
 
-use super::protocol::{self, ClientMessage, FrameBuffer, ServerMessage, SessionInfo};
+use super::protocol::{self, ClientMessage, FrameBuffer, Geometry, ServerMessage, SessionInfo};
 
 // ========================================================================
 // Constants
@@ -72,11 +72,12 @@ impl MuxClient {
     }
 
     /// Report this client's geometry; the server arbitrates the session's size.
-    pub fn resize(&mut self, session: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
+    pub fn resize(&mut self, session: &str, geometry: Geometry) -> anyhow::Result<()> {
         self.send(&ClientMessage::Resize {
             session: session.to_string(),
-            cols,
-            rows,
+            cols: geometry.cols,
+            rows: geometry.rows,
+            cell_px: geometry.cell_px,
         })
     }
 

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use crate::model::layout::{Direction, Layout, TabId};
 use crate::terminal::session::Terminal;
 
+use super::appearance::terminal_presentation;
 use super::tool::{ClosedPane, ClosedTerminal, Closing};
 use super::App;
 use super::{DEFAULT_COLS, DEFAULT_ROWS, SPLIT_RATIO};
@@ -391,8 +392,15 @@ impl App {
         // apply the policy would silently over-grant. Setting it here costs a
         // field write per pane and cannot be missed.
         let max_trust = self.config.security.block_max_trust;
+        // The same goes for how the window shows each terminal (its cell size
+        // and theme colors, which programs may ask about): a font or theme
+        // change reaches every pane on the next pump, however it was made.
+        let presentation = self.renderer.as_ref().map(terminal_presentation);
         for (_, terminal) in self.open_tabs.terminals_mut() {
             terminal.block_queue_mut().set_max_trust(max_trust);
+            if let Some(presentation) = presentation {
+                terminal.set_presentation(presentation);
+            }
         }
         for (id, terminal) in self.open_tabs.terminals_mut() {
             for remap in terminal.take_row_remaps() {

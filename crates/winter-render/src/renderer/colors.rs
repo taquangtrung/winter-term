@@ -142,7 +142,7 @@ pub(super) fn grid_color_to_rgb(color: &GridColor, theme: &Theme) -> (f32, f32, 
     match color {
         GridColor::Default => theme.background.as_linear(),
         GridColor::Indexed(i) => {
-            let (r, g, b) = theme_indexed_color(theme, *i);
+            let (r, g, b) = theme.palette_color(*i);
             (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
         }
         GridColor::Rgb(RgbColor { r, g, b }) => {
@@ -159,26 +159,13 @@ pub(super) fn resolve_fg_linear(color: GridColor, theme: &Theme) -> (f32, f32, f
     match color {
         GridColor::Default => theme.foreground.as_linear(),
         GridColor::Indexed(i) => {
-            let (r, g, b) = theme_indexed_color(theme, i);
+            let (r, g, b) = theme.palette_color(i);
             (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
         }
         GridColor::Rgb(RgbColor { r, g, b }) => {
             (r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0)
         }
     }
-}
-
-/// Resolve a 256-color palette index to RGB using the theme: ANSI 0-15 and any
-/// custom indexed overrides come from the theme; the rest fall back to the
-/// standard xterm 256-color cube and grey ramp.
-pub(super) fn theme_indexed_color(theme: &Theme, index: u8) -> (u8, u8, u8) {
-    if (index as usize) < 16 {
-        return theme.ansi_color(index);
-    }
-    if let Some(rgb) = theme.indexed_color(index) {
-        return rgb;
-    }
-    xterm_256_to_rgb(index)
 }
 
 /// A cell's on-screen glyph color: its own foreground, or its background if
@@ -189,12 +176,12 @@ pub(super) fn theme_indexed_color(theme: &Theme, index: u8) -> (u8, u8, u8) {
 pub(super) fn cell_text_fg(cell: Option<&Cell>, theme: &Theme) -> (u8, u8, u8) {
     let fg_rgb = match cell.map(|c| c.style.foreground) {
         Some(GridColor::Rgb(rgb)) => (rgb.r, rgb.g, rgb.b),
-        Some(GridColor::Indexed(idx)) => theme_indexed_color(theme, idx),
+        Some(GridColor::Indexed(idx)) => theme.palette_color(idx),
         _ => (theme.foreground.r, theme.foreground.g, theme.foreground.b),
     };
     let bg_rgb = match cell.map(|c| c.style.background) {
         Some(GridColor::Rgb(rgb)) => (rgb.r, rgb.g, rgb.b),
-        Some(GridColor::Indexed(idx)) => theme_indexed_color(theme, idx),
+        Some(GridColor::Indexed(idx)) => theme.palette_color(idx),
         _ => (theme.background.r, theme.background.g, theme.background.b),
     };
     if cell.is_some_and(|c| c.style.reversed) {
@@ -203,44 +190,6 @@ pub(super) fn cell_text_fg(cell: Option<&Cell>, theme: &Theme) -> (u8, u8, u8) {
         fg_rgb
     }
 }
-
-fn xterm_256_to_rgb(index: u8) -> (u8, u8, u8) {
-    if index < 16 {
-        return ANSI_COLORS[index as usize];
-    }
-    if index < 232 {
-        let i = index - 16;
-        let b_val = i % 6;
-        let g_val = (i / 6) % 6;
-        let r_val = (i / 36) % 6;
-        return (
-            if r_val > 0 { 55 + 40 * r_val } else { 0 },
-            if g_val > 0 { 55 + 40 * g_val } else { 0 },
-            if b_val > 0 { 55 + 40 * b_val } else { 0 },
-        );
-    }
-    let grey = 8 + 10 * (index - 232);
-    (grey, grey, grey)
-}
-
-const ANSI_COLORS: [(u8, u8, u8); 16] = [
-    (0, 0, 0),
-    (128, 0, 0),
-    (0, 128, 0),
-    (128, 128, 0),
-    (0, 0, 128),
-    (128, 0, 128),
-    (0, 128, 128),
-    (192, 192, 192),
-    (128, 128, 128),
-    (255, 0, 0),
-    (0, 255, 0),
-    (255, 255, 0),
-    (0, 0, 255),
-    (255, 0, 255),
-    (0, 255, 255),
-    (255, 255, 255),
-];
 
 // ========================================================================
 // Tests
@@ -253,27 +202,6 @@ mod tests {
     use super::*;
     use crate::grid::Style;
 
-    #[test]
-    fn test_xterm_256_first_16_are_ansi() {
-        assert_eq!(xterm_256_to_rgb(0), (0, 0, 0));
-        assert_eq!(xterm_256_to_rgb(1), (128, 0, 0));
-        assert_eq!(xterm_256_to_rgb(7), (192, 192, 192));
-        assert_eq!(xterm_256_to_rgb(15), (255, 255, 255));
-    }
-    #[test]
-    fn test_xterm_256_cube() {
-        let (r, g, b) = xterm_256_to_rgb(16 + 36 + 6 + 1);
-        assert!(r > 0);
-        assert!(g > 0);
-        assert!(b > 0);
-    }
-    #[test]
-    fn test_xterm_256_grey_ramp() {
-        let (r, g, b) = xterm_256_to_rgb(232);
-        assert_eq!(r, g);
-        assert_eq!(g, b);
-        assert!(r >= 8);
-    }
     #[test]
     fn test_grid_color_default() {
         let theme = Theme::default();

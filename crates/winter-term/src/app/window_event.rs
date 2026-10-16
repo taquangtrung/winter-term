@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, KeyEvent, MouseButton, MouseScrollDelta};
-use winit::keyboard::{Key, PhysicalKey};
+use winit::keyboard::{Key, NativeKeyCode, PhysicalKey};
 
 use crate::model::paint::Point;
 use winit::event_loop::ActiveEventLoop;
@@ -64,7 +64,6 @@ impl App {
             return false;
         }
 
-        let focused = self.layout().focused();
         let mods_state = self.modifiers.state();
         let code = winit_key_to_code(&logical_key, &physical_key);
         let key = input::Key {
@@ -75,6 +74,46 @@ impl App {
             sup: mods_state.super_key(),
         }
         .canonical();
+        self.route_key(state, key, logical_key, physical_key)
+    }
+
+    /// Type `text` an input method committed: each character goes through
+    /// the same routing as an unmodified key press and release, so it reaches
+    /// a shell, a tool, or the Normal-mode keymap exactly as typing it on a
+    /// keyboard would, whatever modifiers happen to be held while the
+    /// candidate is picked. Returns `true` when the app should quit.
+    pub(crate) fn type_committed_text(&mut self, text: &str) -> bool {
+        let physical = PhysicalKey::Unidentified(NativeKeyCode::Unidentified);
+        for ch in text.chars() {
+            let logical = Key::Character(ch.to_string().into());
+            let key = input::Key {
+                alt: false,
+                code: winit_key_to_code(&logical, &physical),
+                ctrl: false,
+                shift: false,
+                sup: false,
+            }
+            .canonical();
+            if self.route_key(ElementState::Pressed, key, logical.clone(), physical) {
+                return true;
+            }
+            self.route_key(ElementState::Released, key, logical, physical);
+        }
+        false
+    }
+
+    /// Route `key` (with the winit key it came from, which the palette and
+    /// settings page read for text entry) through the overlays, the focused
+    /// pane's keymap, and on to the PTY. Returns `true` when the app should
+    /// quit.
+    fn route_key(
+        &mut self,
+        state: ElementState,
+        key: input::Key,
+        logical_key: Key,
+        physical_key: PhysicalKey,
+    ) -> bool {
+        let focused = self.layout().focused();
         if state == ElementState::Released {
             let kitty_flags = self
                 .open_tabs
@@ -336,6 +375,11 @@ impl App {
                 is_alt_screen,
             ),
         };
+        let app_cursor_keys = self
+            .open_tabs
+            .terminal(&focused)
+            .is_some_and(|p| p.app_cursor_keys());
+        let action = input::apply_cursor_key_mode(action, app_cursor_keys, kitty_flags);
         if self.pending != prev_pending {
             self.pending_since = if self.pending.hint().is_some() {
                 Some(Instant::now())
@@ -470,11 +514,15 @@ impl App {
         // Plain clicks always drive Winter's own selection, even over a
         // full-screen app (vim, htop) that has turned on mouse reporting.
         // Hold Shift to forward the click to that app's mouse handling instead.
+        // A program that was handed a press is handed its release too, even
+        // if Shift went up first, or it would see the button held forever.
+        let completes_forwarded_press =
+            state == ElementState::Released && self.pointer.forwarded_button.is_some();
         let mouse_active = self
             .open_tabs
             .terminal(&focused)
             .is_some_and(|p| p.mouse_tracking())
-            && self.modifiers.state().shift_key();
+            && (self.modifiers.state().shift_key() || completes_forwarded_press);
 
         if mouse_active {
             self.forward_mouse_event(state, button, focused);
@@ -711,14 +759,18 @@ impl App {
             }
         }
 
+        // With Shift held (Winter's "this goes to the app" chord), motion
+        // reaches a mouse-tracking program: drags under drag tracking
+        // (?1002), and bare motion too under any-event tracking (?1003).
         let focused = self.layout().focused();
-        if self.pointer.mouse_down
-            && self
-                .open_tabs
-                .terminal(&focused)
-                .is_some_and(|p| p.mouse_drag_tracking())
-            && self.modifiers.state().shift_key()
-        {
+        let reports_motion = self.open_tabs.terminal(&focused).is_some_and(|p| {
+            if self.pointer.forwarded_button.is_some() {
+                p.mouse_drag_tracking()
+            } else {
+                p.mouse_any_event()
+            }
+        });
+        if reports_motion && self.modifiers.state().shift_key() {
             self.forward_mouse_motion(focused);
             return;
         }
@@ -974,6 +1026,25 @@ mod tests {
             std::thread::sleep(Duration::from_millis(20));
         }
         false
+    }
+
+    #[test]
+    fn test_text_an_input_method_commits_is_typed_into_the_terminal() {
+        // Composed Vietnamese, as an input method commits it: precomposed
+        // letters beyond ASCII, plus an uppercase one, with Ctrl still held
+        // from picking the candidate. It must arrive as the text itself.
+        let (mut app, id) = app_pane_and_id();
+        app.modifiers = winit::keyboard::ModifiersState::CONTROL.into();
+        assert!(!app.type_committed_text("Tiếng Việt"));
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let mut echoed = String::new();
+        while Instant::now() < deadline && !echoed.contains("Tiếng Việt") {
+            let terminal = app.open_tabs.terminal_mut(&id).expect("pane");
+            terminal.drain_output();
+            echoed = terminal.grid().to_text();
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(echoed.contains("Tiếng Việt"), "echoed: {echoed:?}");
     }
 
     #[test]

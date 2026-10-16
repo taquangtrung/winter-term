@@ -27,10 +27,12 @@
 
 pub mod actions;
 mod appearance;
+mod blink;
 mod blocks;
 mod busy;
 mod errors;
 mod geometry;
+mod ime;
 mod init;
 mod jobs;
 mod lifecycle;
@@ -678,6 +680,13 @@ pub struct App {
     /// When the next blink phase flip is due. Updated on every flip and on key
     /// press (which resets the cursor to visible to give feedback).
     pub(crate) blink_next_flip: Instant,
+    /// The phase of blinking text (SGR 5): its own clock, running only while
+    /// the last frame drew some and the window has focus, whatever the
+    /// cursor's blink setting.
+    pub(crate) text_blink: blink::BlinkTimer,
+    /// What the input method is composing, and where its candidate window
+    /// was last anchored.
+    pub(crate) ime: ime::ImeState,
     /// When PTY output, a window event, or any other activity was last
     /// observed. Drives the `about_to_wait` idle back-off (see
     /// `PTY_ACTIVE_WINDOW`).
@@ -1029,6 +1038,7 @@ impl ApplicationHandler for App {
             }
 
             WindowEvent::KeyboardInput { event, .. } => self.on_keyboard_input(event, event_loop),
+            WindowEvent::Ime(ime) => self.on_ime(ime, event_loop),
 
             WindowEvent::MouseInput { state, button, .. } => {
                 self.on_mouse_input(state, button, event_loop)
@@ -1183,6 +1193,15 @@ impl ApplicationHandler for App {
             }
         }
 
+        // Blinking text runs on its own timer, for as long as some is on
+        // screen.
+        if self
+            .text_blink
+            .tick(Instant::now(), self.is_text_blink_active())
+        {
+            self.dirty = true;
+        }
+
         // Flip cursor blink phase when the timer fires, requesting a redraw to
         // show the updated state.
         if is_blink_active(self.config.cursor.blink, self.window_focused) {
@@ -1278,6 +1297,9 @@ impl ApplicationHandler for App {
         } else {
             next_poll
         };
+        if let Some(deadline) = self.text_blink.deadline(self.is_text_blink_active()) {
+            wakeup = wakeup.min(deadline);
+        }
         if let Some((deadline, _)) = self.search_debounce {
             wakeup = wakeup.min(deadline);
         }

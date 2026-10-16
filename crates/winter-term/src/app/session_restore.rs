@@ -6,7 +6,8 @@ use crate::model::layout::{Layout, TabId};
 use crate::session::Session;
 use crate::terminal::session::{Terminal, MUX_COMMAND_PREFIX, MUX_REMOTE_COMMAND_PREFIX};
 
-use super::{content_rows, App, APPROX_CELL_HEIGHT, APPROX_CELL_WIDTH, DEFAULT_COLS, DEFAULT_ROWS};
+use super::appearance::terminal_presentation;
+use super::{content_rows, App, DEFAULT_COLS, DEFAULT_ROWS};
 
 // ========================================================================
 // App: session restore
@@ -30,11 +31,6 @@ impl App {
             r.grid_size()
         } else {
             (DEFAULT_COLS as usize, DEFAULT_ROWS as usize)
-        };
-        let (cw, ch) = if let Some(r) = &self.renderer {
-            r.cell_size()
-        } else {
-            (APPROX_CELL_WIDTH as f32, APPROX_CELL_HEIGHT as f32)
         };
         let want_rows = content_rows(rows);
 
@@ -119,7 +115,9 @@ impl App {
             };
             match terminal {
                 Some(mut terminal) => {
-                    terminal.set_cell_size(cw, ch);
+                    if let Some(renderer) = &self.renderer {
+                        terminal.set_presentation(terminal_presentation(renderer));
+                    }
                     self.open_tabs.insert_terminal(*id, terminal);
                 }
                 None => failed_ids.push(*id),

@@ -16,6 +16,51 @@ const SECS_PER_DAY: u64 = SECS_PER_HOUR * 24;
 // ========================================================================
 // Data Structures
 // ========================================================================
+// CellPixels
+// ========================================================================
+
+impl CellPixels {
+    /// A cell `width` x `height` pixels wide and tall, rounded to whole
+    /// pixels.
+    pub fn from_px(width: f32, height: f32) -> Self {
+        Self {
+            height: to_pixels(height),
+            width: to_pixels(width),
+        }
+    }
+
+    /// The pixel width of `cols` cells, saturating at what a PTY can hold.
+    pub fn pixel_width(self, cols: u16) -> u16 {
+        saturate(u32::from(cols) * u32::from(self.width))
+    }
+
+    /// The pixel height of `rows` cells, saturating at what a PTY can hold.
+    pub fn pixel_height(self, rows: u16) -> u16 {
+        saturate(u32::from(rows) * u32::from(self.height))
+    }
+}
+
+// ========================================================================
+
+/// The size of one terminal cell in whole pixels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct CellPixels {
+    /// Cell height, in pixels.
+    pub height: u16,
+    /// Cell width, in pixels.
+    pub width: u16,
+}
+
+/// A terminal's geometry: its grid, and its cell size when known.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct Geometry {
+    /// Cell size in pixels, or `None` when the client did not say.
+    pub cell_px: Option<CellPixels>,
+    /// Column count.
+    pub cols: u16,
+    /// Row count.
+    pub rows: u16,
+}
 
 /// A request sent from an attached client to the mux server.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -42,6 +87,11 @@ pub enum ClientMessage {
         cols: u16,
         /// This client's row count.
         rows: u16,
+        /// This client's cell size in pixels, when it knows it, so the PTY
+        /// reports a true pixel size to programs that size images by it.
+        /// Absent from older clients, which leaves the pixel size unknown.
+        #[serde(default)]
+        cell_px: Option<CellPixels>,
     },
     /// List active sessions.
     ListSessions,
@@ -240,6 +290,14 @@ pub fn format_uptime(created: u64, now: u64) -> String {
     }
 }
 
+fn to_pixels(px: f32) -> u16 {
+    px.round().clamp(0.0, f32::from(u16::MAX)) as u16
+}
+
+fn saturate(px: u32) -> u16 {
+    u16::try_from(px).unwrap_or(u16::MAX)
+}
+
 // ========================================================================
 // Tests
 // ========================================================================
@@ -321,20 +379,52 @@ mod tests {
 
     #[test]
     fn test_encode_decode_client_resize() {
+        let cell = CellPixels {
+            height: 18,
+            width: 9,
+        };
         let msg = ClientMessage::Resize {
             session: "default".into(),
             cols: 200,
             rows: 50,
+            cell_px: Some(cell),
         };
         let encoded = encode(&msg);
         let decoded: ClientMessage = decode(&encoded).unwrap();
         match decoded {
-            ClientMessage::Resize { cols, rows, .. } => {
+            ClientMessage::Resize {
+                cols,
+                rows,
+                cell_px,
+                ..
+            } => {
                 assert_eq!(cols, 200);
                 assert_eq!(rows, 50);
+                assert_eq!(cell_px, Some(cell));
             }
             _ => panic!("wrong variant"),
         }
+    }
+
+    #[test]
+    fn test_a_resize_from_an_older_client_still_decodes() {
+        // Peers of different versions share a session; one that predates the
+        // cell size field must not be refused.
+        let old = br#"{"Resize":{"session":"s","cols":80,"rows":24}}"#;
+        let mut frame = (old.len() as u32).to_be_bytes().to_vec();
+        frame.extend_from_slice(old);
+        match decode::<ClientMessage>(&frame) {
+            Some(ClientMessage::Resize { cell_px, .. }) => assert_eq!(cell_px, None),
+            other => panic!("decoded {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_pixel_sizes_saturate_instead_of_wrapping() {
+        let cell = CellPixels::from_px(9.4, 18.6);
+        assert_eq!((cell.width, cell.height), (9, 19));
+        assert_eq!(cell.pixel_width(80), 720);
+        assert_eq!(cell.pixel_height(u16::MAX), u16::MAX);
     }
 
     #[test]

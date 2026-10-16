@@ -18,8 +18,8 @@ use crate::terminal::webview::{self, PaneViewport, SurfaceMessage, SurfaceParams
 use winter_core::winter_proto::EmitBlock;
 use winter_render::renderer::{PaneRect, PaneView};
 use winter_render::{
-    Color, CursorShape, Grid, ImagePlacement, PaletteItem, PaletteView, RgbColor, StatusNotice,
-    StatusPrompt, StatusSearch, Style, Theme, ThemeRgb,
+    CellOverlay, Color, CursorShape, Grid, ImagePlacement, PaletteItem, PaletteView, RgbColor,
+    StatusNotice, StatusPrompt, StatusSearch, Style, Theme, ThemeRgb,
 };
 
 use super::open_tabs::OpenTabs;
@@ -136,6 +136,10 @@ struct PaneOverlays {
 #[derive(Clone, Copy)]
 struct PaneViewInput<'a> {
     blink_phase: bool,
+    /// Whether blinking text is in its shown phase.
+    text_blink_visible: bool,
+    /// Text an input method is composing, drawn over the focused terminal.
+    preedit: Option<&'a CellOverlay>,
     config: &'a crate::config::Config,
     focused: TabId,
     /// The focused pane's block bands, `(abs_row, rows)` in anchor order: the
@@ -174,6 +178,8 @@ struct ToolPaint {
 fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
     let PaneViewInput {
         blink_phase,
+        text_blink_visible,
+        preedit,
         config,
         focused,
         focused_bands,
@@ -271,21 +277,27 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
             };
             let is_focused = *id == focused;
             let cursor_unfocused = is_focused && !window_focused;
-            let cursor_visible = if overlay_open || !terminal.grid().cursor_visible() {
-                // An overlay with the keyboard has the cursor too, and DECTCEM
-                // (CSI ?25l) lets a full-screen app like btop hide it outright.
-                false
-            } else if cursor_unfocused {
-                // An unfocused cursor marks "not receiving keystrokes"; blinking
-                // it would fight that signal by making it disappear half the
-                // time.
-                true
-            } else if is_focused {
-                !config.cursor.blink || blink_phase
-            } else {
-                !config.cursor.hide_in_inactive
-            };
+            // Text being composed in an input method sits where the cursor
+            // is, and stands in for it until it is committed.
+            let pane_preedit = preedit.filter(|_| *id == focused);
+            let cursor_visible =
+                if overlay_open || !terminal.grid().cursor_visible() || pane_preedit.is_some() {
+                    // An overlay with the keyboard has the cursor too, and DECTCEM
+                    // (CSI ?25l) lets a full-screen app like btop hide it outright.
+                    false
+                } else if cursor_unfocused {
+                    // An unfocused cursor marks "not receiving keystrokes"; blinking
+                    // it would fight that signal by making it disappear half the
+                    // time.
+                    true
+                } else if is_focused {
+                    !config.cursor.blink || blink_phase
+                } else {
+                    !config.cursor.hide_in_inactive
+                };
             views.push(PaneView {
+                overlay: pane_preedit,
+                blink_visible: text_blink_visible,
                 bracket_colors: &overlays.bracket_colors[i],
                 block_band,
                 cursor_shape,
@@ -376,6 +388,9 @@ fn tool_pane_view<'a>(
     // does or because the window lost focus, is drawn hollow.
     let caret_unfocused = text_cursor.is_some() && !(focused && window_focused);
     PaneView {
+        overlay: None,
+        // Tools draw no program output, so nothing in them blinks.
+        blink_visible: true,
         bracket_colors: &[],
         block_band: None,
         // A tool's caret is a block over the cell it is on, as the traversal
@@ -887,6 +902,8 @@ impl App {
             })
             .collect();
 
+        let preedit = self.preedit_overlay(focused);
+
         let Some(renderer) = self.renderer.as_mut() else {
             return;
         };
@@ -915,6 +932,8 @@ impl App {
         }
         let views = build_pane_views(PaneViewInput {
             blink_phase: self.blink_phase,
+            text_blink_visible: self.text_blink.is_visible(),
+            preedit: preedit.as_ref(),
             config: &self.config,
             focused,
             focused_bands: &focused_bands,
@@ -942,6 +961,7 @@ impl App {
 
         self.reposition_block_tiles(&rects, ch);
         self.place_tool_surfaces(&rects, ch);
+        self.update_ime_anchor(focused);
     }
 
     // --------------------------------------------------------------------
@@ -1357,6 +1377,8 @@ impl App {
         let (cw, ch) = renderer.cell_size();
         let grid = build_settings_grid(tool, renderer.theme(), cols, rows);
         let view = PaneView {
+            overlay: None,
+            blink_visible: true,
             bracket_colors: &[],
             block_band: None,
             cursor_shape: CursorShape::Block,

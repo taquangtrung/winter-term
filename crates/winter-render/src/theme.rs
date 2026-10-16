@@ -26,6 +26,17 @@ const CURSOR_LINE_TINT: f32 = 0.06;
 
 /// The luminance below which a background counts as dark.
 const DARK_LUMINANCE: f32 = 0.5;
+/// The xterm 256-color palette past the 16 ANSI colors: a 6x6x6 color cube
+/// from index 16, then a 24-step grey ramp from index 232.
+const PALETTE_CUBE_FIRST: u8 = 16;
+const PALETTE_GREY_FIRST: u8 = 232;
+const PALETTE_CUBE_SIDE: u8 = 6;
+/// A cube channel's level `n` (1-5) is `CUBE_BASE + CUBE_STEP * n`; level 0 is 0.
+const PALETTE_CUBE_BASE: u8 = 55;
+const PALETTE_CUBE_STEP: u8 = 40;
+/// Grey ramp step `n` is `GREY_BASE + GREY_STEP * n`.
+const PALETTE_GREY_BASE: u8 = 8;
+const PALETTE_GREY_STEP: u8 = 10;
 
 // ========================================================================
 // Data Structures
@@ -503,6 +514,43 @@ impl Theme {
         }
         None
     }
+
+    /// The color 256-color palette `index` draws in: the theme's 16 ANSI
+    /// colors, then any override the theme sets, then xterm's standard cube
+    /// and grey ramp. What programs see when they ask (OSC 4) is this too.
+    pub fn palette_color(&self, index: u8) -> (u8, u8, u8) {
+        if index < PALETTE_CUBE_FIRST {
+            return self.ansi_color(index);
+        }
+        self.indexed_color(index)
+            .unwrap_or_else(|| xterm_palette_color(index))
+    }
+}
+
+// ========================================================================
+// Free functions
+// ========================================================================
+
+/// xterm's standard color for palette `index` past the ANSI colors.
+fn xterm_palette_color(index: u8) -> (u8, u8, u8) {
+    if index >= PALETTE_GREY_FIRST {
+        let grey = PALETTE_GREY_BASE + PALETTE_GREY_STEP * (index - PALETTE_GREY_FIRST);
+        return (grey, grey, grey);
+    }
+    let cube = index.saturating_sub(PALETTE_CUBE_FIRST);
+    let level = |n: u8| {
+        if n == 0 {
+            0
+        } else {
+            PALETTE_CUBE_BASE + PALETTE_CUBE_STEP * n
+        }
+    };
+    let side = PALETTE_CUBE_SIDE;
+    (
+        level(cube / (side * side) % side),
+        level(cube / side % side),
+        level(cube % side),
+    )
 }
 
 // ========================================================================
@@ -624,5 +672,18 @@ mod tests {
         let theme = Theme::default();
         assert_eq!(theme.indexed_color(0), None);
         assert!(theme.indexed_color(136).is_some());
+    }
+
+    #[test]
+    fn test_palette_color_layers_ansi_overrides_and_the_xterm_cube() {
+        let mut theme = Theme::default();
+        assert_eq!(theme.palette_color(1), theme.ansi_color(1));
+        assert_eq!(theme.palette_color(16), (0, 0, 0), "cube origin");
+        assert_eq!(theme.palette_color(16 + 36 + 6 + 1), (95, 95, 95));
+        assert_eq!(theme.palette_color(231), (255, 255, 255), "cube corner");
+        assert_eq!(theme.palette_color(232), (8, 8, 8), "grey ramp start");
+        assert_eq!(theme.palette_color(255), (238, 238, 238), "grey ramp end");
+        theme.indexed.push((100, Rgb::new(1, 2, 3)));
+        assert_eq!(theme.palette_color(100), (1, 2, 3), "an override wins");
     }
 }

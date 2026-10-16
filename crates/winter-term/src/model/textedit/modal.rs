@@ -669,7 +669,7 @@ impl Session<'_> {
         self.yanked = self.ed.yanked.take();
         self.completing = self.ed.completion.take();
         if !self.ed.replaying {
-            self.ed.record.push(key.clone());
+            self.ed.record.push(*key);
         }
         let outcome = match self.ed.mode {
             EditMode::Insert => self.on_insert_key(key),
@@ -750,15 +750,13 @@ impl Session<'_> {
             return EditOutcome::Consumed;
         }
         if self.ed.read_only {
-            match key.glyph() {
-                KeyCode::Char(
-                    'i' | 'a' | 'I' | 'A' | 'o' | 'O' | 'R' | 's' | 'S' | 'x' | 'X' | 'C' | 'D'
-                    | 'r' | '~' | 'J' | 'p' | 'P' | 'u' | '.' | 'd' | 'c' | '>' | '<',
-                ) => {
-                    self.ed.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
-                    return EditOutcome::Consumed;
-                }
-                _ => {}
+            if let KeyCode::Char(
+                'i' | 'a' | 'I' | 'A' | 'o' | 'O' | 'R' | 's' | 'S' | 'x' | 'X' | 'C' | 'D' | 'r'
+                | '~' | 'J' | 'p' | 'P' | 'u' | '.' | 'd' | 'c' | '>' | '<',
+            ) = key.glyph()
+            {
+                self.ed.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
+                return EditOutcome::Consumed;
             }
         }
         match key.glyph() {
@@ -1338,12 +1336,11 @@ impl Session<'_> {
             return self.leave_visual();
         };
         if self.ed.read_only {
-            match key.glyph() {
-                KeyCode::Char('d' | 'x' | 'c' | 's' | '>' | '<' | 'J' | '~' | 'p' | 'P' | 'r') => {
-                    self.ed.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
-                    return EditOutcome::Consumed;
-                }
-                _ => {}
+            if let KeyCode::Char('d' | 'x' | 'c' | 's' | '>' | '<' | 'J' | '~' | 'p' | 'P' | 'r') =
+                key.glyph()
+            {
+                self.ed.notice = Some(ToolNotice::error(READ_ONLY_MESSAGE));
+                return EditOutcome::Consumed;
             }
         }
         match key.glyph() {

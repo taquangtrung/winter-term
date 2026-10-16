@@ -1,8 +1,11 @@
 //! Runtime appearance changes: font size, themes, and display toggles.
 
+use winter_render::renderer::GpuRenderer;
+use winter_render::Theme;
+
 use crate::config::Config;
 use crate::model::input::WindowKeymap;
-use winter_render::Theme;
+use crate::terminal::session::{Presentation, ThemeColors};
 
 use super::App;
 
@@ -155,5 +158,20 @@ impl App {
             }
             Err(e) => self.set_error(e.to_string()),
         }
+    }
+}
+
+// ========================================================================
+// Free functions
+// ========================================================================
+
+/// How `renderer` shows a terminal, for the terminal to answer programs'
+/// size and color queries with (see `Terminal::set_presentation`).
+pub(crate) fn terminal_presentation(renderer: &GpuRenderer) -> Presentation {
+    let (cell_width_px, cell_height_px) = renderer.cell_size();
+    Presentation {
+        cell_height_px,
+        cell_width_px,
+        colors: ThemeColors::from_theme(renderer.theme()),
     }
 }

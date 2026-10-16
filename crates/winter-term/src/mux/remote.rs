@@ -9,7 +9,7 @@ use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 
-use super::protocol::{self, ClientMessage, FrameBuffer, ServerMessage};
+use super::protocol::{self, ClientMessage, FrameBuffer, Geometry, ServerMessage};
 
 // ========================================================================
 // Constants
@@ -100,11 +100,12 @@ impl RemoteClient {
     }
 
     /// Report this client's geometry to the remote session.
-    pub fn resize(&mut self, session: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
+    pub fn resize(&mut self, session: &str, geometry: Geometry) -> anyhow::Result<()> {
         self.send(&ClientMessage::Resize {
             session: session.to_string(),
-            cols,
-            rows,
+            cols: geometry.cols,
+            rows: geometry.rows,
+            cell_px: geometry.cell_px,
         })
     }
 

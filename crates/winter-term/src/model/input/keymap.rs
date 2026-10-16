@@ -451,7 +451,7 @@ impl WindowKeymap {
                 // only a name neither table recognizes becomes a named
                 // command, or those chords would double-resolve.
                 if let [single] = keys.as_slice() {
-                    named.push((single.clone(), name.clone()));
+                    named.push((*single, name.clone()));
                 }
             }
         }
@@ -491,8 +491,8 @@ impl WindowKeymap {
 
         for (keys, action) in parsed {
             match keys.as_slice() {
-                [single] if action.is_global() => self.global.push((single.clone(), action)),
-                [single] => self.direct.push((single.clone(), action)),
+                [single] if action.is_global() => self.global.push((*single, action)),
+                [single] => self.direct.push((*single, action)),
                 [leader, follow] => {
                     self.leader = *leader;
                     self.sequence.push((*leader, *follow, action));

@@ -96,6 +96,24 @@ pub fn encode_release(key: &Key, flags: u32) -> Vec<u8> {
     }
     encode_kitty_release(key)
 }
+/// `action` as the cursor keys send it under DECCKM (application cursor
+/// keys, `CSI ? 1 h`): an unmodified arrow, Home or End (`CSI A`..`CSI D`,
+/// `CSI H`, `CSI F`) goes out in its `SS3` form (`ESC O A`), which is what
+/// `kcuu1` and friends in the `xterm-256color` terminfo name once a program
+/// enables keypad mode. Modified keys, and every other action, are unchanged,
+/// as in xterm. Only the legacy encoding has this mode; the kitty protocol
+/// keeps its own forms.
+pub fn apply_cursor_key_mode(action: Action, app_cursor_keys: bool, kitty_flags: u32) -> Action {
+    match action {
+        Action::SendBytes(bytes) if app_cursor_keys && kitty_flags == 0 => {
+            Action::SendBytes(match bytes.as_slice() {
+                [ESCAPE, b'[', final_byte @ (b'A'..=b'D' | b'F' | b'H')] => ss3(*final_byte),
+                _ => bytes,
+            })
+        }
+        other => other,
+    }
+}
 /// xterm modifier byte: 1 + shift + 2*alt + 4*ctrl + 8*super. Value 1 means no
 /// modifier.
 pub(super) fn xterm_modifier(key: &Key) -> u8 {
@@ -1118,5 +1136,40 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn test_application_cursor_keys_send_ss3_for_unmodified_keys_only() {
+        let send = |bytes: &[u8]| Action::SendBytes(bytes.to_vec());
+        for (normal, application) in [
+            (b"\x1b[A", b"\x1bOA"),
+            (b"\x1b[D", b"\x1bOD"),
+            (b"\x1b[H", b"\x1bOH"),
+            (b"\x1b[F", b"\x1bOF"),
+        ] {
+            assert_eq!(
+                apply_cursor_key_mode(send(normal), true, 0),
+                send(application)
+            );
+            assert_eq!(
+                apply_cursor_key_mode(send(normal), false, 0),
+                send(normal),
+                "mode off"
+            );
+        }
+        // A modified arrow keeps its CSI form, as in xterm.
+        assert_eq!(
+            apply_cursor_key_mode(send(b"\x1b[1;5A"), true, 0),
+            send(b"\x1b[1;5A")
+        );
+        // The kitty protocol has its own forms.
+        assert_eq!(
+            apply_cursor_key_mode(send(b"\x1b[A"), true, 1),
+            send(b"\x1b[A")
+        );
+        assert_eq!(
+            apply_cursor_key_mode(Action::Ignore, true, 0),
+            Action::Ignore
+        );
     }
 }

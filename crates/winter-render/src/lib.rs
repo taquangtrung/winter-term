@@ -18,12 +18,14 @@ mod tabbar;
 mod theme;
 
 pub use grid::{
-    Cell, CellWidth, Color, CursorShape, EraseMode, Grid, RgbColor, RowRemap, Style, MAX_SCROLLBACK,
+    AnsiMode, Cell, CellWidth, Charset, CharsetSlot, Color, CursorShape, DecMode, EraseMode, Grid,
+    RgbColor, RowRemap, Style, UnderlineStyle, MAX_SCROLLBACK,
 };
 pub use image::ImagePlacement;
 pub use renderer::{
-    start_font_load, FontConfig, FontLoad, InputView, NoticeKind, PaletteItem, PaletteView,
-    PaneRect, PaneView, StatusBar, StatusNotice, StatusPrompt, StatusSearch, WhichKeyView,
+    start_font_load, CellOverlay, FontConfig, FontLoad, InputView, NoticeKind, PaletteItem,
+    PaletteView, PaneRect, PaneView, StatusBar, StatusNotice, StatusPrompt, StatusSearch,
+    WhichKeyView,
 };
 pub use screen::Screen;
 pub use tabbar::{

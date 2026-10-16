@@ -68,11 +68,6 @@ const INPUT_TEXTURE_ID: u64 = u64::MAX - 9;
 /// a panel rather than as a question.
 pub(super) const INPUT_WIDTH_RATIO: f32 = 0.5;
 
-/// The key-hint card's width and height as fractions of the surface.
-///
-/// A fixed size whatever the card holds: a hint is read at a glance, in the
-/// same place every time, and a panel that grew and shrank with the number of
-
 /// The palette's width and height as fractions of the surface.
 ///
 /// A fixed size, as the key-hint card is: the list narrows as the query is

@@ -37,6 +37,8 @@ impl Grid {
     /// Erase part of the cursor's line.
     pub fn erase_in_line(&mut self, mode: EraseMode) {
         let (start, end) = self.line_range(mode);
+        self.break_wide_pair_at(self.cursor.row, start);
+        self.break_wide_pair_at(self.cursor.row, end);
         for col in start..end {
             if let Some(index) = self.index(self.cursor.row, col) {
                 self.cells[index] = self.blank_cell();
@@ -95,6 +97,10 @@ impl Grid {
         let row = self.cursor.row;
         let col = self.cursor.col;
         let shift = n.min(self.cols.saturating_sub(col));
+        // A pair split by the insertion point, or pushed half off the right
+        // edge, has to go: see `break_wide_pair_at`.
+        self.break_wide_pair_at(row, col);
+        self.break_wide_pair_at(row, self.cols.saturating_sub(shift));
         let row_start = row * self.cols;
         let src_start = row_start + col;
         let src_end = row_start + self.cols - shift;
@@ -113,6 +119,8 @@ impl Grid {
         let row = self.cursor.row;
         let col = self.cursor.col;
         let shift = n.min(self.cols.saturating_sub(col));
+        self.break_wide_pair_at(row, col);
+        self.break_wide_pair_at(row, col + shift);
         let row_start = row * self.cols;
         let dst = row_start + col;
         let src = dst + shift;
@@ -132,6 +140,8 @@ impl Grid {
     pub fn erase_chars(&mut self, n: usize) {
         let row = self.cursor.row;
         let end = (self.cursor.col + n).min(self.cols);
+        self.break_wide_pair_at(row, self.cursor.col);
+        self.break_wide_pair_at(row, end);
         for col in self.cursor.col..end {
             if let Some(index) = self.index(row, col) {
                 self.cells[index] = self.blank_cell();

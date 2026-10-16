@@ -6,7 +6,7 @@
 
 use std::fmt::Write;
 
-use winter_render::{Color, Grid, Theme};
+use winter_render::{Color, Grid, Style, Theme};
 
 // ========================================================================
 // Plain text export
@@ -55,14 +55,9 @@ pub(crate) fn export_scrollback_ansi(grid: &Grid, _theme: &Theme) -> String {
 
     for abs_row in 0..total_rows {
         let mut row_has_text = false;
-        let mut last_fg = Color::Default;
-        let mut last_bg = Color::Default;
-        let mut last_bold = false;
-        let mut last_faint = false;
-        let mut last_strikethrough = false;
-        let mut last_italic = false;
-        let mut last_underline = false;
-        let mut last_reversed = false;
+        // The pen the row's text has been written in so far, links aside:
+        // they are not pen attributes and the export does not carry them.
+        let mut pen = Style::default();
 
         let mut row_str = String::with_capacity(grid.cols());
 
@@ -77,78 +72,19 @@ pub(crate) fn export_scrollback_ansi(grid: &Grid, _theme: &Theme) -> String {
                 row_has_text = true;
             }
 
-            let style_changed = cell.style.foreground != last_fg
-                || cell.style.background != last_bg
-                || cell.style.bold != last_bold
-                || cell.style.faint != last_faint
-                || cell.style.strikethrough != last_strikethrough
-                || cell.style.italic != last_italic
-                || cell.style.underline != last_underline
-                || cell.style.reversed != last_reversed;
-
-            if style_changed {
-                row_str.push_str("\x1b[0m");
-                if cell.style.bold {
-                    row_str.push_str("\x1b[1m");
-                }
-                if cell.style.faint {
-                    row_str.push_str("\x1b[2m");
-                }
-                if cell.style.italic {
-                    row_str.push_str("\x1b[3m");
-                }
-                if cell.style.underline {
-                    row_str.push_str("\x1b[4m");
-                }
-                if cell.style.strikethrough {
-                    row_str.push_str("\x1b[9m");
-                }
-                if cell.style.reversed {
-                    row_str.push_str("\x1b[7m");
-                }
-
-                match cell.style.foreground {
-                    Color::Rgb(rgb) => {
-                        let _ = write!(row_str, "\x1b[38;2;{};{};{}m", rgb.r, rgb.g, rgb.b);
-                    }
-                    Color::Indexed(idx) => {
-                        let _ = write!(row_str, "\x1b[38;5;{}m", idx);
-                    }
-                    Color::Default => {}
-                }
-
-                match cell.style.background {
-                    Color::Rgb(rgb) => {
-                        let _ = write!(row_str, "\x1b[48;2;{};{};{}m", rgb.r, rgb.g, rgb.b);
-                    }
-                    Color::Indexed(idx) => {
-                        let _ = write!(row_str, "\x1b[48;5;{}m", idx);
-                    }
-                    Color::Default => {}
-                }
-
-                last_fg = cell.style.foreground;
-                last_bg = cell.style.background;
-                last_bold = cell.style.bold;
-                last_faint = cell.style.faint;
-                last_strikethrough = cell.style.strikethrough;
-                last_italic = cell.style.italic;
-                last_underline = cell.style.underline;
-                last_reversed = cell.style.reversed;
+            let style = Style {
+                link: 0,
+                ..cell.style
+            };
+            if style != pen {
+                let _ = write!(row_str, "\x1b[{}m", style.sgr_params());
+                pen = style;
             }
 
             row_str.push(cell.ch);
         }
 
-        if last_bold
-            || last_faint
-            || last_strikethrough
-            || last_italic
-            || last_underline
-            || last_reversed
-            || last_fg != Color::Default
-            || last_bg != Color::Default
-        {
+        if pen != Style::default() {
             row_str.push_str("\x1b[0m");
         }
 
@@ -218,7 +154,7 @@ pub(crate) fn export_scrollback_html(grid: &Grid, theme: &Theme) -> String {
             if cell.style.faint {
                 style_parts.push("opacity:0.5;".to_string());
             }
-            match (cell.style.underline, cell.style.strikethrough) {
+            match (cell.style.underline.is_drawn(), cell.style.strikethrough) {
                 (true, true) => {
                     style_parts.push("text-decoration:underline line-through;".to_string())
                 }
@@ -319,7 +255,6 @@ pre {{
 #[cfg(test)]
 mod tests {
     use super::*;
-    use winter_render::Style;
 
     #[test]
     fn test_export_scrollback_plain_trims_whitespace_and_empty_rows() {
@@ -350,7 +285,7 @@ mod tests {
         }
         let theme = Theme::default();
         let ansi = export_scrollback_ansi(&grid, &theme);
-        assert!(ansi.contains("\x1b[1m"), "contains bold escape code");
+        assert!(ansi.contains("\x1b[0;1m"), "contains bold escape code");
         assert!(ansi.contains("bold"), "contains text");
     }
 

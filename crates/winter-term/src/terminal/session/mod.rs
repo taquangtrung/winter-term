@@ -4,11 +4,13 @@
 //! or from a named session on an external mux server.
 
 mod performer;
+mod reports;
 mod shell;
 #[cfg(target_os = "windows")]
 mod win_process;
 
 use performer::{ApcDecision, CombinedPerformer};
+pub use reports::{Presentation, ThemeColors};
 pub(crate) use shell::osc52_read_response;
 #[cfg(target_os = "linux")]
 use shell::parse_foreground_process;
@@ -22,12 +24,12 @@ use std::time::{Duration, Instant};
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 
 use winter_core::Scrollback;
-use winter_render::Grid;
 #[cfg(test)]
 use winter_render::MAX_SCROLLBACK;
+use winter_render::{DecMode, Grid};
 
 use super::block_queue::{BlockBand, BlockQueue};
-use crate::mux::protocol::ServerMessage;
+use crate::mux::protocol::{Geometry, ServerMessage};
 use crate::mux::resilience::ResilientClient;
 
 // ========================================================================
@@ -36,9 +38,9 @@ use crate::mux::resilience::ResilientClient;
 
 const READ_CHUNK: usize = 4096;
 
-/// DEC private mode for synchronized output: `CSI ? 2026 h` begins a frame the
-/// terminal holds back, `CSI ? 2026 l` ends it.
-const SYNC_OUTPUT_MODE: u16 = 2026;
+/// The terminal type advertised to programs (`TERM`), whose terminfo entry
+/// is the contract for what this terminal implements.
+const TERM_NAME: &str = "xterm-256color";
 
 /// How a synchronized frame ends in the byte stream, which is what releases the
 /// bytes held back while it was drawn.
@@ -51,10 +53,6 @@ const SYNC_OUTPUT_TIMEOUT: Duration = Duration::from_millis(35);
 /// The most bytes held for one frame, for the same reason.
 const SYNC_OUTPUT_MAX_BYTES: usize = 8 * 1024 * 1024;
 const BELL: u8 = 0x07;
-const LINE_FEED: u8 = b'\n';
-const CARRIAGE_RETURN: u8 = b'\r';
-const BACKSPACE: u8 = 0x08;
-const HORIZONTAL_TAB: u8 = b'\t';
 /// Maximum time to wait for trailing line-rewrite bytes (e.g. text following
 /// `\r`, `\x1b[2K`, or `\x1b[G`) before rendering an intermediate frame,
 /// preventing cursor tearing and horizontal jumping during CLI progress
@@ -196,7 +194,7 @@ impl Terminal {
             });
 
         let mut command = CommandBuilder::new(resolve_shell(&shell));
-        let effective_cwd = cwd.map(std::path::PathBuf::from).or_else(|| {
+        let effective_cwd = cwd.map(std::path::PathBuf::from).or({
             #[cfg(target_os = "windows")]
             {
                 if let Ok(cur) = std::env::current_dir() {
@@ -247,7 +245,7 @@ impl Terminal {
         command.env("TERM_PROGRAM", "winter");
         command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));
         command.env("WINTER", "1");
-        command.env("TERM", "xterm-256color");
+        command.env("TERM", TERM_NAME);
         command.env("COLORTERM", "truecolor");
         if let Some(editor) = git_editor_command() {
             command.env("GIT_EDITOR", editor);
@@ -600,7 +598,7 @@ impl Terminal {
         // begin it again.
         self.combined
             .grid_mut()
-            .set_private_mode(SYNC_OUTPUT_MODE, false);
+            .set_dec_mode(DecMode::SyncOutput, false);
         for byte in hold.bytes {
             self.feed_byte(byte);
         }
@@ -671,17 +669,25 @@ impl Terminal {
     /// guard above; used at attach time, when the remote PTY starts at the
     /// server's default geometry regardless of this grid's size.
     fn transport_resize(&mut self, cols: usize, rows: usize) {
+        // The pixel size lets a program that reads the window size
+        // (`TIOCGWINSZ`) to size images get it right without a query.
+        let cell = self.combined.presentation().cell_pixels();
+        let geometry = Geometry {
+            cell_px: Some(cell),
+            cols: grid_extent(cols),
+            rows: grid_extent(rows),
+        };
         match &mut self.transport {
             TerminalTransport::Local { master, .. } => {
                 let _ = master.resize(PtySize {
-                    rows: rows as u16,
-                    cols: cols as u16,
-                    pixel_width: 0,
-                    pixel_height: 0,
+                    rows: geometry.rows,
+                    cols: geometry.cols,
+                    pixel_width: cell.pixel_width(geometry.cols),
+                    pixel_height: cell.pixel_height(geometry.rows),
                 });
             }
             TerminalTransport::Mux { client, .. } => {
-                let _ = client.resize(cols as u16, rows as u16);
+                let _ = client.resize(geometry);
             }
         }
     }
@@ -725,10 +731,18 @@ impl Terminal {
         self.combined.grid()
     }
 
-    /// Set the pixel cell size so image blocks reserve the exact rows they
-    /// occupy. Called once the renderer's metrics are known.
-    pub fn set_cell_size(&mut self, width: f32, height: f32) {
-        self.combined.set_cell_size(width, height);
+    /// Tell the terminal how the window shows it: the pixel cell size (so
+    /// image blocks reserve the exact rows they occupy, and size queries are
+    /// answered truly) and the theme's default colors (for color queries).
+    /// Cheap to repeat: the pty only hears of it when the cell size changed.
+    pub fn set_presentation(&mut self, presentation: Presentation) {
+        let previous = self.combined.presentation().cell_pixels();
+        self.combined.set_presentation(presentation);
+        if presentation.cell_pixels() != previous {
+            let grid = self.combined.grid();
+            let (cols, rows) = (grid.cols(), grid.rows());
+            self.transport_resize(cols, rows);
+        }
     }
 
     /// The terminal cell grid (mutable, for scrollback navigation).
@@ -807,6 +821,18 @@ impl Terminal {
     /// Whether drag tracking specifically is active.
     pub fn mouse_drag_tracking(&self) -> bool {
         self.combined.grid().mouse_drag_tracking()
+    }
+
+    /// Whether the cursor keys send their application (`SS3`) forms
+    /// (DECCKM, CSI ?1h).
+    pub fn app_cursor_keys(&self) -> bool {
+        self.combined.grid().app_cursor_keys()
+    }
+
+    /// Whether every pointer motion is reported, buttons down or not
+    /// (CSI ?1003h).
+    pub fn mouse_any_event(&self) -> bool {
+        self.combined.grid().mouse_any_event()
     }
 
     /// Whether focus event mode (CSI ?1004h) is active.
@@ -1094,6 +1120,12 @@ fn is_line_rewrite_pending(slice: &[u8]) -> bool {
         || slice.ends_with(b"\x1b")
         || slice.ends_with(b"\x1b[")
         || slice.ends_with(b"\x1b[?")
+}
+
+/// A grid dimension as the PTY's 16-bit field, saturating rather than
+/// wrapping for an absurd size.
+fn grid_extent(cells: usize) -> u16 {
+    u16::try_from(cells).unwrap_or(u16::MAX)
 }
 
 /// Inspect the trailing bytes across `chunks` to determine if a line rewrite

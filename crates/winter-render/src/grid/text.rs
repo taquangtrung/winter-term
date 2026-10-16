@@ -1,8 +1,16 @@
 //! Printing text into the grid: graphemes, wide cells, and auto-wrap.
 
+use unicode_width::UnicodeWidthChar;
+
 use super::Grid;
 use super::{Cell, CellWidth, Style};
-use unicode_width::UnicodeWidthChar;
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+/// Columns a double-width (East Asian wide, emoji) glyph occupies.
+const WIDE_GLYPH_COLUMNS: usize = 2;
 
 // ========================================================================
 // Grid: printing text
@@ -123,13 +131,33 @@ impl Grid {
         carried
     }
     /// Print a character at the cursor and advance, wrapping and scrolling as
-    /// needed. Uses deferred (pending) line wrap matching VT100/xterm semantics:
-    /// when a print fills the final column, the cursor parks at `cols - 1` with
-    /// the cursor's deferred-wrap flag set, and the actual wrap to the next line is
-    /// deferred until the next printable character. This keeps the reported
-    /// cursor column in bounds and lets full-width progress bars and spinners
-    /// redraw in place via `\r` instead of scrolling prematurely.
+    /// needed. The character goes through the active character set first
+    /// (DEC Special Graphics turns `q` into `─`).
+    ///
+    /// Uses deferred (pending) line wrap matching VT100/xterm semantics: when
+    /// a print fills the final column, the cursor parks at `cols - 1` with
+    /// the cursor's deferred-wrap flag set, and the actual wrap to the next
+    /// line is deferred until the next printable character. This keeps the
+    /// reported cursor column in bounds and lets full-width progress bars and
+    /// spinners redraw in place via `\r` instead of scrolling prematurely.
+    /// With autowrap off (DECAWM reset) nothing is deferred: the last column
+    /// is overwritten in place.
     pub fn print(&mut self, ch: char) {
+        let ch = self.charsets.translate(ch);
+        self.print_glyph(ch);
+    }
+    /// Repeat the last graphic character printed `n` times (REP, `CSI n b`).
+    /// Capped at one screenful, so a hostile count cannot stall the parser.
+    pub fn repeat_last_graphic(&mut self, n: usize) {
+        let Some(ch) = self.last_graphic else {
+            return;
+        };
+        for _ in 0..n.min(self.cols * self.rows) {
+            self.print_glyph(ch);
+        }
+    }
+    /// Print `ch`, already translated through the character sets.
+    fn print_glyph(&mut self, ch: char) {
         // A zero-width combining mark composes onto the previous cell rather than
         // occupying its own; it must not flush a pending wrap or advance.
         if UnicodeWidthChar::width(ch) == Some(0) {
@@ -141,30 +169,67 @@ impl Grid {
         if self.try_merge_continuation(ch) {
             return;
         }
+        self.last_graphic = Some(ch);
         if self.cursor.wrap_pending {
             self.auto_wrap();
         }
+        // East-Asian-wide and emoji glyphs occupy two columns; anything else
+        // (including width-`None` controls) one.
+        let width = if UnicodeWidthChar::width(ch) == Some(WIDE_GLYPH_COLUMNS) {
+            WIDE_GLYPH_COLUMNS
+        } else {
+            1
+        };
+        // A double-width glyph can't straddle the right margin: with one
+        // column left it wraps first, or, with autowrap off, takes the last
+        // two columns instead.
+        if width == WIDE_GLYPH_COLUMNS && self.cursor.col + 1 >= self.cols {
+            if self.modes.auto_wrap {
+                self.auto_wrap();
+            } else {
+                self.cursor.col = self.cols.saturating_sub(WIDE_GLYPH_COLUMNS);
+            }
+        }
+        if self.modes.insert {
+            self.insert_chars(width);
+        }
+        self.place_glyph(ch, width);
+        let next = self.cursor.col + width;
+        if next >= self.cols {
+            // Filled the last column: park here and, under autowrap, defer
+            // the wrap to the next print.
+            self.cursor.col = self.cols.saturating_sub(1);
+            self.cursor.wrap_pending = self.modes.auto_wrap;
+        } else {
+            self.cursor.col = next;
+        }
+    }
+    /// Write `ch`, `width` columns wide, at the cursor in the current pen.
+    fn place_glyph(&mut self, ch: char, width: usize) {
+        let (row, col) = (self.cursor.row, self.cursor.col);
+        // Overwriting either half of an existing double-width glyph leaves
+        // its other half meaningless; blank it rather than let the old glyph
+        // draw over the new one.
+        self.break_wide_pair_at(row, col);
+        self.break_wide_pair_at(row, col + width);
         let style = Style {
             link: self.active_link,
             ..self.style
         };
-        // East-Asian-wide and emoji glyphs occupy two columns; width 0 (combining
-        // marks, controls) is treated as a single cell to preserve prior behavior.
-        if UnicodeWidthChar::width(ch) == Some(2) {
-            // A double-width glyph can't straddle the right margin: if only one
-            // column remains, wrap to the next line before placing it.
-            if self.cursor.col + 1 >= self.cols {
-                self.auto_wrap();
-            }
-            let (row, col) = (self.cursor.row, self.cursor.col);
-            if let Some(index) = self.index(row, col) {
-                self.cells[index] = Cell {
-                    ch,
-                    tail: None,
-                    style,
-                    width: CellWidth::Wide,
-                };
-            }
+        let lead = if width == WIDE_GLYPH_COLUMNS {
+            CellWidth::Wide
+        } else {
+            CellWidth::Single
+        };
+        if let Some(index) = self.index(row, col) {
+            self.cells[index] = Cell {
+                ch,
+                tail: None,
+                style,
+                width: lead,
+            };
+        }
+        if width == WIDE_GLYPH_COLUMNS {
             if let Some(index) = self.index(row, col + 1) {
                 self.cells[index] = Cell {
                     ch: ' ',
@@ -173,27 +238,33 @@ impl Grid {
                     width: CellWidth::Spacer,
                 };
             }
-            if col + 2 >= self.cols {
-                self.cursor.col = self.cols.saturating_sub(1);
-                self.cursor.wrap_pending = true;
-            } else {
-                self.cursor.col += 2;
-            }
+        }
+    }
+    /// Split any double-width glyph straddling the boundary just left of
+    /// `col` on `row` (its `Wide` half at `col - 1`, its `Spacer` at `col`),
+    /// blanking both halves in their own background. `col` may be `cols`,
+    /// the right margin, where a `Wide` cell with no room for its spacer is
+    /// blanked alone. Every edit that writes or shifts a run of cells calls
+    /// this at the run's two ends, so a pair is never left half-overwritten.
+    pub(super) fn break_wide_pair_at(&mut self, row: usize, col: usize) {
+        let left = col.checked_sub(1).and_then(|c| self.index(row, c));
+        let right = self.index(row, col);
+        let straddles = left.is_some_and(|i| self.cells[i].width == CellWidth::Wide)
+            || right.is_some_and(|i| self.cells[i].width == CellWidth::Spacer);
+        if !straddles {
             return;
         }
-        if let Some(index) = self.index(self.cursor.row, self.cursor.col) {
-            self.cells[index] = Cell {
-                ch,
-                tail: None,
-                style,
-                width: CellWidth::Single,
-            };
-        }
-        if self.cursor.col + 1 >= self.cols {
-            // Filled the last column: park here and defer the wrap.
-            self.cursor.wrap_pending = true;
-        } else {
-            self.cursor.col += 1;
+        for index in [left, right].into_iter().flatten() {
+            let cell = &self.cells[index];
+            if matches!(cell.width, CellWidth::Wide | CellWidth::Spacer) {
+                self.cells[index] = Cell {
+                    style: Style {
+                        background: cell.style.background,
+                        ..Style::default()
+                    },
+                    ..Cell::default()
+                };
+            }
         }
     }
     /// Index of the cell holding the glyph just printed: the parked column when

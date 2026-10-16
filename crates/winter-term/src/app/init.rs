@@ -10,6 +10,8 @@ use crate::terminal::session::Terminal;
 use winter_render::renderer::GpuRenderer;
 use winter_render::{FontConfig, Theme};
 
+use super::appearance::terminal_presentation;
+use super::ime::enable_ime;
 use super::{
     content_rows, App, APPROX_CELL_HEIGHT, APPROX_CELL_WIDTH, DEFAULT_COLS, DEFAULT_ROWS, MIN_COLS,
     MIN_ROWS,
@@ -131,6 +133,7 @@ impl App {
                 .create_window(window_attrs)
                 .expect("create window"),
         );
+        enable_ime(&window);
 
         let size = window.inner_size();
 
@@ -239,8 +242,7 @@ impl App {
         if cols != pane_init_cols || want_rows != pane_init_rows {
             terminal.resize(cols, want_rows);
         }
-        let (cell_w, cell_h) = renderer.cell_size();
-        terminal.set_cell_size(cell_w, cell_h);
+        terminal.set_presentation(terminal_presentation(&renderer));
         let focused = self.layout().focused();
         self.open_tabs.insert_terminal(focused, terminal);
 

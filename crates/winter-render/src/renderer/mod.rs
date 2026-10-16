@@ -20,12 +20,14 @@ mod frame;
 mod surface;
 mod view;
 
+pub use display::CellOverlay;
 pub use view::{
     NoticeKind, PaneRect, PaneView, StatusBar, StatusNotice, StatusPrompt, StatusSearch,
 };
 mod background;
 mod chrome;
 mod colors;
+mod display;
 mod glyphs;
 mod images;
 
@@ -125,6 +127,9 @@ pub struct GpuRenderer {
     /// tabbar reuses the texture already uploaded for it. Repainting it was
     /// the most expensive thing an otherwise idle frame did.
     tabbar_strip_cache: Option<chrome::TabbarStripCache>,
+    /// Whether the last frame drew any blinking text (SGR 5), which is what
+    /// the host needs a blink timer running for.
+    drew_blinking_text: bool,
     /// System fonts for SVG text, loaded lazily on first SVG with text and then
     /// reused (the scan costs ~150ms, so it is deferred off the startup path).
     svg_fontdb: Option<std::sync::Arc<resvg::usvg::fontdb::Database>>,

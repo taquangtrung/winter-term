@@ -8,8 +8,10 @@
 //! Nothing here needs a serialization format of its own, and what the new
 //! binary's parser understands is by definition what it can restore.
 
-use super::cell::{Cell, CellWidth, Color, Style};
-use super::Grid;
+use super::cell::{Cell, CellWidth, Style};
+use super::charset::Charsets;
+use super::{AnsiMode, DecMode};
+use super::{Grid, SavedCursor};
 
 // ========================================================================
 // Constants
@@ -21,6 +23,12 @@ const OSC_LINK: &str = "\x1b]8;;";
 const ST: &str = "\x1b\\";
 const RESET: &str = "\x1b[0m";
 const NEWLINE: &str = "\r\n";
+/// Final bytes of SM/DECSET and RM/DECRST.
+const MODE_SET: char = 'h';
+const MODE_RESET: char = 'l';
+
+/// DECSC: save the cursor.
+const DECSC: &str = "\x1b7";
 
 /// Switches to the alternate screen, saving the cursor it leaves.
 const ENTER_ALT_SCREEN: &str = "\x1b[?1049h";
@@ -49,6 +57,11 @@ impl Grid {
         if self.alt_buffer.is_some() {
             // The alternate screen saves the cursor it leaves, so the primary
             // cursor is put where it was before entering it.
+            // The primary screen's own DECSC save is set aside with it, so it
+            // is made before entering the alternate screen.
+            if let Some(saved) = self.alt_buffer.as_ref().and_then(|alt| alt.saved_cursor) {
+                out.saved_cursor(&saved, 0);
+            }
             if let Some((row, col)) = primary_cursor {
                 out.cursor_to(row, col);
             }
@@ -63,8 +76,17 @@ impl Grid {
                 self.scroll_bottom + 1
             ));
         }
+        if let Some(saved) = self.saved_cursor {
+            out.saved_cursor(&saved, self.scroll_top);
+        }
         out.modes(self);
-        out.cursor_to(self.cursor.row, self.cursor.col);
+        // Under origin mode a CUP row counts from the scroll region's top.
+        let row = if self.modes.origin {
+            self.cursor.row.saturating_sub(self.scroll_top)
+        } else {
+            self.cursor.row
+        };
+        out.cursor_to(row, self.cursor.col);
         out.set_style(&self.style);
         out.close_link();
         out.finish()
@@ -158,25 +180,54 @@ impl Dump {
         }
     }
 
+    /// Make `saved` the terminal's DECSC save: set up the cursor, pen,
+    /// character sets and origin mode it holds, and save them with `ESC 7`.
+    /// Leaves the character sets and origin mode at their defaults again, so
+    /// the live state can be written after it as onto a fresh terminal. A
+    /// pending wrap cannot be recreated by positioning and is not restored.
+    fn saved_cursor(&mut self, saved: &SavedCursor, scroll_top: usize) {
+        let origin = DecMode::Origin.code();
+        let row = if saved.origin {
+            self.raw(&format!("{CSI}?{origin}{MODE_SET}"));
+            saved.row.saturating_sub(scroll_top)
+        } else {
+            saved.row
+        };
+        self.cursor_to(row, saved.col);
+        self.set_style(&saved.style);
+        self.raw(&saved.charsets.explicit_sequence());
+        self.raw(DECSC);
+        if saved.origin {
+            self.raw(&format!("{CSI}?{origin}{MODE_RESET}"));
+        }
+        self.raw(&Charsets::default().explicit_sequence());
+    }
+
     fn cursor_to(&mut self, row: usize, col: usize) {
         self.raw(&format!("{CSI}{};{}H", row + 1, col + 1));
     }
 
+    /// The modes, character sets and tab stops a program set, as the
+    /// sequences that set them. Written after the screen's cells: those are
+    /// already translated through the character sets and laid out under the
+    /// wrap and insert modes in force when drawn, so replaying them must not
+    /// go through any of these again.
     fn modes(&mut self, grid: &Grid) {
-        let modes = [
-            (grid.bracketed_paste, 2004),
-            (grid.focus_event, 1004),
-            (grid.mouse_button, 1000),
-            (grid.mouse_drag, 1002),
-            (grid.mouse_sgr, 1006),
-        ];
-        for (set, mode) in modes {
-            if set {
-                self.raw(&format!("{CSI}?{mode}h"));
+        let fresh = Grid::new(grid.cols, grid.rows);
+        for mode in DecMode::ALL.into_iter().filter(|&mode| is_dumped(mode)) {
+            let set = grid.dec_mode(mode);
+            if set != fresh.dec_mode(mode) {
+                self.raw(&format!("{CSI}?{}{}", mode.code(), mode_final(set)));
             }
         }
-        if !grid.cursor_visible {
-            self.raw(&format!("{CSI}?25l"));
+        let insert = AnsiMode::Insert;
+        if grid.ansi_mode(insert) != fresh.ansi_mode(insert) {
+            let set = grid.ansi_mode(insert);
+            self.raw(&format!("{CSI}{}{}", insert.code(), mode_final(set)));
+        }
+        self.raw(&grid.charsets.restore_sequence());
+        if let Some(tabs) = grid.tabs.restore_sequence() {
+            self.raw(&tabs);
         }
     }
 
@@ -191,28 +242,7 @@ impl Dump {
             return;
         }
         // Start from a clean pen rather than working out what to turn off.
-        let mut codes = vec!["0".to_string()];
-        if wanted.bold {
-            codes.push("1".into());
-        }
-        if wanted.faint {
-            codes.push("2".into());
-        }
-        if wanted.italic {
-            codes.push("3".into());
-        }
-        if wanted.underline {
-            codes.push("4".into());
-        }
-        if wanted.reversed {
-            codes.push("7".into());
-        }
-        if wanted.strikethrough {
-            codes.push("9".into());
-        }
-        push_color(&mut codes, wanted.foreground, 38);
-        push_color(&mut codes, wanted.background, 48);
-        self.raw(&format!("{CSI}{}m", codes.join(";")));
+        self.raw(&format!("{CSI}{}m", wanted.sgr_params()));
         self.style = wanted;
     }
 
@@ -239,6 +269,42 @@ impl Dump {
 // Free functions
 // ========================================================================
 
+/// Whether `mode` is written out as a mode. The alternate screen is dumped
+/// as the screens themselves, saving the cursor is an action rather than a
+/// state, a permanent mode cannot differ, and a synchronized frame in flight
+/// is the old process's business.
+fn is_dumped(mode: DecMode) -> bool {
+    match mode {
+        DecMode::AltScreen
+        | DecMode::AltScreenClear
+        | DecMode::AltScreenLegacy
+        | DecMode::GraphemeClusters
+        | DecMode::SaveCursor
+        | DecMode::SyncOutput => false,
+        DecMode::AppCursorKeys
+        | DecMode::AppKeypad
+        | DecMode::AutoWrap
+        | DecMode::BracketedPaste
+        | DecMode::CursorVisible
+        | DecMode::FocusEvent
+        | DecMode::MouseAnyEvent
+        | DecMode::MouseButton
+        | DecMode::MouseDrag
+        | DecMode::MouseSgr
+        | DecMode::Origin
+        | DecMode::ReverseVideo => true,
+    }
+}
+
+/// The final byte that sets (`h`) or resets (`l`) a mode.
+fn mode_final(set: bool) -> char {
+    if set {
+        MODE_SET
+    } else {
+        MODE_RESET
+    }
+}
+
 /// Where a row stops mattering: past its last cell that is not a plain blank.
 fn content_end(cells: &[Cell]) -> usize {
     let blank = Cell::default();
@@ -248,16 +314,6 @@ fn content_end(cells: &[Cell]) -> usize {
         .map_or(0, |last| last + 1)
 }
 
-/// The SGR parameters selecting `color` as foreground (`38`) or background
-/// (`48`); nothing for the default color, which the reset already is.
-fn push_color(codes: &mut Vec<String>, color: Color, base: u8) {
-    match color {
-        Color::Default => {}
-        Color::Indexed(index) => codes.push(format!("{base};5;{index}")),
-        Color::Rgb(rgb) => codes.push(format!("{base};2;{};{};{}", rgb.r, rgb.g, rgb.b)),
-    }
-}
-
 // ========================================================================
 // Tests
 // ========================================================================
@@ -265,6 +321,7 @@ fn push_color(codes: &mut Vec<String>, color: Color, base: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::grid::Color;
     use crate::Screen;
 
     /// Build a screen from `bytes`, dump it, and rebuild it from the dump.
@@ -348,6 +405,60 @@ mod tests {
         assert!(
             dump.contains("\x1b]8;;https://example.com\x1b\\link\x1b]8;;\x1b\\!"),
             "got {dump:?}"
+        );
+    }
+
+    #[test]
+    fn test_every_mode_and_charset_state_survives_without_redrawing_the_cells() {
+        // Line-drawing glyphs are dumped as drawn, and the charset is restored
+        // only after them, so they are not translated a second time; autowrap
+        // and insert mode likewise come back only after the cells are laid.
+        let (original, rebuilt) = round_trip(
+            10,
+            2,
+            b"\x1b(0lqk\x1b[?1h\x1b[?7l\x1b[4h\x1b[?1003h\x1b[3g\x1b[1;4H\x1bH\x1b[1;9H",
+        );
+        same_screen(original.grid(), rebuilt.grid());
+        let mut grids = [original, rebuilt];
+        for screen in &mut grids {
+            let grid = screen.grid();
+            assert!(grid.dec_mode(DecMode::AppCursorKeys));
+            assert!(!grid.dec_mode(DecMode::AutoWrap));
+            assert!(grid.ansi_mode(AnsiMode::Insert));
+            assert!(grid.mouse_any_event());
+            screen.feed(b"\x1b[4l\rq\t");
+        }
+        for screen in &grids {
+            assert_eq!(screen.grid().cell(0, 0).map(|c| c.ch), Some('─'));
+            assert_eq!(screen.grid().cursor(), (0, 3), "the custom tab stop");
+        }
+    }
+
+    #[test]
+    fn test_the_decsc_save_survives_on_both_screens() {
+        // A save on the primary screen, then a different one on the
+        // alternate screen: after the rebuild each `ESC 8` lands where, and
+        // draws how, the program saved it.
+        let (original, rebuilt) = round_trip(
+            10,
+            4,
+            b"\x1b[2;3H\x1b[32m\x1b(0\x1b7\x1b[0m\x1b(B\x1b[1;1H\x1b[?1049h\x1b[3;6H\x1b[1m\x1b7\x1b[0m\x1b[1;1H",
+        );
+        let mut screens = [original, rebuilt];
+        for screen in &mut screens {
+            screen.feed(b"\x1b8X");
+        }
+        same_screen(screens[0].grid(), screens[1].grid());
+        let alt = screens[1].grid().cell(2, 5).expect("cell");
+        assert!(alt.ch == 'X' && alt.style.bold);
+        for screen in &mut screens {
+            screen.feed(b"\x1b[?1049l\x1b8q");
+        }
+        same_screen(screens[0].grid(), screens[1].grid());
+        let primary = screens[1].grid().cell(1, 2).expect("cell");
+        assert_eq!(
+            (primary.ch, primary.style.foreground),
+            ('─', Color::Indexed(2))
         );
     }
 

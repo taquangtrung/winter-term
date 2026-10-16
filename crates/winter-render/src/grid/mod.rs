@@ -2,19 +2,28 @@
 //! that VT sequences map onto. No `vte` here; [`crate::screen`] does the parsing.
 
 mod cell;
+mod charset;
 mod cursor;
 mod dump;
 mod erase;
 mod link;
+mod modes;
 mod reflow;
+mod reset;
 mod screen;
 mod scroll;
+mod tabs;
 mod text;
 
-pub use cell::{Cell, CellWidth, Color, CursorShape, EraseMode, RgbColor, Style};
+pub use cell::{Cell, CellWidth, Color, CursorShape, EraseMode, RgbColor, Style, UnderlineStyle};
+pub use charset::{Charset, CharsetSlot};
+pub use modes::{AnsiMode, DecMode};
 pub use scroll::MAX_SCROLLBACK;
 
+use charset::Charsets;
+use modes::ModeFlags;
 use screen::AltBuffer;
+use tabs::TabStops;
 // The DEC private-mode flags are read by every module that touches grid state.
 
 use std::time::Instant;
@@ -30,11 +39,9 @@ pub struct Grid {
     /// Intern ID of the currently active OSC 8 hyperlink; 0 = none.
     active_link: u16,
     alt_buffer: Option<Box<AltBuffer>>,
-    bracketed_paste: bool,
-    /// Whether the program has begun a synchronized update (CSI ?2026h) it
-    /// has not yet ended: a frame it is part-way through drawing.
-    sync_output: bool,
     cells: Vec<Cell>,
+    /// The G0/G1 character sets and which one prints.
+    charsets: Charsets,
     cols: usize,
     cursor: Cursor,
     /// Whether the active program has explicitly set a cursor shape via DECSCUSR.
@@ -42,22 +49,16 @@ pub struct Grid {
     /// program's reported shape drives rendering (e.g. vim's block/bar by mode).
     /// Reset on alt-screen transitions so a full-screen app's shape never leaks.
     cursor_shape_set: bool,
-    /// Cursor visibility (DECTCEM): cleared by CSI ?25l, set by CSI ?25h.
-    /// Full-screen apps like btop hide the cursor while they draw.
-    cursor_visible: bool,
-    focus_event: bool,
+    /// The last graphic character printed, which REP (`CSI n b`) repeats.
+    last_graphic: Option<char>,
     /// Intern table for OSC 8 URLs; index 0 is always the empty string (no link).
     link_table: Vec<String>,
     max_scrollback: usize,
-    mouse_button: bool,
-    mouse_drag: bool,
-    mouse_sgr: bool,
+    /// The DEC private and ANSI modes that are plain flags.
+    modes: ModeFlags,
     /// Debounce timestamp for [`Grid::detect_urls`]; `None` means it has never
     /// run yet (so the next call always scans).
     next_url_scan: Option<Instant>,
-    /// DECOM origin mode: when set, absolute cursor positioning (CUP/HVP/VPA) is
-    /// relative to the scroll region top and confined within it.
-    origin_mode: bool,
     /// Per-row word-break columns (length == `rows`): `row_break[r]` is `Some(k)`
     /// when row `r` soft-wrapped at a word boundary, consuming the space at
     /// column `k` and moving everything after it onto the next row. Read when
@@ -73,7 +74,10 @@ pub struct Grid {
     /// logical lines, so staleness affects reflow alone, never live scrolling.
     row_wrapped: Vec<bool>,
     rows: usize,
-    saved_cursor: Option<Cursor>,
+    /// What DECSC saved, for DECRC.
+    saved_cursor: Option<SavedCursor>,
+    /// DEC private mode values recorded by XTSAVE for XTRESTORE.
+    saved_modes: Vec<(DecMode, bool)>,
     scroll_bottom: usize,
     scroll_offset: usize,
     scroll_top: usize,
@@ -83,6 +87,8 @@ pub struct Grid {
     scrollback_wrap_indent: Vec<usize>,
     scrollback_wrapped: Vec<bool>,
     style: Style,
+    /// Horizontal tab stops.
+    tabs: TabStops,
     /// Absolute row spans (`[start, end)`) the screen has erased since the last
     /// [`Grid::take_erased_spans`]. Rich blocks anchor a band of rows and draw
     /// an image over it; erasing those rows blanks the grid but cannot reach
@@ -142,6 +148,18 @@ impl RowRemap {
     }
 }
 
+/// What DECSC (`ESC 7`) saves and DECRC (`ESC 8`) restores. The default is
+/// what DECRC restores when nothing was saved: home, with a fresh pen.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct SavedCursor {
+    charsets: Charsets,
+    col: usize,
+    origin: bool,
+    row: usize,
+    style: Style,
+    wrap_pending: bool,
+}
+
 #[derive(Clone, Copy, Debug, Default)]
 struct Cursor {
     col: usize,
@@ -174,28 +192,24 @@ impl Grid {
         Self {
             active_link: 0,
             alt_buffer: None,
-            bracketed_paste: false,
-            sync_output: false,
             cells: vec![Cell::default(); cols * rows],
+            charsets: Charsets::default(),
             cols,
             cursor: Cursor::default(),
             cursor_shape_set: false,
-            cursor_visible: true,
             erased_spans: Vec::new(),
-            focus_event: false,
+            last_graphic: None,
             // Index 0 is the sentinel "no link" entry so id 0 always means none.
             link_table: vec![String::new()],
             max_scrollback: MAX_SCROLLBACK,
-            mouse_button: false,
-            mouse_drag: false,
-            mouse_sgr: false,
+            modes: ModeFlags::default(),
             next_url_scan: None,
-            origin_mode: false,
             row_break: vec![None; rows],
             row_wrap_indent: vec![0; rows],
             row_wrapped: vec![false; rows],
             rows,
             saved_cursor: None,
+            saved_modes: Vec::new(),
             scroll_bottom: rows.saturating_sub(1),
             scroll_offset: 0,
             scroll_top: 0,
@@ -204,6 +218,7 @@ impl Grid {
             scrollback_wrap_indent: Vec::new(),
             scrollback_wrapped: Vec::new(),
             style: Style::default(),
+            tabs: TabStops::new(cols),
             trimmed_rows: 0,
             wrap_indent: true,
             word_wrap: true,
@@ -323,7 +338,7 @@ impl Grid {
     /// mode: when set, the row is relative to the scroll region top and confined
     /// within `[scroll_top, scroll_bottom]`; otherwise it is clamped to the grid.
     fn resolve_row(&self, row: usize) -> usize {
-        if self.origin_mode {
+        if self.modes.origin {
             (self.scroll_top + row).min(self.scroll_bottom)
         } else {
             row.min(self.rows.saturating_sub(1))

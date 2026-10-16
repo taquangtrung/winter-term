@@ -169,6 +169,7 @@ impl Grid {
         if cols == self.cols && rows == self.rows {
             return;
         }
+        self.tabs.resize(cols);
 
         // 1. Collect logical lines from the live grid, dropping wide-char spacers
         //    (the lead glyph is replayed and recreates them) and trimming trailing

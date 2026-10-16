@@ -19,7 +19,7 @@ use uds_windows::{UnixListener, UnixStream};
 
 use super::client::MuxClient;
 use super::persist::{self, SessionDef, SessionDefs};
-use super::protocol::{self, ClientMessage, FrameBuffer, ServerMessage};
+use super::protocol::{self, CellPixels, ClientMessage, FrameBuffer, Geometry, ServerMessage};
 use super::session::SessionManager;
 use portable_pty::CommandBuilder;
 
@@ -67,7 +67,7 @@ struct Client {
     stream: UnixStream,
     /// Geometry the client asked for per session, the input to size
     /// arbitration: the session sizes to the smallest of these.
-    wanted: HashMap<String, (u16, u16)>,
+    wanted: HashMap<String, Geometry>,
 }
 
 /// The mux server: owns every PTY session and routes output to clients.
@@ -361,6 +361,7 @@ impl MuxServer {
                 session,
                 cols,
                 rows,
+                cell_px,
             } => {
                 if is_attached(clients, cid, &session) {
                     // Record the client's wish, then arbitrate: the session
@@ -368,7 +369,12 @@ impl MuxServer {
                     // attached client learns the result (see
                     // `sync_session_size`).
                     if let Some(client) = clients.get_mut(&cid) {
-                        client.wanted.insert(session.clone(), (cols, rows));
+                        let geometry = Geometry {
+                            cell_px,
+                            cols,
+                            rows,
+                        };
+                        client.wanted.insert(session.clone(), geometry);
                     }
                     sync_session_size(manager, clients, &session);
                 } else if let Some(client) = clients.get_mut(&cid) {
@@ -421,7 +427,12 @@ impl MuxServer {
                     if !client.attachments.contains(&session) {
                         client.attachments.push(session.clone());
                     }
-                    client.wanted.insert(session.clone(), (cols, rows));
+                    let geometry = Geometry {
+                        cell_px: None,
+                        cols,
+                        rows,
+                    };
+                    client.wanted.insert(session.clone(), geometry);
                     for msg in attach_replies(manager, &session) {
                         reply(client, &msg);
                     }
@@ -473,19 +484,30 @@ fn attach_count(clients: &HashMap<u64, Client>, session: &str) -> usize {
 /// Clients that attached but never resized are unconstrained: they don't
 /// shrink the session, and `None` means no client constrains it, so the
 /// session keeps its current size (the pre-arbitration behavior for
-/// attach-only clients like the CLI).
-fn effective_size(clients: &HashMap<u64, Client>, session: &str) -> Option<(u16, u16)> {
-    let mut size: Option<(u16, u16)> = None;
-    for client in clients.values() {
-        let Some(&(cols, rows)) = client.wanted.get(session) else {
-            continue;
-        };
-        size = Some(match size {
-            None => (cols, rows),
-            Some((c, r)) => (c.min(cols), r.min(rows)),
-        });
+/// attach-only clients like the CLI). The cell size is the smallest each
+/// way among the clients that reported one: the pixel size it gives never
+/// claims more room than the smallest screen has.
+fn effective_size(clients: &HashMap<u64, Client>, session: &str) -> Option<Geometry> {
+    clients
+        .values()
+        .filter_map(|client| client.wanted.get(session).copied())
+        .reduce(|smallest, wanted| Geometry {
+            cell_px: smaller_cell(smallest.cell_px, wanted.cell_px),
+            cols: smallest.cols.min(wanted.cols),
+            rows: smallest.rows.min(wanted.rows),
+        })
+}
+
+/// The smaller of two optional cell sizes in each dimension; an unknown one
+/// defers to the known.
+fn smaller_cell(a: Option<CellPixels>, b: Option<CellPixels>) -> Option<CellPixels> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(CellPixels {
+            height: a.height.min(b.height),
+            width: a.width.min(b.width),
+        }),
+        (known, None) | (None, known) => known,
     }
-    size
 }
 
 /// Re-arbitrate `session`: when the effective size changed, resize the PTY
@@ -497,13 +519,20 @@ fn sync_session_size(
     clients: &mut HashMap<u64, Client>,
     session: &str,
 ) {
-    let Some((cols, rows)) = effective_size(clients, session) else {
+    let Some(geometry) = effective_size(clients, session) else {
         return;
     };
-    if manager.geometry(session) == Some((cols, rows)) {
+    let (cols, rows) = (geometry.cols, geometry.rows);
+    let grid_changed = manager.geometry(session) != Some((cols, rows));
+    if !grid_changed && manager.cell_px(session) == geometry.cell_px {
         return;
     }
-    if manager.resize(session, cols, rows).is_err() {
+    if manager.resize(session, geometry).is_err() {
+        return;
+    }
+    // A change of cell size alone resizes the PTY's pixels but leaves the
+    // grid every client draws as it was: nothing to tell them.
+    if !grid_changed {
         return;
     }
     let msg = ServerMessage::Resized {
@@ -807,7 +836,16 @@ mod tests {
                 ..
             }
         ));
-        manager.resize("geo", 132, 43).unwrap();
+        manager
+            .resize(
+                "geo",
+                Geometry {
+                    cell_px: None,
+                    cols: 132,
+                    rows: 43,
+                },
+            )
+            .unwrap();
         let replies = attach_replies(&manager, "geo");
         assert!(matches!(
             &replies[0],
@@ -884,6 +922,15 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// A geometry with no cell size, as a client that does not report one.
+    fn grid(cols: u16, rows: u16) -> Geometry {
+        Geometry {
+            cell_px: None,
+            cols,
+            rows,
+        }
+    }
+
     /// A `Client` wired to a readable peer socket, with `wanted` geometry
     /// entries preloaded. Returns `(client, peer, socket_path)`.
     fn connected_client(tag: &str, wanted: &[(&str, u16, u16)]) -> (Client, UnixStream, String) {
@@ -905,7 +952,7 @@ mod tests {
                 stream,
                 wanted: wanted
                     .iter()
-                    .map(|(s, c, r)| (s.to_string(), (*c, *r)))
+                    .map(|&(s, cols, rows)| (s.to_string(), grid(cols, rows)))
                     .collect(),
             },
             peer,
@@ -926,6 +973,18 @@ mod tests {
     }
 
     #[test]
+    fn test_effective_cell_size_is_the_smallest_reported_each_way() {
+        let cell = |width, height| Some(CellPixels { height, width });
+        assert_eq!(smaller_cell(cell(9, 20), cell(10, 18)), cell(9, 18));
+        assert_eq!(
+            smaller_cell(None, cell(9, 20)),
+            cell(9, 20),
+            "unknown defers"
+        );
+        assert_eq!(smaller_cell(None, None), None);
+    }
+
+    #[test]
     fn test_effective_size_ignores_unconstrained_clients() {
         let (c1, _p1, path1) = connected_client("eff1", &[("s", 120, 40)]);
         let (c2, _p2, path2) = connected_client("eff2", &[]); // attached, never resized
@@ -935,8 +994,8 @@ mod tests {
         clients.insert(2u64, c2);
         clients.insert(3u64, c3);
 
-        assert_eq!(effective_size(&clients, "s"), Some((80, 24)));
-        assert_eq!(effective_size(&clients, "t"), Some((50, 10)));
+        assert_eq!(effective_size(&clients, "s"), Some(grid(80, 24)));
+        assert_eq!(effective_size(&clients, "t"), Some(grid(50, 10)));
         assert_eq!(effective_size(&clients, "missing"), None);
 
         for p in [path1, path2, path3] {
@@ -977,6 +1036,7 @@ mod tests {
                 session: "s".into(),
                 cols: 120,
                 rows: 40,
+                cell_px: None,
             },
         );
         assert_eq!(manager.geometry("s"), Some((120, 40)));
@@ -989,6 +1049,7 @@ mod tests {
                 session: "s".into(),
                 cols: 80,
                 rows: 24,
+                cell_px: None,
             },
         );
         assert_eq!(
@@ -1006,6 +1067,7 @@ mod tests {
                 session: "s".into(),
                 cols: 100,
                 rows: 50,
+                cell_px: None,
             },
         );
         assert_eq!(manager.geometry("s"), Some((100, 40)));
@@ -1060,6 +1122,7 @@ mod tests {
                 session: "s".into(),
                 cols: 80,
                 rows: 24,
+                cell_px: None,
             },
         );
         MuxServer::handle_message(
@@ -1070,6 +1133,7 @@ mod tests {
                 session: "s".into(),
                 cols: 120,
                 rows: 40,
+                cell_px: None,
             },
         );
         assert_eq!(manager.geometry("s"), Some((80, 24)));

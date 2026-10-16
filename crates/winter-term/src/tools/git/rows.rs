@@ -1214,7 +1214,7 @@ mod tests {
                 &no_diffs,
             )
             .iter()
-            .map(|row| text(row))
+            .map(text)
             .collect()
         };
         assert!(drawn(true).iter().any(|row| row == LOG_MORE));

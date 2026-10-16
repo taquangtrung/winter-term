@@ -32,6 +32,13 @@ pub(crate) struct PointerState {
     /// Drives the pointer-cursor icon and Ctrl+click to open.
     pub(crate) hovered_url: Option<String>,
     pub(crate) last_click: Option<(Instant, f32, f32)>,
+    /// The button the mouse-tracking program was last handed a press of and
+    /// not yet its release: the one its motion reports name as held.
+    pub(crate) forwarded_button: Option<u8>,
+    /// The `(row, col)` the last motion report sent to a mouse-tracking
+    /// program named: motion is reported once per cell entered, as xterm
+    /// does, not once per pixel the pointer moves.
+    pub(crate) last_motion_cell: Option<(usize, usize)>,
     pub(crate) mouse_down: bool,
     /// Where the held left button went down: the pane, and the absolute
     /// `(row, col)` under the pointer at that instant (see
@@ -73,6 +80,8 @@ impl Default for PointerState {
             divider_drag: None,
             hovered_url: None,
             last_click: None,
+            forwarded_button: None,
+            last_motion_cell: None,
             mouse_down: false,
             press_cell: None,
             scrollbar_drag: None,

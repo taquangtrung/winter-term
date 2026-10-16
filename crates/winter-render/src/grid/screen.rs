@@ -1,10 +1,11 @@
-//! The alternate screen buffer and the DEC private modes.
+//! The alternate screen buffer, and read access to the modes programs set
+//! (see [`super::modes`] for setting them).
 
 use super::{Cell, Style};
-use super::{Cursor, Grid};
+use super::{Cursor, Grid, SavedCursor};
 
 // ========================================================================
-// Grid: alternate screen and DEC modes
+// Grid: alternate screen and mode accessors
 // ========================================================================
 
 impl Grid {
@@ -27,8 +28,8 @@ impl Grid {
         self.scroll_bottom = self.rows.saturating_sub(1);
         self.active_link = 0;
         self.cursor_shape_set = false;
-        self.cursor_visible = true;
-        self.origin_mode = false;
+        self.modes.cursor_visible = true;
+        self.modes.origin = false;
         self.row_wrapped.fill(false);
         self.row_wrap_indent.fill(0);
         self.row_break.fill(None);
@@ -51,8 +52,8 @@ impl Grid {
         self.scroll_bottom = self.rows.saturating_sub(1);
         self.active_link = 0;
         self.cursor_shape_set = false;
-        self.cursor_visible = true;
-        self.origin_mode = false;
+        self.modes.cursor_visible = true;
+        self.modes.origin = false;
         self.row_wrapped.fill(false);
         self.row_wrap_indent.fill(0);
         self.row_break.fill(None);
@@ -64,69 +65,43 @@ impl Grid {
     }
     /// Whether bracketed paste mode (CSI ?2004h) is active.
     pub fn bracketed_paste(&self) -> bool {
-        self.bracketed_paste
+        self.modes.bracketed_paste
     }
     /// Whether a synchronized update (CSI ?2026h) is in progress, which asks the
     /// terminal not to show what the program draws until it ends the update.
     pub fn synchronized_output(&self) -> bool {
-        self.sync_output
+        self.modes.sync_output
     }
-    /// Whether any mouse tracking mode is active (button or drag).
+    /// Whether any mouse tracking mode is active (button, drag, or any-event).
     pub fn mouse_tracking(&self) -> bool {
-        self.mouse_button || self.mouse_drag
+        self.modes.mouse_button || self.mouse_drag_tracking()
     }
-    /// Whether drag tracking (CSI ?1002h) specifically is active.
+    /// Whether motion with a button held is reported: drag tracking
+    /// (CSI ?1002h), or any-event tracking (CSI ?1003h), which includes it.
     pub fn mouse_drag_tracking(&self) -> bool {
-        self.mouse_drag
+        self.modes.mouse_drag || self.modes.mouse_any_event
+    }
+    /// Whether every pointer motion is reported, buttons down or not
+    /// (CSI ?1003h).
+    pub fn mouse_any_event(&self) -> bool {
+        self.modes.mouse_any_event
     }
     /// Whether SGR extended mouse mode (CSI ?1006h) is active.
     pub fn mouse_sgr(&self) -> bool {
-        self.mouse_sgr
+        self.modes.mouse_sgr
     }
     /// Whether focus event mode (CSI ?1004h) is active.
     pub fn focus_event(&self) -> bool {
-        self.focus_event
+        self.modes.focus_event
     }
-    /// Handle DECSET/DECRST for a single mode number. Called from screen.rs
-    /// which parses the CSI ? sequences.
-    pub fn set_private_mode(&mut self, mode: u16, set: bool) {
-        match mode {
-            MODE_ALT_SCREEN => {
-                if set {
-                    self.enter_alt_screen();
-                } else {
-                    self.leave_alt_screen();
-                }
-            }
-            MODE_ALT_SCREEN_47 | MODE_ALT_SCREEN_1047 => {
-                if set {
-                    self.enter_alt_screen();
-                } else {
-                    self.leave_alt_screen();
-                }
-            }
-            MODE_SAVE_CURSOR => {
-                if set {
-                    self.save_cursor();
-                } else {
-                    self.restore_cursor();
-                }
-            }
-            MODE_BRACKETED_PASTE => self.bracketed_paste = set,
-            MODE_SYNC_OUTPUT => self.sync_output = set,
-            MODE_CURSOR => self.cursor_visible = set,
-            // DECOM: positioning becomes relative to the scroll region and the
-            // mode change homes the cursor to that region's top-left.
-            MODE_ORIGIN => {
-                self.origin_mode = set;
-                self.move_to(0, 0);
-            }
-            MODE_FOCUS_EVENT => self.focus_event = set,
-            MODE_MOUSE_BUTTON => self.mouse_button = set,
-            MODE_MOUSE_DRAG => self.mouse_drag = set,
-            MODE_MOUSE_SGR => self.mouse_sgr = set,
-            _ => {}
-        }
+    /// Whether the cursor keys send their application (`SS3`) forms
+    /// (DECCKM, CSI ?1h).
+    pub fn app_cursor_keys(&self) -> bool {
+        self.modes.app_cursor_keys
+    }
+    /// Whether the whole screen is drawn in reverse video (DECSCNM, CSI ?5h).
+    pub fn reverse_video(&self) -> bool {
+        self.modes.reverse_video
     }
 }
 
@@ -134,33 +109,16 @@ impl Grid {
 pub(crate) struct AltBuffer {
     pub(crate) cells: Vec<Cell>,
     pub(crate) cursor: Cursor,
-    pub(crate) saved_cursor: Option<Cursor>,
+    pub(crate) saved_cursor: Option<SavedCursor>,
     pub(crate) style: Style,
 }
-pub(crate) const MODE_ALT_SCREEN: u16 = 1049;
-/// Legacy alternate-screen switch (no cursor save). xterm's older `?47`.
-pub(crate) const MODE_ALT_SCREEN_47: u16 = 47;
-/// Legacy alternate-screen switch that clears on leave (xterm's `?1047`).
-pub(crate) const MODE_ALT_SCREEN_1047: u16 = 1047;
-pub(crate) const MODE_BRACKETED_PASTE: u16 = 2004;
-/// Synchronized output: the program's frame is shown whole, once it ends.
-pub(crate) const MODE_SYNC_OUTPUT: u16 = 2026;
-pub(crate) const MODE_CURSOR: u16 = 25;
-pub(crate) const MODE_MOUSE_BUTTON: u16 = 1000;
-pub(crate) const MODE_MOUSE_DRAG: u16 = 1002;
-pub(crate) const MODE_MOUSE_SGR: u16 = 1006;
-pub(crate) const MODE_FOCUS_EVENT: u16 = 1004;
-pub(crate) const MODE_ORIGIN: u16 = 6;
-/// Save/restore cursor as a DEC private mode (xterm's `?1048`).
-pub(crate) const MODE_SAVE_CURSOR: u16 = 1048;
-
 // ========================================================================
 // Tests
 // ========================================================================
 
 #[cfg(test)]
 mod tests {
-    use super::super::CursorShape;
+    use super::super::{CursorShape, DecMode};
     use super::*;
 
     #[test]
@@ -168,7 +126,7 @@ mod tests {
         let mut grid = Grid::new(10, 10);
         // Region rows 3..=7 (1-based) -> 0-based top 2, bottom 6.
         grid.set_scroll_region(2, 6);
-        grid.set_private_mode(MODE_ORIGIN, true);
+        grid.set_dec_mode(DecMode::Origin, true);
         // Enabling origin mode homes the cursor to the region's top-left.
         assert_eq!(grid.cursor(), (2, 0));
         // CUP rows are relative to the region top.
@@ -178,7 +136,7 @@ mod tests {
         grid.move_to(100, 0);
         assert_eq!(grid.cursor(), (6, 0));
         // Disabling returns to absolute, screen-relative positioning.
-        grid.set_private_mode(MODE_ORIGIN, false);
+        grid.set_dec_mode(DecMode::Origin, false);
         assert_eq!(grid.cursor(), (0, 0));
         grid.move_to(3, 4);
         assert_eq!(grid.cursor(), (3, 4));
@@ -189,9 +147,9 @@ mod tests {
         for ch in "abc".chars() {
             grid.print(ch);
         }
-        grid.set_private_mode(MODE_ALT_SCREEN_47, true);
+        grid.set_dec_mode(DecMode::AltScreenLegacy, true);
         assert!(grid.is_alt_screen());
-        grid.set_private_mode(MODE_ALT_SCREEN_47, false);
+        grid.set_dec_mode(DecMode::AltScreenLegacy, false);
         assert!(!grid.is_alt_screen());
         assert_eq!(grid.cell(0, 0).map(|c| c.ch), Some('a'));
     }
@@ -199,9 +157,9 @@ mod tests {
     fn test_save_cursor_mode_1048() {
         let mut grid = Grid::new(5, 5);
         grid.move_to(2, 3);
-        grid.set_private_mode(MODE_SAVE_CURSOR, true);
+        grid.set_dec_mode(DecMode::SaveCursor, true);
         grid.move_to(0, 0);
-        grid.set_private_mode(MODE_SAVE_CURSOR, false);
+        grid.set_dec_mode(DecMode::SaveCursor, false);
         assert_eq!(grid.cursor(), (2, 3));
     }
     #[test]
@@ -221,14 +179,14 @@ mod tests {
         assert_eq!(grid.cell(0, 0).map(|c| c.ch), Some('a'));
     }
     #[test]
-    fn test_set_private_mode_alt_screen() {
+    fn test_set_dec_mode_alt_screen() {
         let mut grid = Grid::new(3, 2);
         for ch in "abc".chars() {
             grid.print(ch);
         }
-        grid.set_private_mode(MODE_ALT_SCREEN, true);
+        grid.set_dec_mode(DecMode::AltScreen, true);
         assert!(grid.is_alt_screen());
-        grid.set_private_mode(MODE_ALT_SCREEN, false);
+        grid.set_dec_mode(DecMode::AltScreen, false);
         assert!(!grid.is_alt_screen());
         assert_eq!(grid.cell(0, 0).map(|c| c.ch), Some('a'));
     }
@@ -236,18 +194,18 @@ mod tests {
     fn test_synchronized_output_mode() {
         let mut grid = Grid::new(3, 2);
         assert!(!grid.synchronized_output());
-        grid.set_private_mode(MODE_SYNC_OUTPUT, true);
+        grid.set_dec_mode(DecMode::SyncOutput, true);
         assert!(grid.synchronized_output());
-        grid.set_private_mode(MODE_SYNC_OUTPUT, false);
+        grid.set_dec_mode(DecMode::SyncOutput, false);
         assert!(!grid.synchronized_output());
     }
     #[test]
     fn test_bracketed_paste_mode() {
         let mut grid = Grid::new(3, 2);
         assert!(!grid.bracketed_paste());
-        grid.set_private_mode(MODE_BRACKETED_PASTE, true);
+        grid.set_dec_mode(DecMode::BracketedPaste, true);
         assert!(grid.bracketed_paste());
-        grid.set_private_mode(MODE_BRACKETED_PASTE, false);
+        grid.set_dec_mode(DecMode::BracketedPaste, false);
         assert!(!grid.bracketed_paste());
     }
     #[test]
@@ -257,20 +215,20 @@ mod tests {
         assert!(!grid.mouse_drag_tracking());
         assert!(!grid.mouse_sgr());
 
-        grid.set_private_mode(MODE_MOUSE_BUTTON, true);
+        grid.set_dec_mode(DecMode::MouseButton, true);
         assert!(grid.mouse_tracking());
         assert!(!grid.mouse_drag_tracking());
 
-        grid.set_private_mode(MODE_MOUSE_DRAG, true);
+        grid.set_dec_mode(DecMode::MouseDrag, true);
         assert!(grid.mouse_tracking());
         assert!(grid.mouse_drag_tracking());
 
-        grid.set_private_mode(MODE_MOUSE_SGR, true);
+        grid.set_dec_mode(DecMode::MouseSgr, true);
         assert!(grid.mouse_sgr());
 
-        grid.set_private_mode(MODE_MOUSE_BUTTON, false);
-        grid.set_private_mode(MODE_MOUSE_DRAG, false);
-        grid.set_private_mode(MODE_MOUSE_SGR, false);
+        grid.set_dec_mode(DecMode::MouseButton, false);
+        grid.set_dec_mode(DecMode::MouseDrag, false);
+        grid.set_dec_mode(DecMode::MouseSgr, false);
         assert!(!grid.mouse_tracking());
         assert!(!grid.mouse_drag_tracking());
         assert!(!grid.mouse_sgr());
@@ -279,24 +237,24 @@ mod tests {
     fn test_cursor_visibility_dectcem() {
         let mut grid = Grid::new(3, 2);
         assert!(grid.cursor_visible());
-        grid.set_private_mode(MODE_CURSOR, false);
+        grid.set_dec_mode(DecMode::CursorVisible, false);
         assert!(!grid.cursor_visible());
-        grid.set_private_mode(MODE_CURSOR, true);
+        grid.set_dec_mode(DecMode::CursorVisible, true);
         assert!(grid.cursor_visible());
     }
     #[test]
     fn test_alt_screen_resets_reported_shape_and_visibility() {
         let mut grid = Grid::new(3, 2);
         grid.set_cursor_shape(CursorShape::Bar);
-        grid.set_private_mode(MODE_CURSOR, false);
+        grid.set_dec_mode(DecMode::CursorVisible, false);
         // A full-screen app's cursor state must not leak across the alt-screen
         // boundary: leaving restores an unset shape and a visible cursor.
-        grid.set_private_mode(MODE_ALT_SCREEN, true);
+        grid.set_dec_mode(DecMode::AltScreen, true);
         assert_eq!(grid.reported_cursor_shape(), None);
         assert!(grid.cursor_visible());
         grid.set_cursor_shape(CursorShape::Underline);
-        grid.set_private_mode(MODE_CURSOR, false);
-        grid.set_private_mode(MODE_ALT_SCREEN, false);
+        grid.set_dec_mode(DecMode::CursorVisible, false);
+        grid.set_dec_mode(DecMode::AltScreen, false);
         assert_eq!(grid.reported_cursor_shape(), None);
         assert!(grid.cursor_visible());
     }
@@ -304,9 +262,9 @@ mod tests {
     fn test_focus_event_mode() {
         let mut grid = Grid::new(3, 2);
         assert!(!grid.focus_event());
-        grid.set_private_mode(MODE_FOCUS_EVENT, true);
+        grid.set_dec_mode(DecMode::FocusEvent, true);
         assert!(grid.focus_event());
-        grid.set_private_mode(MODE_FOCUS_EVENT, false);
+        grid.set_dec_mode(DecMode::FocusEvent, false);
         assert!(!grid.focus_event());
     }
 }

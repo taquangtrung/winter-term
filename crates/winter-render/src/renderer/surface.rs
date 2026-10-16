@@ -199,6 +199,7 @@ impl GpuRenderer {
             image_pass,
             tabbar_strip_pass,
             tabbar_strip_cache: None,
+            drew_blinking_text: false,
             svg_fontdb: None,
             divider_width: DIVIDER_THICKNESS,
             modern: true,
@@ -267,6 +268,11 @@ impl GpuRenderer {
         let cols = ((rect.width - crate::PANE_H_PAD * 2.0) / self.cell_width).floor() as usize;
         let rows = (rect.height / self.cell_height).floor() as usize;
         (cols.max(1), rows.max(1))
+    }
+    /// Whether the last frame drew any blinking text, so the host knows
+    /// whether a text-blink timer has anything to flip.
+    pub fn drew_blinking_text(&self) -> bool {
+        self.drew_blinking_text
     }
     /// The cell dimensions in pixels.
     pub fn cell_size(&self) -> (f32, f32) {

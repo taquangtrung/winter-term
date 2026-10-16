@@ -8,7 +8,7 @@ use std::thread;
 use portable_pty::{CommandBuilder, NativePtySystem, PtySize, PtySystem};
 
 use super::persist::SessionDef;
-use super::protocol::{ServerMessage, SessionInfo};
+use super::protocol::{CellPixels, Geometry, ServerMessage, SessionInfo};
 
 // ========================================================================
 // Constants
@@ -34,6 +34,9 @@ struct ScrollbackRing {
 }
 
 struct Session {
+    /// The cell size in pixels the PTY was last sized with, if any client
+    /// reported one.
+    cell_px: Option<CellPixels>,
     /// The command line the session runs, for listings.
     command: String,
     /// Current PTY geometry, tracked so listings and attach confirmations
@@ -196,6 +199,7 @@ impl SessionManager {
         self.sessions.insert(
             name.to_string(),
             Session {
+                cell_px: None,
                 command: if command_label.is_empty() {
                     "(default shell)".to_string()
                 } else {
@@ -241,18 +245,30 @@ impl SessionManager {
     }
 
     /// Set a session's PTY geometry.
-    pub fn resize(&mut self, name: &str, cols: u16, rows: u16) -> anyhow::Result<()> {
+    pub fn resize(&mut self, name: &str, geometry: Geometry) -> anyhow::Result<()> {
+        let Geometry {
+            cell_px,
+            cols,
+            rows,
+        } = geometry;
         if let Some(session) = self.sessions.get_mut(name) {
             session.master.resize(PtySize {
                 rows,
                 cols,
-                pixel_width: 0,
-                pixel_height: 0,
+                pixel_width: cell_px.map_or(0, |cell| cell.pixel_width(cols)),
+                pixel_height: cell_px.map_or(0, |cell| cell.pixel_height(rows)),
             })?;
+            session.cell_px = cell_px;
             session.cols = cols;
             session.rows = rows;
         }
         Ok(())
+    }
+
+    /// The cell size in pixels the session's PTY was last sized with, or
+    /// `None` when no client reported one (or the session does not exist).
+    pub fn cell_px(&self, name: &str) -> Option<CellPixels> {
+        self.sessions.get(name).and_then(|s| s.cell_px)
     }
 
     /// The session's current PTY geometry, for attach confirmations.
@@ -322,6 +338,14 @@ impl SessionManager {
 mod tests {
     use super::*;
 
+    fn grid(cols: u16, rows: u16) -> Geometry {
+        Geometry {
+            cell_px: None,
+            cols,
+            rows,
+        }
+    }
+
     #[test]
     fn test_create_and_list_sessions() {
         let (tx, _rx) = mpsc::channel();
@@ -360,7 +384,7 @@ mod tests {
     fn test_resize_nonexistent_is_ok() {
         let (tx, _rx) = mpsc::channel();
         let mut mgr = SessionManager::new(tx);
-        mgr.resize("missing", 100, 50).unwrap();
+        mgr.resize("missing", grid(100, 50)).unwrap();
     }
 
     #[test]
@@ -500,7 +524,7 @@ mod tests {
         let mut mgr = SessionManager::new(tx);
         mgr.create("geo", 100, 40).unwrap();
         assert_eq!(mgr.geometry("geo"), Some((100, 40)));
-        mgr.resize("geo", 120, 50).unwrap();
+        mgr.resize("geo", grid(120, 50)).unwrap();
         assert_eq!(mgr.geometry("geo"), Some((120, 50)));
         assert_eq!(mgr.geometry("missing"), None);
     }

@@ -1,7 +1,7 @@
 //! Cursor motion, saved-cursor state, and cursor presentation.
 
 use super::CursorShape;
-use super::Grid;
+use super::{Grid, SavedCursor};
 
 // ========================================================================
 // Grid: cursor motion
@@ -40,12 +40,6 @@ impl Grid {
         self.cursor.wrap_pending = false;
         self.cursor.col = self.cursor.col.saturating_sub(1);
     }
-    /// Advance the cursor to the next 8-column tab stop.
-    pub fn tab(&mut self) {
-        self.cursor.wrap_pending = false;
-        let next = (self.cursor.col / TAB_WIDTH + 1) * TAB_WIDTH;
-        self.cursor.col = next.min(self.cols.saturating_sub(1));
-    }
     /// Move the cursor to (row, col), clamped to the grid (or the scroll region
     /// under origin mode).
     pub fn move_to(&mut self, row: usize, col: usize) {
@@ -53,15 +47,33 @@ impl Grid {
         self.cursor.row = self.resolve_row(row);
         self.cursor.col = col.min(self.cols.saturating_sub(1));
     }
-    /// Move the cursor up `n` rows, clamped to the top of the screen (CUU).
+    /// Move the cursor up `n` rows (CUU). A cursor inside the scroll region
+    /// stops at its top margin; one above it stops at the top of the screen.
     pub fn move_up(&mut self, n: usize) {
         self.cursor.wrap_pending = false;
-        self.cursor.row = self.cursor.row.saturating_sub(n);
+        let top = if self.cursor.row >= self.scroll_top {
+            self.scroll_top
+        } else {
+            0
+        };
+        self.cursor.row = self.cursor.row.saturating_sub(n).max(top);
     }
-    /// Move the cursor down `n` rows, clamped to the last row (CUD).
+    /// Move the cursor down `n` rows (CUD). A cursor inside the scroll region
+    /// stops at its bottom margin; one below it stops at the last row.
     pub fn move_down(&mut self, n: usize) {
         self.cursor.wrap_pending = false;
-        self.cursor.row = (self.cursor.row + n).min(self.rows.saturating_sub(1));
+        let bottom = if self.cursor.row <= self.scroll_bottom {
+            self.scroll_bottom
+        } else {
+            self.rows.saturating_sub(1)
+        };
+        self.cursor.row = (self.cursor.row + n).min(bottom);
+    }
+    /// Move to column 0 of the next row, scrolling at the bottom margin
+    /// exactly as a line feed does (NEL, `ESC E`).
+    pub fn next_line(&mut self) {
+        self.carriage_return();
+        self.line_feed();
     }
     /// Move the cursor left `n` columns, clamped to column 0 (CUB).
     pub fn move_left(&mut self, n: usize) {
@@ -86,24 +98,40 @@ impl Grid {
         self.cursor.wrap_pending = false;
         self.cursor.row = self.resolve_row(row);
     }
-    /// Save the cursor position and style for a later
-    /// [`Self::restore_cursor`] (DECSC).
+    /// Save the cursor for a later [`Self::restore_cursor`] (DECSC, `ESC 7`):
+    /// its position and pending wrap, the pen, the character sets, and
+    /// origin mode, which is what a VT100 saves. A program that saves, draws
+    /// a box in line-drawing glyphs and color, and restores, gets its own
+    /// pen back.
     pub fn save_cursor(&mut self) {
-        self.saved_cursor = Some(self.cursor);
+        self.saved_cursor = Some(SavedCursor {
+            charsets: self.charsets,
+            col: self.cursor.col,
+            origin: self.modes.origin,
+            row: self.cursor.row,
+            style: self.style,
+            wrap_pending: self.cursor.wrap_pending,
+        });
     }
-    /// Restore the cursor saved by [`Self::save_cursor`], or do nothing if
-    /// none was saved (DECRC).
+    /// Restore what [`Self::save_cursor`] saved (DECRC, `ESC 8`). With
+    /// nothing saved, this homes the cursor with the default pen, character
+    /// sets and origin mode, as xterm does. The cursor's shape is the
+    /// program's DECSCUSR choice, not part of the save, and stays.
     pub fn restore_cursor(&mut self) {
-        if let Some(saved) = self.saved_cursor {
-            self.cursor = saved;
-            // The save may predate a resize that shrank the grid, in which case
-            // the restored position addresses rows or columns that no longer
-            // exist. Row-indexed operations (`delete_chars`, `insert_chars`,
-            // the erases) derive slice bounds from the cursor without
-            // rechecking them against the buffer, so an unclamped restore turns
-            // the next one into an out-of-bounds panic.
-            self.clamp_cursor();
-        }
+        let saved = self.saved_cursor.unwrap_or_default();
+        self.charsets = saved.charsets;
+        self.modes.origin = saved.origin;
+        self.style = saved.style;
+        self.cursor.row = saved.row;
+        self.cursor.col = saved.col;
+        self.cursor.wrap_pending = saved.wrap_pending;
+        // The save may predate a resize that shrank the grid, in which case
+        // the restored position addresses rows or columns that no longer
+        // exist. Row-indexed operations (`delete_chars`, `insert_chars`,
+        // the erases) derive slice bounds from the cursor without
+        // rechecking them against the buffer, so an unclamped restore turns
+        // the next one into an out-of-bounds panic.
+        self.clamp_cursor();
     }
     /// Force the cursor inside the current grid.
     ///
@@ -122,16 +150,20 @@ impl Grid {
     /// Whether the cursor is visible (DECTCEM). Hidden by CSI ?25l, shown by
     /// CSI ?25h; full-screen apps like btop hide it while drawing.
     pub fn cursor_visible(&self) -> bool {
-        self.cursor_visible
+        self.modes.cursor_visible
     }
     /// Set cursor shape (DECSCUSR).
     pub fn set_cursor_shape(&mut self, shape: CursorShape) {
         self.cursor_shape_set = true;
         self.cursor.shape = shape;
     }
+    /// Hand the cursor shape back to the host's configured one (DECSCUSR 0),
+    /// as if the program had never set one.
+    pub fn reset_cursor_shape(&mut self) {
+        self.cursor_shape_set = false;
+        self.cursor.shape = CursorShape::default();
+    }
 }
-
-pub(super) const TAB_WIDTH: usize = 8;
 
 // ========================================================================
 // Tests
@@ -178,13 +210,6 @@ mod tests {
         let mut grid = Grid::new(4, 3);
         grid.move_to(99, 99);
         assert_eq!(grid.cursor(), (2, 3));
-    }
-    #[test]
-    fn test_tab_advances_to_next_stop() {
-        let mut grid = Grid::new(20, 1);
-        grid.print('x');
-        grid.tab();
-        assert_eq!(grid.cursor(), (0, 8));
     }
     #[test]
     fn test_backspace_moves_cursor_left() {
