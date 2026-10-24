@@ -23,10 +23,6 @@ use super::App;
 // Constants
 // ========================================================================
 
-/// The status bar's glyph for commands run on this machine: codicon `vm`, a
-/// monitor in the same thin outline as the bell at the other end of the bar.
-const LOCAL_HOST_ICON: char = '\u{ea7a}';
-
 /// The status bar's glyph for a host reached over ssh: codicon `remote`, the
 /// one VS Code marks a remote window with.
 const SSH_HOST_ICON: char = '\u{eb3a}';
@@ -98,7 +94,11 @@ impl App {
         status.host = host_label(&host);
         status.bell = Some(self.status_bell());
         status.hovered = self.status_hover;
-        status.segments = segments_of(&self.config.status_bar.segments, &sources);
+        status.segments = segments_of(
+            &self.config.status_bar.segments,
+            &self.config.status_bar.priority,
+            &sources,
+        );
         status
     }
 }
@@ -145,26 +145,43 @@ fn status_bar(
     }
 }
 
-/// How the status bar names where commands run: a glyph alone for this
-/// machine, and the glyph then the name for a remote host or a container.
+/// How the status bar names where commands run: empty for this local machine
+/// (so the mode indicator sits directly at the left edge), or the glyph then
+/// the name for a remote host or a container.
 fn host_label(host: &Host) -> String {
     match host {
         Host::Container(name) => format!("{CONTAINER_HOST_ICON} {name}"),
-        Host::Local => LOCAL_HOST_ICON.to_string(),
+        Host::Local => String::new(),
         Host::Ssh(name) => format!("{SSH_HOST_ICON} {name}"),
     }
 }
 
 /// The right side's segments for `kinds`, in their order. A kind with
-/// nothing to say (no quota heard, no tool focused) shows nothing.
-fn segments_of(kinds: &[StatusSegmentKind], sources: &SegmentSources) -> Vec<StatusSegment> {
+/// nothing to say (no quota heard, no tool focused) shows nothing. Each
+/// holds on by its place in `priority`, the first listed longest; with none
+/// listed they all rank alike and the bar drops from the left.
+fn segments_of(
+    kinds: &[StatusSegmentKind],
+    priority: &[StatusSegmentKind],
+    sources: &SegmentSources,
+) -> Vec<StatusSegment> {
     kinds
         .iter()
-        .flat_map(|kind| match kind {
-            StatusSegmentKind::Antigravity => quota_segment(sources, Provider::Antigravity),
-            StatusSegmentKind::Claude => quota_segment(sources, Provider::Claude),
-            StatusSegmentKind::Tool => tool_segments(sources),
-            StatusSegmentKind::Zai => quota_segment(sources, Provider::Zai),
+        .flat_map(|kind| {
+            let rank = priority
+                .iter()
+                .position(|listed| listed == kind)
+                .map_or(0, |at| (priority.len() - at) as u32);
+            let segments = match kind {
+                StatusSegmentKind::Antigravity => quota_segment(sources, Provider::Antigravity),
+                StatusSegmentKind::Claude => quota_segment(sources, Provider::Claude),
+                StatusSegmentKind::Tool => tool_segments(sources),
+                StatusSegmentKind::Zai => quota_segment(sources, Provider::Zai),
+            };
+            segments.into_iter().map(move |segment| StatusSegment {
+                priority: rank,
+                ..segment
+            })
         })
         .collect()
 }
@@ -194,6 +211,7 @@ fn quota_segment(sources: &SegmentSources, provider: Provider) -> Vec<StatusSegm
         .and_then(|(_, windows)| {
             Some(StatusSegment {
                 icon: Some(crate::icons::named_svg(provider.icon_name())?),
+                priority: 0,
                 short: quota::describe_compact(windows),
                 text: quota::describe(windows)?,
             })
@@ -213,6 +231,7 @@ fn tool_segments(sources: &SegmentSources) -> Vec<StatusSegment> {
         .iter()
         .map(|text| StatusSegment {
             icon: None,
+            priority: 0,
             short: None,
             text: text.clone(),
         })
@@ -344,7 +363,7 @@ mod tests {
             StatusSegmentKind::Claude,
             StatusSegmentKind::Zai,
         ];
-        let texts: Vec<String> = segments_of(&kinds, &sources)
+        let texts: Vec<String> = segments_of(&kinds, &[], &sources)
             .into_iter()
             .map(|segment| segment.text)
             .collect();
@@ -353,6 +372,22 @@ mod tests {
             ["12:5", "340 lines", "42%\u{2009}--"],
             "the tool's facts apart and no icon, no Claude quota heard"
         );
-        assert!(segments_of(&[], &sources).is_empty(), "nothing named");
+        assert!(segments_of(&[], &[], &sources).is_empty(), "nothing named");
+        let ranked = segments_of(&kinds, &[StatusSegmentKind::Tool], &sources);
+        let ranks: Vec<u32> = ranked.iter().map(|segment| segment.priority).collect();
+        assert_eq!(ranks, [1, 1, 0], "the listed tool outranks the unlisted quota");
+    }
+
+    #[test]
+    fn test_host_label_empty_for_local_host_and_shows_icons_for_container_and_ssh() {
+        assert_eq!(host_label(&Host::Local), "");
+        assert_eq!(
+            host_label(&Host::Container("my-docker".to_string())),
+            format!("{CONTAINER_HOST_ICON} my-docker")
+        );
+        assert_eq!(
+            host_label(&Host::Ssh("my-remote".to_string())),
+            format!("{SSH_HOST_ICON} my-remote")
+        );
     }
 }

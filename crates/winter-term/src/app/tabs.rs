@@ -342,16 +342,34 @@ impl App {
         }
     }
 
+    /// Split `target_pane_tab`'s pane to make `tab` a new pane in `direction`.
+    pub(crate) fn split_tab_to_new_pane(
+        &mut self,
+        tab: TabId,
+        target_pane_tab: TabId,
+        direction: FocusDir,
+    ) {
+        if self
+            .layout_mut()
+            .split_tab_to_new_pane(tab, target_pane_tab, direction)
+        {
+            self.after_tab_change();
+        }
+    }
+
     /// Move the focused tab into the neighbouring pane in the given direction.
+    /// If there is no pane in that direction, make that tab become the new pane.
     pub(crate) fn move_tab_in_direction(&mut self, direction: FocusDir) {
         if self.layout().is_zoomed() {
             return;
         }
         let viewport = self.viewport_rect();
         let layout_vp = Rect::new(viewport.x, viewport.y, viewport.width, viewport.height);
+        let focused = self.layout().focused();
         if let Some(target) = self.layout().pane_in_direction(direction, layout_vp) {
-            let focused = self.layout().focused();
             self.move_tab_to_pane(focused, target);
+        } else if self.layout_mut().move_tab_to_new_pane(focused, direction) {
+            self.after_tab_change();
         }
     }
 

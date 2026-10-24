@@ -2,6 +2,8 @@
 //! in a tab of its own. The window hands the history over whenever it
 //! changes, so the list stays current while the tab is up.
 
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+
 use crate::model::input::table::{self, Binding, KeyHelp};
 use crate::model::input::Key;
 use crate::model::notify::{Notification, Severity};
@@ -21,9 +23,6 @@ use crate::tools::reltime;
 /// The tool's title.
 const TITLE: &str = "Notifications";
 
-/// Rows of header above the first notification.
-const HEADER_ROWS: usize = 1;
-
 /// The one question the tool asks.
 const ASK_SEARCH: &str = "notifications-search";
 
@@ -33,10 +32,17 @@ const CLEAR_ACTION: &str = "clear_notifications";
 /// What the list says with nothing in it.
 const EMPTY: &str = "No notifications";
 
-/// The width the age and the severity are padded to, so the messages line
-/// up.
-const AGE_WIDTH: usize = 9;
-const SEVERITY_WIDTH: usize = 8;
+/// The codicons a notification leads with, by how much it matters: the
+/// same ones its toast card shows.
+const ERROR_ICON: &str = "\u{ea87}";
+const WARNING_ICON: &str = "\u{ea6c}";
+const INFO_ICON: &str = "\u{ea74}";
+
+/// The least space kept between a message and its age.
+const AGE_GAP: usize = 2;
+
+/// What ends a message cut short to leave room for its age.
+const ELLIPSIS: char = '\u{2026}';
 
 /// The tool's keys, ahead of the motions every list shares.
 const KEYS: &[Binding<Act>] = &[
@@ -136,36 +142,45 @@ impl NotificationsTool {
             .and_then(|index| self.entries.get(index))
     }
 
-    /// The row a notification is listed as: how long ago, how much it
-    /// matters, then what was said, by whom, and how many times.
-    fn row(&self, entry: &Notification) -> Row {
-        let age = format!("{:<AGE_WIDTH$}", reltime::ago(entry.at, self.now));
-        let severity = format!("{:<SEVERITY_WIDTH$}", entry.severity.name());
-        let severity_style = match entry.severity {
-            Severity::Error => Style::ChangeConflict,
-            Severity::Warning => Style::ChangeModified,
-            _ => Style::Dim,
+    /// The row a notification is listed as in `cols` columns: an icon for
+    /// how much it matters, then what was said, by whom, and how many times,
+    /// at the left, and how long ago at the right edge. A message too long
+    /// for the row is cut short, or with `wrap` folds onto the rows below
+    /// with its age after it.
+    fn row(&self, entry: &Notification, cols: usize, wrap: bool) -> Row {
+        let age = reltime::ago(entry.at, self.now);
+        let message = entry.message();
+        let (icon, style) = match entry.severity {
+            Severity::Error => (ERROR_ICON, Style::ChangeConflict),
+            Severity::Warning => (WARNING_ICON, Style::ChangeModified),
+            _ => (INFO_ICON, Style::Dim),
         };
+        let icon = format!("{icon} ");
+        let room = cols.saturating_sub(icon.width() + age.width() + AGE_GAP);
+        if wrap && message.width() > room {
+            let gap = " ".repeat(AGE_GAP);
+            return vec![
+                Span::new(style, icon),
+                Span::plain(message),
+                Span::new(Style::Dim, format!("{gap}{age}")),
+            ];
+        }
+        let message = fit(&message, room);
+        let pad = cols.saturating_sub(icon.width() + message.width() + age.width());
         vec![
+            Span::new(style, icon),
+            Span::plain(message),
+            Span::plain(" ".repeat(pad.max(AGE_GAP))),
             Span::new(Style::Dim, age),
-            Span::new(severity_style, severity),
-            Span::plain(entry.message()),
         ]
     }
 
-    /// The header: the title and how many notifications there are.
-    fn header_row(&self) -> Row {
-        vec![
-            Span::new(Style::HeaderAccent, TITLE),
-            Span::new(Style::Dim, format!("  {}", self.entries.len())),
-        ]
-    }
-
-    /// Each row's text, for the search to read.
+    /// Each row's text, for the search to read: the whole message, however
+    /// the row cuts it, then its age.
     fn search_labels(&self) -> Vec<String> {
         self.entries
             .iter()
-            .map(|entry| row_text(&self.row(entry)))
+            .map(|entry| format!("{}  {}", entry.message(), reltime::ago(entry.at, self.now)))
             .collect()
     }
 
@@ -206,23 +221,24 @@ impl Tool for NotificationsTool {
     }
 
     fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> Frame {
-        let mut frame_rows = vec![self.header_row()];
         if self.entries.is_empty() {
-            frame_rows.push(vec![Span::new(Style::Dim, EMPTY)]);
-            return Frame::new(frame_rows);
+            return Frame::new(vec![vec![Span::new(Style::Dim, EMPTY)]]);
         }
-        let painted: Vec<Row> = self.entries.iter().map(|entry| self.row(entry)).collect();
+        let painted: Vec<Row> = self
+            .entries
+            .iter()
+            .map(|entry| self.row(entry, cols, wrap))
+            .collect();
         let texts: Vec<String> = painted.iter().map(row_text).collect();
-        let visible = rows.saturating_sub(HEADER_ROWS);
-        self.list.view_mut().set_rows(visible);
+        self.list.view_mut().set_rows(rows);
         let placed = self
             .list
-            .place(visible, |index| row_height(&texts[index], cols, wrap, 0));
+            .place(rows, |index| row_height(&texts[index], cols, wrap, 0));
         let window = placed.window;
-        frame_rows.extend(painted.into_iter().skip(window.start).take(window.count));
-        let content = Frame::new(frame_rows);
+        let shown = painted.into_iter().skip(window.start).take(window.count);
+        let content = Frame::new(shown.collect());
         match placed.shows_cursor {
-            true => content.with_cursor_line(HEADER_ROWS + window.cursor),
+            true => content.with_cursor_line(window.cursor),
             false => content,
         }
     }
@@ -273,11 +289,11 @@ impl Tool for NotificationsTool {
 
     /// A press on a notification puts the cursor on it.
     fn on_mouse(&mut self, at: Point) -> ToolOutcome {
-        if at.drag || at.row < HEADER_ROWS {
+        if at.drag {
             return ToolOutcome::Ignored;
         }
         self.list.view_mut().release();
-        let at = self.list.view().scroll() + at.row - HEADER_ROWS;
+        let at = self.list.view().scroll() + at.row;
         if at < self.entries.len() {
             self.list.set_cursor(at);
         }
@@ -321,6 +337,31 @@ impl Tool for NotificationsTool {
 }
 
 // ========================================================================
+// Functions
+// ========================================================================
+
+/// `text`, cut short with an ellipsis to fit in `room` columns.
+fn fit(text: &str, room: usize) -> String {
+    if text.width() <= room {
+        return text.to_string();
+    }
+    let mut cut = String::new();
+    let mut used = 0;
+    for c in text.chars() {
+        let w = c.width().unwrap_or(0);
+        if used + w + 1 > room {
+            break;
+        }
+        cut.push(c);
+        used += w;
+    }
+    if room > 0 {
+        cut.push(ELLIPSIS);
+    }
+    cut
+}
+
+// ========================================================================
 // Tests
 // ========================================================================
 
@@ -348,8 +389,9 @@ mod tests {
         let mut tool = NotificationsTool::new(entries, 10);
         let frame = tool.content(10, 60, false);
         let rows = texts(&frame);
-        assert!(rows[1].contains("error") && rows[1].contains("second"), "{rows:?}");
-        assert!(rows[2].contains("first"), "{rows:?}");
+        assert!(rows[0].starts_with(&format!("{ERROR_ICON} second")), "{rows:?}");
+        assert!(rows[1].starts_with(&format!("{INFO_ICON} first")), "{rows:?}");
+        assert_eq!(frame.rows[0][0].style, Style::ChangeConflict, "an error's icon is red");
         assert_eq!(
             tool.on_key(&Key::plain(crate::model::input::KeyCode::Char('y'))),
             ToolOutcome::Yank("second".to_string())
@@ -364,6 +406,24 @@ mod tests {
         let newer = history(&[Notice::info("a"), Notice::info("b"), Notice::info("c")]);
         tool.set_notifications(&newer, 6);
         assert_eq!(tool.selected().map(|entry| entry.text.as_str()), Some("a"));
+    }
+
+    #[test]
+    fn test_the_message_sits_at_the_left_and_its_age_at_the_right_edge() {
+        let entries = history(&[Notice::info("x".repeat(80))]);
+        let mut tool = NotificationsTool::new(entries, 0);
+        let age = reltime::ago(0, 0);
+        let rows = texts(&tool.content(5, 40, false));
+        assert_eq!(rows[0].width(), 40, "{rows:?}");
+        assert!(rows[0].ends_with(&age), "{rows:?}");
+        assert!(rows[0].contains(ELLIPSIS), "cut short for the age: {rows:?}");
+
+        let short = history(&[Notice::info("hi")]);
+        let mut tool = NotificationsTool::new(short, 0);
+        let rows = texts(&tool.content(5, 40, false));
+        assert!(rows[0].starts_with(&format!("{INFO_ICON} hi ")), "{rows:?}");
+        assert!(rows[0].ends_with(&age), "{rows:?}");
+        assert_eq!(rows[0].width(), 40, "{rows:?}");
     }
 
     #[test]

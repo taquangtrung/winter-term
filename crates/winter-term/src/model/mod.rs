@@ -3,6 +3,7 @@
 //!
 //! These modules share no external dependencies (std-only) and no side effects.
 
+pub mod button;
 pub mod history;
 pub mod input;
 pub mod layout;

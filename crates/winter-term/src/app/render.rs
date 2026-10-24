@@ -1625,6 +1625,7 @@ mod tests {
         assert!(app.input_view().is_none());
 
         let prompt = tool::ActivePrompt {
+            buttons: None,
             field: crate::model::textedit::field::TextField::line("hello"),
             recall: crate::model::textedit::recall::Recall::default(),
             tab: TabId(0),
@@ -1652,6 +1653,7 @@ mod tests {
 
         // A tool's search is typed in the find popup, not a dialog.
         app.overlay = Some(Overlay::ToolPrompt(tool::ActivePrompt {
+            buttons: None,
             field: crate::model::textedit::field::TextField::line("needle"),
             recall: crate::model::textedit::recall::Recall::default(),
             tab: TabId(3),

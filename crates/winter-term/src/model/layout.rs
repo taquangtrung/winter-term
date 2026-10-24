@@ -563,6 +563,56 @@ impl Layout {
         }
     }
 
+    /// Split `target_pane_tab`'s pane to make `tab` a new pane in `direction`.
+    /// Returns `true` if a new pane was created, `false` if `tab` or `target_pane_tab`
+    /// was not found or if `tab` was the only tab in its pane and the target was the same pane.
+    pub fn split_tab_to_new_pane(
+        &mut self,
+        tab: TabId,
+        target_pane_tab: TabId,
+        direction: FocusDir,
+    ) -> bool {
+        let from_len = match find_pane(&self.root, tab) {
+            Some(p) => p.members.len(),
+            None => return false,
+        };
+        let same = match find_pane(&self.root, tab) {
+            Some(p) => p.members.contains(&target_pane_tab),
+            None => false,
+        };
+        if same {
+            if from_len <= 1 {
+                return false;
+            }
+            if !split_off_tab(&mut self.root, tab, direction) {
+                return false;
+            }
+        } else {
+            if !self.contains(target_pane_tab) {
+                return false;
+            }
+            if from_len > 1 {
+                let from_pane = find_pane_mut(&mut self.root, tab).unwrap();
+                from_pane.remove(tab);
+            } else if !close_in(&mut self.root, tab) {
+                return false;
+            }
+            if !split_pane_with_tab(&mut self.root, target_pane_tab, tab, direction) {
+                return false;
+            }
+        }
+        self.focused = tab;
+        self.balance();
+        true
+    }
+
+    /// Move `tab` into a new pane in `direction` beside its current pane.
+    /// Returns `true` if a new pane was created, `false` if `tab` was not found
+    /// or was the only tab in its pane.
+    pub fn move_tab_to_new_pane(&mut self, tab: TabId, direction: FocusDir) -> bool {
+        self.split_tab_to_new_pane(tab, tab, direction)
+    }
+
     // --------------------------------------------------------------------
     // Focus between panes
     // --------------------------------------------------------------------
@@ -815,6 +865,81 @@ fn split_at(
         Node::Split(split) => {
             split_at(&mut split.first, target, direction, ratio, new_id)
                 || split_at(&mut split.second, target, direction, ratio, new_id)
+        }
+    }
+}
+
+fn split_off_tab(node: &mut Node, tab: TabId, direction: FocusDir) -> bool {
+    match node {
+        Node::Leaf(pane) if pane.members.contains(&tab) => {
+            let mut remaining = std::mem::replace(pane, Pane::new(tab));
+            remaining.remove(tab);
+            let (dir, first, second) = match direction {
+                FocusDir::Left => (
+                    Direction::Vertical,
+                    Box::new(Node::Leaf(Pane::new(tab))),
+                    Box::new(Node::Leaf(remaining)),
+                ),
+                FocusDir::Right => (
+                    Direction::Vertical,
+                    Box::new(Node::Leaf(remaining)),
+                    Box::new(Node::Leaf(Pane::new(tab))),
+                ),
+                FocusDir::Up => (
+                    Direction::Horizontal,
+                    Box::new(Node::Leaf(Pane::new(tab))),
+                    Box::new(Node::Leaf(remaining)),
+                ),
+                FocusDir::Down => (
+                    Direction::Horizontal,
+                    Box::new(Node::Leaf(remaining)),
+                    Box::new(Node::Leaf(Pane::new(tab))),
+                ),
+            };
+            *node = Node::Split(SplitNode {
+                direction: dir,
+                first,
+                ratio: 0.5,
+                second,
+            });
+            true
+        }
+        Node::Leaf(_) => false,
+        Node::Split(split) => {
+            split_off_tab(&mut split.first, tab, direction)
+                || split_off_tab(&mut split.second, tab, direction)
+        }
+    }
+}
+
+fn split_pane_with_tab(
+    node: &mut Node,
+    target: TabId,
+    new_tab: TabId,
+    direction: FocusDir,
+) -> bool {
+    match node {
+        Node::Leaf(pane) if pane.members.contains(&target) => {
+            let target_leaf = Box::new(Node::Leaf(std::mem::replace(pane, Pane::new(new_tab))));
+            let new_leaf = Box::new(Node::Leaf(Pane::new(new_tab)));
+            let (dir, first, second) = match direction {
+                FocusDir::Left => (Direction::Vertical, new_leaf, target_leaf),
+                FocusDir::Right => (Direction::Vertical, target_leaf, new_leaf),
+                FocusDir::Up => (Direction::Horizontal, new_leaf, target_leaf),
+                FocusDir::Down => (Direction::Horizontal, target_leaf, new_leaf),
+            };
+            *node = Node::Split(SplitNode {
+                direction: dir,
+                first,
+                ratio: 0.5,
+                second,
+            });
+            true
+        }
+        Node::Leaf(_) => false,
+        Node::Split(split) => {
+            split_pane_with_tab(&mut split.first, target, new_tab, direction)
+                || split_pane_with_tab(&mut split.second, target, new_tab, direction)
         }
     }
 }
@@ -1558,5 +1683,98 @@ mod tests {
             Some(TabId(0))
         );
         assert_eq!(layout.pane_in_direction(FocusDir::Right, VIEWPORT), None);
+    }
+
+    #[test]
+    fn test_move_tab_to_new_pane_in_all_directions() {
+        // Sole tab cannot be split off into a new pane
+        let mut layout = Layout::new();
+        assert!(!layout.move_tab_to_new_pane(TabId(0), FocusDir::Right));
+
+        // Add TabId(1) to the same pane
+        layout.add_tab(TabId(1));
+        assert_eq!(layout.tabs_in_pane(TabId(0)), vec![TabId(0), TabId(1)]);
+
+        // Move TabId(1) right: creates a new pane on the right
+        assert!(layout.move_tab_to_new_pane(TabId(1), FocusDir::Right));
+        assert_eq!(layout.shown_tabs().len(), 2);
+        assert_eq!(layout.focused(), TabId(1));
+        assert_eq!(
+            layout.pane_in_direction(FocusDir::Left, VIEWPORT),
+            Some(TabId(0))
+        );
+
+        // Move TabId(1) back into TabId(0)'s pane
+        layout.move_tab_to_pane(TabId(1), TabId(0));
+        assert_eq!(layout.shown_tabs().len(), 1);
+
+        // Move TabId(1) left: creates a new pane on the left
+        assert!(layout.move_tab_to_new_pane(TabId(1), FocusDir::Left));
+        assert_eq!(layout.shown_tabs().len(), 2);
+        assert_eq!(layout.focused(), TabId(1));
+        assert_eq!(
+            layout.pane_in_direction(FocusDir::Right, VIEWPORT),
+            Some(TabId(0))
+        );
+
+        // Move back
+        layout.move_tab_to_pane(TabId(1), TabId(0));
+        assert_eq!(layout.shown_tabs().len(), 1);
+
+        // Move TabId(1) down: creates a new pane below
+        assert!(layout.move_tab_to_new_pane(TabId(1), FocusDir::Down));
+        assert_eq!(layout.shown_tabs().len(), 2);
+        assert_eq!(layout.focused(), TabId(1));
+        assert_eq!(
+            layout.pane_in_direction(FocusDir::Up, VIEWPORT),
+            Some(TabId(0))
+        );
+
+        // Move back
+        layout.move_tab_to_pane(TabId(1), TabId(0));
+        assert_eq!(layout.shown_tabs().len(), 1);
+
+        // Move TabId(1) up: creates a new pane above
+        assert!(layout.move_tab_to_new_pane(TabId(1), FocusDir::Up));
+        assert_eq!(layout.shown_tabs().len(), 2);
+        assert_eq!(layout.focused(), TabId(1));
+        assert_eq!(
+            layout.pane_in_direction(FocusDir::Down, VIEWPORT),
+            Some(TabId(0))
+        );
+    }
+
+    #[test]
+    fn test_split_tab_to_new_pane_across_panes() {
+        let mut layout = Layout::new();
+        // Pane 0: [TabId(0)]
+        // Split to make Pane 1: [TabId(1)]
+        layout.split(Direction::Vertical, 0.5, TabId(1));
+        assert_eq!(layout.shown_tabs(), vec![TabId(0), TabId(1)]);
+
+        // Move TabId(1) into a new pane to the Left of TabId(0).
+        // Since TabId(1) was the only tab in its pane, its original pane collapses.
+        assert!(layout.split_tab_to_new_pane(TabId(1), TabId(0), FocusDir::Left));
+        assert_eq!(layout.shown_tabs().len(), 2);
+        assert_eq!(layout.focused(), TabId(1));
+        assert_eq!(
+            layout.pane_in_direction(FocusDir::Right, VIEWPORT),
+            Some(TabId(0))
+        );
+
+        // Add TabId(2) to TabId(1)'s pane
+        layout.add_tab(TabId(2));
+        assert_eq!(layout.tabs_in_pane(TabId(1)), vec![TabId(1), TabId(2)]);
+
+        // Move TabId(2) into a new pane Below TabId(0).
+        // TabId(1)'s pane remains with TabId(1), TabId(0)'s pane splits vertically/horizontally.
+        assert!(layout.split_tab_to_new_pane(TabId(2), TabId(0), FocusDir::Down));
+        assert_eq!(layout.shown_tabs().len(), 3);
+        assert_eq!(layout.tabs_in_pane(TabId(1)), vec![TabId(1)]);
+        assert_eq!(layout.focused(), TabId(2));
+        assert_eq!(
+            layout.pane_in_direction(FocusDir::Up, VIEWPORT),
+            Some(TabId(0))
+        );
     }
 }

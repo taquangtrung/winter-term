@@ -430,8 +430,20 @@ pub(super) fn build_bg_vertices_offset(
                     })
                     .flatten(),
             };
+            let fg = cell.map(|c| c.style.foreground).unwrap_or_default();
+            // A bar or an underline covers only part of its cell, so the
+            // cell's own fill (a flash, a selection, a program's color) goes
+            // down first; skipped, the rest of the cell shows as a hole of
+            // the pane's plain background.
+            let under = CellBgOverlays {
+                cursor_filled: false,
+                ..overlays
+            };
+            let partial = params.cursor_shape != CursorShape::Block;
+            if overlays.cursor_filled && partial && under.paints(bg) {
+                cells.push_cell(row, col, cell_bg_color(under, bg, fg, theme, bg_lin));
+            }
             if overlays.paints(bg) {
-                let fg = cell.map(|c| c.style.foreground).unwrap_or_default();
                 let color = cell_bg_color(overlays, bg, fg, theme, bg_lin);
                 match overlays.cursor_filled {
                     true => cells.push_rect(
@@ -922,6 +934,56 @@ mod tests {
         // Six vertices per cell quad.
         let selected_cells = painted_cells(&verts, sel);
         assert_eq!(selected_cells, 3, "cols 0, 1 and 2 should all be selected");
+    }
+
+    #[test]
+    fn test_a_bar_cursor_leaves_its_cells_own_fill_around_it() {
+        // Regression: a bar cursor's cell drew only the bar, so the rest of it
+        // showed the pane's plain background, a dark hole in a selection or a
+        // flashed line.
+        let mut grid = Grid::new(4, 2);
+        for ch in "abc".chars() {
+            grid.print(ch);
+        }
+        grid.move_to(0, 1);
+        let theme = Theme::default();
+        let verts = build_bg_vertices_offset(
+            &grid,
+            BgParams {
+                ch: 20.0,
+                content_right: 40.0,
+                cursor_unfocused: false,
+                cursor_shape: CursorShape::Bar,
+                cw: 10.0,
+                dim: false,
+                draw_braille_dots: true,
+                focused: true,
+                hide_cursor: false,
+                hovered_link: 0,
+                labels: None,
+                find_labels: &[],
+                offset_x: 0.0,
+                overlay: None,
+                presentation: PLAIN_SCREEN,
+                offset_y: 0.0,
+                cursor_line: None,
+                line_flash: None,
+                scroll_offset: 0,
+                scrollback_len: 0,
+                search_matches: &[],
+                search_current: &[],
+                sentence_spans: &[],
+                selection: Some((0, 0, 0, 2)),
+                selection_block: false,
+                surface_h: 600.0,
+                surface_w: 800.0,
+                theme: &theme,
+                url_underline: true,
+            },
+            &mut Vec::new(),
+        );
+        let sel = theme.selection_bg.as_linear();
+        assert_eq!(painted_cells(&verts, sel), 3, "the bar's cell is selected too");
     }
 
     #[test]

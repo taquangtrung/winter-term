@@ -186,6 +186,9 @@ pub enum StatusHover {
 pub struct StatusSegment {
     /// The SVG drawn in the cells before `text`.
     pub icon: Option<Arc<[u8]>>,
+    /// How long the segment holds on when the bar is short of room: the
+    /// lowest is dropped first, and among equals the left-most.
+    pub priority: u32,
     /// What the segment says in fewer cells, for a bar short of room, e.g. a
     /// quota's `42% 10%` without its reset times; `None` when `text` is as
     /// short as it gets. The bar shortens every segment before it drops any.

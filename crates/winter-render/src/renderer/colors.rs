@@ -122,17 +122,24 @@ pub(super) fn block_cursor_cell(
 /// A replacement glyph color for the cell sitting under an opaque block cursor,
 /// when the cell's own foreground `fg` is too close to [`Theme::cursor_bg`] for
 /// the character to be visible against it (a blue prompt under a blue cursor, for
-/// instance). Returns [`Theme::cursor_fg`], or plain black/white when that color
-/// is itself too close to the cursor fill. `None` when `fg` already contrasts and
-/// should be left alone.
+/// instance). Returns the terminal's background, what a reversed cell's text is
+/// drawn in, so a solid block glyph a program draws as its own caret reads as
+/// a hole in the cursor rather than a black square. Falls back to
+/// [`Theme::cursor_fg`], then plain black/white, when that is itself too close
+/// to the cursor fill. `None` when `fg` already contrasts and should be left
+/// alone.
 pub(super) fn cursor_contrast_fg(fg: (u8, u8, u8), theme: &Theme) -> Option<(u8, u8, u8)> {
     let cursor = (theme.cursor_bg.r, theme.cursor_bg.g, theme.cursor_bg.b);
     if color_distance(fg, cursor) >= CURSOR_CONTRAST_MIN {
         return None;
     }
+    let background = (theme.background.r, theme.background.g, theme.background.b);
     let cursor_fg = (theme.cursor_fg.r, theme.cursor_fg.g, theme.cursor_fg.b);
-    if color_distance(cursor_fg, cursor) >= CURSOR_CONTRAST_MIN {
-        return Some(cursor_fg);
+    if let Some(color) = [background, cursor_fg]
+        .into_iter()
+        .find(|color| color_distance(*color, cursor) >= CURSOR_CONTRAST_MIN)
+    {
+        return Some(color);
     }
     let bright = cursor.0 as u32 + cursor.1 as u32 + cursor.2 as u32 > 382;
     Some(if bright { (0, 0, 0) } else { (255, 255, 255) })
@@ -319,6 +326,8 @@ mod tests {
         // block, so it's repainted in something that stands out.
         let fixed = cursor_contrast_fg(cursor, &theme).expect("identical color needs a repaint");
         assert!(color_distance(fixed, cursor) >= CURSOR_CONTRAST_MIN);
+        let background = (theme.background.r, theme.background.g, theme.background.b);
+        assert_eq!(fixed, background, "the terminal's background, not black");
 
         // Ordinary text already contrasts and keeps its own color.
         let fg = (theme.foreground.r, theme.foreground.g, theme.foreground.b);
@@ -326,13 +335,15 @@ mod tests {
     }
     #[test]
     fn test_cursor_contrast_fg_falls_back_when_cursor_fg_also_clashes() {
-        // A theme whose cursor_fg is as lost in the cursor fill as the text is
-        // still has to produce something readable.
+        // A theme whose background and cursor_fg are as lost in the cursor
+        // fill as the text is still has to produce something readable.
         let mut theme = Theme::dark();
+        theme.background = Rgb::new(8, 8, 8);
         theme.cursor_bg = Rgb::new(0, 0, 0);
         theme.cursor_fg = Rgb::new(4, 4, 4);
         assert_eq!(cursor_contrast_fg((0, 0, 0), &theme), Some((255, 255, 255)));
 
+        theme.background = Rgb::new(245, 245, 245);
         theme.cursor_bg = Rgb::new(255, 255, 255);
         theme.cursor_fg = Rgb::new(250, 250, 250);
         assert_eq!(cursor_contrast_fg((255, 255, 255), &theme), Some((0, 0, 0)));

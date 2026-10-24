@@ -3,7 +3,7 @@
 
 use std::sync::Arc;
 
-use crate::model::layout::{PaneArea, Rect, TabId};
+use crate::model::layout::{FocusDir, PaneArea, Rect, TabId};
 use crate::model::paint::IconKind;
 
 use super::App;
@@ -22,6 +22,9 @@ const EDGE_TOLERANCE_PX: f32 = 1.0;
 
 /// What stands at the caret of a tab name being typed into the strip.
 const RENAME_CARET: char = '\u{2502}';
+
+/// Fraction of a pane's width/height from an edge that defines a split drop zone.
+pub(crate) const SPLIT_DROP_EDGE_RATIO: f32 = 0.25;
 
 // ========================================================================
 // Data Structures
@@ -81,6 +84,40 @@ fn strip_edges(rect: Rect, panes: &[Rect]) -> winter_render::PaneStripEdges {
     }
     edges.left &= !left_aligned;
     edges
+}
+
+/// Which split direction corresponds to a point within a pane rectangle.
+fn pane_drop_split_dir(x: f32, y: f32, pr: &winter_render::renderer::PaneRect) -> FocusDir {
+    let w = pr.width.max(1.0);
+    let h = pr.height.max(1.0);
+    let norm_x = ((x - pr.x) / w).clamp(0.0, 1.0);
+    let norm_y = ((y - pr.y) / h).clamp(0.0, 1.0);
+    let dist_left = norm_x;
+    let dist_right = 1.0 - norm_x;
+    let dist_top = norm_y;
+    let dist_bottom = 1.0 - norm_y;
+    let min_dist = dist_left.min(dist_right).min(dist_top.min(dist_bottom));
+    if min_dist == dist_top {
+        FocusDir::Up
+    } else if min_dist == dist_bottom {
+        FocusDir::Down
+    } else if min_dist == dist_left {
+        FocusDir::Left
+    } else {
+        FocusDir::Right
+    }
+}
+
+/// Whether a point within a pane rectangle falls into an outer edge zone.
+fn is_pane_edge_zone(x: f32, y: f32, pr: &winter_render::renderer::PaneRect) -> bool {
+    let w = pr.width.max(1.0);
+    let h = pr.height.max(1.0);
+    let norm_x = ((x - pr.x) / w).clamp(0.0, 1.0);
+    let norm_y = ((y - pr.y) / h).clamp(0.0, 1.0);
+    norm_x < SPLIT_DROP_EDGE_RATIO
+        || norm_x > 1.0 - SPLIT_DROP_EDGE_RATIO
+        || norm_y < SPLIT_DROP_EDGE_RATIO
+        || norm_y > 1.0 - SPLIT_DROP_EDGE_RATIO
 }
 
 // ========================================================================
@@ -201,8 +238,10 @@ impl App {
                             indicator_x: Some(ix),
                             is_target_pane: false,
                         }
-                    } else if let Some((target_pane, _)) = self.pane_at_pixel(cx, cy) {
-                        if area.members.contains(&target_pane) && !area.members.contains(&drag_tab)
+                    } else if let Some((target_pane, pr)) = self.pane_at_pixel(cx, cy) {
+                        if area.members.contains(&target_pane)
+                            && !area.members.contains(&drag_tab)
+                            && !is_pane_edge_zone(cx, cy, &pr)
                         {
                             winter_render::PaneStripDropTarget {
                                 indicator_x: Some(
@@ -363,7 +402,9 @@ impl App {
 
     /// On release, move a dragged tab to where it was let go, when that is
     /// another tab of the same strip or across panes, and the pointer moved
-    /// far enough to mean a drag rather than a click.
+    /// far enough to mean a drag rather than a click. Dropping onto an edge
+    /// of a pane (or into the body of the same pane) splits that pane to create
+    /// a new pane holding the dragged tab.
     pub(crate) fn finalize_tab_drag(&mut self) {
         let Some((pane, start_x, start_y)) = self.tabs.drag_start.take() else {
             return;
@@ -381,9 +422,22 @@ impl App {
             _ => {
                 if let Some((area, _)) = self.strip_at(x, y) {
                     self.move_tab_to_pane(pane, area.active);
-                } else if let Some((target_pane, _)) = self.pane_at_pixel(x, y) {
-                    if !self.layout().same_pane(pane, target_pane) {
-                        self.move_tab_to_pane(pane, target_pane);
+                } else {
+                    let target_info = self.pane_at_pixel(x, y).or_else(|| {
+                        let vp = self.content_viewport();
+                        let clamped_x = x.clamp(vp.x, vp.x + vp.width.max(1.0) - 1.0);
+                        let clamped_y = y.clamp(vp.y, vp.y + vp.height.max(1.0) - 1.0);
+                        self.pane_at_pixel(clamped_x, clamped_y)
+                    });
+                    if let Some((target_pane, pr)) = target_info {
+                        let same = self.layout().same_pane(pane, target_pane);
+                        let edge = is_pane_edge_zone(x, y, &pr);
+                        let direction = pane_drop_split_dir(x, y, &pr);
+                        if edge || same {
+                            self.split_tab_to_new_pane(pane, target_pane, direction);
+                        } else {
+                            self.move_tab_to_pane(pane, target_pane);
+                        }
                     }
                 }
             }
@@ -615,5 +669,131 @@ mod tests {
         assert_eq!(app.layout().tabs_in_pane(tab2), vec![tab0, tab2]);
         assert_eq!(app.layout().tabs_in_pane(tab1), vec![tab1]);
         assert_eq!(app.layout().focused(), tab2);
+
+        // Move tab2 left again: there is no pane to the left, so tab2 becomes a new pane on the left
+        app.move_tab_in_direction(crate::model::layout::FocusDir::Left);
+        assert_eq!(app.layout().shown_tabs().len(), 3);
+        assert_eq!(app.layout().tabs_in_pane(tab2), vec![tab2]);
+        assert_eq!(app.layout().tabs_in_pane(tab0), vec![tab0]);
+        assert_eq!(app.layout().tabs_in_pane(tab1), vec![tab1]);
+        assert_eq!(app.layout().focused(), tab2);
+    }
+
+    #[test]
+    fn test_finalize_tab_drag_into_own_pane_splits_into_new_pane() {
+        let mut app = App::new();
+        let tab0 = app.layout().focused();
+        app.new_tab();
+        let tab1 = app.layout().focused();
+        assert_eq!(app.layout().shown_tabs().len(), 1);
+        assert_eq!(app.layout().tabs_in_pane(tab0), vec![tab0, tab1]);
+
+        let pane_rect = app.pane_rect(tab1).expect("pane rect");
+        // Drag tab1 to the bottom 10% of the pane body (split Down)
+        app.tabs.drag_start = Some((tab1, 20.0, 5.0));
+        app.pointer.cursor_pos = (
+            pane_rect.x + pane_rect.width / 2.0,
+            pane_rect.y + pane_rect.height * 0.9,
+        );
+
+        app.finalize_tab_drag();
+        assert_eq!(app.layout().shown_tabs().len(), 2);
+        assert_eq!(app.layout().focused(), tab1);
+        let vp = Rect::new(0.0, 0.0, 800.0, 600.0);
+        assert_eq!(
+            app.layout().pane_in_direction(FocusDir::Up, vp),
+            Some(tab0)
+        );
+
+        // Move tab1 back into tab0's pane
+        app.move_tab_to_pane(tab1, tab0);
+        assert_eq!(app.layout().shown_tabs().len(), 1);
+
+        let pane_rect = app.pane_rect(tab1).expect("pane rect");
+        // Drag tab1 to the right 10% of the pane body (split Right)
+        app.tabs.drag_start = Some((tab1, 20.0, 5.0));
+        app.pointer.cursor_pos = (
+            pane_rect.x + pane_rect.width * 0.9,
+            pane_rect.y + pane_rect.height / 2.0,
+        );
+
+        app.finalize_tab_drag();
+        assert_eq!(app.layout().shown_tabs().len(), 2);
+        assert_eq!(app.layout().focused(), tab1);
+        assert_eq!(
+            app.layout().pane_in_direction(FocusDir::Left, vp),
+            Some(tab0)
+        );
+    }
+
+    #[test]
+    fn test_finalize_tab_drag_into_other_pane_edge_splits_target_pane() {
+        let mut app = App::new();
+        let tab0 = app.layout().focused();
+        app.split_pane(crate::model::layout::Direction::Vertical);
+        let tab1 = app.layout().focused();
+        assert_eq!(app.layout().shown_tabs().len(), 2);
+
+        let pane0_rect = app.pane_rect(tab0).expect("pane 0 rect");
+        // Drag tab1 to the left 10% of pane0 (split Left of pane0)
+        app.tabs.drag_start = Some((tab1, 500.0, 5.0));
+        app.pointer.cursor_pos = (
+            pane0_rect.x + pane0_rect.width * 0.1,
+            pane0_rect.y + pane0_rect.height / 2.0,
+        );
+
+        app.finalize_tab_drag();
+        // tab1 was the lone tab in its pane, so old pane collapsed and new pane created to the left of tab0
+        assert_eq!(app.layout().shown_tabs().len(), 2);
+        assert_eq!(app.layout().focused(), tab1);
+        let vp = Rect::new(0.0, 0.0, 800.0, 600.0);
+        assert_eq!(
+            app.layout().pane_in_direction(FocusDir::Right, vp),
+            Some(tab0)
+        );
+
+        // Add tab2 to tab1's pane
+        app.new_tab();
+        let tab2 = app.layout().focused();
+        assert_eq!(app.layout().tabs_in_pane(tab1), vec![tab1, tab2]);
+
+        // Drag tab2 to the bottom 10% of tab0's pane (split Down of tab0)
+        let pane0_rect_updated = app.pane_rect(tab0).expect("pane 0 rect");
+        app.tabs.drag_start = Some((tab2, 50.0, 5.0));
+        app.pointer.cursor_pos = (
+            pane0_rect_updated.x + pane0_rect_updated.width / 2.0,
+            pane0_rect_updated.y + pane0_rect_updated.height * 0.9,
+        );
+
+        app.finalize_tab_drag();
+        assert_eq!(app.layout().shown_tabs().len(), 3);
+        assert_eq!(app.layout().tabs_in_pane(tab1), vec![tab1]);
+        assert_eq!(app.layout().focused(), tab2);
+        assert_eq!(
+            app.layout().pane_in_direction(FocusDir::Up, vp),
+            Some(tab0)
+        );
+    }
+
+    #[test]
+    fn test_finalize_tab_drag_past_window_edge_clamps_and_splits() {
+        let mut app = App::new();
+        let tab0 = app.layout().focused();
+        app.new_tab();
+        let tab1 = app.layout().focused();
+        assert_eq!(app.layout().shown_tabs().len(), 1);
+
+        // Drag tab1 far past the right edge of the window
+        app.tabs.drag_start = Some((tab1, 20.0, 5.0));
+        app.pointer.cursor_pos = (999.0, 300.0);
+
+        app.finalize_tab_drag();
+        assert_eq!(app.layout().shown_tabs().len(), 2);
+        assert_eq!(app.layout().focused(), tab1);
+        let vp = Rect::new(0.0, 0.0, 800.0, 600.0);
+        assert_eq!(
+            app.layout().pane_in_direction(FocusDir::Left, vp),
+            Some(tab0)
+        );
     }
 }

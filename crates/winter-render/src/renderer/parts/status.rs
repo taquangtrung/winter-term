@@ -383,8 +383,8 @@ impl GpuRenderer {
         // The segments, then the notifications glyph one cell in from the
         // right edge: the line is monospace, so padding with spaces to the
         // column count lands them there. Segments that would run into the
-        // left side are dropped from the front, keeping the ones nearest the
-        // edge; the notifications glyph always stays.
+        // left side are dropped lowest priority first (see [`kept`]); the
+        // notifications glyph always stays.
         let parts = &status.segments;
         // The right side is laid out in half cells, since a segment's
         // [`THIN_SPACE`] takes one; the left side's text has none.
@@ -400,8 +400,9 @@ impl GpuRenderer {
             let edge = (RIGHT_MARGIN + RIGHT_GAP) * HALVES_PER_CELL;
             let room = total.saturating_sub(used + edge + bell_width);
             let right = fitting(right, parts, room);
-            let first = fit_from_end(&right, room);
-            let shown = right[first..].join(SEGMENT_SEPARATOR);
+            let kept = kept(&right, parts, room);
+            let texts: Vec<String> = kept.iter().map(|&index| right[index].clone()).collect();
+            let shown = texts.join(SEGMENT_SEPARATOR);
             let shown_width = halves(&shown);
             let bell_gap = match shown.is_empty() {
                 true => 0,
@@ -419,9 +420,9 @@ impl GpuRenderer {
             push_thinned(&mut status_text, &shown, &mut thin);
             spans.push((right_start..status_text.len(), muted_attrs.clone()));
             let start = used + padding;
-            parts_shown = segment_spans(first, start, &right[first..]);
-            for (part, (_, at, _)) in parts[first..].iter().zip(&parts_shown) {
-                if let Some(icon) = &part.icon {
+            parts_shown = segment_spans(&kept, start, &texts);
+            for (&index, (_, at, _)) in kept.iter().zip(&parts_shown) {
+                if let Some(icon) = &parts[index].icon {
                     icons.push((*at, Arc::clone(icon)));
                 }
             }
@@ -572,18 +573,22 @@ fn push_thinned(out: &mut String, text: &str, thin: &mut Vec<usize>) {
     }
 }
 
-/// Where each of `shown` lands when the first, segment `first`, starts at
-/// half cell `col`: its index and its span `(first half cell, past the
-/// last)`, the segments standing [`SEGMENT_SEPARATOR`] apart.
-fn segment_spans(first: usize, col: usize, shown: &[String]) -> Vec<(StatusHover, usize, usize)> {
+/// Where each of `shown` lands when the first starts at half cell `col`:
+/// its segment's index (from `indices`) and its span `(first half cell, past
+/// the last)`, the segments standing [`SEGMENT_SEPARATOR`] apart.
+fn segment_spans(
+    indices: &[usize],
+    col: usize,
+    shown: &[String],
+) -> Vec<(StatusHover, usize, usize)> {
     let gap = halves(SEGMENT_SEPARATOR);
     let mut at = col;
-    shown
+    indices
         .iter()
-        .enumerate()
-        .map(|(offset, text)| {
+        .zip(shown)
+        .map(|(&index, text)| {
             let width = halves(text);
-            let span = (StatusHover::Segment(first + offset), at, at + width);
+            let span = (StatusHover::Segment(index), at, at + width);
             at += width + gap;
             span
         })
@@ -599,21 +604,34 @@ fn hit_at(hits: &[StatusHit], x: f32, y: f32) -> Option<StatusHover> {
 
 /// The right side's texts for `room` half cells: `full` when every segment fits
 /// as it is, else every segment in its short form, so the bar shows them all
-/// shortened before it drops any (see [`fit_from_end`]).
+/// shortened before it drops any (see [`kept`]).
 fn fitting(full: Vec<String>, parts: &[StatusSegment], room: usize) -> Vec<String> {
-    if fit_from_end(&full, room) == 0 {
+    if kept(&full, parts, room).len() == full.len() {
         return full;
     }
     parts.iter().map(|part| rendered(part, true)).collect()
 }
 
-/// Where the first of `parts` to show is, dropping from the front until what
-/// is left, joined, fits in `room` half cells: the last part, nearest the
-/// edge, is the one kept longest. `parts.len()` when none fits.
-fn fit_from_end(parts: &[String], room: usize) -> usize {
-    (0..parts.len())
-        .find(|&start| halves(&parts[start..].join(SEGMENT_SEPARATOR)) <= room)
-        .unwrap_or(parts.len())
+/// The indices of `texts` (one per segment of `parts`) still shown in
+/// `room` half cells, in order: segments are dropped until the rest, joined,
+/// fits, the lowest priority first and among equals the left-most, so with
+/// no priorities set the one nearest the edge holds on longest.
+fn kept(texts: &[String], parts: &[StatusSegment], room: usize) -> Vec<usize> {
+    let mut kept: Vec<usize> = (0..texts.len()).collect();
+    let width = |kept: &[usize]| {
+        let shown: Vec<&str> = kept.iter().map(|&index| texts[index].as_str()).collect();
+        halves(&shown.join(SEGMENT_SEPARATOR))
+    };
+    while !kept.is_empty() && width(&kept) > room {
+        let weakest = kept
+            .iter()
+            .enumerate()
+            .min_by_key(|&(_, &index)| (parts[index].priority, index))
+            .map(|(at, _)| at)
+            .unwrap_or(0);
+        kept.remove(weakest);
+    }
+    kept
 }
 
 // ========================================================================
@@ -626,12 +644,32 @@ mod tests {
 
     #[test]
     fn test_the_right_side_drops_its_first_segments_when_short_of_room() {
-        // The icon and the position nearest it say the most; a long count
-        // further left is the first to go when the notice needs the room.
-        let parts = ["340 lines", "12:5", ICON_SLOT].map(String::from);
-        assert_eq!(fit_from_end(&parts, 160), 0);
-        assert_eq!(fit_from_end(&parts, 16), 1);
-        assert_eq!(fit_from_end(&parts, 0), 3);
+        // With no priorities set, a long count further left is the first to
+        // go when the notice needs the room.
+        let texts = ["340 lines", "12:5", "42%"].map(String::from);
+        let parts = texts.clone().map(|text| segment(&text, 0));
+        assert_eq!(kept(&texts, &parts, 160), [0, 1, 2]);
+        assert_eq!(kept(&texts, &parts, 18), [1, 2]);
+        assert_eq!(kept(&texts, &parts, 0), [] as [usize; 0]);
+    }
+
+    #[test]
+    fn test_the_lowest_priority_is_dropped_first_wherever_it_sits() {
+        // The position on the left holds on while the quota to its right,
+        // ranked lower, gives way.
+        let texts = ["12:5", "17% 30%", "1% 1%"].map(String::from);
+        let parts = [segment("12:5", 3), segment("17% 30%", 1), segment("1% 1%", 2)];
+        assert_eq!(kept(&texts, &parts, 30), [0, 2]);
+        assert_eq!(kept(&texts, &parts, 8), [0]);
+    }
+
+    fn segment(text: &str, priority: u32) -> StatusSegment {
+        StatusSegment {
+            icon: None,
+            priority,
+            short: None,
+            text: text.to_string(),
+        }
     }
 
     #[test]
@@ -639,11 +677,13 @@ mod tests {
         let logo: Arc<[u8]> = Arc::from(&b"<svg/>"[..]);
         let quota = StatusSegment {
             icon: Some(Arc::clone(&logo)),
+            priority: 0,
             short: Some("42%".to_string()),
             text: "42% 14:05".to_string(),
         };
         let tool = StatusSegment {
             icon: Some(logo),
+            priority: 0,
             short: None,
             text: String::new(),
         };
@@ -663,6 +703,7 @@ mod tests {
         // left room for both.
         let quota = |text: &str, short: &str| StatusSegment {
             icon: None,
+            priority: 0,
             short: Some(short.to_string()),
             text: text.to_string(),
         };
@@ -678,16 +719,16 @@ mod tests {
         );
         let narrow = fitting(full, &parts, 40);
         assert_eq!(narrow, ["17% 30%", "1% 1%"]);
-        assert_eq!(fit_from_end(&narrow, 40), 0, "both still shown");
+        assert_eq!(kept(&narrow, &parts, 40), [0, 1], "both still shown");
     }
 
     #[test]
     fn test_each_shown_segment_keeps_its_own_index_and_cells() {
-        // Segments dropped from the front for room still count: the first
-        // shown is segment 1 here, so a hover lights the one under the
-        // pointer rather than the one before it.
+        // Segments dropped for room still count: the first shown is
+        // segment 1 here, so a hover lights the one under the pointer rather
+        // than the one before it.
         let shown = ["12:5", "340 lines"].map(String::from);
-        let spans = segment_spans(1, 100, &shown);
+        let spans = segment_spans(&[1, 2], 100, &shown);
         assert_eq!(
             spans,
             [

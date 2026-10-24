@@ -349,6 +349,7 @@ mod tests {
         assert!(!app.status_bar_visible());
 
         let prompt = tool::ActivePrompt {
+            buttons: None,
             field: crate::model::textedit::field::TextField::line("query"),
             recall: crate::model::textedit::recall::Recall::default(),
             tab: TabId(0),

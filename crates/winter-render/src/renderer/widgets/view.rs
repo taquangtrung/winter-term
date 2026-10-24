@@ -65,10 +65,25 @@ pub struct FindView {
     pub query: String,
 }
 
+/// A button shown in a dialog or toolbar.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ButtonView {
+    /// Whether this button is currently focused by keyboard navigation.
+    pub focused: bool,
+    /// Whether this button represents the primary/default action.
+    pub primary: bool,
+    /// Keyboard shortcut hint shown inside the button (e.g. "y", "n", "Esc").
+    pub shortcut: Option<String>,
+    /// Button label text (e.g. "Yes", "No", "Cancel").
+    pub text: String,
+}
+
 /// A question being answered in a floating dialog: what is being asked, what
 /// has been typed so far, and how to answer it.
 #[derive(Clone, Debug, PartialEq)]
 pub struct InputView {
+    /// Buttons drawn along the dialog foot, if any.
+    pub buttons: Vec<ButtonView>,
     /// How many characters of the input sit before the caret, which is drawn
     /// between them and the rest.
     pub caret: usize,

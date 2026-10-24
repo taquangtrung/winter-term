@@ -134,6 +134,10 @@ const DEFAULT_FONT_SIZE: f32 = 15.0;
 pub struct StatusBarConfig {
     /// Whether the status bar is drawn at all.
     pub enabled: bool,
+    /// The segments in the order they hold on when the bar is short of
+    /// room, the first kept longest; one left out goes before any listed.
+    /// Empty to drop from the left.
+    pub priority: Vec<StatusSegmentKind>,
     /// The right side's segments, in order from the left.
     pub segments: Vec<StatusSegmentKind>,
     /// Whether the current mode is named in the bar.
@@ -144,6 +148,7 @@ impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
             enabled: true,
+            priority: Vec::new(),
             segments: StatusSegmentKind::ALL.to_vec(),
             show_mode: false,
         }
@@ -552,6 +557,10 @@ impl Config {
             .status_bar
             .map(|sb| StatusBarConfig {
                 enabled: sb.show.unwrap_or(true),
+                priority: sb
+                    .priority
+                    .map(|names| status_segments_from_names(names, &mut unknown_segments))
+                    .unwrap_or_default(),
                 segments: sb.segments.map_or_else(
                     || StatusSegmentKind::ALL.to_vec(),
                     |names| status_segments_from_names(names, &mut unknown_segments),
@@ -778,7 +787,17 @@ impl Config {
         for segment in &sb.segments {
             out.push_str(&format!(" {}", kdl_string(segment.name())));
         }
-        out.push_str("\n}\n");
+        out.push('\n');
+        // Left out when unset, since a bare `priority` would read as an
+        // empty list, which is the same as none.
+        if !sb.priority.is_empty() {
+            out.push_str("    priority");
+            for segment in &sb.priority {
+                out.push_str(&format!(" {}", kdl_string(segment.name())));
+            }
+            out.push('\n');
+        }
+        out.push_str("}\n");
         out
     }
 }
@@ -1507,6 +1526,26 @@ status-bar {
         );
         assert!(config.status_bar.enabled);
         assert!(config.status_bar.show_mode);
+    }
+
+    #[test]
+    fn test_status_bar_priority_is_read_and_written_back() {
+        let (config, warning) = Config::parse_checked(
+            r#"
+status-bar {
+    segments "tool" "claude"
+    priority "claude" "tool"
+}
+"#,
+        );
+        assert_eq!(warning, None);
+        assert_eq!(
+            config.status_bar.priority,
+            [StatusSegmentKind::Claude, StatusSegmentKind::Tool]
+        );
+        let again = Config::parse_checked(&config.to_kdl()).0;
+        assert_eq!(again.status_bar.priority, config.status_bar.priority);
+        assert!(Config::parse_checked("").0.status_bar.priority.is_empty());
     }
 
     #[test]

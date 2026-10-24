@@ -2,7 +2,8 @@
 //! that answer it, or a confirmation answered by one key.
 
 use super::super::colors::mix_rgb;
-use super::view::InputView;
+use super::button::{draw_buttons_row, measure_buttons_row};
+use super::view::{ButtonView, InputView};
 use crate::renderer::glyphs::FontCtx;
 use crate::renderer::raster::paint::{buffer_width, shape_chrome_line, truncate_label};
 use crate::renderer::raster::popup::{
@@ -11,7 +12,7 @@ use crate::renderer::raster::popup::{
 };
 use crate::renderer::raster::view::DropdownImage;
 use crate::renderer::raster::DROPDOWN_SHADOW;
-use crate::theme::{Rgb, Theme};
+use crate::theme::Theme;
 use glyphon::{FontSystem, SwashCache};
 
 // ========================================================================
@@ -46,33 +47,6 @@ const KEYCAP_MIX: f32 = 0.14;
 const KEYCAP_LABEL_GAP_RATIO: f32 = 0.5;
 const KEYCAP_PAIR_GAP_RATIO: f32 = 1.5;
 
-/// The ANSI color a confirmation is marked in: yellow, the color of a
-/// question that changes something.
-const CONFIRM_ANSI: usize = 3;
-
-/// The confirmation's stripe down its left edge, in pixels.
-const CONFIRM_STRIPE_PX: f32 = 4.0;
-
-/// The badge beside a confirmation's question, as a share of a cell's height,
-/// and the glyph it holds.
-const CONFIRM_BADGE_RATIO: f32 = 1.3;
-const CONFIRM_BADGE_GLYPH: &str = "?";
-
-/// A confirmation button's padding around its text, in cell widths across and
-/// cell heights down, and its corner radius in pixels.
-const BUTTON_PAD_X_RATIO: f32 = 1.0;
-const BUTTON_PAD_Y_RATIO: f32 = 0.25;
-const BUTTON_RADIUS: f32 = 6.0;
-
-/// The space between two confirmation buttons, in cell widths.
-const BUTTON_GAP_RATIO: f32 = 1.0;
-
-/// How far the quiet button's outline leans from the card toward the text.
-const BUTTON_OUTLINE_MIX: f32 = 0.3;
-
-/// The brightness, `0.0..=1.0`, over which a filled button takes dark text.
-const LIGHT_FILL_LUMA: f32 = 0.6;
-
 // ========================================================================
 // Free functions
 // ========================================================================
@@ -91,7 +65,8 @@ pub(in crate::renderer) fn input_rgba(
     surface_w: f32,
     surface_h: f32,
 ) -> DropdownImage {
-    if view.input.is_none() && !view.keys.is_empty() {
+    let has_buttons = !view.buttons.is_empty();
+    if (view.input.is_none() && !view.keys.is_empty()) || has_buttons {
         return confirm_rgba(
             font_system,
             swash_cache,
@@ -234,11 +209,9 @@ pub(in crate::renderer) fn input_rgba(
     frame.into_image(x, y)
 }
 
-/// Rasterize a confirmation: the input dialog's card, marked in the warning
-/// color by a stripe down its left edge and a `?` badge beside the question,
-/// with its answers as buttons along the foot rather than keycaps. The first
-/// answer is the one the question asks for, filled in the accent color; the
-/// rest are quiet outlines. Each button names its key beside what it does.
+/// Rasterize a confirmation: a centered floating card holding the question
+/// in bold and interactive buttons along the foot. Consistent with the rest
+/// of the window chrome without an emphasis leftbar or badge.
 fn confirm_rgba(
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
@@ -251,144 +224,63 @@ fn confirm_rgba(
     let margin = DROPDOWN_SHADOW;
     let pad = (ctx.cell_h * INPUT_PAD_RATIO).round();
     let gap = (ctx.cell_h * INPUT_GAP_RATIO).round();
-    let badge = (ctx.cell_h * CONFIRM_BADGE_RATIO).round();
-    let button_pad_x = (ctx.cell_w * BUTTON_PAD_X_RATIO).round();
-    let button_pad_y = (ctx.cell_h * BUTTON_PAD_Y_RATIO).round();
-    let button_h = ctx.line_height + button_pad_y * 2.0;
-    let heading_h = badge.max(ctx.line_height);
+
+    let buttons: Vec<ButtonView> = if !view.buttons.is_empty() {
+        view.buttons.clone()
+    } else {
+        view.keys
+            .iter()
+            .enumerate()
+            .map(|(i, (k, does))| ButtonView {
+                focused: i == 0,
+                primary: i == 0,
+                shortcut: Some(k.clone()),
+                text: does.clone(),
+            })
+            .collect()
+    };
+
+    let (_buttons_w, button_h) = measure_buttons_row(font_system, ctx, &buttons);
 
     let panel_w = (surface_w * INPUT_WIDTH_RATIO)
         .min(surface_w - 40.0)
         .floor()
         .max(280.0);
-    let panel_h = (pad * 2.0 + heading_h + gap + button_h).ceil();
+    let panel_h = (pad * 2.0 + ctx.line_height + gap + button_h).ceil();
     let mut frame = PopupFrame::new(theme, panel_w, panel_h, margin);
 
-    let warning = theme.ansi[CONFIRM_ANSI];
     let foreground = theme.foreground.to_glyphon();
-    let muted = theme.ansi[8].to_glyphon();
-    let left = margin + pad + CONFIRM_STRIPE_PX;
+    let left = margin + pad;
     let right = margin + panel_w - pad;
     let top = margin + pad;
 
-    // The stripe, inside the card's rounded left edge.
-    frame.fill(
-        (margin, margin, CONFIRM_STRIPE_PX, panel_h),
-        CONFIRM_STRIPE_PX / 2.0,
-        warning,
-        1.0,
-    );
-
-    // The badge: a disc in the warning color holding a `?` in the card's.
-    frame.fill((left, top, badge, badge), badge / 2.0, warning, 1.0);
-    let on_warning = text_on(warning, theme).to_glyphon();
-    let mut glyph = shape_chrome_line(
-        font_system,
-        ctx,
-        CONFIRM_BADGE_GLYPH,
-        on_warning,
-        true,
-        true,
-    );
-    let glyph_w = buffer_width(&glyph).ceil();
-    frame.draw_text(
-        font_system,
-        swash_cache,
-        &mut glyph,
-        (
-            (left + (badge - glyph_w) / 2.0) as i32,
-            (top + (badge - ctx.line_height) / 2.0) as i32,
-        ),
-        on_warning,
-    );
-
-    // The question, bold, beside the badge and centered on it.
-    let label_x = left + badge + ctx.cell_w;
-    let label_room = ((right - label_x) / ctx.cell_w).floor().max(1.0) as usize;
+    // The question in bold, consistent with input_rgba
+    let label_room = ((right - left) / ctx.cell_w).floor().max(1.0) as usize;
     let label = truncate_label(&view.label, label_room);
     let mut label_buf = shape_chrome_line(font_system, ctx, &label, foreground, true, true);
     frame.draw_text(
         font_system,
         swash_cache,
         &mut label_buf,
-        (
-            label_x as i32,
-            (top + (heading_h - ctx.line_height) / 2.0) as i32,
-        ),
+        (left as i32, top as i32),
         foreground,
     );
 
-    // The buttons, laid out from the right edge in: the asked-for answer
-    // last, nearest the edge, where the eye ends.
-    let button_y = top + heading_h + gap;
-    let mut x = right;
-    for (index, (key, does)) in view.keys.iter().enumerate().rev() {
-        let primary = index == 0;
-        let (fill, text) = match primary {
-            true => {
-                let accent = theme.active_indicator;
-                (accent, text_on(accent, theme))
-            }
-            false => (theme.menu_bg, theme.foreground),
-        };
-        let mut does_buf = shape_chrome_line(font_system, ctx, does, text.to_glyphon(), true, true);
-        let key_color = match primary {
-            true => text.to_glyphon(),
-            false => muted,
-        };
-        let mut key_buf = shape_chrome_line(font_system, ctx, key, key_color, false, true);
-        let does_w = buffer_width(&does_buf).ceil();
-        let key_w = buffer_width(&key_buf).ceil();
-        let label_gap = (ctx.cell_w * KEYCAP_LABEL_GAP_RATIO).round();
-        let button_w = button_pad_x * 2.0 + does_w + label_gap + key_w;
-        x -= button_w;
-        let button = (x, button_y, button_w, button_h);
-        if primary {
-            frame.fill(button, BUTTON_RADIUS, fill, 1.0);
-        } else {
-            let outline = mix_rgb(theme.menu_bg, theme.foreground, BUTTON_OUTLINE_MIX);
-            frame.fill(button, BUTTON_RADIUS, outline, 1.0);
-            let inset = (x + 1.0, button_y + 1.0, button_w - 2.0, button_h - 2.0);
-            frame.fill(inset, BUTTON_RADIUS - 1.0, fill, 1.0);
-        }
-        let text_y = (button_y + button_pad_y) as i32;
-        frame.draw_text(
-            font_system,
-            swash_cache,
-            &mut does_buf,
-            ((x + button_pad_x) as i32, text_y),
-            text.to_glyphon(),
-        );
-        frame.draw_text(
-            font_system,
-            swash_cache,
-            &mut key_buf,
-            ((x + button_pad_x + does_w + label_gap) as i32, text_y),
-            key_color,
-        );
-        x -= (ctx.cell_w * BUTTON_GAP_RATIO).round();
-    }
+    // The buttons laid out along the foot, right-aligned
+    let button_y = top + ctx.line_height + gap;
+    draw_buttons_row(
+        &mut frame,
+        font_system,
+        swash_cache,
+        ctx,
+        theme,
+        &buttons,
+        right,
+        button_y,
+    );
 
     let (x, y) = centered(surface_w, surface_h, panel_w, panel_h);
     frame.into_image(x, y)
-}
-
-/// The text color that reads on `fill`: the theme's dark background on a
-/// light fill, its light foreground on a dark one, whichever the theme is.
-fn text_on(fill: Rgb, theme: &Theme) -> Rgb {
-    let (dark, light) = match luma_of(theme.background) < luma_of(theme.foreground) {
-        true => (theme.background, theme.foreground),
-        false => (theme.foreground, theme.background),
-    };
-    match luma_of(fill) > LIGHT_FILL_LUMA {
-        true => dark,
-        false => light,
-    }
-}
-
-/// How bright `color` is, `0.0..=1.0`.
-fn luma_of(color: Rgb) -> f32 {
-    (0.299 * color.r as f32 + 0.587 * color.g as f32 + 0.114 * color.b as f32) / 255.0
 }
 
 // ========================================================================
@@ -399,6 +291,7 @@ fn luma_of(color: Rgb) -> f32 {
 mod tests {
     use super::*;
     use crate::renderer::test_support::*;
+    use crate::theme::Rgb;
 
     #[test]
     fn test_the_input_dialog_is_centered_and_only_as_tall_as_it_needs() {
@@ -412,6 +305,7 @@ mod tests {
         let (surface_w, surface_h) = (1000.0, 800.0);
 
         let typed = InputView {
+            buttons: Vec::new(),
             caret: 8,
             caret_visible: true,
             input: Some("notes.md".to_string()),
@@ -445,6 +339,7 @@ mod tests {
         // A question answered by one key has no line to type on, so it is
         // shorter than one that does.
         let confirmed = InputView {
+            buttons: Vec::new(),
             caret: 0,
             caret_visible: true,
             input: None,
@@ -472,19 +367,30 @@ mod tests {
     }
 
     #[test]
-    fn test_a_confirmation_is_marked_and_answers_with_buttons() {
+    fn test_a_confirmation_has_no_left_stripe_and_focused_button_is_filled() {
         let mut font_system = FontSystem::new();
         let mut swash = SwashCache::new();
         let theme = Theme::dark();
         let ctx = sample_font_ctx();
         let view = |input: Option<&str>| InputView {
+            buttons: vec![
+                ButtonView {
+                    focused: true,
+                    primary: true,
+                    shortcut: Some("y".to_string()),
+                    text: "Yes".to_string(),
+                },
+                ButtonView {
+                    focused: false,
+                    primary: false,
+                    shortcut: Some("n".to_string()),
+                    text: "No".to_string(),
+                },
+            ],
             caret: 0,
             caret_visible: false,
             input: input.map(String::from),
-            keys: vec![
-                ("y".to_string(), "Yes".to_string()),
-                ("any key".to_string(), "No".to_string()),
-            ],
+            keys: Vec::new(),
             label: "Delete 3 entries?".to_string(),
         };
         let draw = |font_system: &mut FontSystem, swash: &mut SwashCache, view: &InputView| {
@@ -504,12 +410,12 @@ mod tests {
 
         let confirm = draw(&mut font_system, &mut swash, &view(None));
         let typed = draw(&mut font_system, &mut swash, &view(Some("x")));
-        let warning = theme.ansi[CONFIRM_ANSI];
-        assert_eq!(edge(&confirm), warning, "the stripe marks it");
+        let warning = theme.ansi[3];
+        assert_ne!(edge(&confirm), warning, "no left stripe on confirmation");
         assert_ne!(edge(&typed), warning, "a typed question is not marked");
         assert!(
             has(&confirm, theme.active_indicator),
-            "the asked-for answer is filled"
+            "the focused button is filled with accent"
         );
     }
 }

@@ -89,6 +89,10 @@ pub(super) struct KdlStatusBar {
     /// an empty list (show none) rather than an absent one (the default).
     #[serde(default, deserialize_with = "present_list")]
     pub(crate) segments: Option<Vec<String>>,
+    /// The segments in the order they hold on when the bar is short of
+    /// room, the last to go first.
+    #[serde(default, deserialize_with = "present_list")]
+    pub(crate) priority: Option<Vec<String>>,
     pub(crate) show: Option<bool>,
     pub(crate) show_mode: Option<bool>,
 }

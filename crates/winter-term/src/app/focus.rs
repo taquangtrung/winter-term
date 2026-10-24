@@ -2,7 +2,8 @@
 //! 1004) when they gain or lose it: on a pane switch as on a window switch,
 //! as tmux does, so an editor in a pane left behind hears that it was left.
 //! The tab that takes it also flashes its cursor's line, fading out, so the
-//! eye finds where typing goes now.
+//! eye finds where typing goes now; so does the focused tab when the window
+//! itself gains the keyboard.
 
 use std::time::{Duration, Instant};
 
@@ -121,9 +122,14 @@ impl App {
             window: self.window_focused,
         };
         let reports = focus_reports(self.focus_reported, now);
-        // A tab taking the keyboard from another flashes; the first tab of a
-        // window, and a window coming back to the tab it left, do not.
-        if self.focus_reported.is_some_and(|last| last.tab != now.tab) {
+        // A tab taking the keyboard from another flashes, and so does the
+        // focused tab when the window gains the keyboard, so the eye finds
+        // the line on coming back from another window. The first tab of a
+        // window opening does not.
+        let flashes = self.focus_reported.is_some_and(|last| {
+            last.tab != now.tab || (now.window && !last.window)
+        });
+        if flashes {
             self.focus_flash = Some(FocusFlash::new(now.tab, Instant::now()));
             self.dirty = true;
         }
@@ -245,7 +251,7 @@ mod tests {
     }
 
     #[test]
-    fn test_only_a_tab_taking_the_keyboard_from_another_flashes() {
+    fn test_a_tab_taking_the_keyboard_or_the_window_regaining_it_flashes() {
         let mut app = App::new();
         let focused = app.layout().focused();
         app.window_focused = true;
@@ -258,7 +264,17 @@ mod tests {
             window: false,
         });
         app.sync_focus_reports();
-        assert_eq!(app.focus_flash, None, "the window coming back to it");
+        assert_eq!(
+            app.focus_flash.map(|flash| flash.tab),
+            Some(focused),
+            "the window coming back to it"
+        );
+
+        app.focus_flash = None;
+        app.window_focused = false;
+        app.sync_focus_reports();
+        assert_eq!(app.focus_flash, None, "the window losing the keyboard");
+        app.window_focused = true;
 
         app.focus_reported = Some(FocusSpot {
             tab: TabId(focused.0 + 1),

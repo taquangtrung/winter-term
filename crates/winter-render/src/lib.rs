@@ -24,10 +24,10 @@ pub use grid::{
 };
 pub use image::ImagePlacement;
 pub use renderer::{
-    clamp_font_size, start_font_load, CellOverlay, FindView, FontConfig, FontLoad, InputView,
-    NoticeKind, PaletteItem, PaletteView, PaneRect, PaneView, StatusBar, StatusBell, StatusHover,
-    StatusNotice, StatusPrompt, StatusSearch, StatusSegment, ToastCard, ToastHit, WhichKeyView,
-    THIN_SPACE,
+    clamp_font_size, start_font_load, ButtonView, CellOverlay, FindView, FontConfig, FontLoad,
+    InputView, NoticeKind, PaletteItem, PaletteView, PaneRect, PaneView, StatusBar, StatusBell,
+    StatusHover, StatusNotice, StatusPrompt, StatusSearch, StatusSegment, ToastCard, ToastHit,
+    WhichKeyView, THIN_SPACE,
 };
 pub use screen::Screen;
 pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};
@@ -118,9 +118,10 @@ pub(crate) fn status_bar_top_px(surface_h: f32, cell_height: f32) -> f32 {
     (surface_h - STATUS_BAR_HEIGHT * cell_height).round()
 }
 
-/// Pixels kept clear above and below what the status bar shows (hover
-/// highlight, prompt cursor, icons), inside the bar's unchanged height.
-pub(crate) const STATUS_BAR_PAD_Y: f32 = 1.0;
+/// Pixels kept clear above and below everything the status bar shows (its
+/// text, icons, hover highlight, and prompt cursor), inside the bar's
+/// unchanged height.
+pub(crate) const STATUS_BAR_PAD_Y: f32 = 1.5;
 
 /// The band the status bar's contents sit in, as `(top, bottom)` pixels:
 /// below the border hairline at `status_top` and [`STATUS_BAR_PAD_Y`] in

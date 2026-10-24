@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use crate::model::button::ButtonGroup;
 use crate::model::layout::TabId;
 use crate::model::palette::Palette;
 use crate::model::settings_page::SettingsPage;
@@ -39,8 +40,9 @@ pub(crate) enum Overlay {
 }
 
 /// The host asking whether to go ahead with a close, and what it would close.
-/// Answered by the first key: `y` goes ahead, anything else does not.
+/// Answered by confirmation buttons (with Tab navigation) or direct keys.
 pub(crate) struct ClosePrompt {
+    pub(crate) buttons: ButtonGroup<bool>,
     /// The question, naming what would be lost.
     pub(crate) label: String,
     /// What closes on a yes.

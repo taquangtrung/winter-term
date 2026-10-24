@@ -504,6 +504,10 @@ mod tests {
 
     fn prompt(mode: PromptMode) -> Overlay {
         Overlay::ToolPrompt(ActivePrompt {
+            buttons: match mode {
+                PromptMode::Confirm => Some(crate::model::button::ButtonGroup::confirm()),
+                _ => None,
+            },
             field: TextField::line("find "),
             recall: Recall::default(),
             tab: TabId(0),

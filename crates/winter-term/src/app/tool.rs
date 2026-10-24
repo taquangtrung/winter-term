@@ -22,12 +22,12 @@ use crate::tools::git::GitTool;
 use crate::tools::grep::GrepTool;
 use crate::tools::image::ImageTool;
 use crate::tools::keys::KeysTool;
+use crate::model::button::ButtonGroup;
 use crate::tools::pdf::PdfTool;
 use crate::tools::proc::ProcTool;
 use crate::tools::reltime;
 use crate::tools::sys::SysTool;
-use winter_render::Grid;
-use winter_render::InputView;
+use winter_render::{ButtonView, Grid, InputView};
 
 use super::jobs::STOP_TASKS_KEY;
 use super::overlay::{ClosePrompt, Overlay, PaletteOverlay};
@@ -123,6 +123,8 @@ pub(crate) enum ToolKind {
 
 /// A question a tool asked, and the answer being typed for it.
 pub(crate) struct ActivePrompt {
+    /// Optional button group for interactive confirmation dialogs.
+    pub(crate) buttons: Option<ButtonGroup<bool>>,
     /// What has been typed, edited with the same keys as any other text.
     pub(crate) field: TextField,
     /// How far the arrow keys have walked back through earlier answers.
@@ -255,6 +257,21 @@ impl PendingClose {
 // ========================================================================
 
 impl ActivePrompt {
+    /// Create an active prompt for `request` on `tab`.
+    pub(crate) fn new(tab: TabId, request: PromptRequest) -> Self {
+        let buttons = match request.mode {
+            PromptMode::Confirm => Some(ButtonGroup::confirm()),
+            _ => None,
+        };
+        Self {
+            buttons,
+            field: TextField::line(&request.initial),
+            recall: Recall::default(),
+            tab,
+            request,
+        }
+    }
+
     /// What a search question has had typed into it so far, and whether it
     /// runs backwards. `None` for any other question.
     pub(crate) fn typed_search(&self) -> Option<(&str, bool)> {
@@ -518,8 +535,15 @@ fn recall_step(key: &Key) -> Option<bool> {
     }
 }
 
-pub(crate) fn input_dialog(label: &str, input: &str, caret: usize, mode: PromptMode) -> InputView {
+pub(crate) fn input_dialog(
+    label: &str,
+    input: &str,
+    caret: usize,
+    mode: PromptMode,
+    buttons: Vec<ButtonView>,
+) -> InputView {
     InputView {
+        buttons,
         caret,
         caret_visible: true,
         input: match mode {
@@ -1040,6 +1064,7 @@ impl App {
             return false;
         }
         self.open_overlay(Overlay::Close(ClosePrompt {
+            buttons: ButtonGroup::confirm(),
             label: format!("{}. Close the {what}? (y/n) ", lost.join("; ")),
             pending,
         }));
@@ -1464,21 +1489,23 @@ impl App {
         self.act_on_tool_outcome(tab_id, outcome)
     }
 
-    /// Route one key into the host's close question: `y` goes ahead, `Esc`
-    /// or any other character does not, and keys that type nothing (an arrow,
-    /// a lone modifier) leave the question up.
+    /// Route one key into the host's close question: `Tab` cycles between buttons,
+    /// `Enter` confirms the focused button, direct shortcuts (`y`, `n`, `Esc`) activate immediately.
     pub(crate) fn handle_close_prompt_key(&mut self, key: &Key) {
-        let yes = match key.typed().glyph() {
-            KeyCode::Escape => false,
-            KeyCode::Char(c) => c == 'y' || c == 'Y',
-            _ => return,
-        };
-        let Some(Overlay::Close(prompt)) = self.overlay.take_if(|o| matches!(o, Overlay::Close(_)))
-        else {
+        let Some(Overlay::Close(prompt)) = &mut self.overlay else {
             return;
         };
-        self.dirty = true;
-        self.answer_close_prompt(prompt.pending, yes);
+        if let Some(yes) = prompt.buttons.on_key(key) {
+            let Some(Overlay::Close(prompt)) =
+                self.overlay.take_if(|o| matches!(o, Overlay::Close(_)))
+            else {
+                return;
+            };
+            self.dirty = true;
+            self.answer_close_prompt(prompt.pending, yes);
+        } else {
+            self.dirty = true;
+        }
     }
 
     /// Route one key into the open prompt: `Enter` answers, `Esc` cancels, and
@@ -1504,11 +1531,23 @@ impl App {
                 return;
             };
             match (prompt.request.mode, key.glyph()) {
-                (_, KeyCode::Escape) => Some(None),
-                (PromptMode::Confirm, KeyCode::Char(c)) => {
-                    Some((c == 'y' || c == 'Y').then(|| c.to_string()))
+                (PromptMode::Confirm, _) => {
+                    if let Some(buttons) = &mut prompt.buttons {
+                        if let Some(yes) = buttons.on_key(key) {
+                            Some(yes.then(|| "y".to_string()))
+                        } else {
+                            None
+                        }
+                    } else {
+                        match key.glyph() {
+                            KeyCode::Escape => Some(None),
+                            KeyCode::Char(c) if c == 'y' || c == 'Y' => Some(Some("y".to_string())),
+                            KeyCode::Char(_) => Some(None),
+                            _ => None,
+                        }
+                    }
                 }
-                (PromptMode::Confirm, _) => None,
+                (_, KeyCode::Escape) => Some(None),
                 // A password is edited like any answer, but is neither
                 // recorded for recall nor handed to the tool while typed.
                 (PromptMode::Secret, _) => match prompt.field.on_key(key, 1) {
@@ -1616,15 +1655,27 @@ impl App {
         // A search is typed in the find popup instead (see
         // [`App::find_target`]).
         if let Some(prompt) = self.tool_prompt().filter(|prompt| prompt.typed_search().is_none()) {
+            let buttons = prompt
+                .buttons
+                .as_ref()
+                .map(|b| b.to_view())
+                .unwrap_or_default();
             return Some(input_dialog(
                 &prompt.request.label,
                 prompt.field.text(),
                 prompt.field.col(),
                 prompt.request.mode,
+                buttons,
             ));
         }
         if let Some(prompt) = self.close_prompt() {
-            return Some(input_dialog(&prompt.label, "", 0, PromptMode::Confirm));
+            return Some(input_dialog(
+                &prompt.label,
+                "",
+                0,
+                PromptMode::Confirm,
+                prompt.buttons.to_view(),
+            ));
         }
         if let Some(input) = self.password_input() {
             return Some(input_dialog(
@@ -1632,6 +1683,7 @@ impl App {
                 input.field.text(),
                 input.field.col(),
                 PromptMode::Secret,
+                Vec::new(),
             ));
         }
         if let Some(field) = self.zai_key_input() {
@@ -1640,6 +1692,7 @@ impl App {
                 field.text(),
                 field.col(),
                 PromptMode::Secret,
+                Vec::new(),
             ));
         }
         let field = self.theme_name_input()?;
@@ -1648,6 +1701,7 @@ impl App {
             field.text(),
             field.col(),
             PromptMode::Text,
+            Vec::new(),
         ))
     }
 
@@ -1770,12 +1824,7 @@ impl App {
                     self.search.match_index = 0;
                     self.search.match_total = 0;
                 }
-                self.open_overlay(Overlay::ToolPrompt(ActivePrompt {
-                    field: TextField::line(&request.initial),
-                    recall: Recall::default(),
-                    tab: tab_id,
-                    request,
-                }));
+                self.open_overlay(Overlay::ToolPrompt(ActivePrompt::new(tab_id, request)));
                 true
             }
             ToolOutcome::Pick(request) => {
@@ -3330,12 +3379,20 @@ mod tests {
     #[test]
     fn test_a_question_answered_by_one_key_offers_no_line_to_type_on() {
         // A caret on a line that cannot be typed into invites typing into it.
-        let text = input_dialog("Name: ", "seed", 4, PromptMode::Text);
+        let text = input_dialog("Name: ", "seed", 4, PromptMode::Text, Vec::new());
         assert_eq!(text.input.as_deref(), Some("seed"));
 
-        let confirm = input_dialog("Delete 3 entries? (y/n) ", "", 0, PromptMode::Confirm);
+        let confirm = input_dialog(
+            "Delete 3 entries? (y/n) ",
+            "",
+            0,
+            PromptMode::Confirm,
+            ButtonGroup::confirm().to_view(),
+        );
         assert_eq!(confirm.input, None);
         assert_eq!(confirm.label, "Delete 3 entries?", "the buttons say y/n");
+        assert_eq!(confirm.buttons.len(), 2, "confirmation has buttons");
+        assert!(confirm.buttons[0].focused, "first button is focused");
         assert_eq!(
             confirm.keys.first().map(|(key, _)| key.as_str()),
             Some("y"),
@@ -3377,6 +3434,55 @@ mod tests {
         app.handle_prompt_key(&ctrl('y'));
         app.handle_prompt_key(&press(KeyCode::Enter));
         assert_eq!(heard.borrow().as_slice(), [Some(">seed".to_string())]);
+    }
+
+    #[test]
+    fn test_confirmation_prompt_tab_switches_buttons_and_enter_submits_focused() {
+        let (mut app, pane, heard) = app_asking();
+        app.act_on_tool_outcome(
+            pane,
+            ToolOutcome::Prompt(PromptRequest {
+                initial: String::new(),
+                label: "Delete file?".to_string(),
+                mode: PromptMode::Confirm,
+                tag: "delete",
+            }),
+        );
+        heard.borrow_mut().clear();
+        let view = app.input_view().expect("confirmation dialog");
+        assert_eq!(view.buttons.len(), 2);
+        assert!(view.buttons[0].focused, "Yes starts focused");
+
+        // Tab moves focus to No
+        app.handle_prompt_key(&press(KeyCode::Tab));
+        let view = app.input_view().expect("still open");
+        assert!(!view.buttons[0].focused);
+        assert!(view.buttons[1].focused, "No is now focused");
+
+        // Enter submits the focused button (No -> None)
+        app.handle_prompt_key(&press(KeyCode::Enter));
+        assert!(app.input_view().is_none(), "dialog closed");
+        assert_eq!(heard.borrow().as_slice(), [None], "declined via focused No button");
+    }
+
+    #[test]
+    fn test_close_prompt_tab_switches_buttons_and_enter_submits_focused() {
+        let mut app = App::new();
+        let tab = app.show_tool(ToolKind::Editor, Box::new(UnsavedTool("main.rs")));
+        app.close_pane(tab);
+        assert!(app.close_prompt().is_some());
+        let view = app.input_view().expect("dialog open");
+        assert!(view.buttons[0].focused, "Yes starts focused");
+
+        // Tab moves to No
+        app.handle_close_prompt_key(&press(KeyCode::Tab));
+        let view = app.input_view().expect("dialog stays open");
+        assert!(view.buttons[1].focused, "No is now focused");
+
+        // Enter on No cancels the close
+        app.handle_close_prompt_key(&press(KeyCode::Enter));
+        assert!(app.close_prompt().is_none(), "dialog closed");
+        assert_eq!(app.layout().shown_tabs().len(), 1, "pane was not closed");
     }
 
     #[test]
