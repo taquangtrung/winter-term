@@ -283,9 +283,13 @@ mod tests {
 
     #[test]
     fn test_status_bar_show_mode_toggle_hides_mode_label() {
-        let hidden = StatusBarConfig::default();
+        let shown = StatusBarConfig::default();
+        let hidden = StatusBarConfig {
+            show_mode: false,
+            ..StatusBarConfig::default()
+        };
         assert_eq!(bar(Some(Mode::Normal), None, &hidden).mode, "");
-        assert_eq!(bar(Some(Mode::Normal), None, &shown_mode()).mode, " N");
+        assert_eq!(bar(Some(Mode::Normal), None, &shown).mode, " N");
     }
 
     #[test]

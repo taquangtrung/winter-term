@@ -6,7 +6,7 @@ For what Winter is and how to install it, see the [README](../README.md). For ho
 
 ## Modes
 
-A window is split into panes, each a strip of tabs, and every tab is a terminal or a tool. A terminal tab is always in exactly one of three modes, and each keeps its own; a tool tab is in none, since it owns the keys it binds. The status bar is the window's, not the terminal's: while a tool has the keyboard it shows the tool's own mode where it has one (the editor's Insert or Normal, a PDF's caret or selection, a listing whose names are being edited) and `P` where it has none, what the tool has to report, and at its right edge where the cursor is, such as `12:5  340 lines` in the editor or `page 3 / 18` in a PDF. The status bar is shown by default (`status-bar { show #false }` hides it and frees its row), and the mode indicator can be enabled in it via `status-bar { show-mode #true }` (hidden by default).
+A window is split into panes, each a strip of tabs, and every tab is a terminal or a tool. A terminal tab is always in exactly one of three modes, and each keeps its own; a tool tab is in none, since it owns the keys it binds. The status bar is the window's, not the terminal's: while a tool has the keyboard it shows the tool's own mode where it has one (the editor's Insert or Normal, a PDF's caret or selection, a listing whose names are being edited) and `P` where it has none, what the tool has to report, and at its right edge where the cursor is, such as `12:5  340 lines` in the editor or `page 3 / 18` in a PDF. The status bar is shown by default (`status-bar { show #false }` hides it and frees its row), and the mode indicator is enabled by default (`status-bar { show-mode #false }` hides it).
 
 The status bar's left edge says where the focused terminal's commands run: a desktop glyph for this machine, the remote glyph and the host's name while `ssh` (or a remote mux session) is in the foreground, and the Docker whale and the container's name while `docker exec`, `docker compose exec`, or `podman exec` is. Its right edge ends in a bell.
 
@@ -679,7 +679,7 @@ The window you are running must already contain this feature: a window started f
 | `prompt-edit-bindings` | `"emacs"` (default) or `"none"`, see above |
 | `icons` | Tool entry icons: `"svg"` (default), `"font"`, or `"none"` |
 | `cursor { ... }` | `blink`, `hide-in-inactive`, plus the shape per mode: `insert`, `normal`, `visual` |
-| `status-bar { ... }` | `show` (default on), `show-mode` (default off), `segments` (the right side's segments in order, from `antigravity`, `claude`, `zai`, `tool`; default all, in that order; a bare `segments` shows none), `priority` (the segments in the order they hold on when the bar is short of room, the first kept longest; one left out goes before any listed; default none, which drops from the left), and the per-mode icons |
+| `status-bar { ... }` | `show` (default on), `show-mode` (default on), `segments` (the right side's segments in order, from `antigravity`, `claude`, `zai`, `tool`; default all, in that order; a bare `segments` shows none), `priority` (the segments in the order they hold on when the bar is short of room, the first kept longest; one left out goes before any listed; default none, which drops from the left), and the per-mode icons |
 | `clipboard-read` | Let programs read the clipboard through OSC 52 |
 
 Every setting above is also editable in the settings page (`C-,`), which writes the same file: a colour table and the keybindings are the two that need the file or their own page instead of a row.

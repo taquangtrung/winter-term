@@ -150,7 +150,7 @@ impl Default for StatusBarConfig {
             enabled: true,
             priority: Vec::new(),
             segments: StatusSegmentKind::ALL.to_vec(),
-            show_mode: false,
+            show_mode: true,
         }
     }
 }
@@ -565,7 +565,7 @@ impl Config {
                     || StatusSegmentKind::ALL.to_vec(),
                     |names| status_segments_from_names(names, &mut unknown_segments),
                 ),
-                show_mode: sb.show_mode.unwrap_or(false),
+                show_mode: sb.show_mode.unwrap_or(true),
             })
             .unwrap_or_default();
 
@@ -1271,7 +1271,7 @@ cursor {
         assert_eq!(parsed.font_size, 18.0);
         assert_eq!(parsed.opacity, 0.8);
         assert!(!parsed.status_bar.enabled);
-        assert!(!parsed.status_bar.show_mode);
+        assert!(parsed.status_bar.show_mode);
     }
 
     #[test]
@@ -1502,9 +1502,9 @@ cursor {
     }
 
     #[test]
-    fn test_status_bar_visibility_defaults_off_and_parses_on() {
+    fn test_status_bar_show_mode_defaults_on_and_parses_off() {
         let default = Config::default().status_bar;
-        assert!(default.enabled && !default.show_mode);
+        assert!(default.enabled && default.show_mode);
 
         let config = Config::parse(
             r#"
@@ -1514,18 +1514,18 @@ status-bar {
 "#,
         );
         assert!(!config.status_bar.enabled);
-        assert!(!config.status_bar.show_mode);
+        assert!(config.status_bar.show_mode);
 
         let config = Config::parse(
             r#"
 status-bar {
     show #true
-    show-mode #true
+    show-mode #false
 }
 "#,
         );
         assert!(config.status_bar.enabled);
-        assert!(config.status_bar.show_mode);
+        assert!(!config.status_bar.show_mode);
     }
 
     #[test]

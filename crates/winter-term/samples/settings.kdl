@@ -137,8 +137,8 @@ status-bar {
     show #true
 
     // Show the current mode label (N / I / V / B).
-    // Default: hidden (#false).
-    show-mode #false
+    // Default: shown (#true).
+    show-mode #true
 
     // What the right side shows, in order from the left; the first ones are
     // dropped when short of room. Leave a name out to hide it, or write a bare
