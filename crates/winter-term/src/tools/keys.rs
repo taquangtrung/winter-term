@@ -191,16 +191,18 @@ impl KeysTool {
         for (col, c) in line.chars().skip(from).enumerate() {
             let actual_col = col + from;
             let selected = marked.is_some_and(|(start, end)| col >= start && col < end);
-            let style = if selected {
-                Style::Marked
-            } else if actual_col >= CHORD_COL {
-                Style::Accent
-            } else {
-                Style::Normal
+            let style = match actual_col >= CHORD_COL {
+                true => Style::Accent,
+                false => Style::Normal,
             };
             match spans.last_mut() {
-                Some(last) if last.style == style => last.text.push(c),
-                _ => spans.push(Span::new(style, c.to_string())),
+                Some(last) if last.style == style && last.selected == selected => {
+                    last.text.push(c)
+                }
+                _ => {
+                    let span = Span::new(style, c.to_string());
+                    spans.push(if selected { span.selected() } else { span });
+                }
             }
         }
         if spans.is_empty() {

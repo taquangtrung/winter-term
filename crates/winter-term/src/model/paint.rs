@@ -127,6 +127,9 @@ pub struct RowWindow {
 /// A run of text sharing one style.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Span {
+    /// Whether the run is selected: drawn on the selection's background in
+    /// its own color, the way a terminal selection keeps its text's color.
+    pub selected: bool,
     /// How the run is colored.
     pub style: Style,
     /// The run's text.
@@ -180,7 +183,9 @@ pub enum Style {
     HeadingUntracked,
     /// A hunk's header line: the band a hunk sits under.
     Hunk,
-    /// Selected by the user for an operation to act on.
+    /// Flagged on the selection's background: a name changed in place, not
+    /// yet saved. A selection itself is a [`Span::selected`] run, which
+    /// keeps its own color.
     Marked,
     /// Ordinary text.
     #[default]
@@ -578,9 +583,16 @@ impl Span {
     /// A run drawn in `style`.
     pub fn new(style: Style, text: impl Into<String>) -> Self {
         Self {
+            selected: false,
             style,
             text: text.into(),
         }
+    }
+
+    /// The same run, selected.
+    pub fn selected(mut self) -> Self {
+        self.selected = true;
+        self
     }
 
     /// A run drawn in the tool's ordinary text style.

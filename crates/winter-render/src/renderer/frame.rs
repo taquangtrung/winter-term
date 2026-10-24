@@ -679,15 +679,14 @@ impl GpuRenderer {
                     // glyph keeps the cell's own foreground (reverse video
                     // still swaps, as it would unselected) so selected
                     // text reads the same as the rest of the line, unless
-                    // that color would not read on the selection, when it
-                    // turns black or white.
+                    // it is nearly the selection's own color, when it is
+                    // inverted (toned down). Only a bold cell is bold.
                     let sel_bg = self.theme.selection_bg;
                     let (r, g, b) =
                         cursor_text_fg.unwrap_or_else(|| cell_text_fg(cell, &self.theme));
                     let readable = Rgb::new(r, g, b).readable_on(sel_bg);
                     let text_fg = (readable.r, readable.g, readable.b);
-                    let bold = cell.is_some_and(|c| c.style.bold)
-                        || needs_dark_on_light_bold(text_fg, (sel_bg.r, sel_bg.g, sel_bg.b));
+                    let bold = cell.is_some_and(|c| c.style.bold);
                     let attrs = self.highlight_attrs(style, ch, cell, text_fg, pane_dim, bold);
                     attrs_list.add_span(start..text.len(), &attrs);
                 } else if search_current_set.contains(&(row, col)) {
@@ -739,12 +738,16 @@ impl GpuRenderer {
         let mut attrs = Attrs::new()
             .family(base_family(style.family.as_deref()))
             .color(dim_toward_bg(r, g, b, self.theme.background, dim));
-        if bold {
-            attrs = attrs.weight(effective_bold_weight(
+        attrs = match bold {
+            true => attrs.weight(effective_bold_weight(
                 self.bold_weight.as_deref(),
                 self.font_has_bold,
-            ));
-        }
+            )),
+            false => attrs.weight(parse_weight(
+                self.normal_weight.as_deref(),
+                glyphon::cosmic_text::Weight::NORMAL,
+            )),
+        };
         if cell.is_some_and(|c| c.style.italic) {
             attrs = attrs.style(glyphon::cosmic_text::Style::Italic);
         }

@@ -99,7 +99,10 @@ pub(super) fn build_frame_grid(
         let mut chars = Vec::new();
         let mut styles = Vec::new();
         for span in spans {
-            let style = span_style(span.style, theme);
+            let style = match span.selected {
+                true => selected_style(span_style(span.style, theme), theme),
+                false => span_style(span.style, theme),
+            };
             for ch in span.text.chars() {
                 chars.push(ch);
                 styles.push(style);
@@ -160,6 +163,26 @@ pub(super) fn screen_row_starts(content: &Frame, cols: usize, wrap: bool) -> Vec
         screen += row_height(&row_text(spans), cols, wrap, indent);
     }
     starts
+}
+
+/// `style` on the selection: the selection's background under the run's own
+/// text color, inverted (toned down) only where that color nearly matches
+/// the selection and would vanish into it.
+fn selected_style(style: Style, theme: &Theme) -> Style {
+    let foreground = match style.foreground {
+        Color::Default => theme.foreground,
+        Color::Indexed(index) => {
+            let (r, g, b) = theme.palette_color(index);
+            ThemeRgb::new(r, g, b)
+        }
+        Color::Rgb(rgb) => ThemeRgb::new(rgb.r, rgb.g, rgb.b),
+    };
+    Style {
+        background: theme_rgb(theme.selection_bg),
+        foreground: theme_rgb(foreground.readable_on(theme.selection_bg)),
+        reversed: false,
+        ..style
+    }
 }
 
 /// Resolve a tool's semantic style against the active theme. The diff styles
@@ -248,13 +271,10 @@ fn span_style(style: paint::Style, theme: &Theme) -> Style {
             foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
             ..Style::default()
         },
-        // The theme's selection text, unless it would not read on the
-        // selection (the default dark theme's black on dark blue), when it
-        // turns black or white, whichever does.
+        // A name changed in place, flagged with the selection's background.
         paint::Style::Marked => Style {
             background: theme_rgb(theme.selection_bg),
-            bold: true,
-            foreground: theme_rgb(theme.selection_fg.readable_on(theme.selection_bg)),
+            foreground: theme_rgb(theme.foreground.readable_on(theme.selection_bg)),
             ..Style::default()
         },
         paint::Style::Operation => heading_style(theme, theme.git.unmerged, ANSI_MAGENTA),
@@ -519,6 +539,23 @@ mod tests {
             Some('\u{672c}'),
             "and the second wide character is whole"
         );
+    }
+
+    #[test]
+    fn test_selected_text_keeps_its_color_on_the_selection_background() {
+        let theme = Theme::dark();
+        let content = Frame::new(vec![vec![
+            Span::new(paint::Style::Accent, "x").selected(),
+            Span::plain("y").selected(),
+        ]]);
+        let grid = build_frame_grid(&content, &theme, 10, 1, false);
+        let accent = span_style(paint::Style::Accent, &theme);
+        let cell = grid.cell(0, 0).expect("the selected accent");
+        assert_eq!(cell.style.foreground, accent.foreground, "its own color");
+        assert_eq!(cell.style.background, theme_rgb(theme.selection_bg));
+        assert!(!cell.style.bold, "not made bold");
+        let plain = grid.cell(0, 1).expect("the selected plain text");
+        assert_eq!(plain.style.foreground, theme_rgb(theme.foreground));
     }
 
     #[test]

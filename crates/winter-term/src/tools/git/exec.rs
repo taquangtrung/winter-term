@@ -161,6 +161,29 @@ pub const TAG_STATUS: &str = "status";
 /// Tag naming an unstage request.
 pub const TAG_UNSTAGE: &str = "unstage";
 
+/// Tags naming a request that changes the repository or its settings, which
+/// the status bar names while it runs. Reads are left out: the view makes
+/// them on every change to the files, and naming each would only flicker.
+pub const CHANGE_TAGS: [&str; 10] = [
+    TAG_CHANGED,
+    TAG_COMMIT,
+    TAG_DISCARD,
+    TAG_FETCH,
+    TAG_PULL,
+    TAG_PUSH,
+    TAG_PUSH_REMOTE_SET,
+    TAG_RESOLVE,
+    TAG_STAGE,
+    TAG_UNSTAGE,
+];
+
+/// Longest command summary the status bar shows before it is cut short.
+const SUMMARY_MAX_CHARS: usize = 72;
+
+/// Words every request carries that say nothing about what it does: the
+/// separators that keep typed text from being read as options.
+const SUMMARY_SKIPPED: [&str; 2] = [END_OF_OPTIONS, END_OF_REVISIONS];
+
 /// How many recent commits the status view lists to begin with.
 pub const RECENT_COMMITS: usize = 10;
 
@@ -482,6 +505,30 @@ pub fn succeeded(output: &CommandOutput) -> bool {
         _ => SUCCESS,
     };
     output.code.is_some_and(|code| codes.contains(&code))
+}
+
+/// The command line `request` runs, as a reader would type it: the settings
+/// every request carries and the option separators left out, and cut short
+/// to fit the status bar (`git push origin main`).
+pub fn summary(request: &CommandRequest) -> String {
+    // Every request here is put together by [`Git::command`], which puts
+    // the settings first.
+    let line = std::iter::once(request.program.as_str())
+        .chain(
+            request
+                .args
+                .iter()
+                .skip(QUOTE_PATH_OFF.len())
+                .map(String::as_str)
+                .filter(|arg| !SUMMARY_SKIPPED.contains(arg)),
+        )
+        .collect::<Vec<_>>()
+        .join(" ");
+    if line.chars().count() <= SUMMARY_MAX_CHARS {
+        return line;
+    }
+    let kept: String = line.chars().take(SUMMARY_MAX_CHARS).collect();
+    format!("{kept}...")
 }
 
 // ========================================================================
@@ -1144,6 +1191,14 @@ mod tests {
 
     fn path(text: &str) -> Pathspec {
         Pathspec::new(text)
+    }
+
+    #[test]
+    fn test_a_summary_reads_as_typed_without_the_settings_or_separators() {
+        let staged = stage(Path::new("/repo"), &[path("src/a b.rs")]);
+        assert_eq!(summary(command_of(&staged)), "git add src/a b.rs");
+        let checkout = checkout(Path::new("/repo"), &rev("main"));
+        assert!(!summary(command_of(&checkout)).contains("--"), "{checkout:?}");
     }
 
     #[test]

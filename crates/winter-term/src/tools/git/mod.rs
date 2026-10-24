@@ -395,6 +395,18 @@ impl GitTool {
                 self.keep_place = false;
             }
         }
+        self.announce(outcome)
+    }
+
+    /// Name a command that changes the repository in the status bar as it
+    /// starts (`git push origin main`), so what a key ran is never a guess.
+    /// Left out of the notification history, which hears how it ended.
+    fn announce(&mut self, outcome: ToolOutcome) -> ToolOutcome {
+        if let ToolOutcome::Job(JobRequest::Command(request)) = &outcome {
+            if exec::CHANGE_TAGS.contains(&request.tag) {
+                self.notice = Some(Notice::info(exec::summary(request)).unlogged());
+            }
+        }
         outcome
     }
 
@@ -1476,7 +1488,12 @@ impl Tool for GitTool {
 
     fn on_job(&mut self, reply: JobReply) -> ToolOutcome {
         match reply {
-            JobReply::Command(output) => self.on_command(output),
+            // A read can lead on to a change: the push menu's read of the
+            // config, a reword's read of the commit.
+            JobReply::Command(output) => {
+                let outcome = self.on_command(output);
+                self.announce(outcome)
+            }
             JobReply::Files(files) => {
                 // What git is part-way through, read straight from the files
                 // it writes it in: nothing about it reaches a porcelain

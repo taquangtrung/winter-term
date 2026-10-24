@@ -1257,26 +1257,25 @@ fn expanded_text(line: &str) -> String {
 /// color, cut to what the pane has room for. One span per character would be
 /// correct and would cost the renderer a shaping run for every letter.
 ///
-/// A selected run takes the theme's selection colors instead of the ones its
-/// syntax would have, the way selected text is marked everywhere else.
+/// A selected run keeps its syntax color and takes the selection's
+/// background, the way a terminal selection does.
 fn runs(cells: &[(char, Style)], cols: usize, marked: Option<(usize, usize)>) -> Row {
     let mut spans: Vec<Span> = Vec::new();
     for (at, (c, style)) in cells.iter().take(cols).enumerate() {
         let selected = marked.is_some_and(|(start, end)| at >= start && at < end);
-        let style = match selected {
-            true => Style::Marked,
-            false => *style,
-        };
         match spans.last_mut() {
-            Some(last) if last.style == style => last.text.push(*c),
-            _ => spans.push(Span::new(style, c.to_string())),
+            Some(last) if last.style == *style && last.selected == selected => last.text.push(*c),
+            _ => {
+                let span = Span::new(*style, c.to_string());
+                spans.push(if selected { span.selected() } else { span });
+            }
         }
     }
     // A selection that reaches past the line's last character shows as one
     // marked cell there, so an empty line in a linewise selection is visible.
     if let Some((start, end)) = marked {
         if cells.len() < end && cells.len() >= start && cells.len() < cols {
-            spans.push(Span::new(Style::Marked, " ".to_string()));
+            spans.push(Span::plain(" ").selected());
         }
     }
     spans

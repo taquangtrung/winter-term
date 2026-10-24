@@ -6,7 +6,6 @@
 //! an arm in [`segments_of`] saying where its text comes from.
 
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use winter_render::{StatusBar, StatusNotice, StatusPrompt, StatusSearch, StatusSegment, Theme};
 
@@ -51,8 +50,6 @@ struct SegmentSources<'a> {
 /// What the focused tool gives the status bar: the glyph for its kind, and
 /// where its keys stand.
 struct FocusedTool {
-    /// The tool's tab icon, drawn at the status bar's right edge.
-    icon: Option<Arc<[u8]>>,
     status: ToolStatus,
 }
 
@@ -72,7 +69,6 @@ impl App {
         focused: &TabId,
     ) -> StatusBar {
         let tool = self.open_tabs.tool(focused).map(|slot| FocusedTool {
-            icon: crate::icons::shared_svg(&slot.tab_icon()),
             status: slot.tool.status(),
         });
         let host = self
@@ -206,22 +202,21 @@ fn quota_segment(sources: &SegmentSources, provider: Provider) -> Vec<StatusSegm
 }
 
 /// Each fact the focused tool reports, as a segment of its own so the bar
-/// drops them one at a time when short of room, then the tool's icon alone.
+/// drops them one at a time when short of room. The tool's icon is left to
+/// its tab, which already shows which tool is open.
 fn tool_segments(sources: &SegmentSources) -> Vec<StatusSegment> {
     let Some(tool) = &sources.tool else {
         return Vec::new();
     };
-    let facts = tool.status.segments.iter().map(|text| StatusSegment {
-        icon: None,
-        short: None,
-        text: text.clone(),
-    });
-    let icon = tool.icon.clone().map(|icon| StatusSegment {
-        icon: Some(icon),
-        short: None,
-        text: String::new(),
-    });
-    facts.chain(icon).collect()
+    tool.status
+        .segments
+        .iter()
+        .map(|text| StatusSegment {
+            icon: None,
+            short: None,
+            text: text.clone(),
+        })
+        .collect()
 }
 
 // ========================================================================
@@ -330,7 +325,6 @@ mod tests {
 
     #[test]
     fn test_segments_follow_the_configured_order_and_skip_what_has_nothing_to_say() {
-        let icon: Arc<[u8]> = Arc::from(&b"<svg/>"[..]);
         let windows = [Window {
             resets_at: None,
             used_percent: 42.0,
@@ -339,7 +333,6 @@ mod tests {
         let sources = SegmentSources {
             quotas: vec![(Provider::Zai, &windows[..])],
             tool: Some(FocusedTool {
-                icon: Some(Arc::clone(&icon)),
                 status: ToolStatus {
                     mode: None,
                     segments: vec!["12:5".to_string(), "340 lines".to_string()],
@@ -357,8 +350,8 @@ mod tests {
             .collect();
         assert_eq!(
             texts,
-            ["12:5", "340 lines", "", "42%\u{2009}--"],
-            "the tool's facts apart then its icon, no Claude quota heard"
+            ["12:5", "340 lines", "42%\u{2009}--"],
+            "the tool's facts apart and no icon, no Claude quota heard"
         );
         assert!(segments_of(&[], &sources).is_empty(), "nothing named");
     }

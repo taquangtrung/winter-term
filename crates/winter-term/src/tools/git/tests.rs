@@ -400,6 +400,20 @@ fn test_staging_acts_on_the_path_under_the_cursor() {
 }
 
 #[test]
+fn test_a_command_that_changes_the_repository_is_named_as_it_starts() {
+    // The status bar says what a key ran; a read the view makes on its own
+    // says nothing, and the name stays out of the notification history.
+    let mut tool = loaded_tool();
+    cursor_on(&mut tool, "working.rs");
+    tool.on_key(&press(KeyCode::Char('s')));
+    let notice = tool.take_notice().expect("the command is named");
+    assert_eq!(notice.text, "git add working.rs");
+    assert!(!notice.logged);
+    tool.on_job(reply(exec::TAG_STAGE, ""));
+    assert_eq!(tool.take_notice(), None, "the re-read is not named");
+}
+
+#[test]
 fn test_staging_on_a_heading_acts_on_that_whole_section() {
     // The heading stands for its section, which is what makes "stage this
     // lot" one keystroke.

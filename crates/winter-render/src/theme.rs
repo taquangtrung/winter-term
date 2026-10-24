@@ -36,10 +36,14 @@ const LIGHT_BACKGROUND: &str = "#f2f2f2";
 /// The luminance below which a background counts as dark.
 const DARK_LUMINANCE: f32 = 0.5;
 
-/// The least contrast text keeps its own color at, as WCAG measures it
-/// (`1.0` none, `21.0` black on white): the bar its level AA sets for large
-/// text, short of which the text is swapped for black or white.
+/// The contrast text is brought to where it has to be recolored, as WCAG
+/// measures it (`1.0` none, `21.0` black on white): the bar its level AA
+/// sets for large text.
 const MIN_TEXT_CONTRAST: f64 = 3.0;
+
+/// The contrast below which text counts as nearly its fill's own color, and
+/// is inverted to stay visible on it.
+const NEAR_FILL_CONTRAST: f64 = 1.6;
 /// The xterm 256-color palette past the 16 ANSI colors: a 6x6x6 color cube
 /// from index 16, then a 24-step grey ramp from index 232.
 const PALETTE_CUBE_FIRST: u8 = 16;
@@ -312,18 +316,21 @@ impl Rgb {
         under.with_alpha(255).mix(self.with_alpha(255), t)
     }
 
-    /// This color as text on `fill`, or black or white in its place, whichever
-    /// reads better, where it would not read at all: dark text on a dark
-    /// selection, say. A color with enough contrast is kept as it is.
+    /// This color as text on `fill`, inverted where it is so close to the
+    /// fill it would vanish into it: text in the selection's own blue, say.
+    /// The inverse is then pulled back toward the fill as far as it still
+    /// reads, so it never comes out glaring. Any color that reads at all is
+    /// kept as it is.
     pub fn readable_on(self, fill: Rgb) -> Rgb {
-        if contrast_ratio(self, fill) >= MIN_TEXT_CONTRAST {
+        if contrast_ratio(self, fill) >= NEAR_FILL_CONTRAST {
             return self;
         }
-        let (black, white) = (Rgb::new(0, 0, 0), Rgb::new(255, 255, 255));
-        match contrast_ratio(black, fill) >= contrast_ratio(white, fill) {
-            true => black,
-            false => white,
-        }
+        let inverted = Rgb::new(255 - self.r, 255 - self.g, 255 - self.b);
+        (0..=LEGIBLE_STEPS)
+            .rev()
+            .map(|step| inverted.mix(fill, step as f32 / LEGIBLE_STEPS as f32))
+            .find(|color| contrast_ratio(*color, fill) >= MIN_TEXT_CONTRAST)
+            .unwrap_or_else(|| inverted.legible_on(fill, MIN_TEXT_CONTRAST))
     }
 
     /// This color as text on `fill`, moved toward black on a light fill or
@@ -607,17 +614,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_text_that_would_not_read_on_its_fill_turns_black_or_white() {
+    fn test_only_text_close_to_its_fill_is_inverted_and_not_glaring() {
         let selection = Rgb::parse_hex("#2257a0").expect("the dark selection");
         let black = Rgb::new(0, 0, 0);
-        let white = Rgb::new(255, 255, 255);
-        assert_eq!(black.readable_on(selection), white, "black on dark blue");
-        let comment = Rgb::parse_hex("#5b6268").expect("a comment's grey");
-        assert_eq!(comment.readable_on(selection), white);
+        assert_eq!(black.readable_on(selection), black, "dark but distinct: kept");
         let light = Rgb::parse_hex("#bbc2cf").expect("the foreground");
         assert_eq!(light.readable_on(selection), light, "already reads: kept");
-        let yellow = Rgb::parse_hex("#e6b422").expect("a light fill");
-        assert_eq!(white.readable_on(yellow), black, "white on yellow");
+        let blue = Rgb::parse_hex("#2a60a8").expect("nearly the selection");
+        let shown = blue.readable_on(selection);
+        assert!(contrast_ratio(shown, selection) >= MIN_TEXT_CONTRAST, "{shown:?}");
+        let inverse = Rgb::new(255 - blue.r, 255 - blue.g, 255 - blue.b);
+        assert!(
+            relative_luminance(shown) <= relative_luminance(inverse),
+            "toned down from the plain inverse: {shown:?}"
+        );
+        assert!(
+            relative_luminance(shown) < relative_luminance(Rgb::new(255, 255, 255)) / 2.0,
+            "not glaring: {shown:?}"
+        );
     }
 
     #[test]
