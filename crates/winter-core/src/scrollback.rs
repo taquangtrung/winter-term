@@ -14,7 +14,7 @@ use crate::block::{CommandBlock, LiveBlock, Segment};
 // Constants
 // ============================================================================
 
-/// Hard cap on patches retained per live block. Without it, a tool streaming
+/// Hard cap on patches retained per live block. Without it, an editor streaming
 /// frequent updates to one long-lived block (a progress bar, a log tail)
 /// accumulates one entry per update for the block's whole lifetime, growing
 /// memory without bound.
@@ -623,7 +623,7 @@ mod tests {
 
     #[test]
     fn test_patch_growth_is_capped_instead_of_unbounded() {
-        // Regression: a tool streaming frequent updates to one long-lived
+        // Regression: an editor streaming frequent updates to one long-lived
         // block (a progress bar, a log tail) pushed one patch per update for
         // the block's whole lifetime with no ceiling, growing memory without
         // bound.

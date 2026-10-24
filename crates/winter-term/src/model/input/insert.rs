@@ -314,7 +314,7 @@ pub(super) fn kitty_modifier(key: &Key) -> u32 {
 }
 /// `CSI codepoint u` or `CSI codepoint ; modifier u` (omit `;1`).
 /// A key the kitty protocol leaves in its legacy shape rather than giving it a
-/// codepoint: the arrows, Home and End, Insert, Delete, the tool keys, and the
+/// codepoint: the arrows, Home and End, Insert, Delete, the editor keys, and the
 /// function keys. `number` and `final_byte` are the legacy `CSI number ~` or
 /// `CSI 1 final` pair, and `modifier` is 1 for none. A press drops what is
 /// default (`CSI A`, `CSI 5 ~`) and carries a modifier as `CSI 1 ; m A`; a

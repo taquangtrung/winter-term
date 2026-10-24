@@ -1,4 +1,4 @@
-//! What is drawn in a pane rather than painted as cells, by blocks and tools
+//! What is drawn in a pane rather than painted as cells, by blocks and editors
 //! alike: the content, from an encoded file to pixels already drawn, and the
 //! geometry that places it and crops it to where it may show.
 
@@ -22,7 +22,7 @@ const MIDDLE: (f32, f32) = (0.5, 0.5);
 // Data Structures
 // ========================================================================
 
-/// What a tool asks the host to draw over its pane.
+/// What an editor asks the host to draw over its pane.
 #[derive(Clone, Debug)]
 pub struct Picture {
     /// Names the contents, so the host decodes them once and again only
@@ -34,7 +34,7 @@ pub struct Picture {
     pub view: PictureView,
 }
 
-/// Something drawn in a pane: what an inline block shows, and what a tool
+/// Something drawn in a pane: what an inline block shows, and what an editor
 /// shows over its pane.
 #[derive(Clone, Debug)]
 pub enum Content {
@@ -51,7 +51,7 @@ pub enum Content {
     Vector(Arc<[u8]>),
 }
 
-/// Content a tool placed in its pane itself: a page of a document drawn at
+/// Content an editor placed in its pane itself: a page of a document drawn at
 /// the size it is shown, or a box over it. Past the pane on a side it
 /// overflows, where the host crops it.
 #[derive(Clone, Debug)]
@@ -71,7 +71,7 @@ pub struct Tile {
     pub y: f32,
 }
 
-/// Pixels a tool drew itself: straight RGBA, four bytes a pixel, row by row.
+/// Pixels an editor drew itself: straight RGBA, four bytes a pixel, row by row.
 #[derive(Debug)]
 pub struct Pixels {
     /// Rows.

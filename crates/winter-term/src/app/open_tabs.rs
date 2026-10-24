@@ -1,4 +1,4 @@
-//! Every open tab and what it holds: a terminal, or a tool Winter paints
+//! Every open tab and what it holds: a terminal, or an editor Winter paints
 //! itself. The layout says where a tab sits; this says what it is.
 
 use std::collections::{HashMap, HashSet};
@@ -7,14 +7,14 @@ use crate::model::layout::TabId;
 use crate::model::mode::Mode;
 use crate::terminal::session::Terminal;
 
+use super::editor::EditorSlot;
 use super::prompt_edit::PromptShadow;
-use super::tool::ToolSlot;
 
 // ========================================================================
 // Data Structures
 // ========================================================================
 
-/// The tabs of the window, by id. A tab is a terminal or a tool and never
+/// The tabs of the window, by id. A tab is a terminal or an editor and never
 /// both, so asking for one kind of a tab of the other answers `None`.
 #[derive(Default)]
 pub(crate) struct OpenTabs {
@@ -24,8 +24,8 @@ pub(crate) struct OpenTabs {
 /// What one tab holds. Both kinds are boxed: each is several hundred bytes
 /// or more, and a tab is only ever reached through the map.
 pub(crate) enum Tab {
-    /// A tool Winter paints itself: a listing, the git view, an editor.
-    Tool(Box<ToolSlot>),
+    /// An editor Winter paints itself: a listing, the git view, an editor.
+    Editor(Box<EditorSlot>),
     /// A shell or another program on a pseudo-terminal.
     Terminal(Box<TerminalTab>),
 }
@@ -86,7 +86,7 @@ impl OpenTabs {
     pub(crate) fn terminal_tab(&self, id: &TabId) -> Option<&TerminalTab> {
         match self.tabs.get(id) {
             Some(Tab::Terminal(tab)) => Some(tab.as_ref()),
-            Some(Tab::Tool(_)) | None => None,
+            Some(Tab::Editor(_)) | None => None,
         }
     }
 
@@ -94,7 +94,7 @@ impl OpenTabs {
     pub(crate) fn terminal_tab_mut(&mut self, id: &TabId) -> Option<&mut TerminalTab> {
         match self.tabs.get_mut(id) {
             Some(Tab::Terminal(tab)) => Some(tab.as_mut()),
-            Some(Tab::Tool(_)) | None => None,
+            Some(Tab::Editor(_)) | None => None,
         }
     }
 
@@ -107,7 +107,7 @@ impl OpenTabs {
     pub(crate) fn terminals(&self) -> impl Iterator<Item = (&TabId, &Terminal)> {
         self.tabs.iter().filter_map(|(id, tab)| match tab {
             Tab::Terminal(tab) => Some((id, &tab.terminal)),
-            Tab::Tool(_) => None,
+            Tab::Editor(_) => None,
         })
     }
 
@@ -115,7 +115,7 @@ impl OpenTabs {
     pub(crate) fn terminals_mut(&mut self) -> impl Iterator<Item = (&TabId, &mut Terminal)> {
         self.tabs.iter_mut().filter_map(|(id, tab)| match tab {
             Tab::Terminal(tab) => Some((id, &mut tab.terminal)),
-            Tab::Tool(_) => None,
+            Tab::Editor(_) => None,
         })
     }
 
@@ -126,18 +126,18 @@ impl OpenTabs {
             .collect()
     }
 
-    /// Close every terminal tab, leaving the tools.
+    /// Close every terminal tab, leaving the editors.
     pub(crate) fn clear_terminals(&mut self) {
-        self.tabs.retain(|_, tab| matches!(tab, Tab::Tool(_)));
+        self.tabs.retain(|_, tab| matches!(tab, Tab::Editor(_)));
     }
 
-    /// Where tab `id`'s keystrokes go, or `None` for a tool, which takes
+    /// Where tab `id`'s keystrokes go, or `None` for an editor, which takes
     /// its own keys rather than being in a mode.
     pub(crate) fn mode(&self, id: &TabId) -> Option<Mode> {
         self.terminal_tab(id).map(|tab| tab.mode)
     }
 
-    /// Put terminal tab `id` in `mode`. A tool has no mode to set.
+    /// Put terminal tab `id` in `mode`. An editor has no mode to set.
     pub(crate) fn set_mode(&mut self, id: &TabId, mode: Mode) {
         if let Some(tab) = self.terminal_tab_mut(id) {
             tab.mode = mode;
@@ -149,7 +149,7 @@ impl OpenTabs {
         self.terminal_tab(id).and_then(|tab| tab.nav_cursor)
     }
 
-    /// Set or drop terminal tab `id`'s traversal cursor. A tool keeps a
+    /// Set or drop terminal tab `id`'s traversal cursor. An editor keeps a
     /// cursor of its own.
     pub(crate) fn set_nav_cursor(&mut self, id: &TabId, cursor: Option<(usize, usize)>) {
         if let Some(tab) = self.terminal_tab_mut(id) {
@@ -164,58 +164,58 @@ impl OpenTabs {
     }
 
     // --------------------------------------------------------------------
-    // Tools
+    // Editors
     // --------------------------------------------------------------------
 
     /// Open `slot` as tab `id`.
-    pub(crate) fn insert_tool(&mut self, id: TabId, slot: ToolSlot) {
-        self.tabs.insert(id, Tab::Tool(Box::new(slot)));
+    pub(crate) fn insert_editor(&mut self, id: TabId, slot: EditorSlot) {
+        self.tabs.insert(id, Tab::Editor(Box::new(slot)));
     }
 
-    /// The tool of tab `id`.
-    pub(crate) fn tool(&self, id: &TabId) -> Option<&ToolSlot> {
+    /// The editor of tab `id`.
+    pub(crate) fn editor(&self, id: &TabId) -> Option<&EditorSlot> {
         match self.tabs.get(id) {
-            Some(Tab::Tool(slot)) => Some(slot.as_ref()),
+            Some(Tab::Editor(slot)) => Some(slot.as_ref()),
             Some(Tab::Terminal(_)) | None => None,
         }
     }
 
-    /// The tool of tab `id`, to change.
-    pub(crate) fn tool_mut(&mut self, id: &TabId) -> Option<&mut ToolSlot> {
+    /// The editor of tab `id`, to change.
+    pub(crate) fn editor_mut(&mut self, id: &TabId) -> Option<&mut EditorSlot> {
         match self.tabs.get_mut(id) {
-            Some(Tab::Tool(slot)) => Some(slot.as_mut()),
+            Some(Tab::Editor(slot)) => Some(slot.as_mut()),
             Some(Tab::Terminal(_)) | None => None,
         }
     }
 
-    /// Whether tab `id` is a tool.
-    pub(crate) fn is_tool(&self, id: &TabId) -> bool {
-        self.tool(id).is_some()
+    /// Whether tab `id` is an editor.
+    pub(crate) fn is_editor(&self, id: &TabId) -> bool {
+        self.editor(id).is_some()
     }
 
-    /// Take tab `id`'s tool out, leaving a terminal tab where it is.
-    pub(crate) fn remove_tool(&mut self, id: &TabId) -> Option<ToolSlot> {
-        if !self.is_tool(id) {
+    /// Take tab `id`'s editor out, leaving a terminal tab where it is.
+    pub(crate) fn remove_editor(&mut self, id: &TabId) -> Option<EditorSlot> {
+        if !self.is_editor(id) {
             return None;
         }
         match self.tabs.remove(id) {
-            Some(Tab::Tool(slot)) => Some(*slot),
+            Some(Tab::Editor(slot)) => Some(*slot),
             Some(Tab::Terminal(_)) | None => None,
         }
     }
 
-    /// Every tool tab's tool, in no particular order.
-    pub(crate) fn tools(&self) -> impl Iterator<Item = (&TabId, &ToolSlot)> {
+    /// Every editor tab's editor, in no particular order.
+    pub(crate) fn editors(&self) -> impl Iterator<Item = (&TabId, &EditorSlot)> {
         self.tabs.iter().filter_map(|(id, tab)| match tab {
-            Tab::Tool(slot) => Some((id, slot.as_ref())),
+            Tab::Editor(slot) => Some((id, slot.as_ref())),
             Tab::Terminal(_) => None,
         })
     }
 
-    /// Every tool tab's tool, to change.
-    pub(crate) fn tools_mut(&mut self) -> impl Iterator<Item = (&TabId, &mut ToolSlot)> {
+    /// Every editor tab's editor, to change.
+    pub(crate) fn editors_mut(&mut self) -> impl Iterator<Item = (&TabId, &mut EditorSlot)> {
         self.tabs.iter_mut().filter_map(|(id, tab)| match tab {
-            Tab::Tool(slot) => Some((id, slot.as_mut())),
+            Tab::Editor(slot) => Some((id, slot.as_mut())),
             Tab::Terminal(_) => None,
         })
     }

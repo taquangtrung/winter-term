@@ -10,10 +10,10 @@ use std::collections::BTreeSet;
 use winter_render::{StatusBar, StatusNotice, StatusPrompt, StatusSearch, StatusSegment, Theme};
 
 use crate::config::{StatusBarConfig, StatusSegmentKind};
+use crate::model::editor::EditorStatus;
 use crate::model::layout::TabId;
 use crate::model::mode::Mode;
 use crate::model::textedit::modal::EditMode;
-use crate::model::tool::ToolStatus;
 use crate::quota::{self, Provider, Window};
 use crate::terminal::session::Host;
 
@@ -39,14 +39,14 @@ const CONTAINER_HOST_ICON: char = '\u{f0868}';
 struct SegmentSources<'a> {
     /// Each provider with a quota to show.
     quotas: Vec<(Provider, &'a [Window])>,
-    /// The tool that has the keyboard, if a tool does.
-    tool: Option<FocusedTool>,
+    /// The editor that has the keyboard, if an editor does.
+    editor: Option<FocusedEditor>,
 }
 
-/// What the focused tool gives the status bar: the glyph for its kind, and
+/// What the focused editor gives the status bar: the glyph for its kind, and
 /// where its keys stand.
-struct FocusedTool {
-    status: ToolStatus,
+struct FocusedEditor {
+    status: EditorStatus,
 }
 
 // ========================================================================
@@ -55,7 +55,7 @@ struct FocusedTool {
 
 impl App {
     /// The status bar for tab `focused`, whose terminal is in `mode` (`None`
-    /// for a tool).
+    /// for an editor).
     pub(super) fn build_status_bar(
         &self,
         mode: Option<Mode>,
@@ -64,19 +64,19 @@ impl App {
         notice: Option<StatusNotice>,
         focused: &TabId,
     ) -> StatusBar {
-        let tool = self.open_tabs.tool(focused).map(|slot| FocusedTool {
-            status: slot.tool.status(),
+        let editor = self.open_tabs.editor(focused).map(|slot| FocusedEditor {
+            status: slot.editor.status(),
         });
         let host = self
             .open_tabs
             .terminal(focused)
             .map_or(Host::Local, |terminal| terminal.host());
-        let tool_mode = tool.as_ref().and_then(|tool| tool.status.mode);
+        let editor_mode = editor.as_ref().and_then(|editor| editor.status.mode);
         // A search being typed is shown in the find popup; the bar keeps
         // only how far it has got.
         let mut status = status_bar(
             mode,
-            tool_mode,
+            editor_mode,
             theme,
             None,
             search,
@@ -89,7 +89,7 @@ impl App {
                 .as_ref()
                 .map(|monitor| monitor.shown().collect())
                 .unwrap_or_default(),
-            tool,
+            editor,
         };
         status.host = host_label(&host);
         status.bell = Some(self.status_bell());
@@ -107,20 +107,20 @@ impl App {
 // Functions
 // ========================================================================
 
-/// The status bar's left side, for a terminal in `mode`, or a tool in
-/// `tool_mode` (`None` for both: a tool with no mode of its own, shown as
-/// `P`). The letters and colors are shared, so a tool in Insert reads as a
+/// The status bar's left side, for a terminal in `mode`, or an editor in
+/// `editor_mode` (`None` for both: an editor with no mode of its own, shown as
+/// `P`). The letters and colors are shared, so an editor in Insert reads as a
 /// terminal in Insert does.
 fn status_bar(
     mode: Option<Mode>,
-    tool_mode: Option<EditMode>,
+    editor_mode: Option<EditMode>,
     theme: &Theme,
     prompt: Option<StatusPrompt>,
     search: Option<StatusSearch>,
     notice: Option<StatusNotice>,
     config: &StatusBarConfig,
 ) -> StatusBar {
-    let (mode_name, accent) = match (mode, tool_mode) {
+    let (mode_name, accent) = match (mode, editor_mode) {
         (Some(Mode::Insert), _) | (None, Some(EditMode::Insert)) => ("I", theme.ansi[12]),
         (Some(Mode::Normal), _) | (None, Some(EditMode::Normal)) => ("N", theme.ansi[4]),
         (Some(Mode::Visual), _) | (None, Some(EditMode::Visual)) => ("V", theme.ansi[6]),
@@ -157,7 +157,7 @@ fn host_label(host: &Host) -> String {
 }
 
 /// The right side's segments for `kinds`, in their order. A kind with
-/// nothing to say (no quota heard, no tool focused) shows nothing. Each
+/// nothing to say (no quota heard, no editor focused) shows nothing. Each
 /// holds on by its place in `priority`, the first listed longest; with none
 /// listed they all rank alike and the bar drops from the left.
 fn segments_of(
@@ -175,7 +175,7 @@ fn segments_of(
             let segments = match kind {
                 StatusSegmentKind::Antigravity => quota_segment(sources, Provider::Antigravity),
                 StatusSegmentKind::Claude => quota_segment(sources, Provider::Claude),
-                StatusSegmentKind::Tool => tool_segments(sources),
+                StatusSegmentKind::Editor => editor_segments(sources),
                 StatusSegmentKind::Zai => quota_segment(sources, Provider::Zai),
             };
             segments.into_iter().map(move |segment| StatusSegment {
@@ -197,7 +197,7 @@ fn provider_of(kind: StatusSegmentKind) -> Option<Provider> {
     match kind {
         StatusSegmentKind::Antigravity => Some(Provider::Antigravity),
         StatusSegmentKind::Claude => Some(Provider::Claude),
-        StatusSegmentKind::Tool => None,
+        StatusSegmentKind::Editor => None,
         StatusSegmentKind::Zai => Some(Provider::Zai),
     }
 }
@@ -219,14 +219,15 @@ fn quota_segment(sources: &SegmentSources, provider: Provider) -> Vec<StatusSegm
     segment.into_iter().collect()
 }
 
-/// Each fact the focused tool reports, as a segment of its own so the bar
-/// drops them one at a time when short of room. The tool's icon is left to
-/// its tab, which already shows which tool is open.
-fn tool_segments(sources: &SegmentSources) -> Vec<StatusSegment> {
-    let Some(tool) = &sources.tool else {
+/// Each fact the focused editor reports, as a segment of its own so the bar
+/// drops them one at a time when short of room. The editor's icon is left to
+/// its tab, which already shows which editor is open.
+fn editor_segments(sources: &SegmentSources) -> Vec<StatusSegment> {
+    let Some(editor) = &sources.editor else {
         return Vec::new();
     };
-    tool.status
+    editor
+        .status
         .segments
         .iter()
         .map(|text| StatusSegment {
@@ -255,8 +256,8 @@ mod tests {
         }
     }
 
-    fn bar(mode: Option<Mode>, tool_mode: Option<EditMode>, cfg: &StatusBarConfig) -> StatusBar {
-        status_bar(mode, tool_mode, &Theme::dark(), None, None, None, cfg)
+    fn bar(mode: Option<Mode>, editor_mode: Option<EditMode>, cfg: &StatusBarConfig) -> StatusBar {
+        status_bar(mode, editor_mode, &Theme::dark(), None, None, None, cfg)
     }
 
     #[test]
@@ -271,9 +272,9 @@ mod tests {
     }
 
     #[test]
-    fn test_a_focused_tool_puts_its_own_mode_in_the_bar() {
-        // A tool in Insert reads as a terminal in Insert does, and only a
-        // tool with no mode of its own falls back to `P`.
+    fn test_a_focused_editor_puts_its_own_mode_in_the_bar() {
+        // An editor in Insert reads as a terminal in Insert does, and only a
+        // editor with no mode of its own falls back to `P`.
         let cfg = shown_mode();
         let insert = bar(None, Some(EditMode::Insert), &cfg);
         assert_eq!(insert.mode, " I");
@@ -355,15 +356,15 @@ mod tests {
         }];
         let sources = SegmentSources {
             quotas: vec![(Provider::Zai, &windows[..])],
-            tool: Some(FocusedTool {
-                status: ToolStatus {
+            editor: Some(FocusedEditor {
+                status: EditorStatus {
                     mode: None,
                     segments: vec!["12:5".to_string(), "340 lines".to_string()],
                 },
             }),
         };
         let kinds = [
-            StatusSegmentKind::Tool,
+            StatusSegmentKind::Editor,
             StatusSegmentKind::Claude,
             StatusSegmentKind::Zai,
         ];
@@ -374,12 +375,16 @@ mod tests {
         assert_eq!(
             texts,
             ["12:5", "340 lines", "42%\u{2009}--"],
-            "the tool's facts apart and no icon, no Claude quota heard"
+            "the editor's facts apart and no icon, no Claude quota heard"
         );
         assert!(segments_of(&[], &[], &sources).is_empty(), "nothing named");
-        let ranked = segments_of(&kinds, &[StatusSegmentKind::Tool], &sources);
+        let ranked = segments_of(&kinds, &[StatusSegmentKind::Editor], &sources);
         let ranks: Vec<u32> = ranked.iter().map(|segment| segment.priority).collect();
-        assert_eq!(ranks, [1, 1, 0], "the listed tool outranks the unlisted quota");
+        assert_eq!(
+            ranks,
+            [1, 1, 0],
+            "the listed editor outranks the unlisted quota"
+        );
     }
 
     #[test]

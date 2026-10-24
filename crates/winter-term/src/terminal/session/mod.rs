@@ -340,7 +340,7 @@ impl Terminal {
         max_scrollback: usize,
         command_str: String,
     ) -> anyhow::Result<Self> {
-        // Advertise Winter to the child so capability-detecting tools emit rich
+        // Advertise Winter to the child so capability-detecting editors emit rich
         // blocks instead of the plain-text fallback.
         command.env("TERM_PROGRAM", "winter");
         command.env("TERM_PROGRAM_VERSION", env!("CARGO_PKG_VERSION"));

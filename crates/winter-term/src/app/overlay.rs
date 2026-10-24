@@ -6,13 +6,13 @@
 use std::path::PathBuf;
 
 use crate::model::button::ButtonGroup;
+use crate::model::editor::PromptReply;
 use crate::model::layout::TabId;
 use crate::model::palette::Palette;
 use crate::model::settings_page::SettingsPage;
 use crate::model::textedit::field::TextField;
-use crate::model::tool::PromptReply;
 
-use super::tool::{ActivePick, ActivePrompt, PendingClose};
+use super::editor::{ActivePick, ActivePrompt, PendingClose};
 use super::App;
 
 // ========================================================================
@@ -23,7 +23,7 @@ use super::App;
 pub(crate) enum Overlay {
     /// The host's own question, before closing what would lose something.
     Close(ClosePrompt),
-    /// The command palette, or a list a tool asked to be picked from.
+    /// The command palette, or a list an editor asked to be picked from.
     Palette(PaletteOverlay),
     /// A tab's new name being typed.
     Rename(RenameInput),
@@ -33,8 +33,8 @@ pub(crate) enum Overlay {
     ThemeName(TextField),
     /// The sudo password, asked before browsing as root.
     Password(PasswordInput),
-    /// A question a tool asked.
-    ToolPrompt(ActivePrompt),
+    /// A question an editor asked.
+    EditorPrompt(ActivePrompt),
     /// The Z.ai API key, for the system's secret store.
     ZaiKey(TextField),
 }
@@ -49,8 +49,8 @@ pub(crate) struct ClosePrompt {
     pub(crate) pending: PendingClose,
 }
 
-/// The palette, and the tool question it answers while it shows a list of
-/// that tool's own choices.
+/// The palette, and the editor question it answers while it shows a list of
+/// that editor's own choices.
 pub(crate) struct PaletteOverlay {
     pub(crate) palette: Palette,
     /// The question a pick answers; `None` for the window's own palettes.
@@ -77,10 +77,10 @@ pub(crate) struct RenameInput {
 // ========================================================================
 
 impl Overlay {
-    /// Whether a tool's prompt or pick may take the keyboard from this one.
+    /// Whether an editor's prompt or pick may take the keyboard from this one.
     /// The host's question may not lose it to one: the answer it is waiting
     /// on decides whether anything is closed.
-    fn yields_to_tool(&self) -> bool {
+    fn yields_to_editor(&self) -> bool {
         !matches!(self, Self::Close(_))
     }
 
@@ -90,19 +90,19 @@ impl Overlay {
             Self::Close(prompt) => prompt.pending.subject() == Some(tab),
             Self::Palette(overlay) => overlay.pick.as_ref().is_some_and(|pick| pick.tab == tab),
             Self::Rename(input) => input.tab == tab,
-            Self::ToolPrompt(prompt) => prompt.tab == tab,
+            Self::EditorPrompt(prompt) => prompt.tab == tab,
             Self::Password(_) | Self::Settings(_) | Self::ThemeName(_) | Self::ZaiKey(_) => false,
         }
     }
 
-    /// The tool question this leaves unanswered when it goes, if any: the
+    /// The editor question this leaves unanswered when it goes, if any: the
     /// tab that asked, and the reply that tells it there was no answer.
     fn unanswered(&self) -> Option<(TabId, PromptReply)> {
         let (tab, tag) = match self {
             Self::Palette(PaletteOverlay {
                 pick: Some(pick), ..
             }) => (pick.tab, pick.tag),
-            Self::ToolPrompt(prompt) => (prompt.tab, prompt.request.tag),
+            Self::EditorPrompt(prompt) => (prompt.tab, prompt.request.tag),
             Self::Close(_)
             | Self::Palette(_)
             | Self::Password(_)
@@ -154,17 +154,17 @@ impl App {
         Some(&mut overlay.palette)
     }
 
-    /// The tool question the open palette is collecting an answer to.
-    pub(crate) fn tool_pick(&self) -> Option<&ActivePick> {
+    /// The editor question the open palette is collecting an answer to.
+    pub(crate) fn editor_pick(&self) -> Option<&ActivePick> {
         let Some(Overlay::Palette(overlay)) = &self.overlay else {
             return None;
         };
         overlay.pick.as_ref()
     }
 
-    /// The tool question being answered, if the overlay is one.
-    pub(crate) fn tool_prompt(&self) -> Option<&ActivePrompt> {
-        let Some(Overlay::ToolPrompt(prompt)) = &self.overlay else {
+    /// The editor question being answered, if the overlay is one.
+    pub(crate) fn editor_prompt(&self) -> Option<&ActivePrompt> {
+        let Some(Overlay::EditorPrompt(prompt)) = &self.overlay else {
             return None;
         };
         Some(prompt)
@@ -230,18 +230,18 @@ impl App {
         }));
     }
 
-    /// Give the keyboard to `overlay`. What held it goes, a tool question it
-    /// held answered with nothing, so no tool is left waiting on a question
-    /// nobody can see. A tool's own question or list cannot take the keyboard
+    /// Give the keyboard to `overlay`. What held it goes, an editor question it
+    /// held answered with nothing, so no editor is left waiting on a question
+    /// nobody can see. An editor's own question or list cannot take the keyboard
     /// from the host's: it is answered with nothing at once instead.
     pub(crate) fn open_overlay(&mut self, overlay: Overlay) {
-        let from_tool = overlay.unanswered().is_some();
-        if from_tool && !self.overlay.as_ref().is_none_or(Overlay::yields_to_tool) {
+        let from_editor = overlay.unanswered().is_some();
+        if from_editor && !self.overlay.as_ref().is_none_or(Overlay::yields_to_editor) {
             self.answer_unasked(&overlay);
             return;
         }
         // Installed before the one it replaces is told it went, so what that
-        // tool does on hearing it sees the new overlay in place.
+        // editor does on hearing it sees the new overlay in place.
         let replaced = self.overlay.replace(overlay);
         if let Some(replaced) = replaced {
             self.overlay_closed(replaced);
@@ -250,7 +250,7 @@ impl App {
     }
 
     /// Close what holds the keyboard, saying so to whatever was waiting on
-    /// it: a tool question is answered with nothing, the settings page puts
+    /// it: an editor question is answered with nothing, the settings page puts
     /// back what it covered.
     pub(crate) fn dismiss_overlay(&mut self) {
         if let Some(overlay) = self.overlay.take() {
@@ -308,7 +308,7 @@ impl App {
 
     /// Tell whatever was waiting on `overlay` that it is gone.
     fn overlay_closed(&mut self, overlay: Overlay) {
-        if matches!(overlay, Overlay::ToolPrompt(_)) {
+        if matches!(overlay, Overlay::EditorPrompt(_)) {
             self.prompt_debounce = None;
         }
         if matches!(overlay, Overlay::Settings(_)) {
@@ -317,15 +317,15 @@ impl App {
         self.answer_unasked(&overlay);
     }
 
-    /// Answer the tool question `overlay` holds, if any, with nothing.
+    /// Answer the editor question `overlay` holds, if any, with nothing.
     fn answer_unasked(&mut self, overlay: &Overlay) {
         let Some((tab, reply)) = overlay.unanswered() else {
             return;
         };
-        let Some(slot) = self.open_tabs.tool_mut(&tab) else {
+        let Some(slot) = self.open_tabs.editor_mut(&tab) else {
             return;
         };
-        let outcome = slot.tool.on_prompt(reply);
-        self.act_on_tool_outcome(tab, outcome);
+        let outcome = slot.editor.on_prompt(reply);
+        self.act_on_editor_outcome(tab, outcome);
     }
 }

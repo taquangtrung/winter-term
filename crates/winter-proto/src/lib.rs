@@ -1,7 +1,7 @@
 //! Terminal Block Protocol (TBP) v1: wire types and codec.
 //!
 //! TBP is an OSC escape sequence carrying a MIME bundle, directly inspired by
-//! Jupyter's `display_data` message. A tool emits a block as one escape; the
+//! Jupyter's `display_data` message. An editor emits a block as one escape; the
 //! terminal selects the richest MIME representation it can render and falls back
 //! toward `text/plain`. Terminals that do not understand TBP ignore the escape.
 //!

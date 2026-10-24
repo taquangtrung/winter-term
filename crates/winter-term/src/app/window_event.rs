@@ -58,10 +58,10 @@ struct KeyPress {
     /// The winit key it came from, which the palette and settings page read
     /// for text entry.
     logical: Key,
-    /// The focused terminal's mode; the default for a tool, which has none.
+    /// The focused terminal's mode; the default for an editor, which has none.
     mode: Mode,
     physical: PhysicalKey,
-    tool_focused: bool,
+    editor_focused: bool,
 }
 
 /// What a layer did with a key.
@@ -161,7 +161,7 @@ impl App {
 
     /// Type `text` an input method committed: each character goes through
     /// the same routing as an unmodified key press and release, so it reaches
-    /// a shell, a tool, or the Normal-mode keymap exactly as typing it on a
+    /// a shell, an editor, or the Normal-mode keymap exactly as typing it on a
     /// keyboard would, whatever modifiers happen to be held while the
     /// candidate is picked. Returns `true` when the app should quit.
     pub(crate) fn type_committed_text(&mut self, text: &str) -> bool {
@@ -236,11 +236,11 @@ impl App {
             key,
             logical: logical_key,
             // `mode` is the terminal's, and only means anything when the tab
-            // is not a tool, which takes its own keys rather than being in a
+            // is not an editor, which takes its own keys rather than being in a
             // mode.
             mode: self.open_tabs.mode(&focused).unwrap_or_default(),
             physical: physical_key,
-            tool_focused: self.open_tabs.is_tool(&focused),
+            editor_focused: self.open_tabs.is_editor(&focused),
         };
         // Each layer takes the key or passes it on, in this order: the first
         // to take it is the only one that sees it.
@@ -252,10 +252,10 @@ impl App {
             Self::route_dismissing_escape,
             Self::route_global_key,
             Self::route_palette_key,
-            Self::route_tool_cursor_layer,
+            Self::route_editor_cursor_layer,
             Self::route_exit_shown_key,
             Self::route_sequence_start_key,
-            Self::route_tool_key,
+            Self::route_editor_key,
             Self::route_bare_escape,
             Self::route_keymap_key,
         ];
@@ -305,7 +305,7 @@ impl App {
 
     /// The paste chord pastes into whatever takes input, ahead of every layer
     /// that would otherwise take it as a key: a dialog's field, the palette,
-    /// a tool, or the terminal.
+    /// an editor, or the terminal.
     fn route_paste_key(&mut self, press: &KeyPress) -> KeyRoute {
         if !self.is_paste_key(&press.key) {
             return KeyRoute::Pass;
@@ -360,7 +360,7 @@ impl App {
     fn route_modal_key(&mut self, press: &KeyPress) -> KeyRoute {
         match &mut self.overlay {
             Some(Overlay::Close(_)) => self.handle_close_prompt_key(&press.key),
-            Some(Overlay::ToolPrompt(_)) => self.handle_prompt_key(&press.key),
+            Some(Overlay::EditorPrompt(_)) => self.handle_prompt_key(&press.key),
             Some(Overlay::Password(_)) => self.handle_password_key(&press.key),
             Some(Overlay::ZaiKey(_)) => self.handle_zai_key_key(&press.key),
             Some(Overlay::ThemeName(input)) => match input.on_key(&press.key.typed(), 1) {
@@ -411,7 +411,7 @@ impl App {
         let global = self
             .keymap
             .global_action(&press.key)
-            .filter(|action| !self.is_copy_yielded_to_tool(action, press.focused));
+            .filter(|action| !self.is_copy_yielded_to_editor(action, press.focused));
         let Some(action) = global else {
             return KeyRoute::Pass;
         };
@@ -428,11 +428,11 @@ impl App {
         KeyRoute::Handled
     }
 
-    /// The tool text cursor takes every key while it is up, ahead of the
-    /// tool itself: sharing keys would move the selection and the listing
-    /// at once. See `tool_cursor`.
-    fn route_tool_cursor_layer(&mut self, press: &KeyPress) -> KeyRoute {
-        KeyRoute::taken(self.handle_tool_cursor_key(&press.key))
+    /// The editor text cursor takes every key while it is up, ahead of the
+    /// editor itself: sharing keys would move the selection and the listing
+    /// at once. See `editor_cursor`.
+    fn route_editor_cursor_layer(&mut self, press: &KeyPress) -> KeyRoute {
+        KeyRoute::taken(self.handle_editor_cursor_key(&press.key))
     }
 
     /// A command that failed keeps its tab, its exit written below its
@@ -445,39 +445,39 @@ impl App {
         if !shown {
             return KeyRoute::Pass;
         }
-        self.close_tab_now(press.focused, super::tool::Closing::Forget);
+        self.close_tab_now(press.focused, super::editor::Closing::Forget);
         KeyRoute::Handled
     }
 
-    /// A key opening a sequence (the window's, or the focused tool's own
-    /// block's) is the sequence's, ahead of the tool and the mode keymaps
-    /// alike, so `M-g M-h` reads the same in a tool as in a terminal.
+    /// A key opening a sequence (the window's, or the focused editor's own
+    /// block's) is the sequence's, ahead of the editor and the mode keymaps
+    /// alike, so `M-g M-h` reads the same in an editor as in a terminal.
     fn route_sequence_start_key(&mut self, press: &KeyPress) -> KeyRoute {
         KeyRoute::of_sequence(self.route_sequence_key(press.focused, &press.key))
     }
 
-    /// A tool owns the keys it binds, and only those: anything it declines
+    /// An editor owns the keys it binds, and only those: anything it declines
     /// falls through to the window chords, so the vim vocabulary reads the
-    /// same in a tool as in a terminal. `v` or `V` in a tool that did not
+    /// same in an editor as in a terminal. `v` or `V` in an editor that did not
     /// bind it starts a text cursor selecting by character or by whole line,
     /// the way each starts a Visual selection in a terminal.
-    fn route_tool_key(&mut self, press: &KeyPress) -> KeyRoute {
-        if self.offer_key_to_tool(press.focused, &press.key) {
+    fn route_editor_key(&mut self, press: &KeyPress) -> KeyRoute {
+        if self.offer_key_to_editor(press.focused, &press.key) {
             return KeyRoute::Handled;
         }
         let key = &press.key;
         let glyph = key.glyph();
-        let starts_cursor = press.tool_focused
+        let starts_cursor = press.editor_focused
             && !key.ctrl
             && !key.alt
             && !key.sup
             && matches!(glyph, KeyCode::Char('v' | 'V'));
         if starts_cursor {
-            self.start_tool_cursor(press.focused);
+            self.start_editor_cursor(press.focused);
             // The cursor starts selecting by character; `V` is what turns a
             // selection linewise once it is up.
             if glyph == KeyCode::Char('V') {
-                self.handle_tool_cursor_key(key);
+                self.handle_editor_cursor_key(key);
             }
         }
         KeyRoute::taken(starts_cursor)
@@ -494,7 +494,7 @@ impl App {
     fn route_bare_escape(&mut self, press: &KeyPress) -> KeyRoute {
         let focused = press.focused;
         let bare_esc = press.key.glyph() == KeyCode::Escape && press.key.mods() == Mods::NONE;
-        if !bare_esc || press.tool_focused {
+        if !bare_esc || press.editor_focused {
             return KeyRoute::Pass;
         }
         if press.mode == Mode::Insert {
@@ -548,8 +548,8 @@ impl App {
         let is_alt_screen = terminal.is_some_and(|p| p.grid().is_alt_screen());
         let app_cursor_keys = terminal.is_some_and(|p| p.app_cursor_keys());
         let prev_pending = self.pending;
-        let action = match press.tool_focused {
-            true => input::resolve_tool(key, &self.keymap),
+        let action = match press.editor_focused {
+            true => input::resolve_editor(key, &self.keymap),
             false => input::resolve_with(
                 press.mode,
                 key,
@@ -579,7 +579,7 @@ impl App {
         // `Edit`/undo/redo update it in their handlers. Mode switches, focus
         // and tab commands leave this line untouched, so the shadow is
         // preserved (undo still works in Normal mode).
-        if !press.tool_focused && press.mode == Mode::Insert && forwarded_to_pty(&action) {
+        if !press.editor_focused && press.mode == Mode::Insert && forwarded_to_pty(&action) {
             // Deliberately does NOT queue an automatic switch to Normal mode
             // once a submitted command's new prompt settles: Insert mode
             // always resumes after running a command, exactly as it was
@@ -592,14 +592,14 @@ impl App {
     }
 
     /// Whether the global copy chord, with nothing selected, should pass to
-    /// the tool in tab `focused` instead: with nothing to copy it
-    /// would do nothing, and a tool may bind the same chord (the Git tool
-    /// commits on `C-S-c`). A tool that declines it still reaches the
+    /// the editor in tab `focused` instead: with nothing to copy it
+    /// would do nothing, and an editor may bind the same chord (the Git editor
+    /// commits on `C-S-c`). An editor that declines it still reaches the
     /// ordinary keymap, where it resolves to the same harmless copy.
-    fn is_copy_yielded_to_tool(&self, action: &input::Action, focused: TabId) -> bool {
+    fn is_copy_yielded_to_editor(&self, action: &input::Action, focused: TabId) -> bool {
         *action == input::Action::Copy
             && self.palette().is_none()
-            && self.open_tabs.is_tool(&focused)
+            && self.open_tabs.is_editor(&focused)
             && self.selected_text().is_none()
     }
 
@@ -803,14 +803,14 @@ impl App {
                     if let Some((tab_id, pane_rect)) = self.pane_at_pixel(x, y) {
                         self.set_focus(tab_id);
                         let (row, col) = self.pixel_to_cell(x, y, pane_rect);
-                        // A tool tab owns what is drawn there, so the click is
+                        // An editor tab owns what is drawn there, so the click is
                         // its to answer before the grid's.
                         let at = Point {
                             col,
                             drag: false,
                             row,
                         };
-                        if self.offer_mouse_to_tool(tab_id, at) {
+                        if self.offer_mouse_to_editor(tab_id, at) {
                             self.pointer.press_cell = None;
                             self.dirty = true;
                             return;
@@ -971,7 +971,7 @@ impl App {
                     drag: true,
                     row,
                 };
-                if self.offer_mouse_to_tool(tab_id, at) {
+                if self.offer_mouse_to_editor(tab_id, at) {
                     self.dirty = true;
                     return;
                 }
@@ -1054,7 +1054,7 @@ impl App {
             .pane_at_pixel(x, y)
             .map(|(id, _)| id)
             .unwrap_or_else(|| self.layout().focused());
-        if scroll_lines != 0 && self.offer_scroll_to_tool(focused, scroll_lines) {
+        if scroll_lines != 0 && self.offer_scroll_to_editor(focused, scroll_lines) {
             self.dirty = true;
             return;
         }
@@ -1337,7 +1337,10 @@ mod tests {
         assert!(app.moves_palette_selection(&down));
         assert!(app.moves_palette_selection(&key(KeyCode::Up, false)));
         assert!(app.moves_palette_selection(&key(KeyCode::Char('n'), true)));
-        assert!(!app.moves_palette_selection(&key(KeyCode::Char('n'), false)), "typed");
+        assert!(
+            !app.moves_palette_selection(&key(KeyCode::Char('n'), false)),
+            "typed"
+        );
         assert!(!app.moves_palette_selection(&key(KeyCode::Backspace, false)));
     }
 
@@ -1415,20 +1418,20 @@ mod tests {
     }
 
     #[test]
-    fn test_v_and_capital_v_in_a_tool_select_by_character_and_by_line() {
+    fn test_v_and_capital_v_in_an_editor_select_by_character_and_by_line() {
         // `V` used to do nothing until a `v` had started the cursor, so the
         // linewise selection Vim starts with one key took two here.
         let select = |typed: &str| {
             let mut app = App::new();
-            let tab = app.show_tool(
-                crate::app::tool::ToolKind::Dir,
-                Box::new(crate::tools::dir::DirTool::new(std::env::temp_dir())),
+            let tab = app.show_editor(
+                crate::app::editor::EditorKind::Dir,
+                Box::new(crate::editors::dir::DirEditor::new(std::env::temp_dir())),
             );
             let mut grid = winter_render::Grid::new(20, 2);
             for ch in "  alpha".chars() {
                 grid.print(ch);
             }
-            if let Some(slot) = app.open_tabs.tool_mut(&tab) {
+            if let Some(slot) = app.open_tabs.editor_mut(&tab) {
                 slot.painted = Some(grid);
                 slot.cursor_line = Some(0);
             }
@@ -1469,7 +1472,7 @@ mod tests {
     }
 
     #[test]
-    fn test_a_tool_search_stays_lit_after_enter_until_esc_and_n_lights_it_again() {
+    fn test_an_editor_search_stays_lit_after_enter_until_esc_and_n_lights_it_again() {
         let dir = std::env::temp_dir().join(format!("winter-tool-search-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("temp dir");
@@ -1478,9 +1481,9 @@ mod tests {
         }
         let mut app = App::new();
         app.keymap = crate::model::input::Keymap::default();
-        app.show_tool(
-            super::super::tool::ToolKind::Dir,
-            Box::new(crate::tools::dir::DirTool::new(dir.clone())),
+        app.show_editor(
+            super::super::editor::EditorKind::Dir,
+            Box::new(crate::editors::dir::DirEditor::new(dir.clone())),
         );
         let press = |app: &mut App, (logical, physical): (Key, PhysicalKey)| {
             assert!(!app.handle_key(ElementState::Pressed, logical, physical));
@@ -1496,7 +1499,7 @@ mod tests {
                 PhysicalKey::Code(WinitKeyCode::Enter),
             ),
         );
-        assert!(app.tool_prompt().is_none(), "Enter answered the question");
+        assert!(app.editor_prompt().is_none(), "Enter answered the question");
         assert_eq!(app.search.query.as_deref(), Some("alpha"), "still lit");
         // From `alpha.txt`, the search looks past the cursor first.
         assert_eq!((app.search.match_index, app.search.match_total), (2, 2));

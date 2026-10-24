@@ -12,7 +12,7 @@ pub struct SystemSample {
     pub cpu: CpuSample,
     /// Mounted local volumes.
     pub disks: Vec<DiskReading>,
-    /// Graphics cards, empty where there is no tool to ask.
+    /// Graphics cards, empty where there is no editor to ask.
     pub gpus: Vec<GpuReading>,
     /// Physical memory and swap.
     pub memory: MemoryReading,

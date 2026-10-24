@@ -63,7 +63,7 @@ impl MimeBundle {
         self.mime.get(mime)
     }
 
-    /// The mandatory `text/plain` fallback, if the tool supplied one.
+    /// The mandatory `text/plain` fallback, if the editor supplied one.
     pub fn text_plain(&self) -> Option<&str> {
         self.get(TEXT_PLAIN).and_then(Value::as_str)
     }

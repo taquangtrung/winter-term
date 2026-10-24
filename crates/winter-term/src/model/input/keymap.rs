@@ -3,7 +3,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::model::tool::ToolCommand;
+use crate::model::editor::EditorCommand;
 
 use super::actions::{EditBinding, IndexAction, WindowAction};
 use super::chord::{find_chord, format_key, format_sequence, parse_chord_sequence};
@@ -15,7 +15,7 @@ use super::{Action, Key};
 // ========================================================================
 
 /// The configurable key bindings: window commands, line edits, and each
-/// tool's own commands. A binding is either a direct chord (e.g. `C-h` to
+/// editor's own commands. A binding is either a direct chord (e.g. `C-h` to
 /// focus left) or a sequence of up to
 /// [`MAX_SEQUENCE_LEN`](super::sequence::MAX_SEQUENCE_LEN) chords (e.g. `M-g`
 /// then `M-h` to move a tab). Built from defaults and overlaid with config via
@@ -41,14 +41,14 @@ pub struct Keymap {
     /// Window sequences, each naming a `WindowAction`, an index action, or a
     /// command-palette name, resolved the way a single chord's name is.
     pub(super) sequences: SequenceMap,
-    /// Each tool's own bindings, by the `keybindings.kdl` block naming them
-    /// (`git`, `dir`, ...): commands the tool runs by name, looked up only
-    /// while that tool has focus and ahead of the window's own sequences.
-    pub(super) tool_sequences: HashMap<String, SequenceMap>,
+    /// Each editor's own bindings, by the `keybindings.kdl` block naming them
+    /// (`git`, `dir`, ...): commands the editor runs by name, looked up only
+    /// while that editor has focus and ahead of the window's own sequences.
+    pub(super) editor_sequences: HashMap<String, SequenceMap>,
 }
 
 /// What the chords typed so far resolve to, across the window's sequences and
-/// the focused tool's.
+/// the focused editor's.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SequenceStep {
     /// No binding starts with them.
@@ -57,8 +57,8 @@ pub enum SequenceStep {
     Pending,
     /// A window binding: dispatch this action.
     Run(Action),
-    /// A binding of the focused tool's: run the tool command of this name.
-    Tool(String),
+    /// A binding of the focused editor's: run the editor command of this name.
+    Editor(String),
 }
 /// The built-in default keybindings, embedded from the canonical file (also
 /// installed as a reference copy at `~/.config/winter-term/keybindings.kdl`).
@@ -70,9 +70,9 @@ pub(super) const DEFAULT_KEYBINDINGS_KDL: &str = include_str!("../../../samples/
 const WINDOW_BLOCK: &str = "window";
 /// The `keybindings.kdl` block of line edits.
 const EDITING_BLOCK: &str = "editing";
-/// The `keybindings.kdl` blocks that are not a tool's: every other block
-/// names one tool's own commands.
-const NON_TOOL_BLOCKS: [&str; 5] = [EDITING_BLOCK, "insert", "normal", "visual", WINDOW_BLOCK];
+/// The `keybindings.kdl` blocks that are not an editor's: every other block
+/// names one editor's own commands.
+const NON_EDITOR_BLOCKS: [&str; 5] = [EDITING_BLOCK, "insert", "normal", "visual", WINDOW_BLOCK];
 impl Keymap {
     /// An unbound keymap: no chords at all. Only ever used as the starting
     /// point for a merge, which immediately layers the built-in defaults onto
@@ -85,7 +85,7 @@ impl Keymap {
             index_specific: vec![],
             named: vec![],
             sequences: SequenceMap::default(),
-            tool_sequences: HashMap::new(),
+            editor_sequences: HashMap::new(),
         }
     }
 
@@ -116,7 +116,7 @@ impl Keymap {
     /// Build a keymap from every block of a `keybindings.kdl` over the
     /// defaults, and say what in `blocks` could never run, one line each: a
     /// spec that is no chord, a command `catalog` does not know, a block no
-    /// tool has, bindings that overlap, and a tool's chord a global chord
+    /// editor has, bindings that overlap, and an editor's chord a global chord
     /// takes first. A binding reported is a binding left out, so what is
     /// reported is exactly what did not bind.
     pub fn load(blocks: &Blocks, catalog: Catalog) -> (Self, Vec<String>) {
@@ -137,7 +137,7 @@ impl Keymap {
     }
 
     /// Overlay every block of one file, in a fixed order: `window`, then
-    /// `editing`, then each tool's.
+    /// `editing`, then each editor's.
     fn apply_blocks(&mut self, blocks: &Blocks, report: &mut Report) {
         let mut sorted: Vec<(&String, &HashMap<String, String>)> = blocks.iter().collect();
         sorted.sort_by_key(|(block, _)| match block.as_str() {
@@ -146,9 +146,9 @@ impl Keymap {
             other => (2, other),
         });
         // Bindings answering the same keys, by namespace: `window` and
-        // `editing` share one, and each tool's block is one of its own.
+        // `editing` share one, and each editor's block is one of its own.
         let mut namespaces: Vec<(&str, Vec<Parsed>)> = Vec::new();
-        let mut tool_bindings: Vec<Parsed> = Vec::new();
+        let mut editor_bindings: Vec<Parsed> = Vec::new();
         for (block, bindings) in sorted {
             let block = block.as_str();
             match block {
@@ -162,17 +162,17 @@ impl Keymap {
                     self.apply_editing_bindings(&parsed, report);
                     push_namespace(&mut namespaces, WINDOW_BLOCK, parsed);
                 }
-                _ if NON_TOOL_BLOCKS.contains(&block) => {
+                _ if NON_EDITOR_BLOCKS.contains(&block) => {
                     report.push(format!("`{block}` is not configurable yet"));
                 }
                 _ => {
-                    let Some(commands) = report.tool_commands(block) else {
-                        report.push(format!("`{block}` is no tool's block"));
+                    let Some(commands) = report.editor_commands(block) else {
+                        report.push(format!("`{block}` is no editor's block"));
                         continue;
                     };
                     let parsed = parse_block(block, bindings, MAX_SEQUENCE_LEN, report);
-                    let parsed = self.apply_tool_bindings(block, parsed, commands, report);
-                    tool_bindings.extend(parsed.iter().cloned());
+                    let parsed = self.apply_editor_bindings(block, parsed, commands, report);
+                    editor_bindings.extend(parsed.iter().cloned());
                     push_namespace(&mut namespaces, block, parsed);
                 }
             }
@@ -180,12 +180,12 @@ impl Keymap {
         for (_, parsed) in &namespaces {
             report_overlaps(parsed, report);
         }
-        // A global chord is taken before any tool sees the key, so a tool's
+        // A global chord is taken before any editor sees the key, so an editor's
         // binding that opens with one is dead.
-        for parsed in &tool_bindings {
+        for parsed in &editor_bindings {
             if find_chord(&self.global, &parsed.keys[0]).is_some() {
                 report.push(format!(
-                    "{} never runs: \"{}\" is a global chord, taken before any tool sees it",
+                    "{} never runs: \"{}\" is a global chord, taken before any editor sees it",
                     parsed.at,
                     format_key(&parsed.keys[0])
                 ));
@@ -193,14 +193,14 @@ impl Keymap {
         }
     }
 
-    /// Overlay one tool's block, leaving out any command the tool does not
+    /// Overlay one editor's block, leaving out any command the editor does not
     /// have. A configured binding replaces every prior binding of that
     /// command, and takes its chords from any other. Returns what it bound.
-    fn apply_tool_bindings(
+    fn apply_editor_bindings(
         &mut self,
         block: &str,
         parsed: Vec<Parsed>,
-        commands: Option<&[ToolCommand]>,
+        commands: Option<&[EditorCommand]>,
         report: &mut Report,
     ) -> Vec<Parsed> {
         let parsed: Vec<Parsed> = parsed
@@ -214,7 +214,7 @@ impl Keymap {
                 is_known
             })
             .collect();
-        let sequences = self.tool_sequences.entry(block.to_string()).or_default();
+        let sequences = self.editor_sequences.entry(block.to_string()).or_default();
         for binding in &parsed {
             sequences.unbind_commands(|bound| bound == binding.name);
         }
@@ -380,13 +380,13 @@ impl Keymap {
         find_chord(&self.editing, key)
     }
 
-    /// What the chords in `typed` resolve to. `tool` names the focused
-    /// tool's block, whose bindings are looked up first: a tool may bind a
+    /// What the chords in `typed` resolve to. `editor` names the focused
+    /// editor's block, whose bindings are looked up first: an editor may bind a
     /// sequence under a window leader (`M-g r` in Git beside `M-g M-h`).
-    pub fn resolve_sequence(&self, typed: &[Key], tool: Option<&str>) -> SequenceStep {
-        let tool_match = self.tool_map(tool).map(|map| map.lookup(typed));
-        if let Some(SequenceMatch::Exact(name)) = tool_match {
-            return SequenceStep::Tool(name.to_string());
+    pub fn resolve_sequence(&self, typed: &[Key], editor: Option<&str>) -> SequenceStep {
+        let editor_match = self.editor_map(editor).map(|map| map.lookup(typed));
+        if let Some(SequenceMatch::Exact(name)) = editor_match {
+            return SequenceStep::Editor(name.to_string());
         }
         // A single chord is a window sequence's leader at most: the window's
         // own single chords resolve by mode, after this.
@@ -398,7 +398,7 @@ impl Keymap {
             true => self.sequences.lookup(typed),
             false => SequenceMatch::Miss,
         };
-        match (tool_match, window_match) {
+        match (editor_match, window_match) {
             (_, SequenceMatch::Exact(name)) => SequenceStep::Run(sequence_action(name)),
             (Some(SequenceMatch::Prefix), _) | (_, SequenceMatch::Prefix) => SequenceStep::Pending,
             (Some(SequenceMatch::Exact(_) | SequenceMatch::Miss) | None, SequenceMatch::Miss) => {
@@ -408,16 +408,16 @@ impl Keymap {
     }
 
     /// The keys that can follow `typed`, each with what it does, for the
-    /// which-key hint: the focused tool's first, then the window's. `label`
-    /// words a command from the tool block naming it (`None` for the
+    /// which-key hint: the focused editor's first, then the window's. `label`
+    /// words a command from the editor block naming it (`None` for the
     /// window's) and its name.
     pub fn sequence_hint(
         &self,
         typed: &[Key],
-        tool: Option<&str>,
+        editor: Option<&str>,
         label: impl Fn(Option<&str>, &str) -> String,
     ) -> Vec<(String, String)> {
-        let mut items = match (tool, self.tool_map(tool)) {
+        let mut items = match (editor, self.editor_map(editor)) {
             (Some(block), Some(map)) => map.continuations(typed, |name| label(Some(block), name)),
             (None, _) | (Some(_), None) => Vec::new(),
         };
@@ -432,15 +432,15 @@ impl Keymap {
         items
     }
 
-    /// The focused tool's bindings, if it has a block.
-    fn tool_map(&self, tool: Option<&str>) -> Option<&SequenceMap> {
-        self.tool_sequences.get(tool?)
+    /// The focused editor's bindings, if it has a block.
+    fn editor_map(&self, editor: Option<&str>) -> Option<&SequenceMap> {
+        self.editor_sequences.get(editor?)
     }
 
-    /// The chords bound to the tool command `name` in `block`, formatted, or
+    /// The chords bound to the editor command `name` in `block`, formatted, or
     /// an empty string when it is unbound.
-    pub fn tool_chord_hint(&self, block: &str, name: &str) -> String {
-        self.tool_map(Some(block))
+    pub fn editor_chord_hint(&self, block: &str, name: &str) -> String {
+        self.editor_map(Some(block))
             .and_then(|map| map.keys_for(name))
             .map(format_sequence)
             .unwrap_or_default()
@@ -468,13 +468,13 @@ pub type Blocks = HashMap<String, HashMap<String, String>>;
 
 /// The commands that exist beyond the keymap's own, for telling a binding
 /// that runs one from a typo. The app supplies it; the model knows neither
-/// the palette's list nor the tools'.
+/// the palette's list nor the editors'.
 #[derive(Clone, Copy)]
 pub struct Catalog {
     /// Whether a name is a command-palette command.
     pub is_command: fn(&str) -> bool,
-    /// The commands a tool's block may bind, or `None` for no tool's block.
-    pub tool_commands: fn(&str) -> Option<&'static [ToolCommand]>,
+    /// The commands an editor's block may bind, or `None` for no editor's block.
+    pub editor_commands: fn(&str) -> Option<&'static [EditorCommand]>,
 }
 
 /// One binding of a block as parsed: its keys, the command it names, and
@@ -522,10 +522,10 @@ impl Report {
     }
 
     /// The commands `block` may bind: `Some(None)` when every name is
-    /// trusted, `None` when the block is no tool's.
-    fn tool_commands(&self, block: &str) -> Option<Option<&'static [ToolCommand]>> {
+    /// trusted, `None` when the block is no editor's.
+    fn editor_commands(&self, block: &str) -> Option<Option<&'static [EditorCommand]>> {
         match self.catalog {
-            Some(catalog) => (catalog.tool_commands)(block).map(Some),
+            Some(catalog) => (catalog.editor_commands)(block).map(Some),
             None => Some(None),
         }
     }
@@ -674,7 +674,7 @@ mod tests {
     fn test_every_default_named_chord_dispatches_to_a_real_command() {
         // A chord bound to a name nothing answers to is a dead key: pressing it
         // does nothing at all, and a test of one binding at a time never sees
-        // it. Every tool chord arrives this way.
+        // it. Every editor chord arrives this way.
         let keymap = Keymap::default();
         let commands: Vec<String> = crate::model::palette::builtin_commands(&keymap)
             .into_iter()
@@ -1925,15 +1925,15 @@ mod tests {
     }
 
     #[test]
-    fn test_a_tool_sequence_shares_a_window_leader_and_wins_only_in_its_tool() {
+    fn test_an_editor_sequence_shares_a_window_leader_and_wins_only_in_its_editor() {
         let alt_g = Key::with_alt(KeyCode::Char('g'));
         let r = Key::plain(KeyCode::Char('r'));
         let win = Keymap::default();
         assert_eq!(
             win.resolve_sequence(&[alt_g, r], Some("git")),
-            SequenceStep::Tool("open_remote".to_string())
+            SequenceStep::Editor("open_remote".to_string())
         );
-        // Outside the Git tool the same keys are no binding at all.
+        // Outside the Git editor the same keys are no binding at all.
         assert_eq!(win.resolve_sequence(&[alt_g, r], None), SequenceStep::Miss);
         // The window's own sequences under that leader still run in Git.
         assert_eq!(
@@ -1946,7 +1946,7 @@ mod tests {
     }
 
     #[test]
-    fn test_a_user_tool_block_rebinds_a_tool_command() {
+    fn test_a_user_editor_block_rebinds_an_editor_command() {
         let mut git = HashMap::new();
         git.insert("M-o".to_string(), "open_remote".to_string());
         let mut blocks = HashMap::new();
@@ -1955,7 +1955,7 @@ mod tests {
         let alt_o = Key::with_alt(KeyCode::Char('o'));
         assert_eq!(
             keymap.resolve_sequence(&[alt_o], Some("git")),
-            SequenceStep::Tool("open_remote".to_string())
+            SequenceStep::Editor("open_remote".to_string())
         );
         // The default `M-g r` is dropped for the rebound command.
         let alt_g = Key::with_alt(KeyCode::Char('g'));
@@ -1986,10 +1986,10 @@ mod tests {
         assert_eq!(keymap.chord_hint("mux_new_session"), "C-x t n");
     }
 
-    /// The palette's and the tools' commands, as the app checks against.
+    /// The palette's and the editors' commands, as the app checks against.
     const CATALOG: Catalog = Catalog {
         is_command: |name| crate::model::palette::command_label(name).is_some(),
-        tool_commands: crate::tools::block_commands,
+        editor_commands: crate::editors::block_commands,
     };
 
     fn check(blocks: &Blocks) -> Vec<String> {
@@ -2028,12 +2028,12 @@ mod tests {
     }
 
     #[test]
-    fn test_a_tool_chord_a_global_chord_takes_first_is_reported() {
+    fn test_an_editor_chord_a_global_chord_takes_first_is_reported() {
         let blocks = blocks_of(&[("git", &[("C-S-n", "open_remote")])]);
         assert_eq!(
             check(&blocks),
             vec![
-                r#"git: "C-S-n" never runs: "C-S-n" is a global chord, taken before any tool sees it"#
+                r#"git: "C-S-n" never runs: "C-S-n" is a global chord, taken before any editor sees it"#
                     .to_string()
             ]
         );
@@ -2055,7 +2055,7 @@ mod tests {
             r#"window: "M-z" runs unknown command "no_such_command""#,
             r#"editing: "C-x C-y" is not a chord"#,
             r#"git: "M-g r" runs unknown command "open_remot""#,
-            "`gti` is no tool's block",
+            "`gti` is no editor's block",
         ] {
             assert!(
                 problems.iter().any(|p| p == expected),

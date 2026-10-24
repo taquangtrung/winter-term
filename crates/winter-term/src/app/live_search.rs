@@ -18,10 +18,10 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::model::editor::OpenTarget;
 use crate::model::paint::IconKind;
 use crate::model::palette::{split_live_query, Palette, PaletteEntry, PaletteMode};
 use crate::model::path::abbreviate_home;
-use crate::model::tool::OpenTarget;
 use crate::process;
 
 use super::project_files::project_root;
@@ -213,7 +213,7 @@ impl App {
     pub(crate) fn open_live_search_row(&mut self, action: &str) {
         if let Some((line, path)) = action.split_once(':') {
             let line = line.parse().unwrap_or(1);
-            self.open_path_tool(OpenTarget::at_line(PathBuf::from(path), line));
+            self.open_path_editor(OpenTarget::at_line(PathBuf::from(path), line));
         }
         self.live_search = None;
     }

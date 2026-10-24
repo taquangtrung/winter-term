@@ -163,9 +163,9 @@ pub enum StatusSegmentKind {
     Antigravity,
     /// Claude Code's quota, under its logo.
     Claude,
-    /// What the tool that has the keyboard says about where its keys stand
+    /// What the editor that has the keyboard says about where its keys stand
     /// (`12:5`, `340 lines`), then its icon.
-    Tool,
+    Editor,
     /// Z.ai's quota, under its logo.
     Zai,
 }
@@ -173,14 +173,14 @@ pub enum StatusSegmentKind {
 impl StatusSegmentKind {
     /// Every segment, in the order the right side shows them when
     /// `settings.kdl` names none.
-    pub const ALL: [Self; 4] = [Self::Antigravity, Self::Claude, Self::Zai, Self::Tool];
+    pub const ALL: [Self; 4] = [Self::Antigravity, Self::Claude, Self::Zai, Self::Editor];
 
     /// The segment `settings.kdl` calls `name`, if it is one.
     pub fn from_name(name: &str) -> Option<Self> {
         match name {
             "antigravity" => Some(Self::Antigravity),
             "claude" => Some(Self::Claude),
-            "tool" => Some(Self::Tool),
+            "tool" => Some(Self::Editor),
             "zai" => Some(Self::Zai),
             _ => None,
         }
@@ -191,7 +191,7 @@ impl StatusSegmentKind {
         match self {
             Self::Antigravity => "antigravity",
             Self::Claude => "claude",
-            Self::Tool => "tool",
+            Self::Editor => "tool",
             Self::Zai => "zai",
         }
     }
@@ -236,7 +236,7 @@ pub struct Config {
     pub font_weight: Option<String>,
     /// Weight used for bold text.
     pub font_weight_bold: Option<String>,
-    /// Which edge of a tool's rows its gutter (the git states of a listing,
+    /// Which edge of an editor's rows its gutter (the git states of a listing,
     /// its marks) stands at. Default: the left.
     pub gutter_side: GutterSide,
     /// User keybindings, keyed by mode and then by chord.
@@ -882,7 +882,7 @@ fn unknown_syntax_warning(names: &[String]) -> Option<String> {
     };
     Some(format!(
         "settings.kdl: no syntax scope named {first}{more}; \
-         Editor: Show Scopes at Cursor names them"
+         Text Editor: Show Scopes at Cursor names them"
     ))
 }
 
@@ -1541,7 +1541,7 @@ status-bar {
         assert_eq!(warning, None);
         assert_eq!(
             config.status_bar.priority,
-            [StatusSegmentKind::Claude, StatusSegmentKind::Tool]
+            [StatusSegmentKind::Claude, StatusSegmentKind::Editor]
         );
         let again = Config::parse_checked(&config.to_kdl()).0;
         assert_eq!(again.status_bar.priority, config.status_bar.priority);
@@ -1560,7 +1560,7 @@ status-bar {
         assert_eq!(
             config.status_bar.segments,
             [
-                StatusSegmentKind::Tool,
+                StatusSegmentKind::Editor,
                 StatusSegmentKind::Zai,
                 StatusSegmentKind::Claude,
             ]
@@ -1586,7 +1586,7 @@ status-bar {
     #[test]
     fn test_status_bar_segments_round_trip_through_settings_kdl() {
         for segments in [
-            vec![StatusSegmentKind::Zai, StatusSegmentKind::Tool],
+            vec![StatusSegmentKind::Zai, StatusSegmentKind::Editor],
             Vec::new(),
         ] {
             let mut config = Config::default();

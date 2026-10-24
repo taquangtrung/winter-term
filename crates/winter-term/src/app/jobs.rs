@@ -1,4 +1,4 @@
-//! Slow work off the event-loop thread: a tool asks for it, a worker thread
+//! Slow work off the event-loop thread: an editor asks for it, a worker thread
 //! does it, and the answer is collected on the next poll.
 
 use std::collections::{HashMap, HashSet};
@@ -10,16 +10,16 @@ use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use crate::model::input::{format_key, Key, KeyCode};
-use crate::model::layout::TabId;
-use crate::model::tool::{
+use crate::editors::dir::ops;
+use crate::model::editor::{
     CommandOutput, CommandRequest, FileOps, JobReply, JobRequest, SearchHit, SearchRequest,
     SearchResult,
 };
-use crate::tools::dir::ops;
+use crate::model::input::{format_key, Key, KeyCode};
+use crate::model::layout::TabId;
 
-use crate::tools::proc::collect;
-use crate::tools::sys;
+use crate::editors::proc::collect;
+use crate::editors::sys;
 
 use super::wake::Waker;
 use super::App;
@@ -28,8 +28,8 @@ use super::App;
 // Constants
 // ========================================================================
 
-/// The key that stops the running tasks of the tool tab it is pressed in,
-/// while it has some. `C-g`, Emacs' and magit's quit: a tool tab has no shell
+/// The key that stops the running tasks of the editor tab it is pressed in,
+/// while it has some. `C-g`, Emacs' and magit's quit: an editor tab has no shell
 /// to send it to, and a terminal tab never sees it taken.
 pub(crate) const STOP_TASKS_KEY: Key = Key {
     alt: false,
@@ -44,7 +44,7 @@ pub(crate) const STOP_TASKS_KEY: Key = Key {
 /// that waited long enough to run would be answering a stale question.
 const MAX_IN_FLIGHT: usize = 16;
 
-/// Matches a search reports before it stops. A tool shows a screenful at a
+/// Matches a search reports before it stops. An editor shows a screenful at a
 /// time, and a query loose enough to pass this is one to narrow, not to hold
 /// every answer to.
 const SEARCH_MAX_HITS: usize = 500;
@@ -103,7 +103,7 @@ const STREAM_CHUNK: usize = 8 * 1024;
 pub(crate) struct Jobs {
     next_id: u64,
     /// Answers given without running anything: requests turned away at
-    /// capacity, or whose worker could not start. Each still answers the tool
+    /// capacity, or whose worker could not start. Each still answers the editor
     /// that asked, which would otherwise wait for ever on a reply.
     refused: Vec<(TabId, JobReply)>,
     /// The jobs whose answers are still wanted. A cancelled job leaves this
@@ -126,7 +126,7 @@ struct RunningJob {
     started: Instant,
 }
 
-/// A finished job: which tool asked, and what came back.
+/// A finished job: which editor asked, and what came back.
 struct Finished {
     id: u64,
     tab: TabId,
@@ -170,7 +170,7 @@ impl Jobs {
     }
 
     /// Ask every job started for `tab` to stop, keeping their answers: a
-    /// stopped command still answers (as stopped), so the tool that asked
+    /// stopped command still answers (as stopped), so the editor that asked
     /// hears how it ended. Returns the command lines stopped.
     pub(crate) fn stop_for(&mut self, tab: TabId) -> Vec<String> {
         self.running
@@ -183,7 +183,7 @@ impl Jobs {
             .collect()
     }
 
-    /// The command lines of every program running, for a tool or not.
+    /// The command lines of every program running, for an editor or not.
     pub(crate) fn labels(&self) -> Vec<String> {
         self.running
             .values()
@@ -320,12 +320,12 @@ impl Capture {
 }
 
 // ========================================================================
-// App: tool jobs
+// App: editor jobs
 // ========================================================================
 
 impl App {
     /// Stop every task running for `tab`, saying what is being stopped. Each
-    /// still answers its tool, as stopped, once it has ended.
+    /// still answers its editor, as stopped, once it has ended.
     pub(crate) fn stop_tasks(&mut self, tab: TabId) {
         let stopped = self.jobs.stop_for(tab);
         match stopped.is_empty() {
@@ -342,16 +342,16 @@ impl App {
             .then(|| format!("{} to stop", format_key(&STOP_TASKS_KEY)))
     }
 
-    /// Hand each finished job's answer to the tool that asked for it.
+    /// Hand each finished job's answer to the editor that asked for it.
     pub(crate) fn deliver_finished_jobs(&mut self) -> bool {
         let finished = self.jobs.drain();
         let mut any = false;
         for (tab_id, reply) in finished {
-            let Some(slot) = self.open_tabs.tool_mut(&tab_id) else {
+            let Some(slot) = self.open_tabs.editor_mut(&tab_id) else {
                 continue;
             };
-            let outcome = slot.tool.on_job(reply);
-            self.act_on_tool_outcome(tab_id, outcome);
+            let outcome = slot.editor.on_job(reply);
+            self.act_on_editor_outcome(tab_id, outcome);
             any = true;
         }
         any
@@ -363,7 +363,7 @@ impl App {
 // ========================================================================
 
 /// The answer a request gets when it is not run at all, saying `why` where
-/// the reply has room for it. Every kind gets one, so no tool is left waiting
+/// the reply has room for it. Every kind gets one, so no editor is left waiting
 /// on a reply that will never come.
 fn refusal(request: &JobRequest, why: &str) -> JobReply {
     match request {
@@ -940,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn test_a_stopped_command_answers_its_tool_as_stopped() {
+    fn test_a_stopped_command_answers_its_editor_as_stopped() {
         let mut jobs = Jobs::new(Waker::default());
         let tab = TabId(1);
         jobs.spawn(tab, command("sleep", &["30"]));
@@ -1069,8 +1069,8 @@ mod tests {
     }
 
     #[test]
-    fn test_a_request_turned_away_at_capacity_still_answers_its_tool() {
-        // Regression: a dropped git read left the tool waiting on a reply
+    fn test_a_request_turned_away_at_capacity_still_answers_its_editor() {
+        // Regression: a dropped git read left the editor waiting on a reply
         // that never came, its view stuck as "watching".
         let mut jobs = full_runner();
         jobs.spawn(TabId(1), command("git", &["status"]));

@@ -22,7 +22,7 @@ use crate::model::picture::{Content, PictureClip, PictureFrame};
 use super::block_text::{csv_to_table, json_to_text};
 use super::canvas::{own_size, upload, Fit};
 use super::open_tabs::OpenTabs;
-use super::render::ToolPaint;
+use super::render::EditorPaint;
 use super::{App, ImageBlock};
 
 // ========================================================================
@@ -671,14 +671,14 @@ pub(super) fn image_placements(
     tabs: &OpenTabs,
     rects: &[(TabId, Rect)],
     cell_height: f32,
-    covered: &[ToolPaint],
+    covered: &[EditorPaint],
 ) -> Vec<ImagePlacement> {
     let mut placements: Vec<ImagePlacement> = Vec::new();
     for img in blocks {
         let Some((_, rect)) = rects.iter().find(|(id, _)| *id == img.tab_id) else {
             continue;
         };
-        // A tool owns every row of its tab, the same way an
+        // An editor owns every row of its tab, the same way an
         // alternate-screen app does below.
         if covered.iter().any(|paint| paint.tab == img.tab_id) {
             continue;

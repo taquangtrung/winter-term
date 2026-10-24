@@ -983,7 +983,11 @@ mod tests {
             &mut Vec::new(),
         );
         let sel = theme.selection_bg.as_linear();
-        assert_eq!(painted_cells(&verts, sel), 3, "the bar's cell is selected too");
+        assert_eq!(
+            painted_cells(&verts, sel),
+            3,
+            "the bar's cell is selected too"
+        );
     }
 
     #[test]

@@ -40,9 +40,9 @@ const GIT_SET: &str = "git";
 /// The set gutter marks are drawn from.
 const GUTTER_SET: &str = "gutter";
 
-/// Tool kind to the packed icon naming it. A kind not listed gets
-/// [`FALLBACK_TOOL_ICON`].
-const TOOL_ICONS: [(&str, &str); 9] = [
+/// Editor kind to the packed icon naming it. A kind not listed gets
+/// [`FALLBACK_EDITOR_ICON`].
+const EDITOR_ICONS: [(&str, &str); 9] = [
     ("dir", "file/default_folder"),
     ("git", "file/file_git"),
     ("grep", "file/file_search"),
@@ -57,8 +57,8 @@ const TOOL_ICONS: [(&str, &str); 9] = [
 /// The icon for a terminal tab: the app's own.
 const TERMINAL_ICON: &str = "app/winter-terminal";
 
-/// The icon for a tool with no artwork of its own.
-const FALLBACK_TOOL_ICON: &str = "file/default_file";
+/// The icon for an editor with no artwork of its own.
+const FALLBACK_EDITOR_ICON: &str = "file/default_file";
 
 // ========================================================================
 // Data Structures
@@ -154,13 +154,13 @@ fn git_icon(status: &str) -> String {
     qualified(GIT_SET, status)
 }
 
-/// The icon naming a kind of tool (`dir`, `git`, ...), or the default file
+/// The icon naming a kind of editor (`dir`, `git`, ...), or the default file
 /// icon when the kind has none of its own.
-fn tool_icon(kind: &str) -> String {
-    TOOL_ICONS
+fn editor_icon(kind: &str) -> String {
+    EDITOR_ICONS
         .iter()
         .find(|(name, _)| *name == kind)
-        .map_or(FALLBACK_TOOL_ICON, |(_, icon)| icon)
+        .map_or(FALLBACK_EDITOR_ICON, |(_, icon)| icon)
         .to_string()
 }
 
@@ -169,7 +169,7 @@ fn terminal_icon() -> String {
     TERMINAL_ICON.to_string()
 }
 
-/// The packed name for a tool's declared icon, or `None` when nothing is
+/// The packed name for an editor's declared icon, or `None` when nothing is
 /// bundled for it.
 pub(crate) fn name_for(kind: &IconKind) -> Option<String> {
     let name = match kind {
@@ -178,7 +178,7 @@ pub(crate) fn name_for(kind: &IconKind) -> Option<String> {
         IconKind::Git { status } => git_icon(status),
         IconKind::Gutter { mark } => qualified(GUTTER_SET, mark),
         IconKind::Terminal => terminal_icon(),
-        IconKind::Tool { kind } => tool_icon(kind),
+        IconKind::Editor { kind } => editor_icon(kind),
     };
     contains(&name).then_some(name)
 }
@@ -332,14 +332,14 @@ mod tests {
     }
 
     #[test]
-    fn test_tool_icons_are_all_packed() {
-        for (kind, icon) in TOOL_ICONS {
-            assert_eq!(tool_icon(kind), icon);
+    fn test_editor_icons_are_all_packed() {
+        for (kind, icon) in EDITOR_ICONS {
+            assert_eq!(editor_icon(kind), icon);
             assert!(contains(icon), "{icon} is not packed");
         }
         assert!(contains(TERMINAL_ICON));
-        assert!(contains(FALLBACK_TOOL_ICON));
-        assert_eq!(tool_icon("no-such-tool"), FALLBACK_TOOL_ICON);
+        assert!(contains(FALLBACK_EDITOR_ICON));
+        assert_eq!(editor_icon("no-such-tool"), FALLBACK_EDITOR_ICON);
     }
 
     #[test]

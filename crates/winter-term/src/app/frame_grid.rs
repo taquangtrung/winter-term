@@ -1,4 +1,4 @@
-//! Painting a tool's styled rows into a cell grid: each span's semantic
+//! Painting an editor's styled rows into a cell grid: each span's semantic
 //! style resolved against the theme, rows folded or clipped to the pane.
 
 use crate::model::paint::{
@@ -11,7 +11,7 @@ use winter_render::{Color, Grid, RgbColor, Style, Theme, ThemeRgb, SCOPE_RULES};
 // Constants
 // ========================================================================
 
-/// How far a tool's dim style is blended toward the background.
+/// How far an editor's dim style is blended toward the background.
 const PAGE_DIM_MIX: f32 = 0.45;
 
 /// How far an added or removed diff line's background is blended toward the
@@ -72,7 +72,7 @@ const TYPE_SCOPES: [&str; 9] = [
 // Functions
 // ========================================================================
 
-/// Paint a tool into a fresh `cols` x `rows` grid: its rows in order, each span
+/// Paint an editor into a fresh `cols` x `rows` grid: its rows in order, each span
 /// resolved from a semantic style to the theme's colors, clipped at the pane's
 /// last row.
 pub(super) fn build_frame_grid(
@@ -87,7 +87,7 @@ pub(super) fn build_frame_grid(
         return grid;
     }
     let mut screen = 0;
-    'tool: for (index, spans) in content.rows.iter().enumerate() {
+    'editor: for (index, spans) in content.rows.iter().enumerate() {
         // The column this row's wrapped continuations start at, reserving the
         // room its leading span gives the diff marker.
         let indent = wrap_start(content.wrap_indents.get(index).copied().unwrap_or(0), cols);
@@ -117,7 +117,7 @@ pub(super) fn build_frame_grid(
             if line > 0 {
                 screen += 1;
                 if screen >= rows {
-                    break 'tool;
+                    break 'editor;
                 }
                 col = indent;
                 if indent > 0 {
@@ -151,9 +151,9 @@ pub(super) fn build_frame_grid(
     grid
 }
 
-/// The screen row each of a tool's own rows starts on in a pane `cols` wide,
+/// The screen row each of an editor's own rows starts on in a pane `cols` wide,
 /// folded the way [`build_frame_grid`] folds them. An icon names its row among
-/// the tool's, so below a row that wrapped it lands only through this.
+/// the editor's, so below a row that wrapped it lands only through this.
 pub(super) fn screen_row_starts(content: &Frame, cols: usize, wrap: bool) -> Vec<usize> {
     let mut starts = Vec::with_capacity(content.rows.len());
     let mut screen = 0;
@@ -185,7 +185,7 @@ fn selected_style(style: Style, theme: &Theme) -> Style {
     }
 }
 
-/// Resolve a tool's semantic style against the active theme. The diff styles
+/// Resolve an editor's semantic style against the active theme. The diff styles
 /// tint the background with the theme's palette the way a diff editor does,
 /// rather than carrying colors of their own, so every theme gets bands that
 /// belong to it.
@@ -574,7 +574,7 @@ mod tests {
 
     #[test]
     fn test_frame_grid_clips_rows_past_the_pane_height() {
-        // A tool longer than its pane must lose the overflow, not write past
+        // An editor longer than its pane must lose the overflow, not write past
         // the grid's last row.
         let rows: Vec<Row> = (0..10)
             .map(|i| vec![Span::plain(format!("row{i}"))])
@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn test_screen_row_starts_follow_the_rows_the_grid_wrapped() {
         // An icon is placed by the start this returns, so it has to name the
-        // screen row the grid actually painted its row on: counting the tool's
+        // screen row the grid actually painted its row on: counting the editor's
         // rows instead puts every icon under a wrapped row one line too high.
         let content = Frame::new(vec![
             vec![Span::plain("aaaa bbbb")],

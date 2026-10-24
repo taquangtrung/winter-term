@@ -1,7 +1,7 @@
 //! Visual mode: acting on a selection.
 
+use crate::model::editor::Notice;
 use crate::model::input::{Key, KeyCode};
-use crate::model::tool::Notice;
 use crate::model::vim::grammar::{operator_of, OperatorKind};
 
 use super::{

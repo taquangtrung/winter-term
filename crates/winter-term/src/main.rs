@@ -178,7 +178,7 @@ fn run_reload() -> ExitCode {
 
 /// Stand in for `$EDITOR` under a program that blocks on it, such as
 /// `git commit`: have the running instance edit `file` and return once that
-/// tool closes, failing when the edit was discarded. The instance is the one
+/// editor closes, failing when the edit was discarded. The instance is the one
 /// listening on `--socket <path>`, or the first launched without it. With no
 /// instance to ask, run the user's own editor so the program is never left
 /// without one.

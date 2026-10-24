@@ -170,7 +170,10 @@ mod tests {
         // project picker reaches the workspace's top, find-file stays here.
         let here = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let files = list_files(&here).expect("this checkout lists");
-        assert!(files.iter().any(|file| file == "Cargo.toml"), "its own manifest");
+        assert!(
+            files.iter().any(|file| file == "Cargo.toml"),
+            "its own manifest"
+        );
         assert!(
             files.iter().all(|file| !file.starts_with("crates/")),
             "nothing from beside it in the workspace"

@@ -32,7 +32,7 @@ use super::App;
 /// Base texture ID for rasterized pane tab strips (below chrome overlay IDs).
 const PANE_STRIP_TEXTURE_BASE: u64 = u64::MAX - 200;
 
-/// What the tab list is headed by: rows naming tools and directories do not
+/// What the tab list is headed by: rows naming editors and directories do not
 /// say on their own what picking one would do.
 const TAB_LIST_TITLE: &str = "Tabs: open, then recently closed";
 
@@ -77,26 +77,26 @@ struct PaneViewInput<'a> {
     hovered_pane: Option<TabId>,
     hovered_url: Option<&'a str>,
     overlays: &'a PaneOverlays,
-    tool_paints: &'a [ToolPaint],
-    /// Where each tool's caret sits, and whether it is typing there.
-    tool_cursors: &'a std::collections::HashMap<TabId, PaneCaret>,
+    editor_paints: &'a [EditorPaint],
+    /// Where each editor's caret sits, and whether it is typing there.
+    editor_cursors: &'a std::collections::HashMap<TabId, PaneCaret>,
     /// The pane drawn as active: the focused one, or none while a popup has
     /// the keyboard, so every pane reads as inactive under it.
     active: Option<TabId>,
     rects: &'a [(TabId, Rect)],
     selection: Option<&'a super::Selection>,
-    /// Every open tab: the grid each tool last painted into, and each
+    /// Every open tab: the grid each editor last painted into, and each
     /// terminal with its mode.
     tabs: &'a OpenTabs,
     window_focused: bool,
 }
 
-/// One tool tab's painted frame: the grid the tool rendered itself into, and
+/// One editor tab's painted frame: the grid the editor rendered itself into, and
 /// the row its cursor line sits on.
-pub(super) struct ToolPaint {
+pub(super) struct EditorPaint {
     pub(super) cursor_line: Option<usize>,
     /// Icons to rasterize over the painted rows, each `row` already a screen
-    /// row of the pane rather than the tool's own row index.
+    /// row of the pane rather than the editor's own row index.
     pub(super) icons: Vec<Icon>,
     pub(super) tab: TabId,
 }
@@ -116,8 +116,8 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
         hovered_pane,
         hovered_url,
         overlays,
-        tool_cursors,
-        tool_paints,
+        editor_cursors,
+        editor_paints,
         rects,
         selection,
         tabs,
@@ -125,11 +125,11 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
     } = input;
     let mut views: Vec<PaneView> = Vec::new();
     for (i, (id, rect)) in rects.iter().enumerate() {
-        // A tool tab paints a grid of its own; every other tab drawn is a
+        // An editor tab paints a grid of its own; every other tab drawn is a
         // terminal.
-        if let Some(paint) = tool_paints.iter().find(|paint| paint.tab == *id) {
-            if let Some(grid) = tabs.tool(id).and_then(|slot| slot.painted.as_ref()) {
-                views.push(tool_pane_view(
+        if let Some(paint) = editor_paints.iter().find(|paint| paint.tab == *id) {
+            if let Some(grid) = tabs.editor(id).and_then(|slot| slot.painted.as_ref()) {
+                views.push(editor_pane_view(
                     paint,
                     grid,
                     *rect,
@@ -138,7 +138,7 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                     config,
                     blink_phase,
                     selection.filter(|s| s.tab == *id),
-                    tool_cursors.get(id).copied(),
+                    editor_cursors.get(id).copied(),
                     &overlays.search_matches[i],
                     &overlays.search_current[i],
                     flash_strength(flash, *id),
@@ -272,13 +272,13 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
     views
 }
 
-/// Build the view for a tool tab.
+/// Build the view for an editor tab.
 ///
-/// A tool has no terminal caret of its own, so the cursor is parked out of
-/// bounds (suppressing it) and the cursor line marks where the tool's own
-/// selection sits. A text selection over the tool is drawn here the same way a
-/// terminal draws one: the rows it names are the tool's, so it has to be
-/// resolved against the grid the tool painted.
+/// An editor has no terminal caret of its own, so the cursor is parked out of
+/// bounds (suppressing it) and the cursor line marks where the editor's own
+/// selection sits. A text selection over the editor is drawn here the same way a
+/// terminal draws one: the rows it names are the editor's, so it has to be
+/// resolved against the grid the editor painted.
 /// Where a pane's caret is drawn and how it reads: the cell it is on, and
 /// whether what is happening there is typing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -300,8 +300,8 @@ impl PaneCaret {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn tool_pane_view<'a>(
-    paint: &'a ToolPaint,
+fn editor_pane_view<'a>(
+    paint: &'a EditorPaint,
     grid: &'a Grid,
     rect: Rect,
     focused: bool,
@@ -321,17 +321,17 @@ fn tool_pane_view<'a>(
         ),
         None => (None, false),
     };
-    // A caret in a tool that does not have the keyboard, because another pane
+    // A caret in an editor that does not have the keyboard, because another pane
     // does or because the window lost focus, is drawn hollow.
     let caret_unfocused = text_cursor.is_some() && !(focused && window_focused);
     PaneView {
         overlay: None,
-        // Tools draw no program output, so nothing in them blinks.
+        // Editors draw no program output, so nothing in them blinks.
         blink_visible: true,
         bracket_colors: &[],
         block_band: None,
-        // A tool's caret is a block over the cell it is on, as the traversal
-        // cursor is everywhere else; a tool taking typed text takes the shape
+        // An editor's caret is a block over the cell it is on, as the traversal
+        // cursor is everywhere else; an editor taking typed text takes the shape
         // the terminal's own cursor has while typing, so the two read apart at
         // a glance. Without the keyboard it is the block's hollow outline,
         // whatever it was, since that is the one unfocused form that cannot be
@@ -349,15 +349,15 @@ fn tool_pane_view<'a>(
         labels: None,
         find_labels: &[],
         // Out of bounds when there is no text cursor, which suppresses it: a
-        // tool has no caret of its own, so the cursor line is the only mark of
-        // where the tool's own selection sits.
+        // editor has no caret of its own, so the cursor line is the only mark of
+        // where the editor's own selection sits.
         nav_cursor: Some(
             text_cursor
                 .map(|caret| (caret.row, caret.col))
                 .unwrap_or((grid.rows(), grid.cols())),
         ),
         cursor_line_row: paint.cursor_line,
-        // The caret's line while there is one, else the line the tool marks.
+        // The caret's line while there is one, else the line the editor marks.
         line_flash: flash.and_then(|strength| {
             let row = text_cursor.map(|caret| caret.row).or(paint.cursor_line)?;
             Some((row, strength))
@@ -394,8 +394,8 @@ fn palette_view(
         PaletteMode::TabList => "No matching tabs",
         PaletteMode::Files => "Nothing here by that name",
         PaletteMode::History => "No matching history",
-        PaletteMode::ToolPick => "Nothing matches",
-        PaletteMode::OpenWith => "No tool by that name",
+        PaletteMode::EditorPick => "Nothing matches",
+        PaletteMode::OpenWith => "No editor by that name",
         PaletteMode::Panes => "No matching panes",
         PaletteMode::TabKeys => "No key by that name",
         PaletteMode::Recent => "Nothing open or recent by that name",
@@ -477,8 +477,8 @@ fn mode_title(mode: &PaletteMode, pick: Option<&str>) -> String {
         PaletteMode::LiveSearch => "Search",
         PaletteMode::Swoop => "Swoop: lines of this pane",
         PaletteMode::TabList => TAB_LIST_TITLE,
-        // A tool's question names its own list.
-        PaletteMode::ToolPick => pick.unwrap_or("Pick one"),
+        // An editor's question names its own list.
+        PaletteMode::EditorPick => pick.unwrap_or("Pick one"),
     };
     title.to_string()
 }
@@ -576,7 +576,7 @@ pub(crate) struct FindTarget {
 
 impl App {
     /// The search being typed, for the find popup at the top-right of the
-    /// pane it searches: the terminal's `/` line, or a tool's search
+    /// pane it searches: the terminal's `/` line, or an editor's search
     /// question. How far it has got stays in the status bar; every other
     /// question is asked in a dialog (see [`App::input_view`]).
     pub(crate) fn find_target(&self) -> Option<FindTarget> {
@@ -592,7 +592,7 @@ impl App {
                 tab: self.tabs.layout.focused(),
             });
         }
-        let prompt = self.tool_prompt()?;
+        let prompt = self.editor_prompt()?;
         prompt.typed_search()?;
         Some(FindTarget {
             caret: prompt.field.col(),
@@ -605,11 +605,11 @@ impl App {
     /// The cells a search lights up in tab `id`: every match, then the one
     /// the search is on, which is drawn in a color of its own. The query is
     /// what a search question has had typed so far while one is open, and
-    /// the live search otherwise, so a tool's matches stay lit after `Enter`
+    /// the live search otherwise, so an editor's matches stay lit after `Enter`
     /// exactly as a terminal's do.
     fn search_highlight_cells(&self, id: TabId, focused: TabId) -> (Cells, Cells) {
         let typed = self
-            .tool_prompt()
+            .editor_prompt()
             .and_then(|prompt| prompt.typed_search())
             .map(|(text, _)| text);
         let Some(query) = typed
@@ -634,19 +634,19 @@ impl App {
             };
             return (visible_match_cells(grid, query), current);
         }
-        let Some(slot) = self.open_tabs.tool(&id) else {
+        let Some(slot) = self.open_tabs.editor(&id) else {
             return Default::default();
         };
         let Some(grid) = slot.painted.as_ref() else {
             return Default::default();
         };
         let spans = painted_match_spans(grid, query);
-        // A tool's search moves its cursor, so the match the cursor is on is
-        // the current one: the one under the caret where the tool has one,
+        // An editor's search moves its cursor, so the match the cursor is on is
+        // the current one: the one under the caret where the editor has one,
         // else the one on the cursor's row nearest it, so a caret a column
-        // off its match (a row's padding the tool does not count) still
+        // off its match (a row's padding the editor does not count) still
         // marks one. Only the focused tab has one, as only one terminal does.
-        let caret = slot.tool.caret().map(|caret| caret.col);
+        let caret = slot.editor.caret().map(|caret| caret.col);
         let current = slot
             .cursor_line
             .filter(|_| id == focused)
@@ -702,18 +702,18 @@ impl App {
         let focused = self.tabs.layout.focused();
         let strip_frames = self.strip_frames(viewport, (cw, ch));
         let mode = self.open_tabs.mode(&focused);
-        // Tools paint themselves into a grid of their own, so the renderer
-        // draws a tool tab through exactly the path a terminal tab takes. A
-        // tool is handed its row count first, so it can window a listing longer
+        // Editors paint themselves into a grid of their own, so the renderer
+        // draws an editor tab through exactly the path a terminal tab takes. A
+        // editor is handed its row count first, so it can window a listing longer
         // than the pane around its own cursor.
-        let mut tool_paints: Vec<ToolPaint> = Vec::new();
+        let mut editor_paints: Vec<EditorPaint> = Vec::new();
         for (id, rect) in &rects {
             let (cols, rows) = renderer.grid_size_for(App::layout_rect_to_pane(*rect));
-            let Some(slot) = self.open_tabs.tool_mut(id) else {
+            let Some(slot) = self.open_tabs.editor_mut(id) else {
                 continue;
             };
-            slot.tool.set_gutter_side(self.config.gutter_side);
-            let content = slot.tool.content(rows, cols, self.tool_wrap);
+            slot.editor.set_gutter_side(self.config.gutter_side);
+            let content = slot.editor.content(rows, cols, self.editor_wrap);
             // Kept on the slot rather than in the paint, so that selecting over
             // the pane after this frame reads the rows the user can see.
             slot.cursor_line = content.cursor_line;
@@ -722,11 +722,11 @@ impl App {
                 renderer.theme(),
                 cols,
                 rows,
-                self.tool_wrap,
+                self.editor_wrap,
             ));
             // A row that wrapped pushes every row after it down the pane, and
             // the icons beside them with it.
-            let starts = screen_row_starts(&content, cols, self.tool_wrap);
+            let starts = screen_row_starts(&content, cols, self.editor_wrap);
             let icons = content
                 .icons
                 .into_iter()
@@ -735,7 +735,7 @@ impl App {
                     Some(Icon { row, ..icon })
                 })
                 .collect();
-            tool_paints.push(ToolPaint {
+            editor_paints.push(EditorPaint {
                 cursor_line: content.cursor_line,
                 icons,
                 tab: *id,
@@ -745,7 +745,9 @@ impl App {
         let hovered_pane = self.hovered_pane(&rects);
         // A search question being typed is what the bar shows while it is
         // open, over any search already lit.
-        let typed = self.tool_prompt().and_then(|prompt| prompt.typed_search());
+        let typed = self
+            .editor_prompt()
+            .and_then(|prompt| prompt.typed_search());
         let search = typed
             .map(|(query, reverse)| (query.to_string(), reverse))
             .or_else(|| {
@@ -758,15 +760,14 @@ impl App {
                 match_total: self.search.match_total,
                 reverse,
             });
-        let status =
-            self.build_status_bar(mode, renderer.theme(), search, notice, &focused);
+        let status = self.build_status_bar(mode, renderer.theme(), search, notice, &focused);
         let status = status_enabled.then_some(&status);
         let mut palette_icons = std::mem::take(&mut self.palette_icons);
         let palette_view = self.palette().map(|p| {
             palette_view(
                 p,
                 self.config.palette_match_underline,
-                self.tool_pick().map(|pick| pick.label.as_str()),
+                self.editor_pick().map(|pick| pick.label.as_str()),
                 is_caret_lit(
                     self.config.cursor.blink,
                     self.window_focused,
@@ -802,9 +803,9 @@ impl App {
             ..view
         });
         self.palette_icons = palette_icons;
-        // A tool part-way through a multi-key command says so through the
+        // An editor part-way through a multi-key command says so through the
         // same card the terminal's own prefixes use, and says it at once: the
-        // menus are how the tools are learned, where the terminal's hints
+        // menus are how the editors are learned, where the terminal's hints
         // wait to see whether the typing stalls.
         // A key sequence waits the same delay as the terminal's prefixes.
         let sequence_view = self
@@ -820,8 +821,8 @@ impl App {
         let which_key_view = sequence_view
             .or_else(|| {
                 self.open_tabs
-                    .tool(&focused)
-                    .and_then(|slot| slot.tool.hint())
+                    .editor(&focused)
+                    .and_then(|slot| slot.editor.hint())
                     .map(|hint| winter_render::WhichKeyView {
                         items: hint.items,
                         title: hint.title,
@@ -833,25 +834,25 @@ impl App {
         let focused_bands = self.block_bands(focused);
         // Rasterized before the renderer is taken mutably below, since filling
         // the icon cache needs it mutably too.
-        let icon_placements = self.tool_icon_placements(&tool_paints, &rects, (cw, ch));
-        let shown_tools: Vec<TabId> = tool_paints.iter().map(|paint| paint.tab).collect();
-        let picture_placements = self.tool_canvas_placements(&shown_tools, &rects, ch);
-        // Every tool tab shows a block cursor, not only one that `v` has
+        let icon_placements = self.editor_icon_placements(&editor_paints, &rects, (cw, ch));
+        let shown_editors: Vec<TabId> = editor_paints.iter().map(|paint| paint.tab).collect();
+        let picture_placements = self.editor_canvas_placements(&shown_editors, &rects, ch);
+        // Every editor tab shows a block cursor, not only one that `v` has
         // started a text cursor in. The row band says which entry is current;
         // the cursor says which cell a selection would start from, and without
-        // it a tool looks like it has no cursor at all.
-        let tool_cursors: std::collections::HashMap<TabId, PaneCaret> = self
+        // it an editor looks like it has no cursor at all.
+        let editor_cursors: std::collections::HashMap<TabId, PaneCaret> = self
             .open_tabs
-            .tools()
+            .editors()
             .filter_map(|(id, slot)| {
-                if let Some(cursor) = self.tool_cursor.as_ref().filter(|c| c.tab == *id) {
+                if let Some(cursor) = self.editor_cursor.as_ref().filter(|c| c.tab == *id) {
                     return Some((*id, PaneCaret::at(cursor.row, cursor.col)));
                 }
                 let row = slot.cursor_line?;
-                // A tool that edits text says which cell it is on; one whose
+                // An editor that edits text says which cell it is on; one whose
                 // cursor is a whole row leaves it to the row's first painted
                 // character, which is where the eye starts reading it.
-                if let Some(caret) = slot.tool.caret() {
+                if let Some(caret) = slot.editor.caret() {
                     return Some((
                         *id,
                         PaneCaret {
@@ -864,7 +865,7 @@ impl App {
                 let grid = slot.painted.as_ref()?;
                 Some((
                     *id,
-                    PaneCaret::at(row, super::tool_cursor::first_non_blank(grid, row)),
+                    PaneCaret::at(row, super::editor_cursor::first_non_blank(grid, row)),
                 ))
             })
             .collect();
@@ -881,7 +882,7 @@ impl App {
             &self.open_tabs,
             &rects,
             ch,
-            &tool_paints,
+            &editor_paints,
         );
         placements.extend(picture_placements);
         placements.extend(icon_placements);
@@ -913,8 +914,8 @@ impl App {
             hovered_pane,
             hovered_url: self.pointer.hovered_url.as_deref(),
             overlays: &overlays,
-            tool_cursors: &tool_cursors,
-            tool_paints: &tool_paints,
+            editor_cursors: &editor_cursors,
+            editor_paints: &editor_paints,
             rects: &rects,
             selection: self.selection.span.as_ref(),
             tabs: &self.open_tabs,
@@ -1091,14 +1092,14 @@ impl App {
         slot
     }
 
-    /// Quads for every icon the tools want drawn this frame.
+    /// Quads for every icon the editors want drawn this frame.
     ///
-    /// Recomputed from scratch each frame rather than anchored, because a tool
+    /// Recomputed from scratch each frame rather than anchored, because an editor
     /// repaints its rows from its own model every frame anyway: there is no
     /// scrollback row for an icon to drift away from.
-    fn tool_icon_placements(
+    fn editor_icon_placements(
         &mut self,
-        paints: &[ToolPaint],
+        paints: &[EditorPaint],
         rects: &[(TabId, Rect)],
         cell: (f32, f32),
     ) -> Vec<ImagePlacement> {
@@ -1179,7 +1180,7 @@ impl App {
     fn render_settings_frame(&mut self) {
         // The field rather than the accessor, so the renderer beside it can
         // be held mutably while the page is read.
-        let Some(Overlay::Settings(tool)) = &self.overlay else {
+        let Some(Overlay::Settings(editor)) = &self.overlay else {
             return;
         };
         let Some(renderer) = &mut self.renderer else {
@@ -1187,7 +1188,7 @@ impl App {
         };
         let (cols, rows) = renderer.grid_size();
         let (cw, ch) = renderer.cell_size();
-        let grid = build_settings_grid(tool, renderer.theme(), cols, rows);
+        let grid = build_settings_grid(editor, renderer.theme(), cols, rows);
         let view = PaneView {
             overlay: None,
             blink_visible: true,
@@ -1286,10 +1287,10 @@ fn effective_cursor_shape(
     }
 }
 
-/// The match among `spans` (`(row, start, end)` in painted cells) a tool's
+/// The match among `spans` (`(row, start, end)` in painted cells) an editor's
 /// cursor is on, on cursor row `row`: the one under the caret at column
 /// `caret`, else the one nearest it, so a caret a column off its match (a
-/// row's padding the tool does not count) still marks one; with no caret,
+/// row's padding the editor does not count) still marks one; with no caret,
 /// the row's first.
 fn current_span(
     spans: &[(usize, usize, usize)],
@@ -1326,23 +1327,23 @@ fn cursor_line_row(mode: Mode, nav_cursor: Option<(usize, usize)>) -> Option<usi
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::tool;
+    use crate::app::editor;
 
     #[test]
-    fn test_a_lit_search_marks_a_tools_matches_and_the_one_its_cursor_is_on() {
+    fn test_a_lit_search_marks_an_editors_matches_and_the_one_its_cursor_is_on() {
         let dir = std::env::temp_dir().join(format!("winter-lit-tool-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("temp dir");
         let mut app = App::new();
-        let tab = app.show_tool(
-            super::super::tool::ToolKind::Dir,
-            Box::new(crate::tools::dir::DirTool::new(dir.clone())),
+        let tab = app.show_editor(
+            super::super::editor::EditorKind::Dir,
+            Box::new(crate::editors::dir::DirEditor::new(dir.clone())),
         );
         let mut grid = Grid::new(10, 3);
         for (row, line) in ["a mod", "mod mod", "x"].iter().enumerate() {
             grid.move_to(row, 0);
             line.chars().for_each(|ch| grid.print(ch));
         }
-        let slot = app.open_tabs.tool_mut(&tab).expect("the tool");
+        let slot = app.open_tabs.editor_mut(&tab).expect("the editor");
         slot.painted = Some(grid);
         slot.cursor_line = Some(1);
         app.search.query = Some("mod".to_string());
@@ -1370,16 +1371,24 @@ mod tests {
     #[test]
     fn test_the_current_match_is_under_the_caret_or_else_nearest_it() {
         let spans = [(0, 2, 5), (1, 0, 3), (1, 8, 11)];
-        assert_eq!(current_span(&spans, 1, Some(9)), Some(&(1, 8, 11)), "under it");
-        assert_eq!(current_span(&spans, 1, Some(6)), Some(&(1, 8, 11)), "nearest");
+        assert_eq!(
+            current_span(&spans, 1, Some(9)),
+            Some(&(1, 8, 11)),
+            "under it"
+        );
+        assert_eq!(
+            current_span(&spans, 1, Some(6)),
+            Some(&(1, 8, 11)),
+            "nearest"
+        );
         assert_eq!(current_span(&spans, 1, None), Some(&(1, 0, 3)), "the first");
         assert_eq!(current_span(&spans, 2, Some(0)), None, "none on the row");
     }
 
     #[test]
-    fn test_a_tool_caret_without_the_keyboard_is_a_hollow_block() {
+    fn test_an_editor_caret_without_the_keyboard_is_a_hollow_block() {
         let grid = Grid::new(10, 3);
-        let paint = ToolPaint {
+        let paint = EditorPaint {
             cursor_line: Some(0),
             icons: Vec::new(),
             tab: TabId(1),
@@ -1393,7 +1402,7 @@ mod tests {
             row: 0,
         });
         let view = |focused: bool, window_focused: bool, caret: Option<PaneCaret>| {
-            let view = tool_pane_view(
+            let view = editor_pane_view(
                 &paint,
                 &grid,
                 rect,
@@ -1432,9 +1441,9 @@ mod tests {
     }
 
     #[test]
-    fn test_a_tool_caret_blinks_with_the_global_setting() {
+    fn test_an_editor_caret_blinks_with_the_global_setting() {
         let grid = Grid::new(10, 3);
-        let paint = ToolPaint {
+        let paint = EditorPaint {
             cursor_line: Some(0),
             icons: Vec::new(),
             tab: TabId(1),
@@ -1443,7 +1452,7 @@ mod tests {
         let caret = Some(PaneCaret::at(0, 1));
         let mut config = crate::config::Config::default();
         let shown = |config: &crate::config::Config, focused, phase, caret| {
-            tool_pane_view(
+            editor_pane_view(
                 &paint,
                 &grid,
                 rect,
@@ -1551,7 +1560,7 @@ mod tests {
                 Some("Checkout")
             ),
             "Checkout",
-            "a tool's question names its own list"
+            "an editor's question names its own list"
         );
 
         let browsing = Palette::open_files(std::env::temp_dir());
@@ -1624,21 +1633,21 @@ mod tests {
         assert!(app.find_target().is_none());
         assert!(app.input_view().is_none());
 
-        let prompt = tool::ActivePrompt {
+        let prompt = editor::ActivePrompt {
             buttons: None,
             field: crate::model::textedit::field::TextField::line("hello"),
             recall: crate::model::textedit::recall::Recall::default(),
             tab: TabId(0),
-            request: crate::model::tool::PromptRequest {
+            request: crate::model::editor::PromptRequest {
                 initial: String::new(),
                 label: "find".to_string(),
-                mode: crate::model::tool::PromptMode::Text,
+                mode: crate::model::editor::PromptMode::Text,
                 tag: "search",
             },
         };
-        app.overlay = Some(Overlay::ToolPrompt(prompt));
+        app.overlay = Some(Overlay::EditorPrompt(prompt));
         assert!(app.find_target().is_none(), "a question is not a search");
-        let dialog = app.input_view().expect("a tool's question");
+        let dialog = app.input_view().expect("an editor's question");
         assert_eq!(dialog.label, "find");
         assert_eq!(dialog.input.as_deref(), Some("hello"));
         assert_eq!(dialog.caret, 5);
@@ -1651,23 +1660,28 @@ mod tests {
         assert_eq!(dialog.label, "New theme name");
         assert_eq!(dialog.input.as_deref(), Some("dracula"));
 
-        // A tool's search is typed in the find popup, not a dialog.
-        app.overlay = Some(Overlay::ToolPrompt(tool::ActivePrompt {
+        // An editor's search is typed in the find popup, not a dialog.
+        app.overlay = Some(Overlay::EditorPrompt(editor::ActivePrompt {
             buttons: None,
             field: crate::model::textedit::field::TextField::line("needle"),
             recall: crate::model::textedit::recall::Recall::default(),
             tab: TabId(3),
-            request: crate::model::tool::PromptRequest {
+            request: crate::model::editor::PromptRequest {
                 initial: String::new(),
                 label: "?".to_string(),
-                mode: crate::model::tool::PromptMode::Search { reverse: true },
+                mode: crate::model::editor::PromptMode::Search { reverse: true },
                 tag: "search-back",
             },
         }));
         assert!(app.input_view().is_none(), "no dialog for a search");
-        let target = app.find_target().expect("the tool's search");
+        let target = app.find_target().expect("the editor's search");
         assert_eq!(
-            (target.tab, target.label.as_str(), target.query.as_str(), target.caret),
+            (
+                target.tab,
+                target.label.as_str(),
+                target.query.as_str(),
+                target.caret
+            ),
             (TabId(3), "?", "needle", 6)
         );
 

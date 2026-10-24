@@ -16,7 +16,7 @@ pub(super) use upload::OverlayCaches;
 // ========================================================================
 
 /// Texture slots for the status bar's icons, from the left: one per quota
-/// logo and the tool's icon. No more icons are drawn than there are slots.
+/// logo and the editor's icon. No more icons are drawn than there are slots.
 pub(in crate::renderer) const STATUS_ICON_TEXTURE_IDS: [u64; 4] =
     [u64::MAX - 12, u64::MAX - 13, u64::MAX - 14, u64::MAX - 15];
 
@@ -26,7 +26,7 @@ pub(in crate::renderer) const STATUS_ICON_TEXTURE_IDS: [u64; 4] =
 pub(in crate::renderer) const PALETTE_ITEM_PAD_Y: f32 = 4.0;
 
 /// Side of an icon's square beside a line of chrome text (a tab title, a
-/// palette entry, the status bar's tool), as a fraction of cell height. One
+/// palette entry, the status bar's editor), as a fraction of cell height. One
 /// size for all of them, so a file reads the same wherever it is named.
 pub(in crate::renderer) const ICON_HEIGHT_RATIO: f32 = 0.85;
 

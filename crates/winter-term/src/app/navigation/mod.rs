@@ -2963,9 +2963,9 @@ mod tests {
     }
 
     #[test]
-    fn test_buffer_jump_on_a_tool_previews_confirms_and_cancels() {
-        use crate::app::tool::ToolKind;
-        use crate::tools::dir::DirTool;
+    fn test_buffer_jump_on_an_editor_previews_confirms_and_cancels() {
+        use crate::app::editor::EditorKind;
+        use crate::editors::dir::DirEditor;
         use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
         let mut app = App::new();
@@ -2974,10 +2974,10 @@ mod tests {
         let _ = std::fs::write(dir.join("a.txt"), "hello");
         let _ = std::fs::write(dir.join("b.txt"), "world");
 
-        let tool = Box::new(DirTool::new(dir.clone()));
-        let id = app.show_tool(ToolKind::Dir, tool);
+        let editor = Box::new(DirEditor::new(dir.clone()));
+        let id = app.show_editor(EditorKind::Dir, editor);
 
-        // Open Jump over the tool
+        // Open Jump over the editor
         app.open_jump(id);
         let palette = app.palette().expect("palette active");
         assert_eq!(palette.mode, crate::model::palette::PaletteMode::Jump);
@@ -2988,13 +2988,19 @@ mod tests {
         let phys = PhysicalKey::Unidentified(winit::keyboard::NativeKeyCode::Unidentified);
         app.press_palette_key(&key_down, &phys, id);
 
-        assert_eq!(app.open_tabs.tool(&id).unwrap().tool.jump_cursor(), Some(1));
+        assert_eq!(
+            app.open_tabs.editor(&id).unwrap().editor.jump_cursor(),
+            Some(1)
+        );
 
         // Escape cancels and restores to 0
         let key_esc = Key::Named(NamedKey::Escape);
         app.press_palette_key(&key_esc, &phys, id);
         assert!(app.palette().is_none());
-        assert_eq!(app.open_tabs.tool(&id).unwrap().tool.jump_cursor(), Some(0));
+        assert_eq!(
+            app.open_tabs.editor(&id).unwrap().editor.jump_cursor(),
+            Some(0)
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

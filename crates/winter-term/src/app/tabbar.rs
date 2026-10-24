@@ -7,12 +7,12 @@
 
 use winter_render::{ContextMenu, Menu, MenuItem, MenuStyle, TabbarHit, TopTabbar};
 
-use crate::model::layout::TabId;
 use crate::model::input::format_key;
+use crate::model::layout::TabId;
 use crate::model::paint::Point;
 
 use super::strip::StripHit;
-use super::{App, ContextAction, ToolKeyAction};
+use super::{App, ContextAction, EditorKeyAction};
 use crate::config::TitleBarStyle;
 
 // ========================================================================
@@ -197,13 +197,13 @@ fn menu_item(item: &ItemDef) -> MenuItem {
 // ========================================================================
 
 impl App {
-    /// How a strip names one tab: a name the user gave it, a tool's own
+    /// How a strip names one tab: a name the user gave it, an editor's own
     /// label, else what the terminal says about itself.
     pub(crate) fn tab_title(&self, focused: TabId) -> String {
         if let Some(name) = self.tabs.name(focused) {
             return name.to_string();
         }
-        if let Some(slot) = self.open_tabs.tool(&focused) {
+        if let Some(slot) = self.open_tabs.editor(&focused) {
             return slot.tab_label();
         }
         // An OSC 0/2 title is the app's own presentation of itself (butterfly,
@@ -332,12 +332,12 @@ impl App {
                         super::ContextAction::Paste => "Paste".into(),
                         super::ContextAction::OpenLink(_) => "Open Link".into(),
                         super::ContextAction::Separator => SEPARATOR.label.into(),
-                        super::ContextAction::ToolKey(action) => action.label.clone(),
+                        super::ContextAction::EditorKey(action) => action.label.clone(),
                     },
-                    // A tool's entry names the keys it types, so the menu
+                    // An editor's entry names the keys it types, so the menu
                     // teaches them.
                     shortcut: match a {
-                        super::ContextAction::ToolKey(action) => keys_label(&action.keys),
+                        super::ContextAction::EditorKey(action) => keys_label(&action.keys),
                         _ => String::new(),
                     },
                 })
@@ -381,9 +381,9 @@ impl App {
     /// abbreviated to `~`.
     fn titlebar_path(&self) -> String {
         let focused = self.layout().focused();
-        if let Some(slot) = self.open_tabs.tool(&focused) {
+        if let Some(slot) = self.open_tabs.editor(&focused) {
             let kind = slot.kind().title();
-            let target = slot.tool.address();
+            let target = slot.editor.address();
             return match target {
                 Some(tgt) if !tgt.is_empty() => format!("{kind}: {tgt}"),
                 _ => kind.to_string(),
@@ -426,16 +426,16 @@ impl App {
 
     /// Open a right-click context menu at `(x, y)`.
     ///
-    /// Over a tool the menu is the tool's own, because the terminal's
+    /// Over an editor the menu is the editor's own, because the terminal's
     /// entries mean nothing there: a paste would go to the shell running
     /// underneath the listing, which is not what was clicked on.
     pub(crate) fn open_context_menu(&mut self, x: f32, y: f32) {
         use super::ContextAction;
         let over_page = self
             .pane_at_pixel(x, y)
-            .is_some_and(|(tab_id, _)| self.open_tabs.is_tool(&tab_id));
+            .is_some_and(|(tab_id, _)| self.open_tabs.is_editor(&tab_id));
         let mut actions: Vec<ContextAction> = match over_page {
-            true => self.tool_context_actions(x, y),
+            true => self.editor_context_actions(x, y),
             false => Vec::new(),
         };
         let mut window = Vec::new();
@@ -448,12 +448,12 @@ impl App {
                 window.push(ContextAction::OpenLink(url.clone()));
             }
         }
-        // The window's own entries are a group apart from the tool's.
+        // The window's own entries are a group apart from the editor's.
         if !actions.is_empty() && !window.is_empty() {
             actions.push(ContextAction::Separator);
         }
         actions.extend(window);
-        // A tool with nothing to offer over this row gets no empty card.
+        // An editor with nothing to offer over this row gets no empty card.
         if actions.is_empty() {
             self.close_context_menu();
             return;
@@ -466,14 +466,14 @@ impl App {
         self.dirty = true;
     }
 
-    /// What the tool under `(x, y)` offers over the row that was
+    /// What the editor under `(x, y)` offers over the row that was
     /// clicked.
     ///
-    /// The pointer moves the tool's cursor first, so the menu acts on the row
+    /// The pointer moves the editor's cursor first, so the menu acts on the row
     /// it was opened over rather than wherever the keyboard last left the
     /// cursor: right-clicking a file in Git and choosing "stage it" stages
     /// that file, not the one that happened to be under the cursor.
-    fn tool_context_actions(&mut self, x: f32, y: f32) -> Vec<super::ContextAction> {
+    fn editor_context_actions(&mut self, x: f32, y: f32) -> Vec<super::ContextAction> {
         let Some((tab_id, pane_rect)) = self.pane_at_pixel(x, y) else {
             return Vec::new();
         };
@@ -483,20 +483,20 @@ impl App {
             drag: false,
             row,
         };
-        let outcome = match self.open_tabs.tool_mut(&tab_id) {
-            Some(slot) => slot.tool.on_context_mouse(at),
+        let outcome = match self.open_tabs.editor_mut(&tab_id) {
+            Some(slot) => slot.editor.on_context_mouse(at),
             None => return Vec::new(),
         };
-        self.act_on_tool_outcome(tab_id, outcome);
-        let Some(slot) = self.open_tabs.tool(&tab_id) else {
+        self.act_on_editor_outcome(tab_id, outcome);
+        let Some(slot) = self.open_tabs.editor(&tab_id) else {
             return Vec::new();
         };
-        slot.tool
+        slot.editor
             .context_items()
             .into_iter()
             .map(|item| match item.is_separator() {
                 true => super::ContextAction::Separator,
-                false => super::ContextAction::ToolKey(ToolKeyAction {
+                false => super::ContextAction::EditorKey(EditorKeyAction {
                     keys: item.keys,
                     label: item.label,
                     tab: tab_id,
@@ -524,9 +524,9 @@ impl App {
             super::ContextAction::Paste => self.paste_from_clipboard(),
             super::ContextAction::OpenLink(url) => self.open_link(&url),
             super::ContextAction::Separator => {}
-            super::ContextAction::ToolKey(action) => {
+            super::ContextAction::EditorKey(action) => {
                 for key in &action.keys {
-                    self.offer_key_to_tool(action.tab, key);
+                    self.offer_key_to_editor(action.tab, key);
                 }
             }
         }
@@ -751,11 +751,11 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::tool::ToolKind;
+    use crate::app::editor::EditorKind;
+    use crate::editors::keys::KeysEditor;
+    use crate::model::editor::{Editor, EditorOutcome};
     use crate::model::input::{Key, Keymap};
     use crate::model::paint::Frame;
-    use crate::model::tool::{Tool, ToolOutcome};
-    use crate::tools::keys::KeysTool;
 
     #[test]
     fn test_modern_has_one_menu_classic_has_several() {
@@ -868,32 +868,35 @@ mod tests {
     }
 
     #[test]
-    fn test_a_tool_tab_is_named_after_its_kind() {
+    fn test_an_editor_tab_is_named_after_its_kind() {
         let mut app = App::new();
-        let keys = app.show_tool(ToolKind::Keys, Box::new(KeysTool::new(&Keymap::default())));
+        let keys = app.show_editor(
+            EditorKind::Keys,
+            Box::new(KeysEditor::new(&Keymap::default())),
+        );
         assert_eq!(
             app.tab_title(keys),
             "Keys",
             "a title restating the kind is not doubled up"
         );
 
-        // The icon before the title says which kind the tool is, so the
+        // The icon before the title says which kind the editor is, so the
         // title is not prefixed with it.
         struct Titled(&'static str);
-        impl Tool for Titled {
+        impl Editor for Titled {
             fn title(&self) -> String {
                 self.0.to_string()
             }
             fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> Frame {
                 Frame::default()
             }
-            fn on_key(&mut self, _key: &Key) -> ToolOutcome {
-                ToolOutcome::Consumed
+            fn on_key(&mut self, _key: &Key) -> EditorOutcome {
+                EditorOutcome::Consumed
             }
         }
-        let dir = app.show_tool(ToolKind::Dir, Box::new(Titled("winter-term")));
+        let dir = app.show_editor(EditorKind::Dir, Box::new(Titled("winter-term")));
         assert_eq!(app.tab_title(dir), "winter-term");
-        let proc = app.show_tool(ToolKind::Proc, Box::new(Titled("firefox")));
+        let proc = app.show_editor(EditorKind::Proc, Box::new(Titled("firefox")));
         assert_eq!(app.tab_title(proc), "firefox");
     }
 
@@ -911,11 +914,14 @@ mod tests {
     }
 
     #[test]
-    fn test_a_renamed_tab_keeps_its_name_over_a_tool_label() {
-        // An explicit name is the user's own act; the tool's label must not
+    fn test_a_renamed_tab_keeps_its_name_over_an_editor_label() {
+        // An explicit name is the user's own act; the editor's label must not
         // overwrite it.
         let mut app = App::new();
-        let keys = app.show_tool(ToolKind::Keys, Box::new(KeysTool::new(&Keymap::default())));
+        let keys = app.show_editor(
+            EditorKind::Keys,
+            Box::new(KeysEditor::new(&Keymap::default())),
+        );
         app.tabs.set_name(keys, Some("work".to_string()));
         assert_eq!(app.tab_title(keys), "work");
     }
@@ -965,22 +971,22 @@ mod tests {
         // With no cwd or foreground process, the terminal shows its name.
         assert_eq!(app.titlebar_path(), "Terminal");
 
-        // When a tool with file reference / cwd is focused:
-        struct MockTool {
+        // When an editor with file reference / cwd is focused:
+        struct MockEditor {
             cwd: Option<std::path::PathBuf>,
             root_dir: Option<std::path::PathBuf>,
             file_ref: Option<String>,
             address: Option<String>,
         }
-        impl Tool for MockTool {
+        impl Editor for MockEditor {
             fn title(&self) -> String {
                 "sample.rs".to_string()
             }
             fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> Frame {
                 Frame::default()
             }
-            fn on_key(&mut self, _key: &Key) -> ToolOutcome {
-                ToolOutcome::Consumed
+            fn on_key(&mut self, _key: &Key) -> EditorOutcome {
+                EditorOutcome::Consumed
             }
             fn cwd(&self) -> Option<std::path::PathBuf> {
                 self.cwd.clone()
@@ -996,21 +1002,21 @@ mod tests {
             }
         }
 
-        let _editor = app.show_tool(
-            ToolKind::Editor,
-            Box::new(MockTool {
+        let _editor = app.show_editor(
+            EditorKind::Text,
+            Box::new(MockEditor {
                 cwd: Some(std::path::PathBuf::from("/home/user/project")),
                 root_dir: None,
                 file_ref: Some("~/project/src/lib.rs:42".to_string()),
                 address: Some("~/project/src/lib.rs".to_string()),
             }),
         );
-        assert_eq!(app.titlebar_path(), "Editor: ~/project/src/lib.rs");
+        assert_eq!(app.titlebar_path(), "Text Editor: ~/project/src/lib.rs");
 
         let home = std::env::var("HOME").unwrap_or_else(|_| "/home/user".to_string());
-        let _files = app.show_tool(
-            ToolKind::Dir,
-            Box::new(MockTool {
+        let _files = app.show_editor(
+            EditorKind::Dir,
+            Box::new(MockEditor {
                 cwd: Some(std::path::PathBuf::from(format!("{home}/docs/subfolder"))),
                 root_dir: Some(std::path::PathBuf::from(format!("{home}/docs"))),
                 file_ref: Some("~/docs/subfolder/active_file.txt".to_string()),
@@ -1019,9 +1025,9 @@ mod tests {
         );
         assert_eq!(app.titlebar_path(), "Dir: ~/docs");
 
-        let _keys = app.show_tool(
-            ToolKind::Keys,
-            Box::new(MockTool {
+        let _keys = app.show_editor(
+            EditorKind::Keys,
+            Box::new(MockEditor {
                 cwd: None,
                 root_dir: None,
                 file_ref: None,
@@ -1030,11 +1036,11 @@ mod tests {
         );
         assert_eq!(app.titlebar_path(), "Keys");
 
-        // The bar names the tool's address, not wherever its cursor has
+        // The bar names the editor's address, not wherever its cursor has
         // wandered: the folder or reference it follows is ignored.
-        let _git = app.show_tool(
-            ToolKind::Git,
-            Box::new(MockTool {
+        let _git = app.show_editor(
+            EditorKind::Git,
+            Box::new(MockEditor {
                 cwd: Some(std::path::PathBuf::from("/home/user/repo/src")),
                 root_dir: None,
                 file_ref: Some("~/repo/src".to_string()),
@@ -1043,11 +1049,11 @@ mod tests {
         );
         assert_eq!(app.titlebar_path(), "Git: ~/repo");
 
-        // A tool with no address of its own is named by its kind alone, even
+        // An editor with no address of its own is named by its kind alone, even
         // when it has a cursor-following folder to offer.
-        let _procs = app.show_tool(
-            ToolKind::Proc,
-            Box::new(MockTool {
+        let _procs = app.show_editor(
+            EditorKind::Proc,
+            Box::new(MockEditor {
                 cwd: Some(std::path::PathBuf::from("/home/user/work")),
                 root_dir: None,
                 file_ref: Some("~/work".to_string()),

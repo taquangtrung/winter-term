@@ -25,7 +25,7 @@ const RIGHT_MARGIN: usize = 1;
 /// The fewest cells kept between the status bar's left text and its right.
 const RIGHT_GAP: usize = 2;
 
-/// The cells the tool's icon is drawn over, kept blank in the text: the
+/// The cells the editor's icon is drawn over, kept blank in the text: the
 /// artwork is square and a cell is about half as wide as it is tall.
 const ICON_SLOT: &str = "  ";
 
@@ -658,7 +658,11 @@ mod tests {
         // The position on the left holds on while the quota to its right,
         // ranked lower, gives way.
         let texts = ["12:5", "17% 30%", "1% 1%"].map(String::from);
-        let parts = [segment("12:5", 3), segment("17% 30%", 1), segment("1% 1%", 2)];
+        let parts = [
+            segment("12:5", 3),
+            segment("17% 30%", 1),
+            segment("1% 1%", 2),
+        ];
         assert_eq!(kept(&texts, &parts, 30), [0, 2]);
         assert_eq!(kept(&texts, &parts, 8), [0]);
     }
@@ -681,7 +685,7 @@ mod tests {
             short: Some("42%".to_string()),
             text: "42% 14:05".to_string(),
         };
-        let tool = StatusSegment {
+        let editor = StatusSegment {
             icon: Some(logo),
             priority: 0,
             short: None,
@@ -690,7 +694,7 @@ mod tests {
         assert_eq!(rendered(&quota, false), "   42% 14:05");
         assert_eq!(rendered(&quota, true), "   42%");
         assert_eq!(
-            rendered(&tool, false),
+            rendered(&editor, false),
             ICON_SLOT,
             "a bare icon is just its slot"
         );

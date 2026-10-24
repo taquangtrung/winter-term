@@ -7,10 +7,10 @@ use std::time::{Instant, SystemTime};
 
 use winter_render::{NoticeKind, StatusBell, StatusNotice, ToastCard, ToastHit};
 
+use crate::editors::notifications::NotificationsEditor;
 use crate::model::notify::{Notice, Notification, Severity};
-use crate::tools::notifications::NotificationsTool;
 
-use super::tool::ToolKind;
+use super::editor::EditorKind;
 use super::App;
 
 // ========================================================================
@@ -22,7 +22,6 @@ const BELL_ICON: char = '\u{eaa2}';
 
 /// The bell with a dot, while an error or a warning is unread.
 const BELL_UNREAD_ICON: char = '\u{eb9a}';
-
 
 // ========================================================================
 // Free functions
@@ -225,9 +224,9 @@ impl App {
     pub(crate) fn open_notifications(&mut self) {
         self.notifier.log.mark_read();
         self.notifier.toasts.dismiss_all();
-        if !self.show_open_tool(ToolKind::Notifications) {
-            let tool = NotificationsTool::new(self.notification_entries(), now_seconds());
-            self.show_tool(ToolKind::Notifications, Box::new(tool));
+        if !self.show_open_editor(EditorKind::Notifications) {
+            let editor = NotificationsEditor::new(self.notification_entries(), now_seconds());
+            self.show_editor(EditorKind::Notifications, Box::new(editor));
         }
         self.sync_notification_tabs();
         self.dirty = true;
@@ -242,9 +241,9 @@ impl App {
     pub(crate) fn sync_notification_tabs(&mut self) {
         let entries = self.notification_entries();
         let now = now_seconds();
-        for (_, slot) in self.open_tabs.tools_mut() {
-            if slot.kind() == ToolKind::Notifications {
-                slot.tool.set_notifications(&entries, now);
+        for (_, slot) in self.open_tabs.editors_mut() {
+            if slot.kind() == EditorKind::Notifications {
+                slot.editor.set_notifications(&entries, now);
             }
         }
     }
@@ -277,13 +276,16 @@ mod tests {
         assert_eq!(app.status_bell().text, BELL_ICON.to_string());
         assert!(app.notice_text().is_none(), "the toasts went into the list");
         let tab = app.layout().focused();
-        let slot = app.open_tabs.tool(&tab).expect("the history is open in a tab");
-        assert_eq!(slot.kind(), ToolKind::Notifications);
+        let slot = app
+            .open_tabs
+            .editor(&tab)
+            .expect("the history is open in a tab");
+        assert_eq!(slot.kind(), EditorKind::Notifications);
         app.open_notifications();
         let tabs = app
             .open_tabs
-            .tools()
-            .filter(|(_, slot)| slot.kind() == ToolKind::Notifications)
+            .editors()
+            .filter(|(_, slot)| slot.kind() == EditorKind::Notifications)
             .count();
         assert_eq!(tabs, 1, "opening it again goes to the tab it has");
 

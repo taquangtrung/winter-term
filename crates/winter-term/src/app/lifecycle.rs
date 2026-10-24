@@ -91,7 +91,7 @@ impl App {
             next_image_id: 0,
             icon_textures: HashMap::new(),
             icon_texture_box: (0, 0),
-            tool_textures: HashMap::new(),
+            editor_textures: HashMap::new(),
             palette_icons: HashMap::new(),
             jobs: Jobs::new(waker.clone()),
             quota: None,
@@ -100,8 +100,8 @@ impl App {
             search_debounce: None,
             prompt_answers: Answers::default(),
             error_walk: None,
-            tool_cursor: None,
-            tool_wrap: false,
+            editor_cursor: None,
+            editor_wrap: false,
             commit_companions: HashMap::new(),
             open_tabs: OpenTabs::default(),
             closed: Vec::new(),
@@ -243,7 +243,7 @@ impl App {
                 self.reveal_recent_terminal();
             }
             "toggle_mode" => {
-                // A tool tab has no mode to toggle, and is left as it is.
+                // An editor tab has no mode to toggle, and is left as it is.
                 if let Some(mode) = self.open_tabs.mode(&focused) {
                     let new_mode = match mode {
                         Mode::Insert => Mode::Normal,
@@ -262,10 +262,10 @@ impl App {
                 self.close_pane(focused);
             }
             "dir_page" => {
-                self.open_dir_tool();
+                self.open_dir_editor();
             }
             "editor_show_scopes" => {
-                self.run_tool_command(focused, crate::tools::editor::SHOW_SCOPES);
+                self.run_editor_command(focused, crate::editors::text::SHOW_SCOPES);
             }
             "live_search" => {
                 self.open_live_search();
@@ -295,19 +295,19 @@ impl App {
                 self.open_target_browser(crate::remote::Kind::Ssh);
             }
             "git_page" => {
-                self.open_git_tool();
+                self.open_git_editor();
             }
             "grep_page" => {
-                self.open_grep_tool();
+                self.open_grep_editor();
             }
             "proc_page" => {
-                self.open_proc_tool();
+                self.open_proc_editor();
             }
             "sys_page" => {
-                self.open_sys_tool();
+                self.open_sys_editor();
             }
             "keys_page" | "keys_view" => {
-                self.open_keys_tool();
+                self.open_keys_editor();
             }
             "reopen_page" => {
                 self.reopen_last_closed();
@@ -565,7 +565,7 @@ impl App {
             let saved = Session::save(
                 &self.tabs.layout,
                 &self.open_tabs.terminal_map(),
-                self.tool_sessions(),
+                self.editor_sessions(),
             );
             // The window is going: there is no status bar left to say it in.
             if let Err(e) = saved {
@@ -601,7 +601,7 @@ impl App {
             Session::save(
                 &self.tabs.layout,
                 &self.open_tabs.terminal_map(),
-                self.tool_sessions(),
+                self.editor_sessions(),
             );
             if let Ok(exe) = std::env::current_exe() {
                 let _ = std::process::Command::new(exe).spawn();
@@ -637,7 +637,7 @@ impl App {
         let saved = Session::save_handover(
             &self.tabs.layout,
             &self.open_tabs.terminal_map(),
-            self.tool_sessions(),
+            self.editor_sessions(),
         );
         if let Err(e) = saved {
             self.take_back_handover();

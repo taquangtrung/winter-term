@@ -11,13 +11,13 @@ use std::sync::Arc;
 
 use disk::{disk_dirs, read_shell_history};
 
+use super::editor::JumpTarget;
 use super::history::EditHistory;
 use super::input::{Key, Keymap};
 use super::paint::IconKind;
 use super::path::{clean_path, expand_home};
 use super::textedit::field::TextField;
 use super::textedit::modal::EditOutcome;
-use super::tool::JumpTarget;
 
 use regex::RegexBuilder;
 
@@ -48,11 +48,11 @@ pub enum PaletteMode {
     Files,
     /// Recalling an earlier query.
     History,
-    /// Every tool tab: the ones open somewhere, then what was closed recently.
+    /// Every editor tab: the ones open somewhere, then what was closed recently.
     /// Selecting an open one goes to it, and a closed one comes back as the
-    /// tool it was rather than as a fresh tool of its kind.
+    /// editor it was rather than as a fresh editor of its kind.
     TabList,
-    /// The tools able to show the focused tab's file, other than the one
+    /// The editors able to show the focused tab's file, other than the one
     /// showing it: selecting one opens the file in it.
     OpenWith,
     /// Pane switcher: selecting an entry focuses that pane.
@@ -68,10 +68,10 @@ pub enum PaletteMode {
     /// Every file in the focused tab's project, by its path in the project:
     /// selecting one opens it.
     ProjectFiles,
-    /// A tool's own list: the branches to check out, the tags to delete.
-    /// Selecting an entry answers the tool's question rather than running a
+    /// An editor's own list: the branches to check out, the tags to delete.
+    /// Selecting an entry answers the editor's question rather than running a
     /// command of the host's.
-    ToolPick,
+    EditorPick,
     /// Buffer swoop: fuzzy line search over the active pane's scrollback and grid.
     Swoop,
     /// Jump to target in current buffer view (fuzzy completion dialog).
@@ -321,7 +321,7 @@ impl Palette {
         }
     }
 
-    /// Open the palette over every tool tab: the ones open somewhere first,
+    /// Open the palette over every editor tab: the ones open somewhere first,
     /// then what was closed recently, newest first.
     ///
     /// Each entry's action says which pane a row goes to or which closed
@@ -398,7 +398,6 @@ impl Palette {
         }
     }
 
-
     /// Open the palette over the keys of the focused tab, under `title`.
     /// Each entry's label says what a key does, its shortcut the key.
     pub fn open_tab_keys(entries: Vec<PaletteEntry>, title: String) -> Self {
@@ -409,8 +408,8 @@ impl Palette {
         }
     }
 
-    /// Open the palette over the tools that can show a file, under `title`.
-    /// Each entry's action names a tool kind.
+    /// Open the palette over the editors that can show a file, under `title`.
+    /// Each entry's action names an editor kind.
     pub fn open_with(entries: Vec<PaletteEntry>, title: String) -> Self {
         Palette {
             mode: PaletteMode::OpenWith,
@@ -441,7 +440,7 @@ impl Palette {
         }
     }
 
-    /// Open the palette over a tool's own list, where each entry stands
+    /// Open the palette over an editor's own list, where each entry stands
     /// for itself: what is chosen is the text of the row.
     ///
     /// `icons` are drawn before the items they line up with, and an item past
@@ -469,7 +468,7 @@ impl Palette {
             history: EditHistory::new(String::new()),
             history_index: None,
             live_query: String::new(),
-            mode: PaletteMode::ToolPick,
+            mode: PaletteMode::EditorPick,
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
@@ -1267,7 +1266,7 @@ fn join_continued_lines(content: &str) -> Vec<String> {
 
 /// Every built-in command as `(action, label, static shortcut hint)`; an
 /// empty hint means the chord is looked up from the keymap. The one list the
-/// palette, the keys tool, and the keybinding checks all read.
+/// palette, the keys editor, and the keybinding checks all read.
 const BUILTIN_COMMANDS: &[(&str, &str, &str)] = &[
     ("cd_recent", "CD: Recent Directory", ""),
     ("close_pane", "Close Pane", ""),
@@ -1294,7 +1293,11 @@ const BUILTIN_COMMANDS: &[(&str, &str, &str)] = &[
     ),
     ("export_scrollback_html", "Export: Scrollback to HTML", ""),
     ("dir_page", "Dir: Open Working Directory", ""),
-    ("editor_show_scopes", "Editor: Show Scopes at Cursor", ""),
+    (
+        "editor_show_scopes",
+        "Text Editor: Show Scopes at Cursor",
+        "",
+    ),
     (
         "next_error",
         "Errors: Open the Next File Reference in the Last Output",
@@ -1418,7 +1421,7 @@ pub(crate) fn builtin_commands(keymap: &Keymap) -> Vec<PaletteEntry> {
 }
 
 /// The icon for a command that opens something with an icon of its own: a
-/// folder, a tool, a terminal. Every other command is drawn without one, since
+/// folder, an editor, a terminal. Every other command is drawn without one, since
 /// an icon shared by them all would say nothing a row does not.
 fn command_icon(action: &str) -> Option<IconKind> {
     match action {
@@ -1433,9 +1436,9 @@ fn command_icon(action: &str) -> Option<IconKind> {
             expanded: false,
             name: String::new(),
         }),
-        "dir_page" => Some(IconKind::Tool { kind: "dir" }),
-        "git_page" => Some(IconKind::Tool { kind: "git" }),
-        "grep_page" => Some(IconKind::Tool { kind: "grep" }),
+        "dir_page" => Some(IconKind::Editor { kind: "dir" }),
+        "git_page" => Some(IconKind::Editor { kind: "git" }),
+        "grep_page" => Some(IconKind::Editor { kind: "grep" }),
         "new_tab" | "reveal_terminal" | "split_horizontal" | "split_vertical" => {
             Some(IconKind::Terminal)
         }
@@ -2031,15 +2034,15 @@ mod tests {
     }
 
     #[test]
-    fn test_every_command_icon_names_a_tool_with_artwork() {
-        // The command table names tools by string, apart from the kinds the
+    fn test_every_command_icon_names_an_editor_with_artwork() {
+        // The command table names editors by string, apart from the kinds the
         // icons are keyed by: a misspelt one would draw the generic file icon
         // beside the command rather than fail anywhere.
         let commands = builtin_commands(&Keymap::default());
-        let tools: Vec<&str> = commands
+        let editors: Vec<&str> = commands
             .iter()
             .filter_map(|entry| match entry.icon.as_ref()? {
-                IconKind::Tool { kind } => Some(*kind),
+                IconKind::Editor { kind } => Some(*kind),
                 IconKind::Dir { .. }
                 | IconKind::File { .. }
                 | IconKind::Git { .. }
@@ -2047,11 +2050,11 @@ mod tests {
                 | IconKind::Terminal => None,
             })
             .collect();
-        assert!(!tools.is_empty());
-        for kind in tools {
+        assert!(!editors.is_empty());
+        for kind in editors {
             assert_ne!(
-                crate::icons::name_for(&IconKind::Tool { kind }),
-                crate::icons::name_for(&IconKind::Tool { kind: "" }),
+                crate::icons::name_for(&IconKind::Editor { kind }),
+                crate::icons::name_for(&IconKind::Editor { kind: "" }),
                 "{kind} draws the generic file icon"
             );
         }

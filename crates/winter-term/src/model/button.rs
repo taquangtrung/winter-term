@@ -183,7 +183,9 @@ impl ButtonGroup<bool> {
     /// A standard confirmation button group: `Yes` (primary, 'y') and `No` ('n').
     pub fn confirm() -> Self {
         Self::new(vec![
-            Button::new("Yes", true).with_shortcut('y', "y").primary(true),
+            Button::new("Yes", true)
+                .with_shortcut('y', "y")
+                .primary(true),
             Button::new("No", false).with_shortcut('n', "n"),
         ])
     }
@@ -215,7 +217,10 @@ mod tests {
     fn test_confirm_buttons_initial_focus_is_primary() {
         let group = ButtonGroup::confirm();
         assert_eq!(group.focused(), 0);
-        assert_eq!(group.focused_button().map(|b| b.label.as_str()), Some("Yes"));
+        assert_eq!(
+            group.focused_button().map(|b| b.label.as_str()),
+            Some("Yes")
+        );
     }
 
     #[test]

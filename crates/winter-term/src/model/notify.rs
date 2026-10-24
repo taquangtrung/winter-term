@@ -1,4 +1,4 @@
-//! Notifications: what the app and its tools report, how long each is shown,
+//! Notifications: what the app and its editors report, how long each is shown,
 //! and what is kept afterwards.
 //!
 //! One [`Notifier`] owns the whole lifecycle. A [`Notice`] posted to it goes
@@ -46,7 +46,7 @@ pub enum Severity {
     Error,
 }
 
-/// Something to tell the user, as the app or a tool posts it.
+/// Something to tell the user, as the app or an editor posts it.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Notice {
     /// Whether it is kept in the log once its toast is gone. Off for what the

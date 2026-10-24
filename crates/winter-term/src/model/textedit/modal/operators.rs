@@ -1,9 +1,9 @@
 //! Operators, and the motions and text objects that say how far they reach.
 
+use crate::model::editor::Notice;
 use crate::model::input::{Key, KeyCode, TextObject};
 use crate::model::textedit::buffer::Register;
 use crate::model::textedit::kill::Merge;
-use crate::model::tool::Notice;
 use crate::model::vim::grammar::{OperatorKind, MAX_COUNT};
 use crate::model::vim::motion::CursorMove;
 use crate::model::vim::nav::bare_motion;

@@ -10,8 +10,8 @@ use winit::event_loop::EventLoopProxy;
 // Statics
 // ========================================================================
 
-/// The running window's handle, for a thread a tool started (a file watcher)
-/// to wake the window with, since a tool holds no handle of its own.
+/// The running window's handle, for a thread an editor started (a file watcher)
+/// to wake the window with, since an editor holds no handle of its own.
 static SHARED: OnceLock<Waker> = OnceLock::new();
 
 // ========================================================================
@@ -38,7 +38,7 @@ impl Waker {
         }
     }
 
-    /// Share this handle with the threads tools start, through
+    /// Share this handle with the threads editors start, through
     /// [`wake_window`]. The first window to share is the one woken.
     pub(crate) fn share(&self) {
         let _ = SHARED.set(self.clone());
@@ -94,7 +94,7 @@ impl Waker {
 // Functions
 // ========================================================================
 
-/// Wake the running window from any thread: what a tool's background thread
+/// Wake the running window from any thread: what an editor's background thread
 /// calls when it has news. Does nothing before a window has shared its handle.
 pub(crate) fn wake_window() {
     if let Some(waker) = SHARED.get() {

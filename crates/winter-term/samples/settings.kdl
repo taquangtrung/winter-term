@@ -144,7 +144,7 @@ status-bar {
     // dropped when short of room. Leave a name out to hide it, or write a bare
     // `segments` to show none. The bell always stays at the right edge.
     //   antigravity, claude, zai  each AI provider's quota, under its logo
-    //   tool                      where the focused tool's keys stand (12:5, 340 lines),
+    //   tool                      where the focused editor's keys stand (12:5, 340 lines),
     //                             then its icon
     // Default: all, in the order below.
     segments "antigravity" "claude" "zai" "tool"
@@ -231,7 +231,7 @@ clipboard-read #false
 //     // window see-through (multiplied with the top-level `opacity`); the tab bar,
 //     // menus and status bar stay solid.
 //
-//     // Source in the built-in editor, defaulting (on the dark preset) to magic-vscode's
+//     // Source in the built-in text editor, defaulting (on the dark preset) to magic-vscode's
 //     // palette. Any name can be omitted; one the theme sets none for uses its ANSI colors.
 //     syntax {
 //         comment "#718b9f"

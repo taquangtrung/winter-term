@@ -2,10 +2,10 @@
 //! places that are not a file: a one-line answer to a question, or a column of
 //! names, one per listed entry, being renamed in place.
 
+use crate::model::editor::Notice;
 use crate::model::input::Key;
 use crate::model::textedit::buffer::TextBuffer;
 use crate::model::textedit::modal::{EditMode, EditOutcome, EditView, Marks, ModalEditor};
-use crate::model::tool::Notice;
 
 // ========================================================================
 // Data Structures

@@ -1,6 +1,6 @@
 //! The Vim motion vocabulary: the intents every surface resolves keys into,
 //! and the char-search they share. The foundation's naming layer — the
-//! terminal grid and the tools both speak in these terms.
+//! terminal grid and the editors both speak in these terms.
 
 // ========================================================================
 // Data Structures
@@ -29,7 +29,7 @@ impl FindChar {
 }
 
 /// A Normal-mode cursor traversal, in the terms every surface shares. Over
-/// the terminal grid these are lines and columns; over a tool's rows, the
+/// the terminal grid these are lines and columns; over an editor's rows, the
 /// ends and the halves are what the words and lines become there.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CursorMove {

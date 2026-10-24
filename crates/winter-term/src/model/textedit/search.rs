@@ -1,7 +1,7 @@
 //! Finding text in the file: what was last looked for, and where the next
 //! occurrence of it lies.
 
-use crate::model::tool::{match_spans, SearchReport};
+use crate::model::editor::{match_spans, SearchReport};
 
 // ========================================================================
 // Data Structures

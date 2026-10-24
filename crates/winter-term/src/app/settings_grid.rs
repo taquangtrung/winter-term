@@ -9,7 +9,7 @@ use super::frame_grid::{mix_rgb, put, theme_rgb};
 // Constants
 // ========================================================================
 
-/// Settings-tool layout, in cells: the label indent, the column dim notes start
+/// Settings-editor layout, in cells: the label indent, the column dim notes start
 /// at, the right margin values align to, and the body's first row (below the
 /// header band and its divider).
 const SETTINGS_LEFT_PAD: usize = 4;
@@ -49,7 +49,7 @@ struct SettingsPalette {
 /// right-aligned control; the selected row gets an accent bar and a highlight. A
 /// key-hint footer sits along the bottom.
 pub(super) fn build_settings_grid(
-    tool: &SettingsPage,
+    editor: &SettingsPage,
     theme: &Theme,
     cols: usize,
     rows: usize,
@@ -98,7 +98,7 @@ pub(super) fn build_settings_grid(
     let body_end = rows.saturating_sub(2);
     let mut row = SETTINGS_FIRST_ROW;
     let mut section: Option<&str> = None;
-    for (i, field) in tool.fields.iter().enumerate() {
+    for (i, field) in editor.fields.iter().enumerate() {
         if let Some(name) = field.section.as_deref() {
             if section != Some(name) {
                 section = Some(name);
@@ -123,8 +123,8 @@ pub(super) fn build_settings_grid(
         if row >= body_end {
             break;
         }
-        let selected = i == tool.selected;
-        let caret = selected.then(|| tool.text_caret()).flatten();
+        let selected = i == editor.selected;
+        let caret = selected.then(|| editor.text_caret()).flatten();
         draw_field_row(&mut grid, row, cols, field, selected, caret, &pal);
         row += 1;
     }

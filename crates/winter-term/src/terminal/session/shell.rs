@@ -41,12 +41,12 @@ pub(super) fn resolve_shell(name: &str) -> String {
 /// Clipboard text an OSC 52 read response may carry, in bytes. Larger
 /// clipboards answer with an empty payload: the response is written straight
 /// into the PTY (whose kernel buffer is ~64 KiB), so an unbounded reply could
-/// block the GUI thread on a tool that isn't reading.
+/// block the GUI thread on an editor that isn't reading.
 pub(super) const OSC52_READ_MAX_BYTES: usize = 64 * 1024;
 /// The reply to an `OSC 52 ; c ; ?` query: the clipboard's text base64-
 /// encoded as `OSC 52 ; c ; <data> ST`. Text over [`OSC52_READ_MAX_BYTES`]
 /// answers with an empty payload, xterm's documented "refused" form, so a
-/// querying tool never waits on data that will not come.
+/// querying editor never waits on data that will not come.
 pub(crate) fn osc52_read_response(text: &str) -> Vec<u8> {
     let payload = if text.len() <= OSC52_READ_MAX_BYTES {
         base64::engine::general_purpose::STANDARD.encode(text)
@@ -116,7 +116,7 @@ mod tests {
     fn test_osc52_read_response_encodes_caps_and_terminates_with_st() {
         // The reply rides the same OSC 52 grammar: base64 payload, ST
         // terminator. Oversized text answers with the empty "refused"
-        // payload so a tool never waits on data that will not come.
+        // payload so an editor never waits on data that will not come.
         assert_eq!(
             osc52_read_response("hello"),
             b"\x1b]52;c;aGVsbG8=\x1b\\".to_vec()

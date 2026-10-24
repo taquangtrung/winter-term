@@ -13,11 +13,11 @@ See the [usage guide](docs/usage-guide.md) for how to drive Winter, and the [pro
 - **Structured command blocks:** OSC 133 shell integration organizes your session into discrete, foldable units with exit codes and durations clearly marked. Jump between blocks with `]b`/`[b`, yank block output with `y`, or target blocks with quick-select (`q`).
 - **Rich inline MIME blocks (TBP):** Programs print images, SVG, Vega-Lite charts, Markdown, HTML, and tables inline via the Terminal Block Protocol, all drawn natively on the GPU, with automatic plain-text fallbacks. Nothing in a block is ever run or fetched.
 - **Prompt-line integration:** Normal-mode operators (`dw`, `ci"`, `x`) act directly on your active shell prompt line, accompanied by which-key hints that display pending keybindings dynamically.
-- **Tool tabs:** `C-S-d` opens a tree-style directory listing with marks, file operations, and background directory sizes; `C-S-g` opens the working tree, where hunks stage and discard one at a time and transient menus drive branch, commit, merge, rebase, stash, tag, log, and blame; `C-S-s` searches the tree for text and opens any match at its line; `C-S-f` walks the working directory in the command palette, a directory at a time, and opens the file you land on; a `.pdf` opens in a viewer that renders it inline and offline, read with vim's own motions: counts, `gg`/`G`, `zt`/`zz`/`zb`, and `i` for a cursor in the text with `w`/`b`/`e`, `f`/`t`, visual selection, and the `y` operator. Each opens as a tab of its own in the focused pane's strip, beside the terminal it was opened from, which keeps running and is one tab away; `/`, `n`, and `N` search whichever tool is up.
+- **Editor tabs:** `C-S-d` opens a tree-style directory listing with marks, file operations, and background directory sizes; `C-S-g` opens the working tree, where hunks stage and discard one at a time and transient menus drive branch, commit, merge, rebase, stash, tag, log, and blame; `C-S-s` searches the tree for text and opens any match at its line; `C-S-f` walks the working directory in the command palette, a directory at a time, and opens the file you land on; a `.pdf` opens in a viewer that renders it inline and offline, read with vim's own motions: counts, `gg`/`G`, `zt`/`zz`/`zb`, and `i` for a cursor in the text with `w`/`b`/`e`, `f`/`t`, visual selection, and the `y` operator. Each opens as a tab of its own in the focused pane's strip, beside the terminal it was opened from, which keeps running and is one tab away; `/`, `n`, and `N` search whichever editor is up.
 
 ## Core keybindings
 
-A Winter window is split into panes, each a strip of tabs, and every tab is a terminal or a tool. A terminal tab is always in one of three modes: **Insert** (owns the PTY), **Normal** (owns the keyboard for navigation and operators), or **Visual** (extends selections). A tool tab is in no mode: it owns the keys it binds, and the status bar shows it as `P`.
+A Winter window is split into panes, each a strip of tabs, and every tab is a terminal or an editor. A terminal tab is always in one of three modes: **Insert** (owns the PTY), **Normal** (owns the keyboard for navigation and operators), or **Visual** (extends selections). An editor tab is in no mode: it owns the keys it binds, and the status bar shows it as `P`.
 
 | Mode / Area | Keys | Action |
 |---|---|---|
@@ -46,10 +46,10 @@ A Winter window is split into panes, each a strip of tabs, and every tab is a te
 | **Window** | `C-M-S-n` | New window |
 | **Tabs** | `C-S-n` / `C-S-w` | New tab, close tab |
 | | `gt` / `gT` | Next tab, previous tab |
-| **Tools** | `C-S-d` / `C-S-g` | Directory listing, git status |
+| **Editors** | `C-S-d` / `C-S-g` | Directory listing, git status |
 | | `C-S-f` | Browse files in the palette, and open one |
 | | `C-S-s` | Search the tree for text |
-| | `/` then `n` / `N` | Search an open tool, next and previous match |
+| | `/` then `n` / `N` | Search an open editor, next and previous match |
 | **Palette** | `M-x` | Open command palette |
 
 See the [keybinding reference](docs/usage-guide.md#keybinding-reference) in the usage guide for the complete keymap.

@@ -19,7 +19,7 @@ pub struct AppState {
     /// Directories opened in a listing, most recent first.
     #[serde(default)]
     pub recent_dirs: Vec<PathBuf>,
-    /// Files opened in a tool or handed to `$EDITOR`, most recent first.
+    /// Files opened in an editor or handed to `$EDITOR`, most recent first.
     #[serde(default)]
     pub recent_files: Vec<PathBuf>,
     /// Last known window dimensions in physical pixels.

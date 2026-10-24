@@ -1,9 +1,9 @@
 //! In-pane text search: scrolls the viewport to the next/previous match.
 
+use crate::model::editor::match_spans;
 use crate::model::input;
 use crate::model::layout::TabId;
 use crate::model::textedit::field::TextField;
-use crate::model::tool::match_spans;
 
 use super::vim::{char_class, line_chars};
 use super::App;
@@ -159,10 +159,10 @@ impl App {
                 (grid.to_absolute_row(row), col)
             })
             .or_else(|| {
-                self.open_tabs.tool(&focused).and_then(|slot| {
+                self.open_tabs.editor(&focused).and_then(|slot| {
                     let grid = slot.painted.as_ref()?;
                     let row = slot.cursor_line.unwrap_or(0);
-                    let col = slot.tool.caret().map(|c| c.col).unwrap_or(0);
+                    let col = slot.editor.caret().map(|c| c.col).unwrap_or(0);
                     Some((grid.to_absolute_row(row), col))
                 })
             });
@@ -596,10 +596,10 @@ pub(crate) fn visible_match_cells(grid: &winter_render::Grid, query: &str) -> Ve
         .collect()
 }
 
-/// Where `query` matches on each row a tool painted into `grid`, as viewport
+/// Where `query` matches on each row an editor painted into `grid`, as viewport
 /// `(row, start_col, end_col)` with the end exclusive. Matched by the rule
-/// every tool searches by ([`match_spans`]), not the terminal's patterns, so
-/// the rows a tool's search lands on are the rows that light up.
+/// every editor searches by ([`match_spans`]), not the terminal's patterns, so
+/// the rows an editor's search lands on are the rows that light up.
 pub(crate) fn painted_match_spans(
     grid: &winter_render::Grid,
     query: &str,

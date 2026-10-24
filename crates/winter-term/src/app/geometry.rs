@@ -104,7 +104,7 @@ impl App {
     /// While a selection drag is held near the top/bottom edge of the content
     /// viewport, scroll the selection's pane one line into (or back out of)
     /// history and extend the drag's live end to the new edge row, so text
-    /// outside the current tool can be reached, and pulled into the
+    /// outside the current editor can be reached, and pulled into the
     /// selection, without the pointer leaving the window. Because `Selection`
     /// rows are absolute ([`winter_render::Grid::to_absolute_row`]),
     /// re-deriving the edge row from each post-scroll view grows `end_row`
@@ -258,9 +258,9 @@ pub(crate) fn edge_resize_direction_at(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::editor;
     use crate::app::overlay::Overlay;
     use crate::app::test_support::*;
-    use crate::app::tool;
     use crate::app::Selection;
     use crate::model::layout::TabId;
     use crate::terminal::session::Terminal;
@@ -348,19 +348,19 @@ mod tests {
         ));
         assert!(!app.status_bar_visible());
 
-        let prompt = tool::ActivePrompt {
+        let prompt = editor::ActivePrompt {
             buttons: None,
             field: crate::model::textedit::field::TextField::line("query"),
             recall: crate::model::textedit::recall::Recall::default(),
             tab: TabId(0),
-            request: crate::model::tool::PromptRequest {
+            request: crate::model::editor::PromptRequest {
                 initial: String::new(),
                 label: "search: ".to_string(),
-                mode: crate::model::tool::PromptMode::Text,
+                mode: crate::model::editor::PromptMode::Text,
                 tag: "search",
             },
         };
-        app.overlay = Some(Overlay::ToolPrompt(prompt));
+        app.overlay = Some(Overlay::EditorPrompt(prompt));
         assert!(!app.status_bar_visible());
     }
 
@@ -514,9 +514,9 @@ mod tests {
     #[test]
     fn test_selected_text_covers_every_line_after_auto_scrolling_past_one_page() {
         // Regression: `selected_text` used to read rows via `visible_cell`,
-        // which only resolves the currently-visible tool (`0..rows`). Once a
+        // which only resolves the currently-visible editor (`0..rows`). Once a
         // drag's absolute span grew past one page via auto-scroll, rows
-        // outside that tool read back as blanks instead of the real
+        // outside that editor read back as blanks instead of the real
         // scrolled-past text. `absolute_cell` fixes this by addressing the
         // scrollback/live buffer directly, independent of scroll position.
         //
@@ -583,7 +583,7 @@ mod tests {
         );
         // The oldest scrolled-into row is "0" (the first line printed), not
         // a blank filler row `visible_cell` would have produced past the
-        // live tool's bound.
+        // live editor's bound.
         assert_eq!(lines[0].trim(), "0");
     }
 

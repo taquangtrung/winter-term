@@ -1,6 +1,6 @@
 //! Rasterizing SVG documents with resvg, shared by the GPU image pass and the
 //! chrome painted on the CPU, so an icon comes out at the same size and in the
-//! same place in a tool's rows, a pane strip, and a popup.
+//! same place in an editor's rows, a pane strip, and a popup.
 
 use resvg::tiny_skia::{Pixmap, Transform};
 use resvg::usvg::{Options, Tree};
@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn test_a_wide_icon_is_centered_in_a_square_box() {
         // The CPU path used to pin the artwork to the box's top edge while the
-        // GPU path centered it, so the same icon sat lower in a tool's rows
+        // GPU path centered it, so the same icon sat lower in an editor's rows
         // than in a pane strip. One routine for both is what this pins.
         let raster = rasterize_in_box(WIDE_SVG, &Options::default(), 20, 20).expect("rasterizes");
         assert_eq!((raster.width, raster.height), (20, 20));

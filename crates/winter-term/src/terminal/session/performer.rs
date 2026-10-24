@@ -733,7 +733,7 @@ impl Perform for CombinedPerformer {
             return;
         }
 
-        // XTWINOPS size queries (`CSI 14/16/18/19 t`), which image tools ask
+        // XTWINOPS size queries (`CSI 14/16/18/19 t`), which image editors ask
         // to size their output in pixels. Every other window operation is
         // ignored (see `window_ops_report`).
         if action == 't' && intermediates.is_empty() {

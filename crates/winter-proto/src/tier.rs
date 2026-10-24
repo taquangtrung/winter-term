@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 // Data Structures
 // ============================================================================
 
-/// How much capability a block's rendered content is granted. The emitting tool
+/// How much capability a block's rendered content is granted. The emitting editor
 /// *requests* a tier; the terminal *clamps* it by policy via [`TrustTier::clamp_to`].
 ///
 /// Variants are declared in ascending capability order, and [`Ord`] follows that
@@ -31,7 +31,7 @@ pub enum TrustTier {
     /// navigation.
     #[default]
     Restricted,
-    /// First-party tools or a user-configured allowlist: full DOM and scripts.
+    /// First-party editors or a user-configured allowlist: full DOM and scripts.
     Trusted,
 }
 

@@ -8,7 +8,7 @@ use crate::model::layout::{Direction, Layout, TabId};
 use crate::terminal::session::{Reap, Terminal};
 
 use super::appearance::terminal_presentation;
-use super::tool::{ClosedPane, ClosedTerminal, Closing};
+use super::editor::{ClosedPane, ClosedTerminal, Closing};
 use super::App;
 use super::{DEFAULT_COLS, DEFAULT_ROWS, SPLIT_RATIO};
 
@@ -64,15 +64,15 @@ impl App {
                 .and_then(|terminal| terminal.cwd())
         })
     }
-    /// Where an action launched from the focused tab starts: a tool tab knows
+    /// Where an action launched from the focused tab starts: an editor tab knows
     /// what is being looked at and answers first, and only without one does
     /// a shell's own directory decide.
     pub(crate) fn focused_start_dir(&self) -> PathBuf {
         let focused = self.layout().focused();
         let dir = self
             .open_tabs
-            .tool(&focused)
-            .and_then(|slot| slot.tool.cwd())
+            .editor(&focused)
+            .and_then(|slot| slot.editor.cwd())
             .or_else(|| self.focused_cwd().map(PathBuf::from))
             .or_else(|| {
                 let cur = std::env::current_dir().ok()?;
@@ -96,8 +96,8 @@ impl App {
     }
     pub(crate) fn split_pane(&mut self, direction: Direction) {
         // Captured before the layout split so the new pane opens where the
-        // focused one was being used, which for a tool tab is the directory
-        // that tool is looking at rather than a shell's own.
+        // focused one was being used, which for an editor tab is the directory
+        // that editor is looking at rather than a shell's own.
         let cwd = self.focused_start_cwd();
         self.split_pane_at(direction, cwd);
     }
@@ -186,7 +186,7 @@ impl App {
     /// Close the pane holding `tab_id`, every tab in it. The last pane of
     /// the window is never closed this way.
     pub(crate) fn close_pane(&mut self, tab_id: TabId) {
-        // Edits nowhere but in a tool tab of this pane are the one thing
+        // Edits nowhere but in an editor tab of this pane are the one thing
         // closing it cannot give back on its own, so they are asked about
         // first. The pane closes on the answer, not here.
         if self.ask_before_closing_pane(tab_id) {
@@ -198,7 +198,7 @@ impl App {
     /// Close the pane holding `tab_id` without asking, which is what an
     /// answered question and a pane with nothing to lose both come down to.
     ///
-    /// The pane is kept, not just its tools: where it sat and what its
+    /// The pane is kept, not just its editors: where it sat and what its
     /// shells were running in are what a split merged back by accident
     /// costs, and one key puts all of it back.
     pub(crate) fn close_pane_now(&mut self, tab_id: TabId) {
@@ -207,15 +207,15 @@ impl App {
             return;
         }
         let snapshot = self.layout().export_tree();
-        let mut tools = Vec::new();
+        let mut editors = Vec::new();
         let mut terminals = Vec::new();
         for &tab in &tabs {
-            match self.open_tabs.remove_tool(&tab) {
-                Some(slot) => tools.push(self.stash_closed_tool(tab, slot)),
+            match self.open_tabs.remove_editor(&tab) {
+                Some(slot) => editors.push(self.stash_closed_editor(tab, slot)),
                 None => terminals.push(tab),
             }
         }
-        self.stash_closed_pane(&terminals, snapshot, tools, true);
+        self.stash_closed_pane(&terminals, snapshot, editors, true);
         for &tab in &tabs {
             self.drop_tab_state(tab);
             self.layout_mut().close(tab);
@@ -227,7 +227,7 @@ impl App {
         self.after_tab_change();
     }
 
-    /// Put closed terminals back: shells where their own were, the tool tabs
+    /// Put closed terminals back: shells where their own were, the editor tabs
     /// that went with them, and the split they sat in.
     ///
     /// The shells themselves cannot come back, since closing them dropped
@@ -246,13 +246,13 @@ impl App {
                 restored.push(tab);
             }
         }
-        // No shell could be started, so there is nowhere to put the tools:
+        // No shell could be started, so there is nowhere to put the editors:
         // they stay in the stash rather than going down with the failure,
         // which `spawn_terminal_or_notify` has already reported.
         if restored.is_empty() {
             return;
         }
-        let tools = self.take_closed_tools(&closed.tool_ids());
+        let editors = self.take_closed_editors(&closed.editor_ids());
         let first = restored[0];
         if closed.is_whole_pane() {
             self.split_layout_for(first);
@@ -262,8 +262,8 @@ impl App {
         for &tab in &restored[1..] {
             self.layout_mut().add_tab(tab);
         }
-        for tool in tools {
-            self.restore_closed_tool(tool);
+        for editor in editors {
+            self.restore_closed_editor(editor);
         }
         self.reapply_snapshot(&closed, &before);
         self.set_focus(first);
@@ -471,7 +471,7 @@ impl App {
             }
         }
         // OSC 52 reads answer only when `clipboard-read` opted in: the query
-        // is silent on the tool's side, so the default must stay a refusal.
+        // is silent on the editor's side, so the default must stay a refusal.
         if !clipboard_reads.is_empty() && self.config.clipboard_read {
             let text = self
                 .clipboard()

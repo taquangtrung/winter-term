@@ -82,7 +82,7 @@ pub(crate) struct ControlRequest {
 }
 
 /// Answers a waiting `winter --edit-wait` when dropped, so the program blocked
-/// on the editor continues however the editing tool came to an end: closed,
+/// on the editor continues however the editing editor came to an end: closed,
 /// replaced, or torn down with the app.
 #[derive(Debug)]
 pub(crate) struct EditWaiter {
@@ -222,7 +222,7 @@ pub fn request_reload(path: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Ask a running instance to edit `file` and wait until its editing tool
+/// Ask a running instance to edit `file` and wait until its editing editor
 /// closes. Whether the edit was kept comes back; an error means no instance
 /// could be reached or it went away without answering.
 ///

@@ -257,7 +257,7 @@ impl App {
             self.set_error(message);
         }
         // Winter never sizes its own window once it is up: the size belongs to
-        // whoever set it (the window manager, a tiling tool, a drag), and a
+        // whoever set it (the window manager, a tiling editor, a drag), and a
         // terminal that rounded it to whole cells would push past a tile's
         // edge. Space short of a whole row or column is left as padding
         // inside the panes. No resize increments are set either:

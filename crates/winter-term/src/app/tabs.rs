@@ -6,8 +6,8 @@ use std::collections::HashMap;
 use crate::model::layout::{FocusDir, Layout, Rect, TabId};
 use crate::terminal::session::Terminal;
 
+use super::editor::{Closing, EditorKind};
 use super::strip::StripHit;
-use super::tool::{Closing, ToolKind};
 use super::App;
 use super::{DEFAULT_COLS, DEFAULT_ROWS};
 use winter_render::TabbarHit;
@@ -120,8 +120,8 @@ impl App {
     pub(crate) fn new_tab(&mut self) {
         let id = self.alloc_tab_id();
         // Open the new tab where the focused tab was being used rather than
-        // at the process default (usually `$HOME`): beside a tool that is the
-        // directory the tool is looking at, not a shell's own.
+        // at the process default (usually `$HOME`): beside an editor that is the
+        // directory the editor is looking at, not a shell's own.
         let cwd = self.focused_start_cwd();
         let (cols, rows) = self.focused_grid_size();
         let shell = self.config.active_shell().map(String::from);
@@ -257,16 +257,16 @@ impl App {
     }
 
     /// Show the most recently shown terminal of the focused pane, for the way
-    /// back from a tool tab to the shell it was opened from. A terminal that
+    /// back from an editor tab to the shell it was opened from. A terminal that
     /// is already showing stays showing; a pane with none gets a new one,
-    /// started in the directory its tool is looking at.
+    /// started in the directory its editor is looking at.
     pub(crate) fn reveal_recent_terminal(&mut self) {
         let focused = self.layout().focused();
         let terminal = self
             .layout()
             .recent_in_pane(focused)
             .into_iter()
-            .find(|tab| self.open_tabs.is_terminal(tab) && !self.open_tabs.is_tool(tab));
+            .find(|tab| self.open_tabs.is_terminal(tab) && !self.open_tabs.is_editor(tab));
         match terminal {
             Some(tab) => self.show_tab(tab),
             None => self.new_tab(),
@@ -380,7 +380,7 @@ impl App {
     /// Close one tab. Closing the last tab of the window asks for the app to
     /// exit instead.
     ///
-    /// Unwritten edits in a tool tab are asked about first, and the tab
+    /// Unwritten edits in an editor tab are asked about first, and the tab
     /// closes on the answer rather than here.
     pub(crate) fn close_tab(&mut self, tab: TabId) {
         if self.ask_before_closing_tab(tab) {
@@ -423,13 +423,13 @@ impl App {
         let snapshot = self.layout().export_tree();
         let pane_gone = self.layout().tabs_in_pane(tab).len() <= 1;
         let is_commit_editor = self.commit_companions.contains_key(&tab)
-            || self.open_tabs.tool(&tab).is_some_and(|slot| {
-                slot.kind() == ToolKind::Editor && slot.tool.is_commit_editor()
+            || self.open_tabs.editor(&tab).is_some_and(|slot| {
+                slot.kind() == EditorKind::Text && slot.editor.is_commit_editor()
             });
         let commit_repo = if is_commit_editor {
             self.open_tabs
-                .tool(&tab)
-                .and_then(|slot| slot.tool.cwd())
+                .editor(&tab)
+                .and_then(|slot| slot.editor.cwd())
                 .map(|p| {
                     if p.file_name().is_some_and(|n| n == ".git") {
                         p.parent().unwrap_or(&p).to_path_buf()
@@ -440,9 +440,9 @@ impl App {
         } else {
             None
         };
-        if let Some(slot) = self.open_tabs.remove_tool(&tab) {
+        if let Some(slot) = self.open_tabs.remove_editor(&tab) {
             if closing == Closing::Keep {
-                self.stash_closed_tool(tab, slot);
+                self.stash_closed_editor(tab, slot);
             }
         } else if closing == Closing::Keep {
             self.stash_closed_pane(&[tab], snapshot, Vec::new(), pane_gone);
@@ -459,11 +459,11 @@ impl App {
             self.close_tab_now(companion, Closing::Forget);
         }
         if let Some(repo) = commit_repo {
-            self.focus_or_open_git_tool(repo);
+            self.focus_or_open_git_editor(repo);
         }
     }
 
-    /// Forget everything kept about one tab: its terminal or its tool, and
+    /// Forget everything kept about one tab: its terminal or its editor, and
     /// every per-tab record the rest of the app holds under its id.
     pub(crate) fn drop_tab_state(&mut self, tab: TabId) {
         // Work the tab asked for would come back to a tab that is gone, and
@@ -471,7 +471,7 @@ impl App {
         self.jobs.cancel_for(tab);
         self.commit_companions
             .retain(|_, companion| *companion != tab);
-        self.open_tabs.remove_tool(&tab);
+        self.open_tabs.remove_editor(&tab);
         self.drop_overlay_of(tab);
         if self
             .search_debounce
@@ -480,8 +480,8 @@ impl App {
         {
             self.search_debounce = None;
         }
-        if self.tool_cursor.as_ref().is_some_and(|c| c.tab == tab) {
-            self.stop_tool_cursor();
+        if self.editor_cursor.as_ref().is_some_and(|c| c.tab == tab) {
+            self.stop_editor_cursor();
         }
         self.open_tabs.remove(&tab);
         self.vim.tabs.remove(&tab);
@@ -589,25 +589,25 @@ mod tests {
 
     #[test]
     fn test_revealing_a_terminal_in_a_pane_without_one_opens_one() {
-        // A pane holding only tools used to answer with a notice, which left
+        // A pane holding only editors used to answer with a notice, which left
         // the key doing nothing where a shell was most wanted.
         let mut app = App::new();
-        let tool = app.show_tool(
-            crate::app::tool::ToolKind::Dir,
-            Box::new(crate::tools::dir::DirTool::new(std::env::temp_dir())),
+        let editor = app.show_editor(
+            crate::app::editor::EditorKind::Dir,
+            Box::new(crate::editors::dir::DirEditor::new(std::env::temp_dir())),
         );
         assert!(!app.open_tabs.is_terminal(&app.layout().focused()));
 
         app.reveal_recent_terminal();
         let shown = app.layout().focused();
-        assert_ne!(shown, tool);
+        assert_ne!(shown, editor);
         assert!(
             app.open_tabs.is_terminal(&shown),
             "a new terminal is showing"
         );
         assert!(
-            app.layout().tabs_in_pane(shown).contains(&tool),
-            "in the same pane as the tool"
+            app.layout().tabs_in_pane(shown).contains(&editor),
+            "in the same pane as the editor"
         );
     }
 

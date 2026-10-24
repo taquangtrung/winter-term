@@ -1,4 +1,4 @@
-//! TBP messages: the verbs a tool sends to the terminal.
+//! TBP messages: the verbs an editor sends to the terminal.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

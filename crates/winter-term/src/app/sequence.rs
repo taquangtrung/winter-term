@@ -1,16 +1,16 @@
 //! Multi-key sequences: the chords typed so far, resolved against the window's
-//! sequences and the focused tool's ahead of the tool and the mode keymaps, so
-//! `M-g M-h` reads the same in a terminal as in a tool tab. Also where the
+//! sequences and the focused editor's ahead of the editor and the mode keymaps, so
+//! `M-g M-h` reads the same in a terminal as in an editor tab. Also where the
 //! keymap is built from config, with what is wrong in that config.
 
 use std::time::{Duration, Instant};
 
+use crate::editors;
 use crate::model::input::{
     format_sequence, Blocks, Catalog, Key, KeyCode, Keymap, Mods, PendingPrefix, SequenceStep,
 };
 use crate::model::layout::TabId;
 use crate::model::palette;
-use crate::tools;
 
 use super::App;
 
@@ -19,10 +19,10 @@ use super::App;
 // ========================================================================
 
 /// The commands a binding may name beyond the keymap's own: the palette's,
-/// and each tool's.
+/// and each editor's.
 pub(crate) const CATALOG: Catalog = Catalog {
     is_command: |name| palette::command_label(name).is_some(),
-    tool_commands: tools::block_commands,
+    editor_commands: editors::block_commands,
 };
 
 /// How long a pending key prefix must sit unresolved before the which-key
@@ -60,11 +60,11 @@ pub(crate) fn keymap_from_blocks(blocks: &Blocks) -> (Keymap, Option<String>) {
     (keymap, notice)
 }
 
-/// What the hint calls a command: its palette or tool label, else its name
+/// What the hint calls a command: its palette or editor label, else its name
 /// in words.
-fn command_label(tool: Option<&str>, name: &str) -> String {
-    let label = match tool {
-        Some(block) => tools::command_label(block, name),
+fn command_label(editor: Option<&str>, name: &str) -> String {
+    let label = match editor {
+        Some(block) => editors::command_label(block, name),
         None => palette::command_label(name),
     };
     label.map_or_else(|| name.replace('_', " "), str::to_string)
@@ -118,11 +118,11 @@ impl App {
     /// keys so far as the title, then what can follow them.
     pub(super) fn sequence_hint(&self, focused: TabId) -> Option<(String, Vec<(String, String)>)> {
         let sequence = self.sequence.as_ref().filter(|s| s.tab == focused)?;
-        let tool = self.focused_tool_block(focused);
+        let editor = self.focused_editor_block(focused);
         Some((
             format_sequence(&sequence.keys),
             self.keymap
-                .sequence_hint(&sequence.keys, tool, command_label),
+                .sequence_hint(&sequence.keys, editor, command_label),
         ))
     }
 
@@ -145,8 +145,8 @@ impl App {
             .map(|sequence| sequence.keys)
             .unwrap_or_default();
         typed.push(*key);
-        let tool = self.focused_tool_block(focused);
-        match self.keymap.resolve_sequence(&typed, tool) {
+        let editor = self.focused_editor_block(focused);
+        match self.keymap.resolve_sequence(&typed, editor) {
             SequenceStep::Miss if starting => false,
             SequenceStep::Miss => {
                 self.clear_sequence();
@@ -170,31 +170,33 @@ impl App {
                 self.handle_action(action, focused);
                 true
             }
-            SequenceStep::Tool(name) => {
+            SequenceStep::Editor(name) => {
                 self.clear_sequence();
-                self.run_tool_command(focused, &name);
+                self.run_editor_command(focused, &name);
                 true
             }
         }
     }
 
-    /// Run the focused tool's command `name`, saying so when it has none.
-    pub(super) fn run_tool_command(&mut self, focused: TabId, name: &str) {
-        let Some(slot) = self.open_tabs.tool_mut(&focused) else {
+    /// Run the focused editor's command `name`, saying so when it has none.
+    pub(super) fn run_editor_command(&mut self, focused: TabId, name: &str) {
+        let Some(slot) = self.open_tabs.editor_mut(&focused) else {
             return;
         };
         let title = slot.kind().title();
-        match slot.tool.run_command(name) {
+        match slot.editor.run_command(name) {
             Some(outcome) => {
-                self.act_on_tool_outcome(focused, outcome);
+                self.act_on_editor_outcome(focused, outcome);
             }
             None => self.set_error(format!("{title} has no command {name}")),
         }
     }
 
-    /// The `keybindings.kdl` block of the tool in `focused`, if it is a tool.
-    fn focused_tool_block(&self, focused: TabId) -> Option<&'static str> {
-        self.open_tabs.tool(&focused).map(|slot| slot.kind().name())
+    /// The `keybindings.kdl` block of the editor in `focused`, if it is an editor.
+    fn focused_editor_block(&self, focused: TabId) -> Option<&'static str> {
+        self.open_tabs
+            .editor(&focused)
+            .map(|slot| slot.kind().name())
     }
 }
 
@@ -224,11 +226,11 @@ mod tests {
     use std::collections::HashMap;
     use std::rc::Rc;
 
+    use crate::model::editor::{Editor, EditorOutcome};
     use crate::model::input::{self, Keymap};
     use crate::model::paint::{Frame, Span};
-    use crate::model::tool::{Tool, ToolOutcome};
 
-    use super::super::tool::ToolKind;
+    use super::super::editor::EditorKind;
     use super::*;
 
     #[test]
@@ -252,13 +254,13 @@ mod tests {
         );
     }
 
-    /// What a [`RecordingTool`] was handed: keys, then commands, as text.
+    /// What a [`RecordingEditor`] was handed: keys, then commands, as text.
     type Log = Rc<RefCell<Vec<String>>>;
 
-    /// A tool that writes down every key and command it is given.
-    struct RecordingTool(Log);
+    /// An editor that writes down every key and command it is given.
+    struct RecordingEditor(Log);
 
-    impl Tool for RecordingTool {
+    impl Editor for RecordingEditor {
         fn title(&self) -> String {
             "Recording".to_string()
         }
@@ -267,26 +269,26 @@ mod tests {
             Frame::new(vec![vec![Span::plain("recording")]])
         }
 
-        fn on_key(&mut self, key: &Key) -> ToolOutcome {
+        fn on_key(&mut self, key: &Key) -> EditorOutcome {
             self.0
                 .borrow_mut()
                 .push(format!("key {}", input::format_key(key)));
-            ToolOutcome::Consumed
+            EditorOutcome::Consumed
         }
 
-        fn run_command(&mut self, name: &str) -> Option<ToolOutcome> {
+        fn run_command(&mut self, name: &str) -> Option<EditorOutcome> {
             self.0.borrow_mut().push(format!("command {name}"));
-            Some(ToolOutcome::Consumed)
+            Some(EditorOutcome::Consumed)
         }
     }
 
-    /// An app on the built-in keymap, its focus on a recording tool that
+    /// An app on the built-in keymap, its focus on a recording editor that
     /// reads the `kind` block.
-    fn app_with_tool(kind: ToolKind) -> (App, TabId, Log) {
+    fn app_with_editor(kind: EditorKind) -> (App, TabId, Log) {
         let mut app = App::new();
         app.keymap = Keymap::default();
         let log = Log::default();
-        let tab = app.show_tool(kind, Box::new(RecordingTool(log.clone())));
+        let tab = app.show_editor(kind, Box::new(RecordingEditor(log.clone())));
         (app, tab, log)
     }
 
@@ -295,8 +297,8 @@ mod tests {
     }
 
     #[test]
-    fn test_a_tool_sequence_under_a_window_leader_runs_the_tool_command() {
-        let (mut app, tab, log) = app_with_tool(ToolKind::Git);
+    fn test_an_editor_sequence_under_a_window_leader_runs_the_editor_command() {
+        let (mut app, tab, log) = app_with_editor(EditorKind::Git);
         assert_eq!(app.route_sequence_key(tab, &alt('g')), Some(false));
         assert!(app.is_sequence_pending());
         assert_eq!(
@@ -304,18 +306,18 @@ mod tests {
             Some(false)
         );
         assert!(!app.is_sequence_pending());
-        // The leader never reached the tool as a key of its own.
+        // The leader never reached the editor as a key of its own.
         assert_eq!(*log.borrow(), vec!["command open_remote".to_string()]);
     }
 
     #[test]
     fn test_a_key_continuing_nothing_drops_the_sequence_and_says_so() {
-        let (mut app, tab, log) = app_with_tool(ToolKind::Git);
+        let (mut app, tab, log) = app_with_editor(EditorKind::Git);
         app.route_sequence_key(tab, &alt('g'));
         assert_eq!(
             app.route_sequence_key(tab, &Key::plain(KeyCode::Char('x'))),
             Some(false),
-            "the key is spent, not typed into the tool"
+            "the key is spent, not typed into the editor"
         );
         assert!(!app.is_sequence_pending());
         assert!(log.borrow().is_empty());
@@ -324,8 +326,8 @@ mod tests {
     }
 
     #[test]
-    fn test_another_tool_never_sees_the_git_tool_sequence() {
-        let (mut app, tab, _) = app_with_tool(ToolKind::Dir);
+    fn test_another_editor_never_sees_the_git_editor_sequence() {
+        let (mut app, tab, _) = app_with_editor(EditorKind::Dir);
         app.route_sequence_key(tab, &alt('g'));
         app.route_sequence_key(tab, &Key::plain(KeyCode::Char('r')));
         let notice = app.notice_text();
@@ -334,7 +336,7 @@ mod tests {
 
     #[test]
     fn test_escape_drops_a_sequence_without_a_notice() {
-        let (mut app, tab, _) = app_with_tool(ToolKind::Git);
+        let (mut app, tab, _) = app_with_editor(EditorKind::Git);
         app.route_sequence_key(tab, &alt('g'));
         assert_eq!(
             app.route_sequence_key(tab, &Key::plain(KeyCode::Escape)),
@@ -345,8 +347,8 @@ mod tests {
     }
 
     #[test]
-    fn test_a_key_opening_no_sequence_is_left_to_the_tool() {
-        let (mut app, tab, _) = app_with_tool(ToolKind::Git);
+    fn test_a_key_opening_no_sequence_is_left_to_the_editor() {
+        let (mut app, tab, _) = app_with_editor(EditorKind::Git);
         assert_eq!(
             app.route_sequence_key(tab, &Key::plain(KeyCode::Char('s'))),
             None
@@ -354,22 +356,22 @@ mod tests {
     }
 
     #[test]
-    fn test_the_hint_lists_the_tool_and_window_continuations() {
-        let (mut app, tab, _) = app_with_tool(ToolKind::Git);
+    fn test_the_hint_lists_the_editor_and_window_continuations() {
+        let (mut app, tab, _) = app_with_editor(EditorKind::Git);
         app.route_sequence_key(tab, &alt('g'));
         let (title, items) = app.sequence_hint(tab).expect("a hint while pending");
         assert_eq!(title, "M-g");
-        // Labelled the way the Keys tool and the palette label them.
+        // Labelled the way the Keys editor and the palette label them.
         assert!(items.contains(&("r".to_string(), "Open Remote in Browser".to_string())));
         assert!(items.contains(&("M-h".to_string(), "Move Tab to Left Pane".to_string())));
     }
 
     #[test]
-    fn test_every_tool_command_block_is_a_tool_kind() {
-        // The keymap finds a tool's block by its kind's name.
-        for block in tools::COMMAND_BLOCKS {
+    fn test_every_editor_command_block_is_an_editor_kind() {
+        // The keymap finds an editor's block by its kind's name.
+        for block in editors::COMMAND_BLOCKS {
             assert!(
-                ToolKind::from_name(block.block).is_some(),
+                EditorKind::from_name(block.block).is_some(),
                 "{}",
                 block.block
             );
@@ -378,14 +380,14 @@ mod tests {
 
     #[test]
     fn test_a_sequence_opened_in_one_tab_does_not_complete_in_another() {
-        let (mut app, git, _) = app_with_tool(ToolKind::Git);
+        let (mut app, git, _) = app_with_editor(EditorKind::Git);
         app.route_sequence_key(git, &alt('g'));
         let (_, dir, log) = {
             let log = Log::default();
-            let tab = app.show_tool(ToolKind::Dir, Box::new(RecordingTool(log.clone())));
+            let tab = app.show_editor(EditorKind::Dir, Box::new(RecordingEditor(log.clone())));
             ((), tab, log)
         };
-        // `r` on its own opens nothing, so in the new tab it is the tool's.
+        // `r` on its own opens nothing, so in the new tab it is the editor's.
         assert_eq!(
             app.route_sequence_key(dir, &Key::plain(KeyCode::Char('r'))),
             None

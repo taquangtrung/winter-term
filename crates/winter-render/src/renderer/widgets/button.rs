@@ -117,8 +117,14 @@ pub(crate) fn draw_button(
     }
 
     let text_y = (y + pad_y) as i32;
-    let mut text_buf =
-        shape_chrome_line(font_system, ctx, &button.text, text_color.to_glyphon(), true, true);
+    let mut text_buf = shape_chrome_line(
+        font_system,
+        ctx,
+        &button.text,
+        text_color.to_glyphon(),
+        true,
+        true,
+    );
     frame.draw_text(
         font_system,
         swash_cache,

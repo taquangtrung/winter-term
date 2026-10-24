@@ -604,7 +604,7 @@ mod tests {
     const NOT_ROWS: [&str; 8] = [
         // A whole color table needs an editor of its own, not a row.
         "colors",
-        // Chords live in their own file, and the keys tool lists them.
+        // Chords live in their own file, and the keys editor lists them.
         "keybindings",
         // Written through the one `shell` row, which saves the key for this OS.
         "shell_linux",

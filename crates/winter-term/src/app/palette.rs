@@ -4,16 +4,16 @@ use std::path::PathBuf;
 
 use winit::keyboard::{Key, NamedKey, PhysicalKey};
 
+use crate::model::editor;
 use crate::model::input::{self, EditBinding};
 use crate::model::layout::TabId;
 use crate::model::mode::Mode;
 use crate::model::palette::{Palette, PaletteMode};
 use crate::model::textedit::modal::EditOutcome;
-use crate::model::tool;
 
+use super::editor::ActivePick;
 use super::navigation;
 use super::overlay::PaletteOverlay;
-use super::tool::ActivePick;
 use super::window_event::winit_key_to_code;
 use super::App;
 
@@ -223,7 +223,7 @@ impl App {
         }
     }
     /// Put the palette away unanswered (`Esc`, `C-g`): a jump or a swoop
-    /// puts the cursor back where it was, and a tool waiting on a choice is
+    /// puts the cursor back where it was, and an editor waiting on a choice is
     /// told there was none.
     fn dismiss_palette(&mut self, palette: &mut Palette, focused: TabId) {
         if palette.mode == PaletteMode::Jump {
@@ -236,7 +236,7 @@ impl App {
                 }
             }
         }
-        // A tool waiting on a choice is told there was none, the way
+        // An editor waiting on a choice is told there was none, the way
         // an escaped prompt answers with nothing, when the palette is
         // put away.
         palette.close();
@@ -246,7 +246,7 @@ impl App {
     /// Act on the palette's currently selected entry (`Enter`, or a pane
     /// switcher digit-jump): run a command, replay shell history, `cd` into a
     /// recent directory, or switch to a pane, depending on `palette.mode`.
-    /// `pick` is the tool question a [`PaletteMode::ToolPick`] list answers.
+    /// `pick` is the editor question a [`PaletteMode::EditorPick`] list answers.
     pub(crate) fn confirm_palette_selection(
         &mut self,
         palette: &Palette,
@@ -304,7 +304,7 @@ impl App {
             }
             PaletteMode::ProjectFiles => {
                 if let Some(path) = action {
-                    self.open_path_tool(tool::OpenTarget::file(PathBuf::from(path)));
+                    self.open_path_editor(editor::OpenTarget::file(PathBuf::from(path)));
                 }
             }
             PaletteMode::OpenWith => {
@@ -325,10 +325,10 @@ impl App {
                 if let Some(path) = action {
                     // Over the focused pane, as every other way into a file
                     // does it, so closing it puts the shell back.
-                    self.open_path_tool(tool::OpenTarget::file(PathBuf::from(path)));
+                    self.open_path_editor(editor::OpenTarget::file(PathBuf::from(path)));
                 }
             }
-            PaletteMode::ToolPick => {
+            PaletteMode::EditorPick => {
                 if let Some(pick) = pick {
                     self.answer_pick(pick, action);
                 }
@@ -348,8 +348,8 @@ impl App {
             PaletteMode::Jump => {
                 if let Some(action) = action {
                     if let Ok(target) = action.parse::<usize>() {
-                        if let Some(slot) = self.open_tabs.tool_mut(&focused) {
-                            slot.tool.jump_confirm(target);
+                        if let Some(slot) = self.open_tabs.editor_mut(&focused) {
+                            slot.editor.jump_confirm(target);
                         } else {
                             if let Some((_pid, origin)) = self.swoop_initial_cursor.take() {
                                 self.vim.tab_mut(focused).jump_list.push(origin);
@@ -553,10 +553,10 @@ impl App {
 
     /// Buffer jump: open fuzzy target completion dialog for the active buffer view.
     pub(crate) fn open_jump(&mut self, focused: TabId) {
-        if let Some(slot) = self.open_tabs.tool_mut(&focused) {
-            if let Some(targets) = slot.tool.jump_targets() {
-                let title = format!("Jump: {}", slot.tool.title());
-                let initial_cursor = slot.tool.jump_cursor();
+        if let Some(slot) = self.open_tabs.editor_mut(&focused) {
+            if let Some(targets) = slot.editor.jump_targets() {
+                let title = format!("Jump: {}", slot.editor.title());
+                let initial_cursor = slot.editor.jump_cursor();
                 let mut palette = Palette::open_jump(targets, Some(title))
                     .with_query_history(self.palette_history.clone());
                 if let Some(cur) = initial_cursor {
@@ -564,7 +564,7 @@ impl App {
                 }
                 if let Some(action) = palette.selected_action() {
                     if let Ok(target) = action.parse::<usize>() {
-                        slot.tool.jump_to(target);
+                        slot.editor.jump_to(target);
                     }
                 }
                 self.open_palette(palette);
@@ -589,7 +589,7 @@ impl App {
         let targets = lines
             .into_iter()
             .map(|(abs_row, line)| {
-                tool::JumpTarget::new(abs_row, format!("{:>5}  {}", abs_row + 1, line))
+                editor::JumpTarget::new(abs_row, format!("{:>5}  {}", abs_row + 1, line))
             })
             .collect();
         let mut palette = Palette::open_jump(targets, Some("Jump: Terminal".to_string()))
@@ -610,8 +610,8 @@ impl App {
     pub(crate) fn update_jump_preview(&mut self, palette: &Palette, focused: TabId) {
         if let Some(action) = palette.selected_action() {
             if let Ok(target) = action.parse::<usize>() {
-                if let Some(slot) = self.open_tabs.tool_mut(&focused) {
-                    slot.tool.jump_to(target);
+                if let Some(slot) = self.open_tabs.editor_mut(&focused) {
+                    slot.editor.jump_to(target);
                 } else {
                     self.set_nav_cursor(focused, (target, 0));
                     self.reveal_position_centered(focused, (target, 0));
@@ -623,8 +623,8 @@ impl App {
 
     /// Restore the pre-jump view/cursor position when jump is cancelled.
     pub(crate) fn cancel_jump(&mut self, focused: TabId) {
-        if let Some(slot) = self.open_tabs.tool_mut(&focused) {
-            slot.tool.jump_cancel();
+        if let Some(slot) = self.open_tabs.editor_mut(&focused) {
+            slot.editor.jump_cancel();
         } else if let Some((pid, (r, c))) = self.swoop_initial_cursor.take() {
             if pid == focused {
                 self.set_nav_cursor(focused, (r, c));

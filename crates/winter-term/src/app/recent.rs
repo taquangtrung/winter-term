@@ -8,11 +8,11 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+use crate::model::editor::OpenTarget;
 use crate::model::layout::TabId;
 use crate::model::paint::IconKind;
 use crate::model::palette::{Palette, PaletteEntry};
 use crate::model::path::abbreviate_home;
-use crate::model::tool::OpenTarget;
 
 use super::App;
 
@@ -115,7 +115,7 @@ impl App {
     }
 
     /// Act on a row of the recent list: go to the tab, open the file in the
-    /// tool that shows it, or list the directory.
+    /// editor that shows it, or list the directory.
     pub(crate) fn choose_recent_row(&mut self, action: &str) {
         if let Some(tab) = action
             .strip_prefix(TAB_ROW)
@@ -125,11 +125,11 @@ impl App {
             return;
         }
         if let Some(path) = action.strip_prefix(FILE_ROW) {
-            self.open_path_tool(OpenTarget::file(PathBuf::from(path)));
+            self.open_path_editor(OpenTarget::file(PathBuf::from(path)));
             return;
         }
         if let Some(path) = action.strip_prefix(DIR_ROW) {
-            self.open_dir_tool_at(PathBuf::from(path));
+            self.open_dir_editor_at(PathBuf::from(path));
         }
     }
 

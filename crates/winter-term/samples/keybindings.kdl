@@ -32,7 +32,7 @@
 // palette entry would. Sequences resolve names the same way.
 //
 // The `window` and `editing` blocks are configurable today, and so is a block
-// per tool (`git`, ...) naming that tool's own commands; a tool's bindings
+// per editor (`git`, ...) naming that editor's own commands; an editor's bindings
 // apply only while it has focus, ahead of the window's. `normal`, `insert`,
 // and `visual` use built-in Vim-style defaults.
 //
@@ -93,7 +93,7 @@ window {
     "M-S-q" "close_other_tabs"
 
     // Walk the file:line references the last command printed (compiler
-    // errors, test failures), opening each in the editor.
+    // errors, test failures), opening each in the text editor.
     "<f8>" "next_error"
     "S-<f8>" "prev_error"
 
@@ -167,23 +167,23 @@ window {
     // Search the project as you type, the lines found streaming in; a `*`
     // stands for anything, and ` @ <file>` after the pattern filters by path.
     "C-M-g" "live_search"
-    // The keys of the focused tab: a tool's own keys, else the window's.
+    // The keys of the focused tab: an editor's own keys, else the window's.
     "<f1> h" "tab_keys"
 
-    // Tools: a pane holding a tool page instead of a terminal.
+    // Editors: a pane holding an editor tab instead of a terminal.
     "C-S-d" "dir_page"
     "C-S-f" "file_browser"
     "C-S-g" "git_page"
     "C-S-s" "grep_page"
     "C-S-," "proc_page"
-    // Put back the last tool page closed, whether it was closed on its own or
+    // Put back the last editor tab closed, whether it was closed on its own or
     // went with the pane or tab it was on. Press again for the one before it.
     "C-S-u" "reopen_page"
-    // Every tool as a list to pick from in the fuzzy panel: the ones open
+    // Every editor as a list to pick from in the fuzzy panel: the ones open
     // somewhere, then the ones closed recently.
     "C-S-e" "tool_list"
-    // Open the focused tab's file in another tool that can show it: an SVG
-    // in the editor drawn as a picture, or the picture back as its markup.
+    // Open the focused tab's file in another editor that can show it: an SVG
+    // in the text editor drawn as a picture, or the picture back as its markup.
     "C-M-S-e" "open_with"
     // The notifications the status bar has shown this session, newest first.
     "C-M-m" "notifications"
@@ -206,7 +206,7 @@ editing {
     "C-\\" "prompt_redo"
 }
 
-// The Git tool's own commands. Its single-key commands (s, c, b, ...) are
+// Git's own commands. Its single-key commands (s, c, b, ...) are
 // built in; these are the ones bound here.
 //   open_remote: open the repository's remote in a browser.
 git {

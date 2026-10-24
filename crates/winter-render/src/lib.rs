@@ -105,7 +105,7 @@ pub const STATUS_BAR_HEIGHT: f32 = 1.0;
 
 /// How far non-focused pane colors are lerped toward the background (0 = full,
 /// 1 = fully dimmed). Public so what the host draws over a pane itself, such
-/// as a tool's icons, can fade by the same amount.
+/// as an editor's icons, can fade by the same amount.
 pub const DIM_FACTOR: f32 = 0.4;
 
 /// Top edge of the status bar in pixels: the bar is exactly [`STATUS_BAR_HEIGHT`]

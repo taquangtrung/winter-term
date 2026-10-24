@@ -292,8 +292,8 @@ impl App {
                 icon: self.tab_icon(tab),
                 modified: self
                     .open_tabs
-                    .tool(&tab)
-                    .is_some_and(|slot| slot.tool.is_dirty()),
+                    .editor(&tab)
+                    .is_some_and(|slot| slot.editor.is_dirty()),
                 tab_id: tab.0,
                 title: self.strip_title(tab),
             })
@@ -305,9 +305,9 @@ impl App {
         crate::icons::shared_svg(&self.tab_icon_kind(tab))
     }
 
-    /// What `tab` holds, as its icon depicts it: a terminal, or its tool.
+    /// What `tab` holds, as its icon depicts it: a terminal, or its editor.
     pub(super) fn tab_icon_kind(&self, tab: TabId) -> IconKind {
-        match self.open_tabs.tool(&tab) {
+        match self.open_tabs.editor(&tab) {
             Some(slot) => slot.tab_icon(),
             None => IconKind::Terminal,
         }
@@ -700,10 +700,7 @@ mod tests {
         assert_eq!(app.layout().shown_tabs().len(), 2);
         assert_eq!(app.layout().focused(), tab1);
         let vp = Rect::new(0.0, 0.0, 800.0, 600.0);
-        assert_eq!(
-            app.layout().pane_in_direction(FocusDir::Up, vp),
-            Some(tab0)
-        );
+        assert_eq!(app.layout().pane_in_direction(FocusDir::Up, vp), Some(tab0));
 
         // Move tab1 back into tab0's pane
         app.move_tab_to_pane(tab1, tab0);
@@ -769,10 +766,7 @@ mod tests {
         assert_eq!(app.layout().shown_tabs().len(), 3);
         assert_eq!(app.layout().tabs_in_pane(tab1), vec![tab1]);
         assert_eq!(app.layout().focused(), tab2);
-        assert_eq!(
-            app.layout().pane_in_direction(FocusDir::Up, vp),
-            Some(tab0)
-        );
+        assert_eq!(app.layout().pane_in_direction(FocusDir::Up, vp), Some(tab0));
     }
 
     #[test]

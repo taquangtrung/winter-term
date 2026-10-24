@@ -1,7 +1,7 @@
 //! The key a part-typed command was waiting on.
 
+use crate::model::editor::Notice;
 use crate::model::input::{Key, KeyCode};
-use crate::model::tool::Notice;
 use crate::model::vim::grammar::{
     is_register_name, is_settable_mark, mark_name, table_entry, BLACK_HOLE_REGISTER, GOTO_MOTIONS,
     JUMP_MARK, LINE_PLACEMENTS,

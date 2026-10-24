@@ -30,11 +30,11 @@ mod visual;
 
 use std::collections::HashMap;
 
+use crate::model::editor::{EditorStatus, Notice, SearchReport};
 use crate::model::input::{Key, KeyCode};
 use crate::model::textedit::buffer::{Register, TextBuffer};
 use crate::model::textedit::kill::KillRing;
 use crate::model::textedit::search::Search;
-use crate::model::tool::{Notice, SearchReport, ToolStatus};
 use crate::model::vim::grammar::{
     OperatorKind, BLACK_HOLE_REGISTER, GOTO_MOTIONS, LINE_PLACEMENTS,
 };
@@ -498,13 +498,13 @@ impl ModalEditor {
         self.register
     }
 
-    /// What a tool editing `buffer` with these keys puts in the status bar:
+    /// What an editor editing `buffer` with these keys puts in the status bar:
     /// the mode, where the cursor is, `total` saying how much there is, and
     /// the register a `"` named for the next command.
-    pub fn tool_status(&self, buffer: &TextBuffer, total: String) -> ToolStatus {
+    pub fn editor_status(&self, buffer: &TextBuffer, total: String) -> EditorStatus {
         let mut segments = vec![format!("{}:{}", buffer.row() + 1, buffer.col() + 1), total];
         segments.extend(self.register.map(|register| format!("\"{register}")));
-        ToolStatus {
+        EditorStatus {
             mode: Some(self.mode),
             segments,
         }
@@ -713,7 +713,7 @@ fn move_cursor(
     buffer: &mut TextBuffer,
     motion: CursorMove,
     typed: Option<usize>,
-    tool: usize,
+    editor: usize,
     scroll: usize,
 ) {
     let count = typed.unwrap_or(1);
@@ -738,13 +738,13 @@ fn move_cursor(
             Some(line) => buffer.move_to_line(line.saturating_sub(1)),
             None => buffer.move_bottom(),
         },
-        CursorMove::PageDown => buffer.move_down(tool, false),
-        CursorMove::PageUp => buffer.move_up(tool, false),
-        CursorMove::HalfPageDown => buffer.move_down(tool / HALF_PAGE, false),
-        CursorMove::HalfPageUp => buffer.move_up(tool / HALF_PAGE, false),
+        CursorMove::PageDown => buffer.move_down(editor, false),
+        CursorMove::PageUp => buffer.move_up(editor, false),
+        CursorMove::HalfPageDown => buffer.move_down(editor / HALF_PAGE, false),
+        CursorMove::HalfPageUp => buffer.move_up(editor / HALF_PAGE, false),
         CursorMove::ScreenTop => buffer.move_to_line(scroll),
-        CursorMove::ScreenMiddle => buffer.move_to_line(scroll + tool / HALF_PAGE),
-        CursorMove::ScreenBottom => buffer.move_to_line(scroll + tool.saturating_sub(1)),
+        CursorMove::ScreenMiddle => buffer.move_to_line(scroll + editor / HALF_PAGE),
+        CursorMove::ScreenBottom => buffer.move_to_line(scroll + editor.saturating_sub(1)),
         CursorMove::ParagraphBack => buffer.move_paragraph(count, false),
         CursorMove::ParagraphForward => buffer.move_paragraph(count, true),
         CursorMove::MatchingBracket => buffer.move_matching_bracket(),

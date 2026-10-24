@@ -8,8 +8,8 @@
 
 use std::path::PathBuf;
 
+use crate::model::editor::OpenTarget;
 use crate::model::layout::TabId;
-use crate::model::tool::OpenTarget;
 
 use super::navigation::resolve_existing_path;
 use super::App;
@@ -18,7 +18,7 @@ use super::App;
 // Constants
 // ========================================================================
 
-/// A file reference as tools print one: a path, a line, and maybe a column,
+/// A file reference as editors print one: a path, a line, and maybe a column,
 /// with no blanks, quotes, or brackets in the path.
 const REFERENCE: &str = r#"([^\s:'"()\[\]<>]+):(\d+)(?::\d+)?"#;
 
@@ -89,7 +89,7 @@ impl App {
             tab,
             targets,
         });
-        self.open_path_tool(target);
+        self.open_path_editor(target);
         self.set_notice(note);
     }
 
@@ -146,7 +146,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_references_are_the_existing_files_a_tool_printed_each_once() {
+    fn test_references_are_the_existing_files_an_editor_printed_each_once() {
         let dir = std::env::temp_dir().join(format!("winter-errors-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("src")).expect("temp dir");

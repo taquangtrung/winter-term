@@ -29,7 +29,7 @@ pub struct RawProcess {
     pub cwd: Option<String>,
     /// The executable's full path, where the system tells.
     pub exec_path: Option<String>,
-    /// Video memory it holds in kilobytes, where a GPU tool reports it.
+    /// Video memory it holds in kilobytes, where a GPU editor reports it.
     pub gpu_kb: Option<u64>,
     /// The executable's name, without a path.
     pub name: String,
@@ -50,7 +50,7 @@ pub struct RawProcess {
 pub struct ProcessSample {
     /// The processes, in no particular order.
     pub entries: Vec<RawProcess>,
-    /// Whether a GPU tool answered, so a process missing from its list holds
+    /// Whether a GPU editor answered, so a process missing from its list holds
     /// no video memory rather than an unknown amount.
     pub has_gpu: bool,
     /// When the snapshot was started, so two of them give an interval.

@@ -9,8 +9,8 @@ use crate::Version;
 // Data Structures
 // ============================================================================
 
-/// What a terminal can render, sent back to a querying tool so it can choose a
-/// representation before emitting. Travels as JSON on the tool's stdin, not as
+/// What a terminal can render, sent back to a querying editor so it can choose a
+/// representation before emitting. Travels as JSON on the editor's stdin, not as
 /// an OSC escape, so it is serialized directly rather than through this crate's escape codec.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct Caps {
@@ -23,7 +23,7 @@ pub struct Caps {
     /// escape instead of inline base64, for payloads too large for the PTY.
     pub side_channel: bool,
     /// Trust tiers the terminal's policy will actually grant. A tier absent
-    /// here is clamped away (see [`TrustTier::clamp_to`]), so a tool should not
+    /// here is clamped away (see [`TrustTier::clamp_to`]), so an editor should not
     /// bother requesting it.
     pub tiers: Vec<TrustTier>,
     /// The TBP protocol version the terminal speaks.
@@ -54,7 +54,7 @@ const SUPPORTED_MIME: &[&str] = &[
 // ============================================================================
 
 impl Caps {
-    /// The capabilities this terminal advertises to querying tools.
+    /// The capabilities this terminal advertises to querying editors.
     pub fn winter_default() -> Self {
         Self {
             live: true,
@@ -69,7 +69,7 @@ impl Caps {
         }
     }
 
-    /// Serialize as JSON, ready to write to a tool's stdin.
+    /// Serialize as JSON, ready to write to an editor's stdin.
     pub fn to_json(&self) -> String {
         serde_json::to_string(self).expect("Caps is always serializable")
     }

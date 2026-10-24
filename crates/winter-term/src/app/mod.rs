@@ -15,17 +15,17 @@
 //! - [`canvas`]: content drawn in a pane rather than painted as cells.
 //! - [`errors`]: next-error, walking the `path:line` references a command printed.
 //! - [`focus`]: which tab has the keyboard, and telling programs that asked.
-//! - [`frame_grid`]: painting a tool's styled rows into a cell grid.
+//! - [`frame_grid`]: painting an editor's styled rows into a cell grid.
 //! - [`geometry`]: chrome insets, viewports, pane hit-testing.
 //! - [`ime`]: input-method composition at the cursor.
 //! - [`init`]: GPU and window bootstrap on `resumed`.
-//! - [`jobs`]: slow work a tool asked for, run off the event-loop thread.
+//! - [`jobs`]: slow work an editor asked for, run off the event-loop thread.
 //! - [`lifecycle`]: construction, state persistence, quit and reload.
 //! - [`live_search`]: the project searched as you type, in the palette.
 //! - [`navigation`]: vim-style cursor motions, search, quick-select.
 //! - [`notices`]: notifications: toasts, the bell, and their history.
-//! - [`open_tabs`]: every open tab, terminal or tool, and what it holds.
-//! - [`open_with`]: opening the focused tab's file in another tool.
+//! - [`open_tabs`]: every open tab, terminal or editor, and what it holds.
+//! - [`open_with`]: opening the focused tab's file in another editor.
 //! - [`overlay`]: what holds the keyboard over the panes.
 //! - [`palette`]: command palette and the pickers built on it.
 //! - [`panes`]: pane creation, splitting, closing, per-frame upkeep.
@@ -45,8 +45,8 @@
 //! - [`tabbar`]: the top tabbar and its clicks.
 //! - [`tabs`]: tab creation, activation order, the most-recently-used ring.
 //! - [`title`]: window title composition and the yank highlight.
-//! - [`tool`]: tool tabs: opening, closing, and reopening them, and their keys.
-//! - [`tool_cursor`]: a Vim-style text cursor over a tool's rows.
+//! - [`editor`]: editor tabs: opening, closing, and reopening them, and their keys.
+//! - [`editor_cursor`]: a Vim-style text cursor over an editor's rows.
 //! - [`wake`]: waking the event loop from the threads that feed it.
 //! - [`window_event`]: handlers for individual winit window events.
 
@@ -57,6 +57,8 @@ mod block_text;
 mod blocks;
 mod busy;
 mod canvas;
+mod editor;
+mod editor_cursor;
 mod errors;
 mod focus;
 mod frame_grid;
@@ -91,8 +93,6 @@ mod tabs;
 #[cfg(test)]
 mod test_support;
 mod title;
-mod tool;
-mod tool_cursor;
 pub(crate) mod wake;
 mod window_event;
 
@@ -349,34 +349,34 @@ pub struct App {
     pub(crate) icon_textures: HashMap<(String, u32, u32), Option<u64>>,
     /// The pixel box `icon_textures` was filled for.
     pub(crate) icon_texture_box: (u32, u32),
-    /// What the GPU holds for what each tool shows over its pane, by tab
-    /// and the key the tool gave it.
-    pub(crate) tool_textures: HashMap<(TabId, u64), canvas::ToolTexture>,
+    /// What the GPU holds for what each editor shows over its pane, by tab
+    /// and the key the editor gave it.
+    pub(crate) editor_textures: HashMap<(TabId, u64), canvas::EditorTexture>,
     /// Each icon the open palette's entries name, resolved to its SVG once
     /// rather than on every frame the palette is drawn. Emptied whenever no
     /// palette is open, so it never outgrows one list.
     pub(crate) palette_icons: HashMap<IconKind, Option<Arc<[u8]>>>,
-    /// Every open tab, terminal or tool, by id.
+    /// Every open tab, terminal or editor, by id.
     pub(crate) open_tabs: OpenTabs,
     /// For each commit-message editor tab, the pane beside it showing what is
     /// staged, which closes with it.
     pub(crate) commit_companions: HashMap<TabId, TabId>,
-    /// Panes and tools that were closed, oldest first, for reopening. A pane
-    /// or a tab closed with a tool on it used to drop the tool with no way
+    /// Panes and editors that were closed, oldest first, for reopening. A pane
+    /// or a tab closed with an editor on it used to drop the editor with no way
     /// back, which for an editor meant dropping edits nothing had asked
     /// about.
-    pub(crate) closed: Vec<tool::Closed>,
+    pub(crate) closed: Vec<editor::Closed>,
     /// The id the next closed thing is given, so a row of the list of them
-    /// stands for one tool or pane rather than for a position in a list that
+    /// stands for one editor or pane rather than for a position in a list that
     /// moves.
     pub(crate) next_closed_id: u64,
     /// Whether this session has said yet that a closed tab can be brought
     /// back. Said once, on the first close, and never again.
     pub(crate) reopen_hint_shown: bool,
-    /// Whether tools wrap rows wider than their pane onto the next screen
-    /// row, toggled by `M-z` in every tool at once.
-    pub(crate) tool_wrap: bool,
-    /// Slow work tools have asked for, and the answers coming back.
+    /// Whether editors wrap rows wider than their pane onto the next screen
+    /// row, toggled by `M-z` in every editor at once.
+    pub(crate) editor_wrap: bool,
+    /// Slow work editors have asked for, and the answers coming back.
     pub(crate) jobs: jobs::Jobs,
     /// The AI providers' quotas the status bar shows: started with the
     /// first frame that draws the bar, so a window without one asks nothing.
@@ -389,11 +389,11 @@ pub struct App {
     pub(crate) search_debounce: Option<(Instant, TabId)>,
     /// Where next-error has got to in the last command's file references.
     pub(crate) error_walk: Option<errors::ErrorWalk>,
-    /// What each tool question was answered with before, for the arrow keys.
+    /// What each editor question was answered with before, for the arrow keys.
     pub(crate) prompt_answers: Answers,
-    /// The Vim-style text cursor over a tool, while one is up. At most one
-    /// exists: it belongs to whichever tool tab `v` was pressed in.
-    pub(crate) tool_cursor: Option<tool_cursor::ToolCursor>,
+    /// The Vim-style text cursor over an editor, while one is up. At most one
+    /// exists: it belongs to whichever editor tab `v` was pressed in.
+    pub(crate) editor_cursor: Option<editor_cursor::EditorCursor>,
     /// What holds the keyboard over the panes, if anything: a palette, a
     /// question, a name being typed, the settings page (see [`Overlay`]).
     pub(crate) overlay: Option<Overlay>,
@@ -420,7 +420,7 @@ pub struct App {
     /// Directories opened in a listing, most recent first: this window's own,
     /// on top of what was on disk when it started (see `recent`).
     pub(crate) recent_dirs: Vec<PathBuf>,
-    /// Files opened in a tool or handed to `$EDITOR`, most recent first.
+    /// Files opened in an editor or handed to `$EDITOR`, most recent first.
     pub(crate) recent_files: Vec<PathBuf>,
     /// Next free globally-unique pane id; allocated by [`Self::alloc_tab_id`].
     pub(crate) next_tab_id: u64,
@@ -476,18 +476,18 @@ pub(crate) enum ContextAction {
     Paste,
     /// A line between two groups of entries, which does nothing.
     Separator,
-    /// An entry a tool offered, standing for a key that tool binds.
-    ToolKey(ToolKeyAction),
+    /// An entry an editor offered, standing for a key that editor binds.
+    EditorKey(EditorKeyAction),
 }
 
-/// A menu entry a tool offered: what it is called, and the keys of its
-/// own the tool is typed when it is chosen.
+/// A menu entry an editor offered: what it is called, and the keys of its
+/// own the editor is typed when it is chosen.
 #[derive(Clone)]
-pub(crate) struct ToolKeyAction {
+pub(crate) struct EditorKeyAction {
     /// Qualified: `winit::keyboard::Key` is also in scope in this module.
     pub(crate) keys: Vec<input::Key>,
     pub(crate) label: String,
-    /// The pane whose tool offered it, since the menu outlives the click and
+    /// The pane whose editor offered it, since the menu outlives the click and
     /// the focus could move under it.
     pub(crate) tab: TabId,
 }
@@ -825,7 +825,7 @@ impl ApplicationHandler for App {
             self.save_app_state();
         }
 
-        // Answers from tool jobs. Each worker wakes the loop as it answers,
+        // Answers from editor jobs. Each worker wakes the loop as it answers,
         // so a running job needs no faster poll to be heard.
         if self.deliver_finished_jobs() {
             self.dirty = true;
@@ -833,9 +833,9 @@ impl ApplicationHandler for App {
         if self.quota.as_mut().is_some_and(|quota| quota.drain()) {
             self.dirty = true;
         }
-        // Tools that keep themselves current (the process monitor) ask for
+        // Editors that keep themselves current (the process monitor) ask for
         // their next refresh here, and the loop wakes for the earliest.
-        let tool_tick = self.tick_tools(Instant::now());
+        let editor_tick = self.tick_editors(Instant::now());
         let live_search_tick = self.tick_live_search(Instant::now());
         let progress = self.job_progress_line(self.layout().focused());
         if progress != self.job_progress {
@@ -856,12 +856,12 @@ impl ApplicationHandler for App {
             let now = Instant::now();
             if now >= deadline {
                 self.prompt_debounce = None;
-                if let Some(prompt) = self.tool_prompt() {
+                if let Some(prompt) = self.editor_prompt() {
                     let query = prompt.field.text().to_string();
                     let tag = prompt.request.tag;
-                    if let Some(slot) = self.open_tabs.tool_mut(&tab) {
-                        let outcome = slot.tool.on_prompt_input(&query, tag);
-                        self.act_on_tool_outcome(tab, outcome);
+                    if let Some(slot) = self.open_tabs.editor_mut(&tab) {
+                        let outcome = slot.editor.on_prompt_input(&query, tag);
+                        self.act_on_editor_outcome(tab, outcome);
                     }
                 }
                 self.dirty = true;
@@ -900,7 +900,7 @@ impl ApplicationHandler for App {
         if let Some((deadline, _)) = self.prompt_debounce {
             wakeup = wakeup.min(deadline);
         }
-        if let Some(deadline) = tool_tick {
+        if let Some(deadline) = editor_tick {
             wakeup = wakeup.min(deadline);
         }
         if let Some(deadline) = live_search_tick {

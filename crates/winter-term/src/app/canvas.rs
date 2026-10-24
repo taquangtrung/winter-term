@@ -1,6 +1,6 @@
 //! The canvas: what is drawn in a pane rather than painted as cells, by
-//! inline blocks and tools alike. One way to put any content into a texture
-//! at the size it is shown, and the textures holding what tools show over
+//! inline blocks and editors alike. One way to put any content into a texture
+//! at the size it is shown, and the textures holding what editors show over
 //! their panes, each cropped to its pane.
 
 use std::collections::HashSet;
@@ -37,8 +37,8 @@ pub(crate) enum Fit {
     Width(u32),
 }
 
-/// What the GPU holds for one piece of what a tool shows.
-pub(crate) struct ToolTexture {
+/// What the GPU holds for one piece of what an editor shows.
+pub(crate) struct EditorTexture {
     /// Set once the content failed to draw, so it is said once, not every
     /// frame.
     failed: bool,
@@ -73,14 +73,14 @@ impl Fit {
 }
 
 // ========================================================================
-// App: tool content
+// App: editor content
 // ========================================================================
 
 impl App {
-    /// The placements of what the tools in `shown` draw over their panes
-    /// this frame, each cropped to its pane, every tool told its pane's
+    /// The placements of what the editors in `shown` draw over their panes
+    /// this frame, each cropped to its pane, every editor told its pane's
     /// size first and a picture's own size after.
-    pub(super) fn tool_canvas_placements(
+    pub(super) fn editor_canvas_placements(
         &mut self,
         shown: &[TabId],
         rects: &[(TabId, Rect)],
@@ -95,16 +95,16 @@ impl App {
             };
             let pane_rect = App::layout_rect_to_pane(*rect).grid_area(ch);
             let pane = (pane_rect.width, pane_rect.height);
-            let Some(slot) = self.open_tabs.tool_mut(tab) else {
+            let Some(slot) = self.open_tabs.editor_mut(tab) else {
                 continue;
             };
-            slot.tool.set_pane_size(pane);
-            let tiles = slot.tool.tiles();
-            // Rows the tool painted over its drawing are kept clear of it.
-            let header = (slot.tool.header_rows() as f32 * ch).min(pane.1);
+            slot.editor.set_pane_size(pane);
+            let tiles = slot.editor.tiles();
+            // Rows the editor painted over its drawing are kept clear of it.
+            let header = (slot.editor.header_rows() as f32 * ch).min(pane.1);
             let bounds = (0.0, header, pane.0, pane.1 - header);
-            let picture = slot.tool.picture();
-            // Faded with the rest of an inactive pane, as a tool's icons are.
+            let picture = slot.editor.picture();
+            // Faded with the rest of an inactive pane, as an editor's icons are.
             let alpha = match self.config.dim_inactive && *tab != focused {
                 true => 1.0 - winter_render::DIM_FACTOR,
                 false => 1.0,
@@ -126,7 +126,7 @@ impl App {
                     continue;
                 };
                 let fit = Fit::shown(&tile.content, (tile.width, tile.height));
-                if let Some((id, _)) = self.tool_texture(*tab, tile.key, &tile.content, |_| fit) {
+                if let Some((id, _)) = self.editor_texture(*tab, tile.key, &tile.content, |_| fit) {
                     drawn.insert((*tab, tile.key));
                     placements.push(place(id, clip));
                 }
@@ -141,39 +141,39 @@ impl App {
                 Fit::shown(&picture.content, (frame.width, frame.height))
             };
             let Some((id, natural)) =
-                self.tool_texture(*tab, picture.key, &picture.content, shown_at)
+                self.editor_texture(*tab, picture.key, &picture.content, shown_at)
             else {
                 continue;
             };
             drawn.insert((*tab, picture.key));
-            if let Some(slot) = self.open_tabs.tool_mut(tab) {
-                slot.tool.set_picture_geometry(natural, pane);
+            if let Some(slot) = self.open_tabs.editor_mut(tab) {
+                slot.editor.set_picture_geometry(natural, pane);
             }
             if let Some(clip) = view.frame(natural, pane, vector).clip(bounds) {
                 placements.push(place(id, clip));
             }
         }
-        self.forget_tool_textures(shown, &drawn);
+        self.forget_editor_textures(shown, &drawn);
         placements
     }
 
-    /// The texture holding `content`, keyed `key` by tab `tab`'s tool, and
+    /// The texture holding `content`, keyed `key` by tab `tab`'s editor, and
     /// the content's own size: drawn the first time it is asked for, and
     /// again whenever `fit` asks for it drawn differently. `None` for content
     /// that cannot be drawn, which is said once.
-    fn tool_texture(
+    fn editor_texture(
         &mut self,
         tab: TabId,
         key: u64,
         content: &Content,
         fit: impl Fn((f32, f32)) -> Fit,
     ) -> Option<(u64, (f32, f32))> {
-        if !self.tool_textures.contains_key(&(tab, key)) {
+        if !self.editor_textures.contains_key(&(tab, key)) {
             let id = self.next_image_id;
             self.next_image_id += 1;
-            self.tool_textures.insert(
+            self.editor_textures.insert(
                 (tab, key),
-                ToolTexture {
+                EditorTexture {
                     failed: false,
                     id,
                     natural: None,
@@ -181,7 +181,7 @@ impl App {
                 },
             );
         }
-        let held = self.tool_textures.get(&(tab, key))?;
+        let held = self.editor_textures.get(&(tab, key))?;
         if held.failed {
             return None;
         }
@@ -194,13 +194,13 @@ impl App {
             true => natural,
             false => upload(renderer, id, content, want),
         };
-        let held = self.tool_textures.get_mut(&(tab, key))?;
+        let held = self.editor_textures.get_mut(&(tab, key))?;
         let Some(size) = drawn else {
             held.failed = true;
             let name = self
                 .open_tabs
-                .tool(&tab)
-                .map(|slot| slot.tool.title())
+                .editor(&tab)
+                .map(|slot| slot.editor.title())
                 .unwrap_or_default();
             self.set_error(format!("{name}: cannot draw this"));
             return None;
@@ -216,22 +216,22 @@ impl App {
         Some((id, natural))
     }
 
-    /// Free the textures of tools that have closed, and those a tool shown
-    /// this frame has moved on from. A tool not on screen keeps its own, so
+    /// Free the textures of editors that have closed, and those an editor shown
+    /// this frame has moved on from. An editor not on screen keeps its own, so
     /// switching back to it draws at once rather than decoding again.
-    fn forget_tool_textures(&mut self, shown: &[TabId], drawn: &HashSet<(TabId, u64)>) {
+    fn forget_editor_textures(&mut self, shown: &[TabId], drawn: &HashSet<(TabId, u64)>) {
         let gone: Vec<(TabId, u64)> = self
-            .tool_textures
+            .editor_textures
             .keys()
             .filter(|(tab, key)| {
-                self.open_tabs.tool(tab).is_none()
+                self.open_tabs.editor(tab).is_none()
                     || (shown.contains(tab) && !drawn.contains(&(*tab, *key)))
             })
             .copied()
             .collect();
         for held in gone {
             if let (Some(texture), Some(renderer)) =
-                (self.tool_textures.remove(&held), self.renderer.as_mut())
+                (self.editor_textures.remove(&held), self.renderer.as_mut())
             {
                 renderer.free_image(texture.id);
             }

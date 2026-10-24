@@ -29,7 +29,7 @@ impl App {
                     .and_then(|p| p.foreground_process_name())
                     .or_else(|| {
                         self.open_tabs
-                            .tool(&focused)
+                            .editor(&focused)
                             .map(|slot| slot.kind().title().to_string())
                     })
                     .unwrap_or_default(),
@@ -42,8 +42,8 @@ impl App {
                     .and_then(|p| p.cwd().map(|c| tabbar::clean_cwd(&c)))
                     .or_else(|| {
                         self.open_tabs
-                            .tool(&focused)
-                            .and_then(|slot| slot.tool.cwd())
+                            .editor(&focused)
+                            .and_then(|slot| slot.editor.cwd())
                             .map(|p| tabbar::clean_cwd(&p.to_string_lossy()))
                     })
                     .unwrap_or_default(),

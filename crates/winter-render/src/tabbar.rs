@@ -710,7 +710,7 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
 
     // Tabs grow to share the available width up to MAX, never below MIN. When
     // even MIN-width tabs overflow, paginate: clamp to MIN-ish, reserve arrows,
-    // and show only the tool containing the active tab.
+    // and show only the editor containing the active tab.
     let avail_no_nav = strip_w.max(0.0);
     let paginated = n > 1 && (n as f32) * min_tab_w > avail_no_nav;
 
@@ -738,7 +738,7 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
         let avail = (strip_w - 2.0 * scroll_w).max(min_tab_w);
         let count = ((avail / min_tab_w).floor() as usize).clamp(1, n);
         let tab_w = (avail / count as f32).clamp(min_tab_w, max_tab_w);
-        // Tool-based window keyed on the active tab so it is always visible.
+        // Editor-based window keyed on the active tab so it is always visible.
         let start = (tabbar.active_tab / count * count).min(n - count);
         scroll_left = Some(Region {
             h: bar_h,

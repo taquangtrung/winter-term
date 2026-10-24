@@ -2,8 +2,8 @@
 //! Claude Code's, and Z.ai's, each as how much of its short window and its
 //! weekly window is used and when each starts over.
 //!
-//! Each provider is asked the way its own tools ask, so nothing here needs
-//! setting up beyond what those tools already did: Claude Code's sign-in, a
+//! Each provider is asked the way its own editors ask, so nothing here needs
+//! setting up beyond what those editors already did: Claude Code's sign-in, a
 //! running Antigravity, and for Z.ai an API key kept in the system's secret
 //! store (see [`secret`]).
 //!

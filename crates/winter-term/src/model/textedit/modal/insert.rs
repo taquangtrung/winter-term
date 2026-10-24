@@ -1,9 +1,9 @@
 //! Insert and Replace: the Emacs keys of typing, and writing over text.
 
+use crate::model::editor::Notice;
 use crate::model::input::{Key, KeyCode, Mods};
 use crate::model::textedit::buffer::{TextBuffer, WordCase};
 use crate::model::textedit::kill::Merge;
-use crate::model::tool::Notice;
 use crate::model::vim::words::prev_word_start;
 
 use super::{
@@ -171,8 +171,8 @@ impl Session<'_> {
             't' => self.buffer_mut().transpose_chars(),
             'y' => self.yank_kill(),
             'v' => {
-                let tool = self.insert_tool();
-                self.buffer_mut().move_down(tool, true);
+                let editor = self.insert_editor();
+                self.buffer_mut().move_down(editor, true);
             }
             'l' => self.center_on_cursor(),
             'u' => self.kill(false, |buffer| buffer.take_to(0, false)),
@@ -208,8 +208,8 @@ impl Session<'_> {
             }
             (Mods::ALT, KeyCode::Char('m')) => self.buffer_mut().move_first_non_blank(),
             (Mods::ALT, KeyCode::Char('v')) => {
-                let tool = self.insert_tool();
-                self.buffer_mut().move_up(tool, true);
+                let editor = self.insert_editor();
+                self.buffer_mut().move_up(editor, true);
             }
             (Mods::ALT_SHIFT, KeyCode::Char('<')) => self.buffer_mut().move_text_start(),
             (Mods::ALT_SHIFT, KeyCode::Char('>')) => self.buffer_mut().move_text_end(),
@@ -220,7 +220,7 @@ impl Session<'_> {
 
     /// How far a screen-wise Emacs scroll moves: a page, less the lines that
     /// stay in view to keep the place.
-    pub(super) fn insert_tool(&self) -> usize {
+    pub(super) fn insert_editor(&self) -> usize {
         self.view.viewport.saturating_sub(PAGE_OVERLAP).max(1)
     }
 

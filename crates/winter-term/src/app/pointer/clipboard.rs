@@ -1,9 +1,9 @@
 //! Text selection, word selection, and clipboard copy/paste.
 
+use crate::model::editor::PromptMode;
 use crate::model::input::VisualKind;
 use crate::model::layout::TabId;
 use crate::model::palette::PaletteMode;
-use crate::model::tool::PromptMode;
 
 use super::super::overlay::Overlay;
 use super::super::Selection;
@@ -62,21 +62,21 @@ fn copy_confirmation(text: &str) -> String {
 // ========================================================================
 
 impl App {
-    /// The grid a selection over `tab` reads: the rows a tool last painted,
+    /// The grid a selection over `tab` reads: the rows an editor last painted,
     /// else the terminal's own grid.
     ///
-    /// A tool draws over a pane whose shell keeps running underneath, so the
+    /// An editor draws over a pane whose shell keeps running underneath, so the
     /// two grids hold different text. Resolving against the terminal's meant a
     /// drag over a listing highlighted nothing and copied whatever output was
     /// hidden behind it.
     ///
-    /// Both are addressed the same way afterwards: a tool's grid has no
+    /// Both are addressed the same way afterwards: an editor's grid has no
     /// scrollback, so `to_absolute_row` over it is the identity and
     /// `absolute_cell` is an ordinary cell lookup.
     pub(crate) fn selection_grid(&self, tab: TabId) -> Option<&winter_render::Grid> {
         match self
             .open_tabs
-            .tool(&tab)
+            .editor(&tab)
             .and_then(|slot| slot.painted.as_ref())
         {
             Some(painted) => Some(painted),
@@ -338,7 +338,7 @@ impl App {
 
     /// Put `text` wherever typing goes now: the field of the dialog that is
     /// up, the palette's query, the settings row being edited, or else the
-    /// focused tab, a tool or a terminal. A one-line input takes the first
+    /// focused tab, an editor or a terminal. A one-line input takes the first
     /// line; a question answered by a single key takes nothing.
     pub(crate) fn paste_into_focus(&mut self, text: &str) {
         let line = text.lines().next().unwrap_or_default();
@@ -350,7 +350,7 @@ impl App {
             Some(Overlay::Rename(input)) => input.field.paste(text),
             Some(Overlay::Settings(_)) => self.paste_into_settings(text),
             Some(Overlay::ThemeName(field) | Overlay::ZaiKey(field)) => field.paste(text),
-            Some(Overlay::ToolPrompt(prompt)) => match prompt.request.mode {
+            Some(Overlay::EditorPrompt(prompt)) => match prompt.request.mode {
                 PromptMode::Confirm => {}
                 PromptMode::Secret => prompt.field.paste(text),
                 PromptMode::Search { .. } | PromptMode::Text => {
@@ -391,15 +391,15 @@ impl App {
         self.overlay = Some(Overlay::Settings(page));
     }
 
-    /// Paste `text` into the focused tab: a tool takes it as it likes, a
+    /// Paste `text` into the focused tab: an editor takes it as it likes, a
     /// terminal as a paste its program reads.
     fn paste_into_tab(&mut self, text: &str) {
         let focused = self.layout().focused();
-        let Some(slot) = self.open_tabs.tool_mut(&focused) else {
+        let Some(slot) = self.open_tabs.editor_mut(&focused) else {
             return self.paste_text(text);
         };
-        let outcome = slot.tool.on_paste(text.to_string());
-        self.act_on_tool_outcome(focused, outcome);
+        let outcome = slot.editor.on_paste(text.to_string());
+        self.act_on_editor_outcome(focused, outcome);
     }
 
     /// `row` is the viewport row under the click; the resulting `Selection` is
@@ -466,24 +466,24 @@ mod tests {
     use std::path::PathBuf;
     use std::rc::Rc;
 
+    use crate::model::editor::{Editor, EditorOutcome, PromptRequest};
     use crate::model::input::Key;
     use crate::model::paint::{Frame, Span};
     use crate::model::palette::Palette;
     use crate::model::textedit::field::TextField;
     use crate::model::textedit::recall::Recall;
-    use crate::model::tool::{PromptRequest, Tool, ToolOutcome};
 
+    use super::super::super::editor::{ActivePrompt, EditorKind};
     use super::super::super::overlay::{PasswordInput, RenameInput};
-    use super::super::super::tool::{ActivePrompt, ToolKind};
     use super::*;
 
     /// What every paste test pastes: a line, then one a one-line input drops.
     const CLIPBOARD: &str = "sk-123\nsecond line";
 
-    /// A tool that keeps what is pasted into it.
-    struct PastedTool(Rc<RefCell<String>>);
+    /// An editor that keeps what is pasted into it.
+    struct PastedEditor(Rc<RefCell<String>>);
 
-    impl Tool for PastedTool {
+    impl Editor for PastedEditor {
         fn title(&self) -> String {
             "Pasted".to_string()
         }
@@ -492,18 +492,18 @@ mod tests {
             Frame::new(vec![vec![Span::plain("pasted")]])
         }
 
-        fn on_key(&mut self, _key: &Key) -> ToolOutcome {
-            ToolOutcome::Ignored
+        fn on_key(&mut self, _key: &Key) -> EditorOutcome {
+            EditorOutcome::Ignored
         }
 
-        fn on_paste(&mut self, text: String) -> ToolOutcome {
+        fn on_paste(&mut self, text: String) -> EditorOutcome {
             self.0.borrow_mut().push_str(&text);
-            ToolOutcome::Consumed
+            EditorOutcome::Consumed
         }
     }
 
     fn prompt(mode: PromptMode) -> Overlay {
-        Overlay::ToolPrompt(ActivePrompt {
+        Overlay::EditorPrompt(ActivePrompt {
             buttons: match mode {
                 PromptMode::Confirm => Some(crate::model::button::ButtonGroup::confirm()),
                 _ => None,
@@ -525,7 +525,7 @@ mod tests {
             Overlay::Password(input) => Some(input.field.text().to_string()),
             Overlay::Rename(input) => Some(input.field.text().to_string()),
             Overlay::ThemeName(field) | Overlay::ZaiKey(field) => Some(field.text().to_string()),
-            Overlay::ToolPrompt(prompt) => Some(prompt.field.text().to_string()),
+            Overlay::EditorPrompt(prompt) => Some(prompt.field.text().to_string()),
             Overlay::Palette(overlay) => Some(overlay.palette.query.clone()),
             Overlay::Close(_) | Overlay::Settings(_) => None,
         }
@@ -555,7 +555,7 @@ mod tests {
     }
 
     #[test]
-    fn test_a_paste_into_a_tool_s_question_is_searched_and_a_yes_or_no_takes_none() {
+    fn test_a_paste_into_an_editor_s_question_is_searched_and_a_yes_or_no_takes_none() {
         let mut app = App::new();
         app.overlay = Some(prompt(PromptMode::Text));
         app.paste_into_focus(CLIPBOARD);
@@ -581,12 +581,12 @@ mod tests {
     }
 
     #[test]
-    fn test_a_paste_with_nothing_up_goes_to_the_focused_tool() {
+    fn test_a_paste_with_nothing_up_goes_to_the_focused_editor() {
         let pasted = Rc::new(RefCell::new(String::new()));
         let mut app = App::new();
-        app.show_tool(ToolKind::Proc, Box::new(PastedTool(Rc::clone(&pasted))));
+        app.show_editor(EditorKind::Proc, Box::new(PastedEditor(Rc::clone(&pasted))));
         app.paste_into_focus(CLIPBOARD);
-        assert_eq!(*pasted.borrow(), CLIPBOARD, "the tool takes every line");
+        assert_eq!(*pasted.borrow(), CLIPBOARD, "the editor takes every line");
     }
 
     #[test]

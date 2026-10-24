@@ -21,7 +21,7 @@ const RATIO_MAX: f32 = 0.9;
 /// The window's pane layout: a binary split tree of panes plus which tab
 /// has focus.
 ///
-/// Every tab is a `TabId`, a terminal or a tool alike, allocated by the owner
+/// Every tab is a `TabId`, a terminal or an editor alike, allocated by the owner
 /// so ids stay unique for the life of the window. Only the shown tab of each
 /// pane is laid out; the rest wait in their pane's strip.
 #[derive(Clone, Debug)]
@@ -108,7 +108,7 @@ pub enum FocusDir {
     Up,
 }
 
-/// Identifies one tab: a terminal or a tool.
+/// Identifies one tab: a terminal or an editor.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct TabId(pub u64);
 

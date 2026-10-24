@@ -617,12 +617,19 @@ mod tests {
     fn test_only_text_close_to_its_fill_is_inverted_and_not_glaring() {
         let selection = Rgb::parse_hex("#2257a0").expect("the dark selection");
         let black = Rgb::new(0, 0, 0);
-        assert_eq!(black.readable_on(selection), black, "dark but distinct: kept");
+        assert_eq!(
+            black.readable_on(selection),
+            black,
+            "dark but distinct: kept"
+        );
         let light = Rgb::parse_hex("#bbc2cf").expect("the foreground");
         assert_eq!(light.readable_on(selection), light, "already reads: kept");
         let blue = Rgb::parse_hex("#2a60a8").expect("nearly the selection");
         let shown = blue.readable_on(selection);
-        assert!(contrast_ratio(shown, selection) >= MIN_TEXT_CONTRAST, "{shown:?}");
+        assert!(
+            contrast_ratio(shown, selection) >= MIN_TEXT_CONTRAST,
+            "{shown:?}"
+        );
         let inverse = Rgb::new(255 - blue.r, 255 - blue.g, 255 - blue.b);
         assert!(
             relative_luminance(shown) <= relative_luminance(inverse),

@@ -641,13 +641,13 @@ pub fn resolve_with(
     }
 }
 
-/// Resolve a key a tool tab was offered and declined. The window-layout
+/// Resolve a key an editor tab was offered and declined. The window-layout
 /// chords are honored: splitting, closing, zooming, and moving focus all
-/// still have to work from a tool tab. So is a bare `Esc`, which puts a lit
+/// still have to work from an editor tab. So is a bare `Esc`, which puts a lit
 /// search away as it does in a terminal's Normal mode, since the search is
-/// the window's and not the tool's. Anything else would act on a terminal
+/// the window's and not the editor's. Anything else would act on a terminal
 /// the tab does not have.
-pub fn resolve_tool(key: &Key, window: &Keymap) -> Action {
+pub fn resolve_editor(key: &Key, window: &Keymap) -> Action {
     if let Some(action) = window.direct_action(key, false) {
         return action;
     }
@@ -774,8 +774,8 @@ mod tests {
     }
 
     #[test]
-    fn test_a_tool_tab_still_honors_the_window_layout_chords() {
-        // A tool tab has to stay manageable: `M-h` moves focus off it and
+    fn test_an_editor_tab_still_honors_the_window_layout_chords() {
+        // An editor tab has to stay manageable: `M-h` moves focus off it and
         // `M-S-\\` splits beside it, exactly as from a terminal tab.
         let focus_left = Key {
             alt: true,
@@ -785,13 +785,13 @@ mod tests {
             sup: false,
         };
         assert_eq!(
-            resolve_tool(&focus_left, &Keymap::default()),
+            resolve_editor(&focus_left, &Keymap::default()),
             Action::FocusPane(FocusDir::Left)
         );
     }
 
     #[test]
-    fn test_ctrl_shift_d_opens_the_dir_tool_from_any_mode() {
+    fn test_ctrl_shift_d_opens_the_dir_editor_from_any_mode() {
         // The chord is a named-command binding, not a built-in window action,
         // so it has to resolve through every mode's window-chord lookup.
         let chord = Key {
@@ -805,7 +805,7 @@ mod tests {
         for mode in [Mode::Insert, Mode::Normal, Mode::Visual] {
             assert_eq!(resolve_simple(mode, &chord), expected, "mode {mode:?}");
         }
-        assert_eq!(resolve_tool(&chord, &Keymap::default()), expected);
+        assert_eq!(resolve_editor(&chord, &Keymap::default()), expected);
     }
 
     #[test]
@@ -833,9 +833,9 @@ mod tests {
             assert_eq!(resolve_simple(mode, &chord), expected, "mode {mode:?}");
         }
         assert_eq!(
-            resolve_tool(&chord, &Keymap::default()),
+            resolve_editor(&chord, &Keymap::default()),
             expected,
-            "in a tool"
+            "in an editor"
         );
     }
 
@@ -861,7 +861,7 @@ mod tests {
                 assert_eq!(resolve_simple(mode, &chord), expected, "{key} in {mode:?}");
             }
             assert_eq!(
-                resolve_tool(&chord, &Keymap::default()),
+                resolve_editor(&chord, &Keymap::default()),
                 expected,
                 "{key} in a page"
             );
@@ -869,9 +869,9 @@ mod tests {
     }
 
     #[test]
-    fn test_a_tool_tab_swallows_keys_the_tool_declined() {
-        // `i` in a tool tab must not reach the Normal-mode resolver: switching
-        // a tool tab to Insert would leave its keystrokes with nowhere to go.
+    fn test_an_editor_tab_swallows_keys_the_editor_declined() {
+        // `i` in an editor tab must not reach the Normal-mode resolver: switching
+        // an editor tab to Insert would leave its keystrokes with nowhere to go.
         let insert = Key {
             alt: false,
             code: KeyCode::Char('i'),
@@ -879,7 +879,7 @@ mod tests {
             shift: false,
             sup: false,
         };
-        assert_eq!(resolve_tool(&insert, &Keymap::default()), Action::Ignore);
+        assert_eq!(resolve_editor(&insert, &Keymap::default()), Action::Ignore);
     }
 
     // ---- Kitty keyboard protocol encoding -----------------------------------

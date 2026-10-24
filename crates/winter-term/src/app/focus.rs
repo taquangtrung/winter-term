@@ -98,7 +98,7 @@ impl App {
             None => Some(self.layout().focused()),
             // A search's popup leaves the pane it searches lit: that pane is
             // still what is being read, and its matches show as they are typed.
-            Some(super::Overlay::ToolPrompt(prompt)) if prompt.typed_search().is_some() => {
+            Some(super::Overlay::EditorPrompt(prompt)) if prompt.typed_search().is_some() => {
                 Some(prompt.tab)
             }
             Some(_) => None,
@@ -126,9 +126,9 @@ impl App {
         // focused tab when the window gains the keyboard, so the eye finds
         // the line on coming back from another window. The first tab of a
         // window opening does not.
-        let flashes = self.focus_reported.is_some_and(|last| {
-            last.tab != now.tab || (now.window && !last.window)
-        });
+        let flashes = self
+            .focus_reported
+            .is_some_and(|last| last.tab != now.tab || (now.window && !last.window));
         if flashes {
             self.focus_flash = Some(FocusFlash::new(now.tab, Instant::now()));
             self.dirty = true;

@@ -1,6 +1,6 @@
 //! What a pane paints as styled text rows: one frame's rows, the spans
 //! they are made of, the semantic styles the theme resolves, and the
-//! windowing that fits the rows to the pane. A tool hands the host a
+//! windowing that fits the rows to the pane. An editor hands the host a
 //! [`Frame`]; the host lowers it into the same grid a terminal writes into.
 
 // ========================================================================
@@ -14,9 +14,9 @@ const GUTTER_MARK_SCALE: f32 = 2.0 / 3.0;
 // Data Structures
 // ========================================================================
 
-/// One paint of a tool: the rows it wants drawn in its pane this frame, top
-/// to bottom. Only what fits the pane, already scrolled to where the tool
-/// is looking, not everything the tool holds.
+/// One paint of an editor: the rows it wants drawn in its pane this frame, top
+/// to bottom. Only what fits the pane, already scrolled to where the editor
+/// is looking, not everything the editor holds.
 #[derive(Clone, Debug, Default)]
 pub struct Frame {
     /// The row to band as the cursor line, counted from the first row here.
@@ -28,14 +28,14 @@ pub struct Frame {
     /// For each row, the column its wrapped continuation starts at: a diff
     /// line reserves its marker's room, so the text it spills onto the next
     /// screen row lines up under the text it started with, not under the
-    /// marker. Rows past the list, and tools that set nothing, wrap from
+    /// marker. Rows past the list, and editors that set nothing, wrap from
     /// column zero.
     pub wrap_indents: Vec<usize>,
 }
 
-/// An icon a tool wants drawn beside one of its rows.
+/// An icon an editor wants drawn beside one of its rows.
 ///
-/// A tool names *what* the icon is and where it goes, never how it is drawn:
+/// An editor names *what* the icon is and where it goes, never how it is drawn:
 /// the host resolves that to the bundled artwork and rasterizes it over the
 /// row. The row's text leaves [`Icon::WIDTH`] columns clear at `col` for it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -44,7 +44,7 @@ pub struct Icon {
     pub col: usize,
     /// What the icon depicts.
     pub kind: IconKind,
-    /// Row within the tool's returned rows.
+    /// Row within the editor's returned rows.
     pub row: usize,
 }
 
@@ -81,9 +81,9 @@ pub enum IconKind {
     },
     /// A terminal tab.
     Terminal,
-    /// A kind of tool, by the name it goes by (`dir`, `git`, ...).
-    Tool {
-        /// The tool kind's name.
+    /// A kind of editor, by the name it goes by (`dir`, `git`, ...).
+    Editor {
+        /// The editor kind's name.
         kind: &'static str,
     },
 }
@@ -91,7 +91,7 @@ pub enum IconKind {
 /// One rendered line: styled runs laid out left to right from column zero.
 pub type Row = Vec<Span>;
 
-/// The columns at one edge of a tool's rows, in lanes: each lane holds one
+/// The columns at one edge of an editor's rows, in lanes: each lane holds one
 /// kind of mark for one purpose (a git state, a selection, a diagnostic) as
 /// an icon, at most one per row, so marks for different purposes sit side by
 /// side in the same columns on every row rather than pushing the text about.
@@ -100,7 +100,7 @@ pub struct Gutter {
     lanes: usize,
 }
 
-/// Which edge of a tool's rows its [`Gutter`] stands at.
+/// Which edge of an editor's rows its [`Gutter`] stands at.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum GutterSide {
     /// Ahead of each row's text, at the pane's left edge.
@@ -110,7 +110,7 @@ pub enum GutterSide {
     Right,
 }
 
-/// The rows of a tool to paint in a pane, once wrapping is accounted for:
+/// The rows of an editor to paint in a pane, once wrapping is accounted for:
 /// where the window starts, how many rows fill the pane, and which screen
 /// row the cursor paints on.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -120,7 +120,7 @@ pub struct RowWindow {
     /// The screen row the cursor's row paints on, counted from the first
     /// painted row, in screen rows once wrapping is on.
     pub cursor: usize,
-    /// The first of the tool's own rows to paint.
+    /// The first of the editor's own rows to paint.
     pub start: usize,
 }
 
@@ -136,7 +136,7 @@ pub struct Span {
     pub text: String,
 }
 
-/// A semantic style, resolved against the active theme so a tool never names a
+/// A semantic style, resolved against the active theme so an editor never names a
 /// color of its own.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Style {
@@ -234,8 +234,8 @@ pub struct SyntaxStyle {
     pub weight: Option<u16>,
 }
 
-/// Where a pointer is over a tool: the row and column of the pane's own
-/// content, counted from the first row the tool painted.
+/// Where a pointer is over an editor: the row and column of the pane's own
+/// content, counted from the first row the editor painted.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Point {
     /// The column the pointer is over.
@@ -247,10 +247,10 @@ pub struct Point {
     pub row: usize,
 }
 
-/// Where a tool's own caret sits within the row it bands as its cursor line,
-/// and whether what it is doing there is typing. A tool that reports one is
+/// Where an editor's own caret sits within the row it bands as its cursor line,
+/// and whether what it is doing there is typing. An editor that reports one is
 /// drawn with the caret on that cell, rather than on the row's first non-blank
-/// character, which for a tool with a gutter is in the gutter.
+/// character, which for an editor with a gutter is in the gutter.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct Caret {
     /// The column, counted in painted cells from the row's start.
@@ -293,7 +293,7 @@ pub fn wheel_scroll(scroll: usize, lines: isize, total: usize, visible: usize) -
 /// holds the view, the cursor only if it still sits inside the `visible` rows
 /// from `scroll`, else the first of them, so the window stays where the wheel
 /// put it instead of being pulled back to a cursor it has scrolled away from.
-/// A tool paints its cursor band only when this is the cursor itself.
+/// An editor paints its cursor band only when this is the cursor itself.
 pub fn window_anchor(held: bool, scroll: usize, cursor: usize, visible: usize) -> usize {
     match held && !(scroll..scroll + visible).contains(&cursor) {
         true => scroll,
@@ -377,7 +377,7 @@ pub fn wrapped_lines(
 /// unless it wraps, in which case one per line it spills onto — the first
 /// filling the pane, the rest starting at the row's wrap indent and so
 /// holding less. Counts the lines [`wrapped_lines`] paints, so the height a
-/// tool measures its rows by is the height they paint at.
+/// editor measures its rows by is the height they paint at.
 pub fn row_height(text: &str, cols: usize, wrap: bool, indent: usize) -> usize {
     if !wrap || cols == 0 || text.chars().count() <= cols {
         return 1;
@@ -386,12 +386,12 @@ pub fn row_height(text: &str, cols: usize, wrap: bool, indent: usize) -> usize {
     wrapped_lines(&chars, cols, wrap, indent).len()
 }
 
-/// The window of a tool's rows to paint in a pane, so the cursor stays
+/// The window of an editor's rows to paint in a pane, so the cursor stays
 /// visible: the same cursor-following window [`scroll_to_cursor`] gives, but
 /// measured in screen rows, since a row wider than the pane wraps onto
-/// several of them and leaves room for fewer of the tool's own rows. Each
+/// several of them and leaves room for fewer of the editor's own rows. Each
 /// row's height is read from `height`, which decides how a row wider than the
-/// pane is counted, and only for the rows the walk visits — so a tool whose
+/// pane is counted, and only for the rows the walk visits — so an editor whose
 /// rows are built as they are painted is not asked to build them all. With
 /// every row one screen row this is the plain window.
 pub fn wrap_window(
@@ -489,7 +489,7 @@ impl Gutter {
         self.lanes * Icon::WIDTH
     }
 
-    /// One row of `cols` columns: the tool's own `content` and the `icons`
+    /// One row of `cols` columns: the editor's own `content` and the `icons`
     /// over it (their columns counted from where the content starts), with
     /// the gutter holding `marks`, one per lane in order (`None` for a lane
     /// left blank), at `side`. At the left the gutter leads and the content
@@ -570,7 +570,7 @@ impl IconKind {
     pub fn scale(&self) -> f32 {
         match self {
             Self::Git { .. } | Self::Gutter { .. } => GUTTER_MARK_SCALE,
-            Self::Dir { .. } | Self::File { .. } | Self::Terminal | Self::Tool { .. } => 1.0,
+            Self::Dir { .. } | Self::File { .. } | Self::Terminal | Self::Editor { .. } => 1.0,
         }
     }
 }
@@ -595,7 +595,7 @@ impl Span {
         self
     }
 
-    /// A run drawn in the tool's ordinary text style.
+    /// A run drawn in the editor's ordinary text style.
     pub fn plain(text: impl Into<String>) -> Self {
         Self::new(Style::Normal, text)
     }
@@ -763,14 +763,14 @@ mod tests {
 
     #[test]
     fn test_wrapping_fits_fewer_rows_than_the_pane_is_tall() {
-        // Ten screen rows of two-row-tall rows hold five of the tool's rows.
+        // Ten screen rows of two-row-tall rows hold five of the editor's rows.
         let heights = [2; 30];
         let window = wrap_window(0, 0, heights.len(), 10, |index| heights[index]);
         assert_eq!(window.count, 5);
     }
 
     #[test]
-    fn test_an_empty_tool_windows_to_nothing() {
+    fn test_an_empty_editor_windows_to_nothing() {
         let window = wrap_window(3, 0, 0, 10, |_| 1);
         assert_eq!(
             window,

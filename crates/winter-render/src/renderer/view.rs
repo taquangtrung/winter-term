@@ -180,8 +180,8 @@ pub enum StatusHover {
 }
 
 /// One piece of the status bar's right side: an optional icon, then its
-/// text, e.g. a provider's logo then `42% 14:05`, a tool's `12:5` alone, or a
-/// tool's icon with no text.
+/// text, e.g. a provider's logo then `42% 14:05`, an editor's `12:5` alone, or a
+/// editor's icon with no text.
 #[derive(Clone, Debug, PartialEq)]
 pub struct StatusSegment {
     /// The SVG drawn in the cells before `text`.

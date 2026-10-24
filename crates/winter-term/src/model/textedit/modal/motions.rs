@@ -1,7 +1,7 @@
 //! Searching, and moving the cursor by motions.
 
+use crate::model::editor::Notice;
 use crate::model::textedit::search::Search;
-use crate::model::tool::Notice;
 use crate::model::vim::motion::CursorMove;
 use crate::model::vim::objects::word_object;
 
@@ -72,8 +72,8 @@ impl Session<'_> {
                 *self.view.scroll = row.saturating_sub(viewport.saturating_sub(1));
             }
             _ => {
-                let (tool, scroll) = (viewport.max(1), *self.view.scroll);
-                move_cursor(self.view.buffer, motion, typed, tool, scroll);
+                let (editor, scroll) = (viewport.max(1), *self.view.scroll);
+                move_cursor(self.view.buffer, motion, typed, editor, scroll);
             }
         }
     }
