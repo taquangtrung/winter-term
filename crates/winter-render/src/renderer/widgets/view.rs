@@ -6,10 +6,10 @@ use std::sync::Arc;
 // Data Structures
 // ========================================================================
 
-/// One entry shown in the command palette results list.
+/// One entry shown in the picker results list.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PaletteItem {
-    /// Command id dispatched when this entry is chosen.
+pub struct PickerItem {
+    /// Command id or action payload dispatched when this entry is chosen.
     pub action: String,
     /// SVG drawn before the label, naming what the entry is (a file's type,
     /// a folder). Shared, so a list of a thousand `.rs` files holds one copy
@@ -19,18 +19,19 @@ pub struct PaletteItem {
     pub label: String,
     /// Char indices in `label` that matched the query, used to highlight them.
     pub match_positions: Vec<usize>,
-    /// Keyboard shortcut hint shown on the right (e.g. `"C-S-t"`).
+    /// Optional right-side hint or shortcut shown on the right (e.g. `"C-S-t"`).
     pub shortcut: String,
 }
-/// The command palette state the renderer needs to draw its overlay.
+
+/// The picker state the renderer needs to draw its overlay.
 #[derive(Clone, Debug, PartialEq)]
-pub struct PaletteView {
-    /// Whether the palette is docked to the top of the window with 1/2 window height.
+pub struct PickerView {
+    /// Whether the picker is docked to the top of the window with 1/2 window height.
     pub align_top: bool,
     /// Text shown when the filtered list is empty.
     pub empty_message: String,
     /// The entries to draw, already filtered and ranked by the caller.
-    pub items: Vec<PaletteItem>,
+    pub items: Vec<PickerItem>,
     /// How many characters of the query sit before the caret, which is drawn
     /// between them and the rest.
     pub caret: usize,
@@ -42,11 +43,17 @@ pub struct PaletteView {
     /// The filter text as typed.
     pub query: String,
     /// What the list is of, drawn as a heading above the input line. Empty
-    /// for a palette that needs no naming, which draws no heading at all.
+    /// for a picker that needs no naming, which draws no heading at all.
     pub title: String,
     /// Index into `items` of the highlighted entry.
     pub selected: usize,
 }
+
+/// Backward-compatible alias for [`PickerItem`].
+pub type PaletteItem = PickerItem;
+
+/// Backward-compatible alias for [`PickerView`].
+pub type PaletteView = PickerView;
 /// A search being typed, drawn on a small card at the top-right of the pane
 /// it searches.
 #[derive(Clone, Debug, PartialEq)]

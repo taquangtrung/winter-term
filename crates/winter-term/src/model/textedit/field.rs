@@ -54,6 +54,12 @@ impl TextField {
         }
     }
 
+    /// Set the modal editor's starting mode.
+    pub fn with_mode(mut self, mode: EditMode) -> Self {
+        self.modal = self.modal.with_mode(mode);
+        self
+    }
+
     /// The text, one string per line.
     pub fn lines(&self) -> &[String] {
         self.buffer.lines()

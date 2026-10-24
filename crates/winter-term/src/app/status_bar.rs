@@ -108,9 +108,9 @@ impl App {
 // ========================================================================
 
 /// The status bar's left side, for a terminal in `mode`, or an editor in
-/// `editor_mode` (`None` for both: an editor with no mode of its own, shown as
-/// `P`). The letters and colors are shared, so an editor in Insert reads as a
-/// terminal in Insert does.
+/// `editor_mode` (`None` for both: an editor with no mode of its own, showing
+/// no mode label). The letters and colors are shared, so an editor in Insert
+/// reads as a terminal in Insert does.
 fn status_bar(
     mode: Option<Mode>,
     editor_mode: Option<EditMode>,
@@ -125,9 +125,9 @@ fn status_bar(
         (Some(Mode::Normal), _) | (None, Some(EditMode::Normal)) => ("N", theme.ansi[4]),
         (Some(Mode::Visual), _) | (None, Some(EditMode::Visual)) => ("V", theme.ansi[6]),
         (None, Some(EditMode::Replace)) => ("R", theme.ansi[12]),
-        (None, None) => ("P", theme.ansi[2]),
+        (None, None) => ("", theme.foreground),
     };
-    let mode_label = if config.show_mode && prompt.is_none() {
+    let mode_label = if config.show_mode && prompt.is_none() && !mode_name.is_empty() {
         format!(" {mode_name}")
     } else {
         String::new()
@@ -273,13 +273,13 @@ mod tests {
 
     #[test]
     fn test_a_focused_editor_puts_its_own_mode_in_the_bar() {
-        // An editor in Insert reads as a terminal in Insert does, and only a
-        // editor with no mode of its own falls back to `P`.
+        // An editor in Insert reads as a terminal in Insert does, and an
+        // editor with no mode of its own shows no mode label.
         let cfg = shown_mode();
         let insert = bar(None, Some(EditMode::Insert), &cfg);
         assert_eq!(insert.mode, " I");
         assert_eq!(insert.accent, bar(Some(Mode::Insert), None, &cfg).accent);
-        assert_eq!(bar(None, None, &cfg).mode, " P");
+        assert_eq!(bar(None, None, &cfg).mode, "");
     }
 
     #[test]

@@ -39,11 +39,11 @@ impl App {
         let Some(mut overlay) = self.take_palette_overlay() else {
             return;
         };
-        let query = overlay.palette.query.clone();
+        let query = overlay.picker.query.clone();
         self.handle_palette_input(&mut overlay, key, physical, focused);
-        let live = overlay.palette.active && overlay.palette.mode == PaletteMode::LiveSearch;
-        if live && overlay.palette.query != query {
-            self.on_live_query(&mut overlay.palette);
+        let live = overlay.picker.active && overlay.picker.mode == PaletteMode::LiveSearch;
+        if live && overlay.picker.query != query {
+            self.on_live_query(&mut overlay.picker);
         }
         self.restore_palette_overlay(overlay);
     }
@@ -55,7 +55,7 @@ impl App {
         physical: &PhysicalKey,
         focused: TabId,
     ) {
-        let palette = &mut overlay.palette;
+        let palette = &mut overlay.picker;
         // Prompt undo/redo chords (default `C-/` / `C-\`) also drive the
         // palette query history, resolved through the configurable keymap.
         let mods = self.modifiers.state();
@@ -161,8 +161,8 @@ impl App {
                     self.dirty = true;
                     return;
                 }
-                self.confirm_palette_selection(&overlay.palette, overlay.pick.take(), focused);
-                overlay.palette.close();
+                self.confirm_palette_selection(&overlay.picker, overlay.pick.take(), focused);
+                overlay.picker.close();
                 self.dirty = true;
                 return;
             }
@@ -199,8 +199,8 @@ impl App {
                     .flatten();
                 if let Some(pos) = shortcut_hit {
                     palette.selected = pos;
-                    self.confirm_palette_selection(&overlay.palette, overlay.pick.take(), focused);
-                    overlay.palette.close();
+                    self.confirm_palette_selection(&overlay.picker, overlay.pick.take(), focused);
+                    overlay.picker.close();
                     self.dirty = true;
                     return;
                 } else {

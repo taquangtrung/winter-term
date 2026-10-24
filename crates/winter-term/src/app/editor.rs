@@ -30,7 +30,7 @@ use crate::session::EditorSession;
 use winter_render::{ButtonView, Grid, InputView};
 
 use super::jobs::STOP_TASKS_KEY;
-use super::overlay::{ClosePrompt, Overlay, PaletteOverlay};
+use super::overlay::{ClosePrompt, Overlay, PickerOverlay};
 use super::{App, SPLIT_RATIO};
 
 // ========================================================================
@@ -1838,10 +1838,10 @@ impl App {
                 true
             }
             EditorOutcome::Pick(request) => {
-                // The palette is the list picker Winter already has: what a
+                // The picker is the list picker Winter already has: what an
                 // editor adds is where the choice goes when it is made.
-                self.open_overlay(Overlay::Palette(PaletteOverlay {
-                    palette: Palette::open_pick(request.items, request.icons),
+                self.open_overlay(Overlay::Picker(PickerOverlay {
+                    picker: Palette::open_pick(request.items, request.icons),
                     pick: Some(ActivePick {
                         label: request.label,
                         tab: tab_id,

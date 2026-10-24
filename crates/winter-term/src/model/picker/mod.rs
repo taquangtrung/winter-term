@@ -36,9 +36,9 @@ const ZSH_META_FLIP: u8 = 0x20;
 // Data Structures
 // ========================================================================
 
-/// Whether the palette is showing built-in commands, shell history, or recent dirs.
+/// Whether the picker is showing built-in commands, shell history, or recent dirs.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub enum PaletteMode {
+pub enum PickerMode {
     /// Choosing a command to run.
     #[default]
     Commands,
@@ -93,9 +93,12 @@ pub enum PaletteMode {
     LiveSearch,
 }
 
+/// Backward-compatible alias for [`PickerMode`].
+pub type PaletteMode = PickerMode;
+
 /// One selectable row: what it shows and the command it runs.
 #[derive(Clone, Debug)]
-pub struct PaletteEntry {
+pub struct PickerEntry {
     /// The command dispatched when this row is chosen.
     pub action: String,
     /// What the row is, drawn as an icon before its label: a file's type, a
@@ -105,9 +108,12 @@ pub struct PaletteEntry {
     pub label: String,
     /// Char indices in `label` that matched the current query (for highlight).
     pub match_positions: Vec<usize>,
-    /// Keyboard shortcut hint shown on the right (e.g. `"C-S-t"`).
+    /// Optional right-side hint or shortcut shown on the right (e.g. `"C-S-t"`).
     pub shortcut: String,
 }
+
+/// Backward-compatible alias for [`PickerEntry`].
+pub type PaletteEntry = PickerEntry;
 
 /// One entry of a directory, as the file browser lists it.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -120,9 +126,9 @@ pub struct DirItem {
     pub path: PathBuf,
 }
 
-/// The palette's open state: its query, matching entries, and selection.
+/// The picker's open state: its query, matching entries, and selection.
 #[derive(Clone, Debug)]
-pub struct Palette {
+pub struct Picker {
     /// Whether the palette is currently open.
     pub active: bool,
     /// The directory a file browser is showing, and nothing for every other
@@ -153,9 +159,12 @@ pub struct Palette {
     pub query_history: Vec<String>,
     /// Index into the filtered rows, not into the entries.
     pub selected: usize,
-    /// Custom title shown above the palette query, or None to infer from mode.
+    /// Custom title shown above the picker query, or None to infer from mode.
     pub title: Option<String>,
 }
+
+/// Backward-compatible alias for [`Picker`].
+pub type Palette = Picker;
 
 // ========================================================================
 // Traits
@@ -191,7 +200,7 @@ pub trait DirSource: Debug + Send + Sync {
 // Implementation
 // ========================================================================
 
-impl Default for Palette {
+impl Default for Picker {
     fn default() -> Self {
         Self {
             active: false,
@@ -203,7 +212,7 @@ impl Default for Palette {
             history: EditHistory::default(),
             history_index: None,
             live_query: String::new(),
-            mode: PaletteMode::default(),
+            mode: PickerMode::default(),
             query: String::new(),
             query_history: Vec::new(),
             selected: 0,
@@ -212,7 +221,7 @@ impl Default for Palette {
     }
 }
 
-impl PaletteEntry {
+impl PickerEntry {
     /// A row called `label` that runs `action`, with `shortcut` on its right,
     /// drawn without an icon.
     pub fn new(
@@ -238,7 +247,7 @@ impl PaletteEntry {
     }
 }
 
-impl Palette {
+impl Picker {
     /// Open over the command list, labelling entries with their bound chords.
     pub fn open(keymap: &Keymap) -> Self {
         let entries = builtin_commands(keymap);

@@ -1,6 +1,6 @@
-//! The command palette: a query line over a fuzzy-filtered list.
+//! The picker: a query line over a fuzzy-filtered list.
 
-use super::view::PaletteView;
+use super::view::PickerView;
 use super::MENU_HOVER_INSET;
 use crate::renderer::glyphs::FontCtx;
 use crate::renderer::raster::paint::{
@@ -42,15 +42,15 @@ const PALETTE_ITEM_PAD_X: f32 = 5.0;
 // Free functions
 // ========================================================================
 
-/// Rasterize the command palette: a centered floating panel with a search input
-/// at the top and a fuzzy-filtered list of commands below. Styled like the
+/// Rasterize the picker: a centered floating panel with a search input
+/// at the top and a fuzzy-filtered list of items below. Styled like the
 /// dropdown but wider and vertically centered in the upper portion of the window.
-pub(in crate::renderer) fn palette_rgba(
+pub(in crate::renderer) fn picker_rgba(
     font_system: &mut FontSystem,
     swash_cache: &mut SwashCache,
     ctx: &FontCtx,
     theme: &Theme,
-    view: &PaletteView,
+    view: &PickerView,
     surface_w: f32,
     surface_h: f32,
 ) -> DropdownImage {
@@ -241,8 +241,6 @@ pub(in crate::renderer) fn palette_rgba(
 
             let hint = if !item.shortcut.is_empty() {
                 item.shortcut.as_str()
-            } else if !item.action.is_empty() {
-                item.action.as_str()
             } else {
                 ""
             };
@@ -271,6 +269,8 @@ pub(in crate::renderer) fn palette_rgba(
     frame.into_image(palette_x, palette_y)
 }
 
+pub(in crate::renderer) use picker_rgba as palette_rgba;
+
 // ========================================================================
 // Tests
 // ========================================================================
@@ -291,13 +291,13 @@ mod tests {
         let ctx = sample_font_ctx();
         let (surface_w, surface_h) = (1000.0, 800.0);
         let mut card = |matches: usize| {
-            let view = PaletteView {
+            let view = PickerView {
                 align_top: false,
                 caret: 0,
                 caret_visible: true,
                 empty_message: "Nothing matches".to_string(),
                 items: (0..matches)
-                    .map(|i| crate::renderer::widgets::PaletteItem {
+                    .map(|i| crate::renderer::widgets::PickerItem {
                         action: i.to_string(),
                         icon: None,
                         label: format!("entry {i}"),
@@ -338,13 +338,13 @@ mod tests {
         let theme = Theme::dark();
         let ctx = sample_font_ctx();
         let (surface_w, surface_h) = (1000.0, 800.0);
-        let view = PaletteView {
+        let view = PickerView {
             align_top: true,
             caret: 0,
             caret_visible: true,
             empty_message: "No targets".to_string(),
             items: (0..20)
-                .map(|i| crate::renderer::widgets::PaletteItem {
+                .map(|i| crate::renderer::widgets::PickerItem {
                     action: i.to_string(),
                     icon: None,
                     label: format!("line {i}"),
@@ -375,15 +375,15 @@ mod tests {
         assert_eq!(image.height, expected_total_h);
     }
 
-    /// A palette with a few rows, titled `title`, its caret shown or not.
-    fn sample_palette(title: &str, caret_visible: bool) -> PaletteView {
-        PaletteView {
+    /// A picker with a few rows, titled `title`, its caret shown or not.
+    fn sample_picker(title: &str, caret_visible: bool) -> PickerView {
+        PickerView {
             align_top: false,
             caret: 0,
             caret_visible,
             empty_message: String::new(),
             items: (0..3)
-                .map(|i| crate::renderer::widgets::PaletteItem {
+                .map(|i| crate::renderer::widgets::PickerItem {
                     action: i.to_string(),
                     icon: None,
                     label: format!("entry {i}"),
@@ -398,7 +398,7 @@ mod tests {
         }
     }
 
-    fn render_palette(view: &PaletteView) -> DropdownImage {
+    fn render_picker(view: &PickerView) -> DropdownImage {
         let mut font_system = FontSystem::new();
         let mut swash = SwashCache::new();
         palette_rgba(
@@ -414,8 +414,8 @@ mod tests {
 
     #[test]
     fn test_the_palette_caret_is_drawn_only_in_its_shown_phase() {
-        let shown = render_palette(&sample_palette("", true));
-        let hidden = render_palette(&sample_palette("", false));
+        let shown = render_picker(&sample_picker("", true));
+        let hidden = render_picker(&sample_picker("", false));
         assert_eq!((shown.width, shown.height), (hidden.width, hidden.height));
         assert_ne!(shown.rgba, hidden.rgba, "the caret blinks off");
     }
@@ -423,7 +423,7 @@ mod tests {
     #[test]
     fn test_a_titled_palette_draws_a_divider_between_its_title_and_its_input() {
         let ctx = sample_font_ctx();
-        let image = render_palette(&sample_palette("Files", true));
+        let image = render_picker(&sample_picker("Files", true));
         let y = (DROPDOWN_SHADOW + TITLE_BAR_TOP_PAD + title_bar_height(&ctx)).round() as u32;
         // Sampled near the right edge, clear of the title and the input text.
         let x = image.width - DROPDOWN_SHADOW as u32 - 4;

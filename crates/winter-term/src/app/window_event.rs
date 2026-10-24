@@ -382,7 +382,7 @@ impl App {
                     }
                 }
             }
-            Some(Overlay::Palette(_) | Overlay::Rename(_)) | None => return KeyRoute::Pass,
+            Some(Overlay::Picker(_) | Overlay::Rename(_)) | None => return KeyRoute::Pass,
         }
         KeyRoute::Handled
     }
@@ -1330,8 +1330,8 @@ mod tests {
         };
         let down = key(KeyCode::Down, false);
         assert!(!app.moves_palette_selection(&down), "no palette, no list");
-        app.overlay = Some(Overlay::Palette(crate::app::overlay::PaletteOverlay {
-            palette: crate::model::palette::Palette::open(&app.keymap),
+        app.overlay = Some(Overlay::Picker(crate::app::overlay::PickerOverlay {
+            picker: crate::model::palette::Palette::open(&app.keymap),
             pick: None,
         }));
         assert!(app.moves_palette_selection(&down));

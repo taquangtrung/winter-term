@@ -345,7 +345,7 @@ impl App {
         self.dirty = true;
         match &mut self.overlay {
             Some(Overlay::Close(_)) => {}
-            Some(Overlay::Palette(_)) => self.paste_into_palette(line),
+            Some(Overlay::Picker(_)) => self.paste_into_palette(line),
             Some(Overlay::Password(input)) => input.field.paste(text),
             Some(Overlay::Rename(input)) => input.field.paste(text),
             Some(Overlay::Settings(_)) => self.paste_into_settings(text),
@@ -368,13 +368,13 @@ impl App {
         let Some(mut overlay) = self.take_palette_overlay() else {
             return;
         };
-        let query = overlay.palette.query.clone();
+        let query = overlay.picker.query.clone();
         for c in line.chars() {
-            overlay.palette.push_char(c);
+            overlay.picker.push_char(c);
         }
-        let live = overlay.palette.active && overlay.palette.mode == PaletteMode::LiveSearch;
-        if live && overlay.palette.query != query {
-            self.on_live_query(&mut overlay.palette);
+        let live = overlay.picker.active && overlay.picker.mode == PaletteMode::LiveSearch;
+        if live && overlay.picker.query != query {
+            self.on_live_query(&mut overlay.picker);
         }
         self.restore_palette_overlay(overlay);
     }
@@ -526,7 +526,7 @@ mod tests {
             Overlay::Rename(input) => Some(input.field.text().to_string()),
             Overlay::ThemeName(field) | Overlay::ZaiKey(field) => Some(field.text().to_string()),
             Overlay::EditorPrompt(prompt) => Some(prompt.field.text().to_string()),
-            Overlay::Palette(overlay) => Some(overlay.palette.query.clone()),
+            Overlay::Picker(overlay) => Some(overlay.picker.query.clone()),
             Overlay::Close(_) | Overlay::Settings(_) => None,
         }
     }

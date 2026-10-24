@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::model::button::ButtonGroup;
 use crate::model::editor::PromptReply;
 use crate::model::layout::TabId;
-use crate::model::palette::Palette;
+use crate::model::picker::Picker;
 use crate::model::settings_page::SettingsPage;
 use crate::model::textedit::field::TextField;
 
@@ -23,8 +23,8 @@ use super::App;
 pub(crate) enum Overlay {
     /// The host's own question, before closing what would lose something.
     Close(ClosePrompt),
-    /// The command palette, or a list an editor asked to be picked from.
-    Palette(PaletteOverlay),
+    /// The picker, or a list an editor asked to be picked from.
+    Picker(PickerOverlay),
     /// A tab's new name being typed.
     Rename(RenameInput),
     /// The full-window settings page.
@@ -49,13 +49,16 @@ pub(crate) struct ClosePrompt {
     pub(crate) pending: PendingClose,
 }
 
-/// The palette, and the editor question it answers while it shows a list of
+/// The picker, and the editor question it answers while it shows a list of
 /// that editor's own choices.
-pub(crate) struct PaletteOverlay {
-    pub(crate) palette: Palette,
-    /// The question a pick answers; `None` for the window's own palettes.
+pub(crate) struct PickerOverlay {
+    pub(crate) picker: Picker,
+    /// The question a pick answers; `None` for the window's own pickers.
     pub(crate) pick: Option<ActivePick>,
 }
+
+/// Backward-compatible alias for [`PickerOverlay`].
+pub(crate) type PaletteOverlay = PickerOverlay;
 
 /// The sudo password being typed, and where the browser opens once sudo
 /// takes it.
@@ -88,7 +91,7 @@ impl Overlay {
     fn belongs_to(&self, tab: TabId) -> bool {
         match self {
             Self::Close(prompt) => prompt.pending.subject() == Some(tab),
-            Self::Palette(overlay) => overlay.pick.as_ref().is_some_and(|pick| pick.tab == tab),
+            Self::Picker(overlay) => overlay.pick.as_ref().is_some_and(|pick| pick.tab == tab),
             Self::Rename(input) => input.tab == tab,
             Self::EditorPrompt(prompt) => prompt.tab == tab,
             Self::Password(_) | Self::Settings(_) | Self::ThemeName(_) | Self::ZaiKey(_) => false,
@@ -99,12 +102,12 @@ impl Overlay {
     /// tab that asked, and the reply that tells it there was no answer.
     fn unanswered(&self) -> Option<(TabId, PromptReply)> {
         let (tab, tag) = match self {
-            Self::Palette(PaletteOverlay {
+            Self::Picker(PickerOverlay {
                 pick: Some(pick), ..
             }) => (pick.tab, pick.tag),
             Self::EditorPrompt(prompt) => (prompt.tab, prompt.request.tag),
             Self::Close(_)
-            | Self::Palette(_)
+            | Self::Picker(_)
             | Self::Password(_)
             | Self::Rename(_)
             | Self::Settings(_)
@@ -138,25 +141,35 @@ impl App {
     // Reading
     // --------------------------------------------------------------------
 
-    /// The open palette, if the overlay is one.
-    pub(crate) fn palette(&self) -> Option<&Palette> {
-        let Some(Overlay::Palette(overlay)) = &self.overlay else {
+    /// The open picker, if the overlay is one.
+    pub(crate) fn picker(&self) -> Option<&Picker> {
+        let Some(Overlay::Picker(overlay)) = &self.overlay else {
             return None;
         };
-        Some(&overlay.palette)
+        Some(&overlay.picker)
     }
 
-    /// The open palette, to change it in place.
-    pub(crate) fn palette_mut(&mut self) -> Option<&mut Palette> {
-        let Some(Overlay::Palette(overlay)) = &mut self.overlay else {
+    /// Backward-compatible alias for [`Self::picker`].
+    pub(crate) fn palette(&self) -> Option<&Picker> {
+        self.picker()
+    }
+
+    /// The open picker, to change it in place.
+    pub(crate) fn picker_mut(&mut self) -> Option<&mut Picker> {
+        let Some(Overlay::Picker(overlay)) = &mut self.overlay else {
             return None;
         };
-        Some(&mut overlay.palette)
+        Some(&mut overlay.picker)
     }
 
-    /// The editor question the open palette is collecting an answer to.
+    /// Backward-compatible alias for [`Self::picker_mut`].
+    pub(crate) fn palette_mut(&mut self) -> Option<&mut Picker> {
+        self.picker_mut()
+    }
+
+    /// The editor question the open picker is collecting an answer to.
     pub(crate) fn editor_pick(&self) -> Option<&ActivePick> {
-        let Some(Overlay::Palette(overlay)) = &self.overlay else {
+        let Some(Overlay::Picker(overlay)) = &self.overlay else {
             return None;
         };
         overlay.pick.as_ref()
@@ -222,12 +235,14 @@ impl App {
     // Opening and closing
     // --------------------------------------------------------------------
 
-    /// Show `palette`, in place of whatever holds the keyboard now.
-    pub(crate) fn open_palette(&mut self, palette: Palette) {
-        self.open_overlay(Overlay::Palette(PaletteOverlay {
-            palette,
-            pick: None,
-        }));
+    /// Show `picker`, in place of whatever holds the keyboard now.
+    pub(crate) fn open_picker(&mut self, picker: Picker) {
+        self.open_overlay(Overlay::Picker(PickerOverlay { picker, pick: None }));
+    }
+
+    /// Backward-compatible alias for [`Self::open_picker`].
+    pub(crate) fn open_palette(&mut self, palette: Picker) {
+        self.open_picker(palette);
     }
 
     /// Give the keyboard to `overlay`. What held it goes, an editor question it
@@ -269,27 +284,37 @@ impl App {
         }
     }
 
-    /// Take the palette out to work on it while `self` is borrowed elsewhere;
+    /// Take the picker out to work on it while `self` is borrowed elsewhere;
     /// anything else that holds the keyboard stays where it is.
-    pub(crate) fn take_palette_overlay(&mut self) -> Option<PaletteOverlay> {
-        let Some(Overlay::Palette(overlay)) =
-            self.overlay.take_if(|o| matches!(o, Overlay::Palette(_)))
+    pub(crate) fn take_picker_overlay(&mut self) -> Option<PickerOverlay> {
+        let Some(Overlay::Picker(overlay)) =
+            self.overlay.take_if(|o| matches!(o, Overlay::Picker(_)))
         else {
             return None;
         };
         Some(overlay)
     }
 
-    /// Put back a palette taken out with [`Self::take_palette_overlay`],
+    /// Backward-compatible alias for [`Self::take_picker_overlay`].
+    pub(crate) fn take_palette_overlay(&mut self) -> Option<PickerOverlay> {
+        self.take_picker_overlay()
+    }
+
+    /// Put back a picker taken out with [`Self::take_picker_overlay`],
     /// unless it closed, or something else took the keyboard meanwhile (a
-    /// command run from it opening a palette of its own). A pick that goes
+    /// command run from it opening a picker of its own). A pick that goes
     /// unanswered either way is answered with nothing.
-    pub(crate) fn restore_palette_overlay(&mut self, overlay: PaletteOverlay) {
-        if overlay.palette.active && self.overlay.is_none() {
-            self.overlay = Some(Overlay::Palette(overlay));
+    pub(crate) fn restore_picker_overlay(&mut self, overlay: PickerOverlay) {
+        if overlay.picker.active && self.overlay.is_none() {
+            self.overlay = Some(Overlay::Picker(overlay));
             return;
         }
-        self.overlay_closed(Overlay::Palette(overlay));
+        self.overlay_closed(Overlay::Picker(overlay));
+    }
+
+    /// Backward-compatible alias for [`Self::restore_picker_overlay`].
+    pub(crate) fn restore_palette_overlay(&mut self, overlay: PickerOverlay) {
+        self.restore_picker_overlay(overlay);
     }
 
     /// Take the settings page out to edit it while `self` is borrowed.

@@ -1434,8 +1434,8 @@ fn test_the_status_names_the_mode_the_editor_is_in_and_what_is_marked() {
     let mut editor = DirEditor::new(tree.0.clone());
     assert_eq!(
         editor.status().mode,
-        None,
-        "a listing has no mode of its own"
+        Some(EditMode::Normal),
+        "a listing defaults to Normal mode"
     );
 
     editor.on_key(&press(KeyCode::Char('m')));
@@ -1445,6 +1445,18 @@ fn test_the_status_names_the_mode_the_editor_is_in_and_what_is_marked() {
     assert_eq!(editor.status().mode, Some(EditMode::Normal));
     editor.on_key(&press(KeyCode::Char('A')));
     assert_eq!(editor.status().mode, Some(EditMode::Insert));
+    editor.on_key(&press(KeyCode::Escape));
+    assert_eq!(editor.status().mode, Some(EditMode::Normal));
+
+    // Leaving edit mode discards edits and returns to the listing in Normal mode
+    editor.on_key(&press(KeyCode::Char('q')));
+    assert_eq!(editor.status().mode, Some(EditMode::Normal));
+
+    // Pressing `i` on the listing directly enters edit mode in Insert mode
+    editor.on_key(&press(KeyCode::Char('i')));
+    assert_eq!(editor.status().mode, Some(EditMode::Insert));
+    editor.on_key(&press(KeyCode::Escape));
+    assert_eq!(editor.status().mode, Some(EditMode::Normal));
 }
 
 /// A listing whose tree gives the word motions something to step over:

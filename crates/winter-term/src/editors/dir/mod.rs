@@ -45,6 +45,7 @@ use crate::model::input::Key;
 use crate::model::paint::{row_height, row_text, Frame, GutterSide, Icon, RowWindow, Span, Style};
 use crate::model::path::{abbreviate_home, format_full_path, normalize_path};
 use crate::model::textedit::field::TextField;
+use crate::model::textedit::modal::EditMode;
 use crate::model::vim::nav::VimNav;
 
 use listing::SortKey;
@@ -932,12 +933,16 @@ impl Editor for DirEditor {
         self.list.take_search()
     }
 
-    /// The edit mode while the names are being edited, and how much is
-    /// marked for the next operation.
+    /// The edit mode: Normal when browsing or editing in Normal mode, Insert
+    /// while typing a rename, and how much is marked for the next operation.
     fn status(&self) -> EditorStatus {
         let marked = self.marks.len();
+        let mode = self
+            .edit
+            .as_ref()
+            .map_or(EditMode::Normal, |edit| edit.modal().mode());
         EditorStatus {
-            mode: self.edit.as_ref().map(|edit| edit.modal().mode()),
+            mode: Some(mode),
             segments: (marked > 0)
                 .then(|| format!("{marked} marked"))
                 .into_iter()

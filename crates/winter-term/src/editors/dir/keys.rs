@@ -5,6 +5,7 @@
 use crate::model::editor::{menu_groups, EditorMenuItem, EditorOutcome};
 use crate::model::input::table::{self, Binding, KeyHelp, TableMatch};
 use crate::model::input::Key;
+use crate::model::textedit::modal::EditMode;
 use crate::model::vim::nav::{VimKey, VimNav};
 
 use super::{DirEditor, ASK_COPY, ASK_MKDIR, ASK_MOVE, ASK_NEW_FILE};
@@ -270,6 +271,11 @@ pub(super) const KEYS: &[Binding<Act>] = &[
         keys: &["C-x C-q"],
         label: "Edit the names as text",
     },
+    Binding {
+        action: Act::EditInsert,
+        keys: &["i"],
+        label: "Edit the names in Insert mode",
+    },
 ];
 
 /// The keys while the names are editable text, ahead of the editor's.
@@ -309,6 +315,7 @@ pub(super) enum Act {
     Details,
     Discard,
     Edit,
+    EditInsert,
     Enter,
     Expand,
     ExpandSubtree,
@@ -500,7 +507,8 @@ impl DirEditor {
             Act::Trash => return Some(self.ask_delete(false)),
             Act::Delete => return Some(self.ask_delete(true)),
             Act::Mode => return Some(self.ask_mode()),
-            Act::Edit => self.enter_edit(),
+            Act::Edit => self.enter_edit(EditMode::Normal),
+            Act::EditInsert => self.enter_edit(EditMode::Insert),
             // Only an edit session answers it, before this is reached.
             Act::Discard => return None,
         }

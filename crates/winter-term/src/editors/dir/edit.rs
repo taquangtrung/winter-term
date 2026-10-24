@@ -5,7 +5,7 @@ use crate::model::editor::{EditorOutcome, Notice};
 use crate::model::input::table::{self, TableMatch};
 use crate::model::input::{Key, KeyCode};
 use crate::model::textedit::field::TextField;
-use crate::model::textedit::modal::EditOutcome;
+use crate::model::textedit::modal::{EditMode, EditOutcome};
 
 use super::keys::{Act, EDIT_KEYS};
 use super::tree::Row;
@@ -23,14 +23,15 @@ const RENAMES_LISTED: usize = 3;
 // ========================================================================
 
 impl DirEditor {
-    /// Turn every listed name into editable text, the caret parked at the end
-    /// of the name under the cursor, where a rename usually begins.
-    pub(super) fn enter_edit(&mut self) {
+    /// Turn every listed name into editable text, starting in `mode`, the
+    /// caret parked at the end of the name under the cursor, where a rename
+    /// usually begins.
+    pub(super) fn enter_edit(&mut self, mode: EditMode) {
         if self.rows.is_empty() {
             return;
         }
         let names = self.rows.iter().map(|row| row.entry.name.clone()).collect();
-        self.edit = Some(TextField::rows(names, self.list.cursor()));
+        self.edit = Some(TextField::rows(names, self.list.cursor()).with_mode(mode));
     }
 
     /// Keys while the names are editable text. `C-x C-q` toggles the

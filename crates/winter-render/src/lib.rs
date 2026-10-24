@@ -25,9 +25,9 @@ pub use grid::{
 pub use image::ImagePlacement;
 pub use renderer::{
     clamp_font_size, start_font_load, ButtonView, CellOverlay, FindView, FontConfig, FontLoad,
-    InputView, NoticeKind, PaletteItem, PaletteView, PaneRect, PaneView, StatusBar, StatusBell,
-    StatusHover, StatusNotice, StatusPrompt, StatusSearch, StatusSegment, ToastCard, ToastHit,
-    WhichKeyView, THIN_SPACE,
+    InputView, NoticeKind, PaletteItem, PaletteView, PaneRect, PaneView, PickerItem, PickerView,
+    StatusBar, StatusBell, StatusHover, StatusNotice, StatusPrompt, StatusSearch, StatusSegment,
+    ToastCard, ToastHit, WhichKeyView, THIN_SPACE,
 };
 pub use screen::Screen;
 pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};

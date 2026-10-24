@@ -38,7 +38,9 @@ mod widgets;
 
 use glyphs::FallbackGlyphFit;
 pub use glyphs::{clamp_font_size, start_font_load, FontConfig, FontLoad};
-pub use widgets::{ButtonView, FindView, InputView, PaletteItem, PaletteView, WhichKeyView};
+pub use widgets::{
+    ButtonView, FindView, InputView, PaletteItem, PaletteView, PickerItem, PickerView, WhichKeyView,
+};
 
 // ========================================================================
 // Data Structures

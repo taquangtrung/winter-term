@@ -8,13 +8,16 @@ pub(in crate::renderer) mod button;
 pub(in crate::renderer) mod find;
 pub(in crate::renderer) mod input;
 pub(in crate::renderer) mod menu;
-pub(in crate::renderer) mod palette;
+pub(in crate::renderer) mod picker;
+pub(in crate::renderer) use picker as palette;
 pub(in crate::renderer) mod toast;
 pub(in crate::renderer) mod tooltip;
 mod view;
 pub(in crate::renderer) mod which_key;
 
-pub use view::{ButtonView, FindView, InputView, PaletteItem, PaletteView, WhichKeyView};
+pub use view::{
+    ButtonView, FindView, InputView, PaletteItem, PaletteView, PickerItem, PickerView, WhichKeyView,
+};
 
 // ========================================================================
 // Constants
