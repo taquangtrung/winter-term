@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<!-- Created with Inkscape (http://www.inkscape.org/) -->
+
+<svg
+   width="48mm"
+   height="48mm"
+   viewBox="0 0 48 48"
+   version="1.1"
+   id="svg5"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs2">
+    <rect
+       x="51.452175"
+       y="330.46039"
+       width="472.89725"
+       height="393.4588"
+       id="rect113" />
+  </defs>
+  <g
+     id="layer1">
+    <g
+       transform="matrix(0.26458333,0,0,0.26458333,-5.2519609,-76.932226)"
+       id="text111"
+       style="font-size:53.3333px;white-space:pre;shape-inside:url(#rect113);display:inline" />
+    <g
+       aria-label="DVI"
+       transform="scale(0.809099,1.2359427)"
+       id="text277"
+       style="font-size:26.3939px;font-family:Go;-inkscape-font-specification:Go;fill:#800080;stroke-width:0.35349">
+      <path
+         d="m 24.682762,20.127144 q 0,4.777296 -2.718572,7.205535 -2.692178,2.401845 -7.575049,2.401845 H 9.0575732 V 10.889279 h 5.9122338 q 2.956117,0 5.120416,1.055756 2.190694,1.055756 3.37842,3.11448 1.214119,2.032331 1.214119,5.067629 z M 20.53892,20.23272 q 0,-3.140874 -1.372483,-4.592539 -1.372483,-1.478058 -3.985479,-1.478058 h -2.137906 v 12.273163 h 1.715604 q 5.780264,0 5.780264,-6.202566 z"
+         style="font-weight:bold;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans Bold';fill:#cd87de"
+         id="path11" />
+      <path
+         d="M 43.105691,10.889279 36.691974,29.734524 H 32.33698 L 25.949656,10.889279 h 4.038267 l 3.536783,11.217408 q 0.105575,0.290333 0.290333,1.08215 0.211151,0.765423 0.422302,1.636421 0.211151,0.844605 0.290333,1.425271 0.07918,-0.580666 0.263939,-1.425271 0.211151,-0.870998 0.422302,-1.636421 0.211152,-0.791817 0.290333,-1.08215 l 3.563177,-11.217408 z"
+         style="font-weight:bold;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans Bold';fill:#cd87de"
+         id="path13" />
+      <path
+         d="m 52.528306,29.734524 h -8.578018 v -2.269876 l 2.296269,-1.055756 V 14.214911 l -2.296269,-1.055756 v -2.269876 h 8.578018 v 2.269876 l -2.29627,1.055756 v 12.193981 l 2.29627,1.055756 z"
+         style="font-weight:bold;font-family:'Noto Sans';-inkscape-font-specification:'Noto Sans Bold';fill:#cd87de"
+         id="path15" />
+    </g>
+  </g>
+</svg>

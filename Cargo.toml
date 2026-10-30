@@ -1,0 +1,74 @@
+[workspace]
+members = [
+    "crates/winter-term",
+    "crates/winter-core",
+    "crates/winter-proto",
+    "crates/winter-render",
+    "crates/winter-spell",
+    "crates/winter-lsp",
+    "crates/winter-extension",
+    "crates/winter-ext-example",
+    "clients/client-rs",
+]
+# Vendored third-party crates are patch targets, not workspace members, so
+# workspace-wide test and lint runs leave them alone.
+exclude = ["vendor"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Quang Trung Ta <taquangtrungvn@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/taquangtrung/winter-term"
+homepage = "https://github.com/taquangtrung/winter-term"
+keywords = ["terminal", "pty", "multiplexer", "terminal-emulator", "vim"]
+categories = ["command-line-interface", "command-line-utilities"]
+readme = "README.md"
+# The verified floor, not an aspiration: `rust-toolchain.toml` pins 1.96.0 and
+# CI builds the MSRV job against exactly this value. The dependency graph
+# already forces most of it (kdl declares 1.95, cosmic-text 1.89), so a lower
+# number here would be a claim that cannot build. Bump deliberately, and only
+# after the MSRV CI job passes at the new value.
+rust-version = "1.96"
+
+[workspace.dependencies]
+anyhow = "1"
+base64 = "0.22"
+# Each crate turns on the formats it decodes.
+image = { version = "0.25", default-features = false }
+kdl = { version = "6", features = ["serde"] }
+pollster = "0.4"
+# Each crate turns on what it renders to.
+pulldown-cmark = { version = "0.12", default-features = false }
+winter-core = { version = "0.1.0", path = "crates/winter-core" }
+winter-proto = { version = "0.1.0", path = "crates/winter-proto" }
+winter-render = { version = "0.1.0", path = "crates/winter-render" }
+winter-spell = { version = "0.1.0", path = "crates/winter-spell" }
+winter-lsp = { version = "0.1.0", path = "crates/winter-lsp" }
+winter-extension = { version = "0.1.0", path = "crates/winter-extension" }
+winter-ext-example = { version = "0.1.0", path = "crates/winter-ext-example" }
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+thiserror = "2"
+regex = "1"
+unicode-normalization = "0.1"
+unicode-segmentation = "1"
+unicode-width = "0.1"
+# Default features deliberately left on: `std` is what gives the unbounded
+# OSC buffer. vte 0.13 defaulted to `no_std` (a fixed 1 KiB ArrayVec) and so
+# needed `default-features = false` to get the same thing; 0.15 inverted that,
+# so disabling defaults now silently truncates any TBP escape over 1 KiB.
+vte = "0.15"
+vello = "0.11"
+wgpu = "30"
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+winresource = "0.1"
+
+# portable-pty 0.9.0 with one Windows fix: never LoadLibrary a bare "conpty.dll"
+# (a PATH search that can load another app's deadlocking ConPTY build). See
+# vendor/portable-pty/src/win/psuedocon.rs. Drop this once upstream stops
+# searching PATH for the sideloaded DLL.
+[patch.crates-io]
+portable-pty = { path = "vendor/portable-pty" }

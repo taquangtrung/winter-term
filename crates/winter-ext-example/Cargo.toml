@@ -1,0 +1,14 @@
+[package]
+name = "winter-ext-example"
+description = "An example Winter extension: counts the words of the file in front and flags its TODO lines as problems."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+
+# Like every extension, it depends on the extension API alone.
+[dependencies]
+winter-extension.workspace = true

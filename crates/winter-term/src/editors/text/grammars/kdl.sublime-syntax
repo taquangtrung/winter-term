@@ -1,0 +1,109 @@
+%YAML 1.2
+---
+# KDL (https://kdl.dev), versions 1 and 2, as Winter's editor colors it: the
+# config format Winter's own settings are written in, which the bundled
+# grammars do not have. Scopes follow the names the theme's scope table
+# colors: a node is a tag, a property an attribute, a bare value a string.
+name: KDL
+scope: source.kdl
+file_extensions:
+  - kdl
+
+variables:
+  # What a bare identifier may hold: anything but whitespace and the
+  # characters KDL gives a meaning of its own.
+  ident: '[^\s(){}\[\]/\\"#;=]+'
+
+contexts:
+  main:
+    - include: comments
+    - match: /-
+      scope: comment.block.slashdash.kdl
+    - match: \(
+      scope: punctuation.definition.annotation.begin.kdl
+      push: annotation
+    - match: '({{ident}})(=)'
+      captures:
+        1: entity.other.attribute-name.kdl
+        2: keyword.operator.assignment.kdl
+    - match: '(?:^|(?<=[{;]))\s*({{ident}})'
+      captures:
+        1: entity.name.tag.kdl
+    - match: '[{}]'
+      scope: punctuation.section.block.kdl
+    - match: ;
+      scope: punctuation.terminator.kdl
+    - include: values
+
+  values:
+    - match: '"""'
+      scope: punctuation.definition.string.begin.kdl
+      push: multiline-string
+    - match: '"'
+      scope: punctuation.definition.string.begin.kdl
+      push: string
+    - match: 'r?(#+)"'
+      scope: punctuation.definition.string.begin.kdl
+      push: raw-string
+    - match: '#(true|false)\b'
+      scope: constant.language.boolean.kdl
+    - match: '#(null|inf|-inf|nan)\b'
+      scope: constant.language.kdl
+    - match: '\b(true|false)\b'
+      scope: constant.language.boolean.kdl
+    - match: '\bnull\b'
+      scope: constant.language.kdl
+    - match: '[+-]?(?:0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*(?:\.[0-9][0-9_]*)?(?:[eE][+-]?[0-9]+)?)(?=[\s;{})]|$)'
+      scope: constant.numeric.kdl
+    - match: '{{ident}}'
+      scope: string.unquoted.kdl
+
+  string:
+    - meta_scope: string.quoted.double.kdl
+    - match: '\\.'
+      scope: constant.character.escape.kdl
+    - match: '"'
+      scope: punctuation.definition.string.end.kdl
+      pop: true
+
+  multiline-string:
+    - meta_scope: string.quoted.triple.kdl
+    - match: '\\.'
+      scope: constant.character.escape.kdl
+    - match: '"""'
+      scope: punctuation.definition.string.end.kdl
+      pop: true
+
+  raw-string:
+    - meta_scope: string.quoted.raw.kdl
+    - match: '"\1'
+      scope: punctuation.definition.string.end.kdl
+      pop: true
+
+  annotation:
+    - meta_scope: meta.annotation.type.kdl
+    - match: \)
+      scope: punctuation.definition.annotation.end.kdl
+      pop: true
+    - match: '"[^"]*"|{{ident}}'
+      scope: entity.name.type.kdl
+
+  comments:
+    - match: //
+      scope: punctuation.definition.comment.kdl
+      push:
+        - meta_scope: comment.line.double-slash.kdl
+        - match: $\n?
+          pop: true
+    - match: /\*
+      scope: punctuation.definition.comment.begin.kdl
+      push: block-comment
+
+  block-comment:
+    - meta_scope: comment.block.kdl
+    - match: /\*
+      scope: punctuation.definition.comment.begin.kdl
+      push: block-comment
+    - match: \*/
+      scope: punctuation.definition.comment.end.kdl
+      pop: true

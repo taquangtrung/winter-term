@@ -1,0 +1,17 @@
+[package]
+name = "winter-spell"
+description = "Winter spelling: bundled English Hunspell dictionaries, prose tokenizing, and suggestions."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["spelling", "spellcheck", "hunspell", "dictionary", "terminal"]
+categories = ["text-processing"]
+rust-version.workspace = true
+# The bundled dictionaries are embedded at compile time; the crate needs no
+# files at runtime and has no dependencies.
+include = ["Cargo.toml", "src/**/*.rs", "data/*"]
+
+[dependencies]

@@ -1,0 +1,27 @@
+[package]
+name = "winter-render"
+description = "Winter GPU renderer: draws the terminal cell grid and window chrome with wgpu."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "wgpu", "text-rendering", "gpu", "renderer"]
+categories = ["graphics", "rendering"]
+rust-version.workspace = true
+readme = "README.md"
+
+[dependencies]
+etagere = "0.3"
+glyphon = "0.12"
+kdl.workspace = true
+image = { workspace = true, features = ["bmp", "gif", "ico", "jpeg", "png", "webp"] }
+pollster.workspace = true
+pulldown-cmark.workspace = true
+serde.workspace = true
+resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
+unicode-width.workspace = true
+vello.workspace = true
+wgpu.workspace = true
+winter-core.workspace = true

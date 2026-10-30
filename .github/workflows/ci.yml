@@ -1,0 +1,167 @@
+name: CI
+
+# Cost shape: CI runs on pull requests only, never on a push to main. The
+# Linux jobs run on every pull request because they are cheap and catch nearly
+# everything. Windows and macOS run only when the workflow is started by hand
+# (`gh workflow run CI`), because on a private repo GitHub bills their minutes
+# at 2x and 10x, and a macOS run on every pull request would exhaust a month's
+# allowance in about a dozen of them.
+on:
+  pull_request:
+    paths-ignore: ["**.md", "docs/**", "LICENSE", ".gitignore"]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  RUSTFLAGS: -D warnings
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Style and lint run once, on Linux only: they are target-independent, and
+  # repeating them per-OS triples the cost for identical output.
+  lint:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libxkbcommon-dev
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      # The build without the Markdown preview's web engine, so code behind
+      # the `preview` feature cannot leave the rest unbuildable without it.
+      - run: cargo clippy -p winter-term --all-targets --no-default-features -- -D warnings
+      # Doc links name items that get renamed and moved; a broken one fails
+      # here rather than leaving a reader at a dead reference.
+      - run: cargo doc --workspace --no-deps --document-private-items
+        env:
+          RUSTDOCFLAGS: -D rustdoc::broken_intra_doc_links -A rustdoc::private_intra_doc_links
+
+  test:
+    name: test (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libxkbcommon-dev
+      # zsh and fish are what the shell-integration tests exercise; without
+      # them those tests skip and the scripts go unverified.
+      - name: Install test shells
+        run: sudo apt-get install -y --no-install-recommends zsh fish
+      - run: cargo test --workspace
+
+  test-cross-platform:
+    name: test (${{ matrix.os }})
+    # Not on pull requests: see the cost note at the top of this file.
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install test shells (macOS)
+        if: runner.os == 'macOS'
+        run: brew install fish
+      - run: cargo test --workspace
+
+  # Pins the floor advertised in `[workspace.package] rust-version`. Without
+  # this the field is an unverified claim; with it, a dependency bump that
+  # raises the real floor fails here instead of in a user's build.
+  msrv:
+    name: MSRV (1.96)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.96
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libxkbcommon-dev
+      - run: cargo check --workspace --all-targets
+
+  python-client:
+    name: python client
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - working-directory: clients/client-py
+        run: uv run --with pytest python -m pytest -q
+      # ruff and mypy are declared dev dependencies and ruff is configured
+      # in pyproject.toml, but nothing ran them, so violations accumulated.
+      - working-directory: clients/client-py
+        run: uv run --with ruff ruff check .
+      - working-directory: clients/client-py
+        run: uv run --with mypy mypy src
+
+  # Advisories are published without anyone touching this repository, and with
+  # no scheduled run this job only sees one when a pull request is opened or the
+  # workflow is started by hand. The workspace exists to parse bytes it does not
+  # trust and the lockfile pulls in over 500 crates, so an unreviewed advisory
+  # is the most likely way a problem arrives here: start a run now and then.
+  audit:
+    name: security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # A prebuilt binary; building cargo-audit from source on every run costs
+      # more minutes than the check itself.
+      - uses: taiki-e/install-action@cargo-audit
+      # --deny warnings, with the known-unactionable advisories listed in
+      # .cargo/audit.toml, so a new one cannot hide among them.
+      - run: cargo audit --deny warnings
+
+  # Catches the crates.io rejections that only surface at publish time:
+  # a missing description, an unreadable readme path, an excluded file.
+  #
+  # Only the crates with no unpublished internal dependencies can be checked.
+  # A dry run resolves path dependencies against the real index, so a crate
+  # that depends on another of ours cannot be verified until that one is
+  # actually published. That also fixes the release order:
+  #   winter-proto, winter-spell, winter-lsp, winter-extension -> winter-core
+  #   -> winter-render, winter-client, winter-ext-example -> winter-term
+  publish-dry-run:
+    name: publish dry-run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # The dry runs below cannot reach winter-term until its dependencies
+      # are on the index, and this failure is silent locally: an embedded
+      # path above the crate root resolves in the workspace and breaks only
+      # for someone installing from the registry.
+      - run: python3 scripts/check-embedded-paths.py
+      # The installers copy files in by relative path, so a file that moves
+      # in the repository breaks them silently until someone builds on the
+      # matching OS.
+      - run: python3 scripts/check-packaging-paths.py
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install Linux GUI dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            pkg-config libfontconfig1-dev libxkbcommon-dev
+      - run: cargo publish --dry-run -p winter-proto --allow-dirty
+      - run: cargo publish --dry-run -p winter-spell --allow-dirty
+      - run: cargo publish --dry-run -p winter-lsp --allow-dirty
+      - run: cargo publish --dry-run -p winter-extension --allow-dirty

@@ -1,0 +1,159 @@
+[package]
+name = "winter-term"
+description = "Winter: a terminal-first IDE with GPU rendering and rich MIME-typed block output."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+
+[lib]
+name = "winter_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "winter"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+arboard = "3"
+flate2 = "1"
+open = "5"
+base64.workspace = true
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp"] }
+# PDFs drawn natively: a pure-Rust rasterizer, so a document needs no web
+# engine and no native library, and its parser is memory-safe Rust.
+hayro = "0.8"
+# HTML blocks drawn as rich text: parsed the way a browser parses (html5ever)
+# and turned into Markdown, with nothing ever run.
+htmd = "0.5"
+kdl.workspace = true
+miette = "7"
+notify = "8"
+# The Markdown preview, read with the parser the renderer already carries
+# and written out as HTML.
+pulldown-cmark = { workspace = true, features = ["html"] }
+# The preview's web engine: Blitz lays the HTML out and paints it as a Vello
+# scene, which the renderer draws on the window's own GPU device. Pinned
+# exactly while Blitz is in beta, since each beta breaks its API.
+anyrender = { version = "0.14", optional = true }
+anyrender_vello = { version = "0.15", optional = true }
+blitz-dom = { version = "=0.3.0-beta.4", default-features = false, features = ["svg", "system-fonts", "woff", "floats"], optional = true }
+blitz-html = { version = "=0.3.0-beta.4", default-features = false, optional = true }
+blitz-paint = { version = "=0.3.0-beta.4", default-features = false, features = ["svg"], optional = true }
+blitz-traits = { version = "=0.3.0-beta.4", optional = true }
+parley = { version = "0.12", optional = true }
+# The preview's math, typeset in Rust as SVG drawn in the text's color, so a
+# page needs no script engine. Pinned exactly: young, and kept behind one
+# function in `editors/preview/page.rs` should another take its place.
+mathra = { version = "=1.7.0", optional = true }
+# The preview's Mermaid diagrams, laid out and drawn in Rust as SVG (its own
+# command line and PNG export left out). Its labels are SVG text, which the
+# engine draws; merman's are HTML inside the SVG, which it does not.
+mermaid-rs-renderer = { version = "0.3.1", default-features = false, optional = true }
+url = "2"
+regex.workspace = true
+winter-core.workspace = true
+winter-proto.workspace = true
+
+winter-render.workspace = true
+winter-spell.workspace = true
+winter-lsp.workspace = true
+winter-extension.workspace = true
+# Extensions compiled in, each behind a feature of its own.
+winter-ext-example = { workspace = true, optional = true }
+pollster.workspace = true
+portable-pty.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+# The editor's highlighting: TextMate grammars, the model VS Code themes are
+# written against. Oniguruma rather than the pure-Rust regex engine, which
+# parses about three times slower. The grammars are two-face's, bat's set:
+# syntect's own plus TOML, TypeScript, Nix and the rest, over 200 in all.
+# `yaml-load` reads the few grammars Winter carries itself (KDL).
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-onig", "yaml-load"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-onig"] }
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+vte.workspace = true
+vello.workspace = true
+wgpu.workspace = true
+winit = "0.30"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+keyring = "4.2.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1"
+windows-sys.workspace = true
+
+[build-dependencies]
+flate2 = "1"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource.workspace = true
+
+# Documenting a single Linux target keeps docs.rs from attempting builds
+# on platforms whose system dependencies it cannot provide.
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+
+[package.metadata.deb]
+name = "winter-term"
+maintainer = "Quang Trung Ta <taquangtrungvn@gmail.com>"
+extended-description = """\
+Terminal-first IDE with GPU rendering and \
+rich MIME-typed block output."""
+license-file = ["../../LICENSE", "0"]
+section = "x11"
+priority = "optional"
+depends = "$auto"
+# The package was previously shipped as "winter-terminal"; these let dpkg
+# replace that install cleanly instead of failing with a file conflict over
+# usr/bin/winter and the desktop/icon assets both packages ship.
+replaces = "winter-terminal"
+conflicts = "winter-terminal"
+assets = [
+    ["target/release/winter", "usr/bin/winter", "755"],
+    ["../../winter-terminal.desktop", "usr/share/applications/winter-terminal.desktop", "644"],
+    ["assets/icons/winter-terminal.png", "usr/share/pixmaps/winter-terminal.png", "644"],
+    ["assets/icons/winter-terminal-64.png", "usr/share/icons/hicolor/64x64/apps/winter-terminal.png", "644"],
+    ["builtin/settings.kdl", "usr/share/doc/winter-term/examples/settings.kdl", "644"],
+    ["builtin/keybindings.kdl", "usr/share/doc/winter-term/examples/keybindings.kdl", "644"],
+    ["../../clients/shell-integration/winter.bash", "usr/share/winter-term/shell-integration/winter.bash", "644"],
+    ["../../clients/shell-integration/winter.zsh", "usr/share/winter-term/shell-integration/winter.zsh", "644"],
+    ["../../clients/shell-integration/winter.fish", "usr/share/winter-term/shell-integration/winter.fish", "644"],
+    ["../../README.md", "usr/share/doc/winter-term/README.md", "644"],
+    ["../../LICENSE", "usr/share/doc/winter-term/LICENSE", "644"],
+]
+
+[features]
+default = ["preview"]
+# The Markdown preview, and the web engine it is drawn with (Blitz, still in
+# beta) along with its math and Mermaid. Without it the preview command is
+# not offered.
+preview = [
+    "dep:anyrender",
+    "dep:anyrender_vello",
+    "dep:blitz-dom",
+    "dep:blitz-html",
+    "dep:blitz-paint",
+    "dep:blitz-traits",
+    "dep:mathra",
+    "dep:mermaid-rs-renderer",
+    "dep:parley",
+]
+# The example extension: `example.word_count` and `example.flag_todos`.
+example-extension = ["dep:winter-ext-example"]
+
+[dev-dependencies]
+winter-lsp = { workspace = true, features = ["test-support"] }

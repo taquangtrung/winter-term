@@ -1,0 +1,344 @@
+//! The canvas: what is drawn in a pane rather than painted as cells, by
+//! inline blocks and editors alike. One way to put any content into a texture
+//! at the size it is shown, and the textures holding what editors show over
+//! their panes, each cropped to its pane.
+
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use winter_render::renderer::GpuRenderer;
+use winter_render::ImagePlacement;
+
+use crate::model::editor::Appearance;
+use crate::model::layout::{Rect, TabId};
+use crate::model::paint::{IconKind, Row};
+use crate::model::picture::{Content, PictureClip, PictureFrame};
+
+use crate::window::App;
+
+use super::frame_grid::styled_html;
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+/// The longest side vectors are drawn at. Shown larger, the drawing is
+/// stretched rather than drawn again, which keeps one zoom from asking for a
+/// texture no GPU holds.
+const MAX_VECTOR_SIDE: f32 = 4096.0;
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// What the canvas keeps on the GPU between frames: icon and editor
+/// textures, the palette's resolved icons, and the next free texture id.
+#[derive(Default)]
+pub(in crate::window) struct Textures {
+    pub(in crate::window) next_image_id: u64,
+    /// GPU texture ids for icons already rasterized, keyed by icon name and the
+    /// pixel box they were drawn for. `None` records an icon that failed to
+    /// rasterize, so a broken document is not retried every frame.
+    ///
+    /// Cleared when the cell size changes, because every entry was rasterized
+    /// for the old one: see [`App::icon_texture`].
+    pub(in crate::window) icons: HashMap<(String, u32, u32), Option<u64>>,
+    /// The pixel box `icons` was filled for.
+    pub(in crate::window) icon_box: (u32, u32),
+    /// What the GPU holds for what each editor shows over its pane, by tab
+    /// and the key the editor gave it.
+    pub(in crate::window) editors: HashMap<(TabId, u64), EditorTexture>,
+    /// Each icon the open palette's entries name, resolved to its SVG once
+    /// rather than on every frame the palette is drawn. Emptied whenever no
+    /// palette is open, so it never outgrows one list.
+    pub(in crate::window) palette_icons: HashMap<IconKind, Option<Arc<[u8]>>>,
+}
+
+/// How content is drawn into its texture.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::window) enum Fit {
+    /// At its own size: pixels, decoded or already drawn.
+    Natural,
+    /// At this many pixels across and down, vectors drawn again for it.
+    Size(u32, u32),
+    /// Laid out to this many pixels across.
+    Width(u32),
+}
+
+/// What the GPU holds for one piece of what an editor shows.
+pub(in crate::window) struct EditorTexture {
+    /// Set once the content failed to draw, so it is said once, not every
+    /// frame.
+    failed: bool,
+    /// The texture it is drawn into.
+    id: u64,
+    /// Its own size, once known.
+    natural: Option<(f32, f32)>,
+    /// The renderer's theme generation it was last drawn under: Markdown
+    /// and text are drawn in the theme's colors, and kept them after a
+    /// switch.
+    theme: u64,
+    /// How it was last drawn, `None` before it is.
+    uploaded: Option<Fit>,
+}
+
+// ========================================================================
+// Fit
+// ========================================================================
+
+impl Fit {
+    /// How `content` shown `shown` pixels big is drawn: laid out to that
+    /// width, drawn again at that size, or at its own.
+    pub(in crate::window) fn shown(content: &Content, shown: (f32, f32)) -> Self {
+        match content {
+            Content::Markdown(_) | Content::Text(_) => Self::Width(shown.0.floor().max(1.0) as u32),
+            Content::Vector(_) => {
+                let fit = (MAX_VECTOR_SIDE / shown.0.max(shown.1)).min(1.0);
+                Self::Size(
+                    (shown.0 * fit).round().max(1.0) as u32,
+                    (shown.1 * fit).round().max(1.0) as u32,
+                )
+            }
+            Content::Pixels(_) | Content::Raster(_) | Content::Scene(_) => Self::Natural,
+        }
+    }
+}
+
+// ========================================================================
+// App: editor content
+// ========================================================================
+
+impl App {
+    /// The placements of what the editors in `shown` draw over their panes
+    /// this frame, each cropped to its pane, every editor told its pane's
+    /// size first and a picture's own size after.
+    pub(in crate::window) fn editor_canvas_placements(
+        &mut self,
+        shown: &[TabId],
+        rects: &[(TabId, Rect)],
+        ch: f32,
+    ) -> Vec<ImagePlacement> {
+        let focused = self.layout().focused();
+        let mut placements = Vec::new();
+        let mut drawn = HashSet::new();
+        for tab in shown {
+            let Some((_, rect)) = rects.iter().find(|(id, _)| id == tab) else {
+                continue;
+            };
+            let pane_rect = App::layout_rect_to_pane(*rect).grid_area(ch);
+            let pane = (pane_rect.width, pane_rect.height);
+            let origin = (pane_rect.x, pane_rect.y);
+            let Some(slot) = self.open_tabs.editor_mut(tab) else {
+                continue;
+            };
+            if let Some(renderer) = self.renderer.as_ref() {
+                let theme = renderer.theme();
+                let styled_html = |rows: &[Row]| styled_html(rows, theme);
+                slot.editor.set_appearance(&Appearance {
+                    scale: renderer.scale_factor() as f32,
+                    styled_html: &styled_html,
+                    theme,
+                });
+            }
+            slot.editor.set_pane_size(pane);
+            let tiles = slot.editor.tiles();
+            // Rows the editor painted over its drawing are kept clear of it.
+            let header = (slot.editor.header_rows() as f32 * ch).min(pane.1);
+            let bounds = (0.0, header, pane.0, pane.1 - header);
+            let picture = slot.editor.picture();
+            // Faded with the rest of an inactive pane, as an editor's icons are.
+            let alpha = match self.config.dim_inactive && *tab != focused {
+                true => 1.0 - winter_render::DIM_FACTOR,
+                false => 1.0,
+            };
+            let place = |id: u64, clip: PictureClip| ImagePlacement {
+                alpha,
+                height: clip.height,
+                id,
+                u_max: clip.u_max,
+                u_min: clip.u_min,
+                v_max: clip.v_max,
+                v_min: clip.v_min,
+                width: clip.width,
+                x: pane_rect.x + clip.x,
+                y: pane_rect.y + clip.y,
+            };
+            for tile in &tiles {
+                let frame = PictureFrame::from(tile).snapped(origin);
+                let Some(clip) = frame.clip(bounds) else {
+                    continue;
+                };
+                let fit = Fit::shown(&tile.content, (tile.width, tile.height));
+                if let Some((id, _)) = self.editor_texture(*tab, tile.key, &tile.content, |_| fit) {
+                    drawn.insert((*tab, tile.key));
+                    placements.push(place(id, clip));
+                }
+            }
+            let Some(picture) = picture else {
+                continue;
+            };
+            let vector = picture.content.is_vector();
+            let view = picture.view;
+            let shown_at = |natural| {
+                let frame = view.frame(natural, pane, vector);
+                Fit::shown(&picture.content, (frame.width, frame.height))
+            };
+            let Some((id, natural)) =
+                self.editor_texture(*tab, picture.key, &picture.content, shown_at)
+            else {
+                continue;
+            };
+            drawn.insert((*tab, picture.key));
+            if let Some(slot) = self.open_tabs.editor_mut(tab) {
+                slot.editor.set_picture_geometry(natural, pane);
+            }
+            if let Some(clip) = view
+                .frame(natural, pane, vector)
+                .snapped(origin)
+                .clip(bounds)
+            {
+                placements.push(place(id, clip));
+            }
+        }
+        self.forget_editor_textures(shown, &drawn);
+        placements
+    }
+
+    /// The texture holding `content`, keyed `key` by tab `tab`'s editor, and
+    /// the content's own size: drawn the first time it is asked for, and
+    /// again whenever `fit` asks for it drawn differently. `None` for content
+    /// that cannot be drawn, which is said once.
+    fn editor_texture(
+        &mut self,
+        tab: TabId,
+        key: u64,
+        content: &Content,
+        fit: impl Fn((f32, f32)) -> Fit,
+    ) -> Option<(u64, (f32, f32))> {
+        if !self.textures.editors.contains_key(&(tab, key)) {
+            let id = self.textures.next_image_id;
+            self.textures.next_image_id += 1;
+            self.textures.editors.insert(
+                (tab, key),
+                EditorTexture {
+                    failed: false,
+                    id,
+                    natural: None,
+                    theme: 0,
+                    uploaded: None,
+                },
+            );
+        }
+        let held = self.textures.editors.get(&(tab, key))?;
+        if held.failed {
+            return None;
+        }
+        let (id, natural, uploaded, theme) = (held.id, held.natural, held.uploaded, held.theme);
+        let renderer = self.renderer.as_mut()?;
+        let theme_now = renderer.theme_generation();
+        let natural = natural.or_else(|| own_size(renderer, content));
+        // Content whose size comes from drawing it is drawn first to learn it.
+        let want = fit(natural.unwrap_or((0.0, 0.0)));
+        let drawn = match uploaded == Some(want) && theme == theme_now {
+            true => natural,
+            false => upload(renderer, id, content, want),
+        };
+        let held = self.textures.editors.get_mut(&(tab, key))?;
+        let Some(size) = drawn else {
+            held.failed = true;
+            let name = self
+                .open_tabs
+                .editor(&tab)
+                .map(|slot| slot.editor.title())
+                .unwrap_or_default();
+            self.set_error(format!("{name}: cannot draw this"));
+            return None;
+        };
+        // A vector's own size is the one it declares, not the one it was
+        // drawn at; everything else's is what drawing it came to.
+        let natural = match content.is_vector() {
+            true => natural.unwrap_or(size),
+            false => size,
+        };
+        held.natural = Some(natural);
+        held.theme = theme_now;
+        held.uploaded = Some(want);
+        Some((id, natural))
+    }
+
+    /// Free the textures of editors that have closed, and those an editor shown
+    /// this frame has moved on from. An editor not on screen keeps its own, so
+    /// switching back to it draws at once rather than decoding again.
+    fn forget_editor_textures(&mut self, shown: &[TabId], drawn: &HashSet<(TabId, u64)>) {
+        let gone: Vec<(TabId, u64)> = self
+            .textures
+            .editors
+            .keys()
+            .filter(|(tab, key)| {
+                self.open_tabs.editor(tab).is_none()
+                    || (shown.contains(tab) && !drawn.contains(&(*tab, *key)))
+            })
+            .copied()
+            .collect();
+        for held in gone {
+            if let (Some(texture), Some(renderer)) =
+                (self.textures.editors.remove(&held), self.renderer.as_mut())
+            {
+                renderer.free_image(texture.id);
+            }
+        }
+    }
+}
+
+// ========================================================================
+// Free functions
+// ========================================================================
+
+/// Draw `content` into texture `id` as `fit` says, and say what size it
+/// came to: its own for pixels, laid out for text, drawn for vectors. `None`
+/// for content that cannot be drawn.
+pub(in crate::window) fn upload(
+    renderer: &mut GpuRenderer,
+    id: u64,
+    content: &Content,
+    fit: Fit,
+) -> Option<(f32, f32)> {
+    let size = |(width, height): (u32, u32)| (width as f32, height as f32);
+    match (content, fit) {
+        (Content::Raster(bytes), _) => renderer.upload_image(id, bytes).map(size),
+        (Content::Pixels(pixels), _) => {
+            renderer.upload_rgba(id, &pixels.rgba, pixels.width, pixels.height);
+            Some(size((pixels.width, pixels.height)))
+        }
+        (Content::Scene(scene), _) => renderer
+            .upload_scene(id, &scene.scene, scene.width, scene.height)
+            .then(|| size((scene.width, scene.height))),
+        (Content::Vector(svg), Fit::Size(width, height)) => renderer
+            .upload_svg_in_box(id, svg, width, height)
+            .then(|| size((width, height))),
+        (Content::Markdown(markdown), Fit::Width(width)) => renderer
+            .upload_markdown(id, markdown, width as f32)
+            .map(size),
+        (Content::Text(text), Fit::Width(width)) => {
+            renderer.upload_text(id, text, width as f32).map(size)
+        }
+        // A fit that does not suit the content draws nothing: vectors are
+        // drawn at a size, text laid out to a width.
+        (Content::Vector(_), Fit::Natural | Fit::Width(_))
+        | (Content::Markdown(_) | Content::Text(_), Fit::Natural | Fit::Size(..)) => None,
+    }
+}
+
+/// The size `content` gives itself, where that is known without drawing
+/// it: an SVG's declared size, or pixels already drawn.
+pub(in crate::window) fn own_size(
+    renderer: &mut GpuRenderer,
+    content: &Content,
+) -> Option<(f32, f32)> {
+    match content {
+        Content::Vector(svg) => renderer.svg_size(svg),
+        Content::Pixels(pixels) => Some((pixels.width as f32, pixels.height as f32)),
+        Content::Scene(scene) => Some((scene.width as f32, scene.height as f32)),
+        Content::Markdown(_) | Content::Raster(_) | Content::Text(_) => None,
+    }
+}

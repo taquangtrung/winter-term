@@ -1,0 +1,22 @@
+[package]
+name = "winter-core"
+description = "Winter core: PTY-driven terminal that parses a session into a block list, and the VT-driven cell grid."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "pty", "scrollback", "vt100", "grid"]
+categories = ["command-line-interface", "os"]
+rust-version.workspace = true
+readme = "README.md"
+
+[dependencies]
+base64.workspace = true
+winter-proto.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+unicode-normalization.workspace = true
+unicode-width.workspace = true
+vte.workspace = true

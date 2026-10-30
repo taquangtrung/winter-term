@@ -1,0 +1,16 @@
+[package]
+name = "winter-extension"
+description = "The API Winter's extensions are written against: what an extension registers, and what it may ask of Winter."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "editor", "extension", "plugin"]
+categories = ["api-bindings"]
+rust-version.workspace = true
+include = ["Cargo.toml", "src/**/*.rs"]
+
+# An extension depends on this crate alone, never on Winter itself.
+[dependencies]
