@@ -1,0 +1,29 @@
+[package]
+name = "winter-pdf"
+description = "Winter's PDF viewer: pages drawn by Winter itself with hayro, text selection, spelling, and SyncTeX jumps to and from the LaTeX source."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["pdf", "synctex", "latex", "terminal", "viewer"]
+categories = ["text-editors", "visualization"]
+rust-version.workspace = true
+
+[features]
+# The text PDF the app's tests search.
+test-support = []
+
+[dependencies]
+# PDFs drawn natively: a pure-Rust rasterizer, so a document needs no web
+# engine and no native library, and its parser is memory-safe Rust.
+hayro = "0.8"
+regex.workspace = true
+winter-synctex.workspace = true
+winter-model.workspace = true
+winter-render.workspace = true
+winter-spell.workspace = true
+
+[dev-dependencies]
+winter-model = { workspace = true, features = ["test-support"] }

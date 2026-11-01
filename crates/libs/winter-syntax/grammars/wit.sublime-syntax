@@ -1,0 +1,466 @@
+%YAML 1.2
+---
+# WebAssembly Interface Types (WIT), as Winter's editor colors it: the
+# IDL WebAssembly components are described in.
+name: WIT
+scope: source.wit
+file_extensions:
+  - wit
+
+variables:
+  ident: '%?[a-zA-Z0-9]+(?:-[a-zA-Z0-9]+)*'
+
+contexts:
+  main:
+    - include: comments
+    - include: package-declaration
+    - include: top-level
+
+  comments:
+    - match: '(///)(.*$)'
+      scope: comment.line.documentation.wit
+      captures:
+        1: punctuation.definition.comment.wit
+    - match: '(//)(.*$)'
+      scope: comment.line.double-slash.wit
+      captures:
+        1: punctuation.definition.comment.wit
+    - match: '/\*\*'
+      scope: punctuation.definition.comment.begin.wit
+      push: doc-block-comment
+    - match: '/\*'
+      scope: punctuation.definition.comment.begin.wit
+      push: block-comment
+
+  doc-block-comment:
+    - meta_scope: comment.block.documentation.wit
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.wit
+      pop: true
+    - match: '/\*'
+      push: doc-block-comment
+
+  block-comment:
+    - meta_scope: comment.block.wit
+    - match: '\*/'
+      scope: punctuation.definition.comment.end.wit
+      pop: true
+    - match: '/\*'
+      push: block-comment
+
+  package-declaration:
+    - match: '\b(package)\b'
+      scope: keyword.control.package.wit
+      push: package-path
+
+  package-path:
+    - include: comments
+    - match: '({{ident}})(:)'
+      captures:
+        1: entity.name.namespace.wit
+        2: punctuation.separator.wit
+    - match: '(/)({{ident}})'
+      captures:
+        1: punctuation.separator.wit
+        2: entity.name.namespace.wit
+    - match: '(@)([0-9]+(?:\.[0-9]+)*(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)'
+      captures:
+        1: keyword.operator.wit
+        2: constant.numeric.version.wit
+    - match: '({{ident}})'
+      scope: entity.name.namespace.wit
+    - match: ';'
+      scope: punctuation.terminator.wit
+      pop: true
+
+  top-level:
+    - include: comments
+    - include: interface
+    - include: world
+    - include: use-statement
+    - include: type-definitions
+    - include: function-definition
+
+  interface:
+    - match: '\b(interface)\s+({{ident}})'
+      captures:
+        1: storage.type.interface.wit
+        2: entity.name.interface.wit
+      push: interface-opening
+
+  interface-opening:
+    - include: comments
+    - match: '\{'
+      scope: punctuation.section.block.begin.bracket.curly.wit
+      set: interface-body
+
+  interface-body:
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.bracket.curly.wit
+      pop: true
+    - include: use-statement
+    - include: type-definitions
+    - include: function-definition
+
+  world:
+    - match: '\b(world)\s+({{ident}})'
+      captures:
+        1: storage.type.world.wit
+        2: entity.name.type.world.wit
+      push: world-opening
+
+  world-opening:
+    - include: comments
+    - match: '\{'
+      scope: punctuation.section.block.begin.bracket.curly.wit
+      set: world-body
+
+  world-body:
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.bracket.curly.wit
+      pop: true
+    - match: '\b(import|export)\b'
+      scope: keyword.control.$1.wit
+      push: import-export-target
+    - match: '\b(include)\b'
+      scope: keyword.control.include.wit
+      push: include-target
+    - include: use-statement
+    - include: type-definitions
+
+  import-export-target:
+    - include: comments
+    - match: '({{ident}})\s*(:)\s*(?:(static)\s+)?(func)\b'
+      captures:
+        1: entity.name.function.wit
+        2: punctuation.separator.colon.wit
+        3: storage.modifier.static.wit
+        4: keyword.other.func.wit
+      push: function-parameters
+    - match: '({{ident}})\s*(:)\s*(interface)\b'
+      captures:
+        1: entity.name.interface.wit
+        2: punctuation.separator.colon.wit
+        3: storage.type.interface.wit
+      push: interface-opening
+    - match: '({{ident}})\s*(:)'
+      captures:
+        1: entity.name.type.wit
+        2: punctuation.separator.colon.wit
+    - match: '({{ident}})(:)'
+      captures:
+        1: entity.name.namespace.wit
+        2: punctuation.separator.wit
+    - match: '(/)({{ident}})'
+      captures:
+        1: punctuation.separator.wit
+        2: entity.name.namespace.wit
+    - match: '(@)([0-9]+(?:\.[0-9]+)*(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)'
+      captures:
+        1: keyword.operator.wit
+        2: constant.numeric.version.wit
+    - match: '({{ident}})'
+      scope: entity.name.interface.wit
+    - match: ';'
+      scope: punctuation.terminator.wit
+      pop: true
+
+  include-target:
+    - include: comments
+    - match: '\b(with)\b'
+      scope: keyword.control.with.wit
+    - match: '\b(as)\b'
+      scope: keyword.control.as.wit
+    - match: '\{'
+      scope: punctuation.section.block.begin.bracket.curly.wit
+    - match: '\}'
+      scope: punctuation.section.block.end.bracket.curly.wit
+    - match: ','
+      scope: punctuation.separator.comma.wit
+    - match: '({{ident}})'
+      scope: entity.name.type.wit
+    - match: ';'
+      scope: punctuation.terminator.wit
+      pop: true
+
+  use-statement:
+    - match: '\b(use)\b'
+      scope: keyword.control.use.wit
+      push: use-body
+
+  use-body:
+    - include: comments
+    - match: '({{ident}})(:)'
+      captures:
+        1: entity.name.namespace.wit
+        2: punctuation.separator.wit
+    - match: '(/)({{ident}})'
+      captures:
+        1: punctuation.separator.wit
+        2: entity.name.namespace.wit
+    - match: '(@)([0-9]+(?:\.[0-9]+)*(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?)'
+      captures:
+        1: keyword.operator.wit
+        2: constant.numeric.version.wit
+    - match: '(\.)(\{)'
+      captures:
+        1: punctuation.accessor.wit
+        2: punctuation.section.block.begin.bracket.curly.wit
+      push: use-items
+    - match: '(\.)({{ident}})'
+      captures:
+        1: punctuation.accessor.wit
+        2: entity.name.type.wit
+    - match: '({{ident}})'
+      scope: entity.name.type.wit
+    - match: ';'
+      scope: punctuation.terminator.wit
+      pop: true
+
+  use-items:
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.bracket.curly.wit
+      pop: true
+    - match: '\b(as)\s+({{ident}})'
+      captures:
+        1: keyword.control.as.wit
+        2: entity.name.type.wit
+    - match: '({{ident}})'
+      scope: entity.name.type.wit
+    - match: ','
+      scope: punctuation.separator.comma.wit
+
+  type-definitions:
+    - include: record
+    - include: enum
+    - include: variant
+    - include: flags
+    - include: resource
+    - include: type-alias
+
+  record:
+    - match: '\b(record)\s+({{ident}})'
+      captures:
+        1: storage.type.record.wit
+        2: entity.name.struct.wit
+      push: record-opening
+
+  record-opening:
+    - include: comments
+    - match: '\{'
+      scope: punctuation.section.block.begin.bracket.curly.wit
+      set: record-body
+
+  record-body:
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.bracket.curly.wit
+      pop: true
+    - match: '({{ident}})\s*(:)'
+      captures:
+        1: variable.other.member.wit
+        2: punctuation.separator.colon.wit
+      push: type-expr
+    - match: ','
+      scope: punctuation.separator.comma.wit
+
+  enum:
+    - match: '\b(enum)\s+({{ident}})'
+      captures:
+        1: storage.type.enum.wit
+        2: entity.name.enum.wit
+      push: enum-opening
+
+  enum-opening:
+    - include: comments
+    - match: '\{'
+      scope: punctuation.section.block.begin.bracket.curly.wit
+      set: enum-body
+
+  enum-body:
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.bracket.curly.wit
+      pop: true
+    - match: '({{ident}})'
+      scope: variable.other.member.wit
+    - match: ','
+      scope: punctuation.separator.comma.wit
+
+  variant:
+    - match: '\b(variant)\s+({{ident}})'
+      captures:
+        1: storage.type.variant.wit
+        2: entity.name.union.wit
+      push: variant-opening
+
+  variant-opening:
+    - include: comments
+    - match: '\{'
+      scope: punctuation.section.block.begin.bracket.curly.wit
+      set: variant-body
+
+  variant-body:
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.bracket.curly.wit
+      pop: true
+    - match: '({{ident}})'
+      scope: variable.other.member.wit
+    - match: '\('
+      scope: punctuation.section.parens.begin.bracket.round.wit
+      push: variant-payload
+    - match: ','
+      scope: punctuation.separator.comma.wit
+
+  variant-payload:
+    - include: comments
+    - match: '\)'
+      scope: punctuation.section.parens.end.bracket.round.wit
+      pop: true
+    - match: ','
+      scope: punctuation.separator.comma.wit
+    - include: type-expr-items
+
+  flags:
+    - match: '\b(flags)\s+({{ident}})'
+      captures:
+        1: storage.type.flags.wit
+        2: entity.name.type.flags.wit
+      push: flags-opening
+
+  flags-opening:
+    - include: comments
+    - match: '\{'
+      scope: punctuation.section.block.begin.bracket.curly.wit
+      set: flags-body
+
+  flags-body:
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.bracket.curly.wit
+      pop: true
+    - match: '({{ident}})'
+      scope: variable.other.member.wit
+    - match: ','
+      scope: punctuation.separator.comma.wit
+
+  resource:
+    - match: '\b(resource)\s+({{ident}})'
+      captures:
+        1: storage.type.resource.wit
+        2: entity.name.type.resource.wit
+      push: resource-opening
+
+  resource-opening:
+    - include: comments
+    - match: '\{'
+      scope: punctuation.section.block.begin.bracket.curly.wit
+      set: resource-body
+    - match: ';'
+      scope: punctuation.terminator.wit
+      pop: true
+
+  resource-body:
+    - include: comments
+    - match: '\}'
+      scope: punctuation.section.block.end.bracket.curly.wit
+      pop: true
+    - include: function-definition
+
+  type-alias:
+    - match: '\b(type)\s+({{ident}})\s*(=)'
+      captures:
+        1: storage.type.type.wit
+        2: entity.name.type.wit
+        3: keyword.operator.assignment.wit
+      push: type-expr
+    - match: ';'
+      scope: punctuation.terminator.wit
+
+  function-definition:
+    - match: '\b(constructor)\b'
+      scope: entity.name.function.constructor.wit
+      push: function-parameters
+    - match: '({{ident}})\s*(:)\s*(?:(static)\s+)?(func)\b'
+      captures:
+        1: entity.name.function.wit
+        2: punctuation.separator.colon.wit
+        3: storage.modifier.static.wit
+        4: keyword.other.func.wit
+      push: function-parameters
+
+  function-parameters:
+    - include: comments
+    - match: '\('
+      scope: punctuation.section.parameters.begin.bracket.round.wit
+      push: parameter-list
+    - match: '->'
+      scope: keyword.operator.arrow.wit
+      push: type-expr
+    - match: ';'
+      scope: punctuation.terminator.wit
+      pop: true
+
+  parameter-list:
+    - include: comments
+    - match: '\)'
+      scope: punctuation.section.parameters.end.bracket.round.wit
+      pop: true
+    - match: '({{ident}})\s*(:)'
+      captures:
+        1: variable.parameter.wit
+        2: punctuation.separator.colon.wit
+      push: type-expr
+    - match: ','
+      scope: punctuation.separator.comma.wit
+
+  type-expr:
+    - include: type-expr-items
+    - match: '(?=[,;\)\}>])'
+      pop: true
+
+  type-params:
+    - include: comments
+    - match: '>'
+      scope: punctuation.section.angle-brackets.end.wit
+      pop: true
+    - match: ','
+      scope: punctuation.separator.comma.wit
+    - include: type-expr-items
+
+  type-expr-items:
+    - include: comments
+    - match: '\b(u8|u16|u32|u64|s8|s16|s32|s64|float32|float64|f32|f64|char|bool|string)\b'
+      scope: support.type.primitive.wit
+    - match: '\b(list|option|result|tuple|borrow|own|stream|future)\b'
+      scope: support.type.wit
+    - match: '<'
+      scope: punctuation.section.angle-brackets.start.wit
+      push: type-params
+    - match: '({{ident}})'
+      scope: entity.name.type.wit
+
+  literals:
+    - match: '"'
+      scope: punctuation.definition.string.begin.wit
+      push: string
+    - match: "'([^'\\\\]|\\\\.)*'"
+      scope: constant.character.wit
+    - match: '\b(true|false)\b'
+      scope: constant.language.boolean.wit
+    - match: '\b0x[0-9a-fA-F_]+\b'
+      scope: constant.numeric.hex.wit
+    - match: '\b[0-9][0-9_]*(\.[0-9][0-9_]*)?([eE][+-]?[0-9_]+)?\b'
+      scope: constant.numeric.wit
+
+  string:
+    - meta_scope: string.quoted.double.wit
+    - match: '\\(?:[nrt\\''"0]|u\{[0-9a-fA-F]+\})'
+      scope: constant.character.escape.wit
+    - match: '"'
+      scope: punctuation.definition.string.end.wit
+      pop: true

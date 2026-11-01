@@ -1,0 +1,412 @@
+//! The window's side of the picker framework (`winter-picker`): opening a
+//! picker over a source, routing keys to it through its key tables, taking
+//! in what its source and matcher sent, carrying out what a row chose, and
+//! keeping the last picker session to resume.
+//!
+//! - [`outcome`]: what a chosen row has the window do.
+//! - `preview`: a live picker's preview in its pane, and the side panel's.
+//! - [`sources`]: one source per picker.
+
+mod open;
+pub(in crate::window) mod outcome;
+mod preview;
+pub(in crate::window) mod sources;
+
+pub(in crate::window) use outcome::WindowOutcome;
+
+pub(in crate::window) use preview::PanelState;
+
+use std::collections::HashMap;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+use winter_model::input::table::find;
+use winter_model::input::Key;
+use winter_model::layout::TabId;
+use winter_picker::{History, Parked, Picker, PreviewKind, Recency, Reply, Source, KEYS};
+
+use crate::window::editor::ActivePick;
+use crate::window::input::overlay::{Overlay, PickerOverlay};
+use crate::window::App;
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+/// How many lines a page key moves before the picker has been drawn, which
+/// is when it says how many it shows.
+const UNDRAWN_LINES: usize = 10;
+
+/// How long a picker opening waits for its first rows before it is drawn
+/// without them: two frames, so a list ready at once never flashes empty.
+const OPENING_PATIENCE: Duration = Duration::from_millis(30);
+
+/// Whether pickers match on the window's thread: under test, so a test never
+/// waits on a matcher's thread.
+const SYNCHRONOUS: bool = cfg!(test);
+
+/// Said when there is no picker session to resume.
+const NOTHING_TO_RESUME: &str = "no picker to resume";
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// What the window keeps of its pickers: each picker's earlier queries and
+/// the use of its rows (both saved across restarts), whether each shows its
+/// side panel, and the last picker session to resume.
+#[derive(Default)]
+pub(in crate::window) struct PickerMemory {
+    pub(in crate::window) history: History,
+    /// Whether each picker's side panel is shown: hidden until `F6` shows it.
+    shown_panels: HashMap<&'static str, bool>,
+    /// The side panel's preview of the selected row, read off the window's
+    /// thread.
+    pub(in crate::window) panel: PanelState,
+    parked: Option<Parked<WindowOutcome>>,
+    pub(in crate::window) recency: Recency,
+}
+
+// ========================================================================
+// PickerMemory
+// ========================================================================
+
+impl PickerMemory {
+    /// What the saved state left: each picker's queries and its rows' use.
+    pub(in crate::window) fn new(history: History, recency: Recency) -> Self {
+        Self {
+            history,
+            recency,
+            ..Self::default()
+        }
+    }
+}
+
+// ========================================================================
+// App: pickers
+// ========================================================================
+
+impl App {
+    // --------------------------------------------------------------------
+    // Opening
+    // --------------------------------------------------------------------
+
+    /// Open a picker over `source`, in place of whatever holds the keyboard.
+    pub(in crate::window) fn open_picker(&mut self, source: Box<dyn Source<WindowOutcome>>) {
+        self.open_picker_answering(source, None);
+    }
+
+    /// Open a picker over `source` that answers an editor's question, which
+    /// is told when it goes unanswered.
+    pub(in crate::window) fn open_picker_answering(
+        &mut self,
+        source: Box<dyn Source<WindowOutcome>>,
+        pick: Option<ActivePick>,
+    ) {
+        let id = source.id();
+        let history = self.pickers.history.of(id).to_vec();
+        let panel = self
+            .pickers
+            .shown_panels
+            .get(id)
+            .copied()
+            .unwrap_or_default();
+        let recency = self.pickers.recency.clone();
+        let mut picker = Box::new(Picker::open(source, history, recency, panel, SYNCHRONOUS));
+        picker.settle(OPENING_PATIENCE);
+        self.pickers.panel.clear();
+        self.open_overlay(Overlay::Picker(Box::new(PickerOverlay { pick, picker })));
+    }
+
+    /// Open the picker `id` builds, or put it away when it is the one open:
+    /// the chord that opens a picker closes it.
+    pub(in crate::window) fn toggle_picker(
+        &mut self,
+        id: &str,
+        build: impl FnOnce(&mut App) -> Option<Box<dyn Source<WindowOutcome>>>,
+    ) {
+        if self.is_picker_open(id) {
+            self.dismiss_overlay();
+            return;
+        }
+        if let Some(source) = build(self) {
+            self.open_picker(source);
+        }
+    }
+
+    /// Whether the picker open is `id`.
+    pub(in crate::window) fn is_picker_open(&self, id: &str) -> bool {
+        self.chrome.picker().is_some_and(|picker| picker.id() == id)
+    }
+
+    /// Open the last picker session closed, as it was.
+    pub(in crate::window) fn resume_picker(&mut self) {
+        let Some(parked) = self.pickers.parked.take() else {
+            self.set_notice(NOTHING_TO_RESUME);
+            return;
+        };
+        let mut picker = Box::new(match sources::rebuild(self, parked.id()) {
+            Some(fresh) => parked.resume_with(fresh),
+            None => parked.resume(),
+        });
+        picker.settle(OPENING_PATIENCE);
+        self.pickers.panel.clear();
+        self.open_overlay(Overlay::Picker(Box::new(PickerOverlay {
+            pick: None,
+            picker,
+        })));
+    }
+
+    // --------------------------------------------------------------------
+    // Keys
+    // --------------------------------------------------------------------
+
+    /// Route `key` to the open picker: its own table first, then the table
+    /// of its source's actions, then the source and the query.
+    pub(in crate::window) fn press_picker_key(&mut self, key: &Key, focused: TabId) {
+        let lines = self.picker_lines();
+        let now = Instant::now();
+        let Some(picker) = self.chrome.picker_mut() else {
+            return;
+        };
+        let reply = match find(&KEYS, key) {
+            Some(act) => picker.act(act, lines, now),
+            None => match sources::action_for(picker.id(), key) {
+                Some(action) => picker.run_action(action),
+                None => picker.key(key, now),
+            },
+        };
+        self.answer_reply(reply, focused);
+    }
+
+    /// Text pasted while a picker is open goes to its query.
+    pub(in crate::window) fn paste_into_picker(&mut self, text: &str) {
+        if let Some(picker) = self.chrome.picker_mut() {
+            picker.paste(text, Instant::now());
+            self.dirty = true;
+        }
+    }
+
+    /// A click on a button of the selected row.
+    pub(in crate::window) fn click_picker_button(&mut self, item: usize, button: usize) {
+        let focused = self.layout().focused();
+        let Some(picker) = self.chrome.picker_mut() else {
+            return;
+        };
+        let view = picker.view();
+        let action = view
+            .rows
+            .get(item)
+            .and_then(|row| row.buttons.get(button))
+            .map(|action| action.id);
+        let Some(action) = action else {
+            return;
+        };
+        let reply = picker.click_button(item, action);
+        self.answer_reply(reply, focused);
+    }
+
+    // --------------------------------------------------------------------
+    // Ticking
+    // --------------------------------------------------------------------
+
+    /// Take in what the open picker's source and matcher sent; when to be
+    /// called again for work waiting on a pause.
+    pub(in crate::window) fn tick_picker(&mut self, now: Instant) -> Option<Instant> {
+        let panel_again = self.take_panel_preview();
+        let focused = self.layout().focused();
+        // Until the picker is drawn, it keeps the lines it opened with rather
+        // than shrinking to a guess and growing back once it is measured.
+        let lines = self.drawn_picker_lines();
+        let picker = self.chrome.picker_mut()?;
+        if let Some(lines) = lines {
+            picker.set_lines(lines);
+        }
+        let kind = picker.preview_kind();
+        let query = picker.query().to_string();
+        let tick = picker.tick(now);
+        if tick.redraw {
+            self.dirty = true;
+        }
+        if let Some(update) = tick.preview {
+            match kind {
+                PreviewKind::Live => self.live_preview(update, &query, focused),
+                PreviewKind::Panel => self.panel_preview(update, &query),
+                PreviewKind::None => {}
+            }
+        }
+        if let Some(outcome) = tick.outcome {
+            self.finish_picker(outcome, focused);
+        }
+        [tick.again, panel_again].into_iter().flatten().min()
+    }
+
+    // --------------------------------------------------------------------
+    // Closing
+    // --------------------------------------------------------------------
+
+    /// The picker `overlay` held went without a choice: a live picker's pane
+    /// goes back to where it was, and the session is kept to resume. The
+    /// question it answered, if any, has been told already.
+    pub(in crate::window) fn picker_dismissed(&mut self, overlay: PickerOverlay) {
+        if overlay.picker.preview_kind() == PreviewKind::Live {
+            let focused = self.layout().focused();
+            self.cancel_jump(focused);
+        }
+        self.keep_picker(*overlay.picker);
+    }
+
+    /// Do what a key or a tick's reply asks.
+    fn answer_reply(&mut self, reply: Reply<WindowOutcome>, focused: TabId) {
+        match reply {
+            Reply::Close => self.dismiss_overlay(),
+            Reply::Consumed => {}
+            Reply::Ignored => return,
+            Reply::Notice(notice) => self.set_notice(notice),
+            Reply::Run(outcome) => self.finish_picker(outcome, focused),
+        }
+        self.dirty = true;
+    }
+
+    /// The picker chose `outcome`: remember the query and the row, close
+    /// the picker keeping its session, and carry the outcome out, an answer
+    /// to whoever asked.
+    fn finish_picker(&mut self, outcome: WindowOutcome, focused: TabId) {
+        let Some(overlay) = self.chrome.take_picker_overlay() else {
+            return;
+        };
+        self.remember_choice(&overlay);
+        let PickerOverlay { pick, picker } = overlay;
+        self.keep_picker(*picker);
+        match outcome {
+            WindowOutcome::AnswerEditor(choice) => {
+                if let Some(pick) = pick {
+                    self.answer_pick(pick, Some(choice));
+                }
+            }
+            outcome => {
+                // A question the picker held but did not answer is told so,
+                // as one put away is.
+                if let Some(pick) = pick {
+                    self.answer_pick(pick, None);
+                }
+                self.carry_out(outcome, focused);
+            }
+        }
+        self.dirty = true;
+    }
+
+    /// Remember the query `overlay`'s picker ran with, and the row chosen,
+    /// for this picker's history and its ranking by use, here and on disk.
+    fn remember_choice(&mut self, overlay: &PickerOverlay) {
+        let picker = &overlay.picker;
+        let id = picker.id();
+        self.pickers.history.record(id, picker.query());
+        let used = picker
+            .selected_row()
+            .and_then(|row| picker.recency_name(row));
+        if let Some(name) = used {
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|elapsed| elapsed.as_secs())
+                .unwrap_or_default();
+            self.pickers.recency.record(id, &name, now);
+        }
+        let (history, recency) = (self.pickers.history.clone(), self.pickers.recency.clone());
+        self.update_app_state(|state| {
+            state.picker_history = history;
+            state.picker_recency = recency;
+        });
+    }
+
+    /// Keep `overlay`'s picker session to resume, and whether its panel
+    /// shows, for the next time it opens.
+    fn keep_picker(&mut self, picker: Picker<WindowOutcome>) {
+        if picker.preview_kind() == PreviewKind::Panel {
+            self.pickers
+                .shown_panels
+                .insert(picker.id(), picker.is_panel_shown());
+        }
+        self.pickers.panel.clear();
+        if let Some(parked) = picker.park() {
+            self.pickers.parked = Some(parked);
+        }
+    }
+
+    /// How many lines of rows the open picker shows, as last drawn.
+    fn picker_lines(&self) -> usize {
+        self.drawn_picker_lines().unwrap_or(UNDRAWN_LINES)
+    }
+
+    /// How many lines of rows the open picker shows, once it has been drawn.
+    fn drawn_picker_lines(&self) -> Option<usize> {
+        self.renderer
+            .as_ref()
+            .and_then(|renderer| renderer.hits().picker_rows())
+    }
+}
+
+// ========================================================================
+// Test support
+// ========================================================================
+
+#[cfg(test)]
+impl App {
+    /// Tick the open picker past every pause it waits on, until its source's
+    /// work is done or a deadline passes; an extension's picker's queries are
+    /// told it each tick, as the event loop tells them.
+    pub(in crate::window) fn settle_picker(&mut self) {
+        let deadline = Instant::now() + SETTLE_PATIENCE;
+        loop {
+            self.tick_picker(Instant::now() + SETTLE_PAST);
+            self.tell_extension_queries();
+            let working = self
+                .chrome
+                .picker()
+                .is_some_and(|picker| picker.view().status == winter_picker::Status::Working);
+            if !working || Instant::now() > deadline {
+                // Once more, past the preview's pause the last tick started.
+                self.tick_picker(Instant::now() + SETTLE_PAST * 2);
+                return;
+            }
+            std::thread::sleep(SETTLE_POLL);
+        }
+    }
+
+    /// Press the keys of `spec`, written as `keybindings.kdl` writes them and
+    /// separated by spaces, into the open picker, settling it after each.
+    pub(in crate::window) fn press_in_picker(&mut self, spec: &str) {
+        let focused = self.layout().focused();
+        for word in spec.split_whitespace() {
+            let keys = winter_model::input::table::keys(word).expect("a key spec");
+            for key in keys {
+                self.press_picker_key(&key, focused);
+                self.settle_picker();
+            }
+        }
+    }
+
+    /// The labels of the open picker's rows on screen.
+    pub(in crate::window) fn picker_labels(&self) -> Vec<String> {
+        self.chrome
+            .picker()
+            .map(|picker| {
+                picker
+                    .view()
+                    .rows
+                    .into_iter()
+                    .map(|row| row.row.label)
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
+/// How far past now a settling tick looks, beyond every pause a picker waits.
+#[cfg(test)]
+const SETTLE_PAST: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// How long settling waits on a source's work, and how often it looks.
+#[cfg(test)]
+const SETTLE_PATIENCE: std::time::Duration = std::time::Duration::from_secs(10);
+#[cfg(test)]
+const SETTLE_POLL: std::time::Duration = std::time::Duration::from_millis(5);

@@ -1,0 +1,22 @@
+[package]
+name = "winter-picker"
+description = "Winter's picker framework: picker sessions over sources of rows, matched on a thread of their own."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["picker", "terminal", "editor", "fuzzy-finder"]
+categories = ["text-editors"]
+rust-version.workspace = true
+
+[features]
+# What the tests of a picker's host build on: a scripted source and keys.
+test-support = []
+
+[dependencies]
+regex.workspace = true
+serde.workspace = true
+winter-base.workspace = true
+winter-model.workspace = true

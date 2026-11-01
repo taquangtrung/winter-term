@@ -1,0 +1,18 @@
+[package]
+name = "winter-wasm"
+description = "Runs Winter extensions built as WebAssembly components, each sandboxed, as extensions compiled in run."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "editor", "extension", "wasm"]
+categories = ["wasm"]
+rust-version.workspace = true
+
+[dependencies]
+wasmparser.workspace = true
+wasmtime.workspace = true
+wasmtime-wasi.workspace = true
+winter-ext-api.workspace = true

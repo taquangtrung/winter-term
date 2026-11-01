@@ -1,0 +1,36 @@
+[package]
+name = "winter-text"
+description = "Winter's text editor: one file as editable text, with Vim and Emacs keys, language servers, completion, and texts compared and merged."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["editor", "vim", "emacs", "terminal"]
+categories = ["text-editors"]
+rust-version.workspace = true
+
+[dependencies]
+flate2 = "1"
+regex.workspace = true
+serde_json.workspace = true
+unicode-width.workspace = true
+winter-base.workspace = true
+winter-emulator.workspace = true
+winter-lsp.workspace = true
+winter-model.workspace = true
+winter-render.workspace = true
+winter-ext-api.workspace = true
+winter-spell.workspace = true
+winter-synctex.workspace = true
+winter-syntax.workspace = true
+winter-vcs.workspace = true
+
+[features]
+# The Markdown preview's key, offered only where Winter draws the preview.
+preview = []
+
+[dev-dependencies]
+winter-lsp = { workspace = true, features = ["test-support"] }
+winter-model = { workspace = true, features = ["test-support"] }
