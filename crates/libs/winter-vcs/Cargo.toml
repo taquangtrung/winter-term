@@ -1,0 +1,20 @@
+[package]
+name = "winter-vcs"
+description = "Version control as Winter's tools share it: git's command lines, reading its output, and watching a working tree."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["git", "vcs", "terminal", "editor"]
+categories = ["development-tools"]
+rust-version.workspace = true
+
+[dependencies]
+notify = "8"
+winter-base.workspace = true
+winter-model.workspace = true
+
+[dev-dependencies]
+winter-model = { workspace = true, features = ["test-support"] }

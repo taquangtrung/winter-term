@@ -1,0 +1,22 @@
+[package]
+name = "winter-git"
+description = "Winter's git view: the working tree's state in a pane, the keys that change it, and the git command lines it runs."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["git", "terminal", "editor", "magit"]
+categories = ["development-tools"]
+rust-version.workspace = true
+
+[dependencies]
+notify = "8"
+winter-base.workspace = true
+winter-model.workspace = true
+winter-render.workspace = true
+winter-vcs.workspace = true
+
+[dev-dependencies]
+winter-model = { workspace = true, features = ["test-support"] }

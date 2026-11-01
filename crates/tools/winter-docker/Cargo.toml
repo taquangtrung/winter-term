@@ -1,0 +1,19 @@
+[package]
+name = "winter-docker"
+description = "Winter's Docker view: the containers, images, volumes, and networks the daemon knows, and what can be done to each."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["docker", "containers", "terminal", "editor"]
+categories = ["command-line-utilities"]
+rust-version.workspace = true
+
+[dependencies]
+winter-base.workspace = true
+winter-model.workspace = true
+
+[dev-dependencies]
+winter-model = { workspace = true, features = ["test-support"] }

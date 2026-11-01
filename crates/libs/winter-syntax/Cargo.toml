@@ -1,0 +1,24 @@
+[package]
+name = "winter-syntax"
+description = "Winter's syntax coloring: which TextMate scopes, the ones VS Code's themes are written against, each run of characters sits in."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["syntax", "highlighting", "textmate", "editor"]
+categories = ["text-editors", "text-processing"]
+rust-version.workspace = true
+include = ["Cargo.toml", "src/**/*.rs", "grammars/*"]
+
+[dependencies]
+# TextMate grammars, the model VS Code themes are written against.
+# Oniguruma rather than the pure-Rust regex engine, which parses about three
+# times slower. The grammars are two-face's, bat's set: syntect's own plus
+# TOML, TypeScript, Nix and the rest, over 200 in all. `yaml-load` reads the
+# few grammars Winter carries itself (KDL).
+syntect = { version = "5.3", default-features = false, features = ["parsing", "regex-onig", "yaml-load"] }
+two-face = { version = "0.5", default-features = false, features = ["syntect-onig"] }
+winter-model.workspace = true
+winter-render.workspace = true

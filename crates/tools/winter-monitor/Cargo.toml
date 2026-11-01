@@ -1,0 +1,19 @@
+[package]
+name = "winter-monitor"
+description = "Winter's monitors: the machine's processes with the actions of a task manager, and its processors, memory, GPUs, and disks."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["process-monitor", "system-monitor", "terminal", "editor"]
+categories = ["command-line-utilities"]
+rust-version.workspace = true
+
+[dependencies]
+serde_json.workspace = true
+winter-model.workspace = true
+
+[dev-dependencies]
+winter-model = { workspace = true, features = ["test-support"] }

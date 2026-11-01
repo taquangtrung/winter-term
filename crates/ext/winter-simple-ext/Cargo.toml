@@ -1,0 +1,21 @@
+[package]
+name = "winter-simple-ext"
+description = "An example Winter extension: counts the words of the file in front and flags its TODO lines as problems."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+
+# Like every extension, it depends on the extension API alone.
+[dependencies]
+winter-ext-api.workspace = true
+# Built as a WebAssembly component, to be installed as a file:
+# `cargo rustc -p winter-simple-ext --features wasm --release
+# --target wasm32-wasip2 --crate-type cdylib`.
+winter-ext-guest = { workspace = true, optional = true }
+
+[features]
+wasm = ["dep:winter-ext-guest"]

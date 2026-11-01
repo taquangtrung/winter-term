@@ -1,0 +1,45 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   version="1.1"
+   viewBox="0 0 32 32"
+   width="32"
+   height="32"
+   id="svg14"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs18" />
+  <title
+     id="title2">folder_type_wit</title>
+  <path
+     d="M27.5,5.5H18.2L16.1,9.7H4.4V26.5H29.6V5.5Zm0,4.2H19.3l1.1-2.1h7.1Z"
+     fill="#155f6c"
+     id="path4" />
+  <g
+     transform="matrix(0.88882,0,0,0.88882,3.4817,3.0448)"
+     id="g12">
+    <path
+       d="m 23.321,10.312 v 0.11138 a 2.3763,2.3763 0 1 1 -4.7526,0 V 10.312 h -7.9851 v 20.733 h 20.733 V 10.312 Z"
+       fill="#2194a8"
+       stroke-width="0.7426"
+       id="path6" />
+    <g
+       aria-label="WIT"
+       transform="scale(0.87405,1.1441)"
+       id="text10"
+       style="font-size:9.1714px;fill:#ffffff;stroke-width:0.76429">
+      <path
+         d="m 19.505665,25.199507 h 1.256482 l 1.384881,-4.805814 1.494938,4.805814 h 1.228968 l 1.852623,-6.364952 h -1.192282 l -1.247311,4.796642 -1.421567,-4.759956 h -1.302338 l -1.37571,4.860842 -1.210625,-4.897528 h -1.348196 z"
+         style="font-weight:bold;font-family:'Segoe UI'"
+         id="path20" />
+      <path
+         d="m 27.503126,25.199507 h 1.201453 v -6.364952 h -1.201453 z"
+         style="font-weight:bold;font-family:'Segoe UI'"
+         id="path22" />
+      <path
+         d="m 31.56605,25.199507 h 1.164768 v -5.328584 h 2.054393 v -1.036368 h -5.264383 v 1.036368 h 2.045222 z"
+         style="font-weight:bold;font-family:'Segoe UI'"
+         id="path24" />
+    </g>
+  </g>
+</svg>

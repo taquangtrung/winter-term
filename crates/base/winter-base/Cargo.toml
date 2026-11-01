@@ -1,0 +1,25 @@
+[package]
+name = "winter-base"
+description = "Winter's OS plumbing: per-user paths, atomic file writes, helper processes, remote places, and waking the event loop."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "paths", "process"]
+categories = ["os"]
+rust-version.workspace = true
+
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+notify = "8"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+winit = "0.30"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1"

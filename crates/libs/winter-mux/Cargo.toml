@@ -1,0 +1,23 @@
+[package]
+name = "winter-mux"
+description = "Winter's multiplexer: sessions that outlive the window, served over a local socket or an SSH bridge, and the client that attaches to them."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "multiplexer", "pty", "tmux", "ssh"]
+categories = ["command-line-utilities"]
+rust-version.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+base64.workspace = true
+portable-pty.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+winter-base.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1"

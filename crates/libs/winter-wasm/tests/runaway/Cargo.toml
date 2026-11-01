@@ -1,0 +1,13 @@
+# A component for the runtime's tests: an extension misbehaving in each way
+# the sandbox must survive. Built by the tests, outside the workspace.
+[package]
+name = "runaway"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+winter-ext-api = { path = "../../../../sdk/winter-ext-api" }
+winter-ext-guest = { path = "../../../../sdk/winter-ext-guest" }
