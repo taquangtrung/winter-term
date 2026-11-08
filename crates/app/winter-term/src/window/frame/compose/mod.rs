@@ -26,6 +26,7 @@ use crate::window::editor::buffers::ScreenSkip;
 use crate::window::input::sequence::WHICH_KEY_DELAY;
 use crate::window::layout::bands::{crumb_bar, PaneBands};
 use crate::window::layout::open_tabs::OpenTabs;
+use crate::window::picker::sources::{color_scout_rows, SCOUT_PICKER};
 use crate::window::strip::StripFrame;
 use crate::window::terminal::blocks::native::{image_placements, refresh_block_textures};
 use crate::window::terminal::command_marks::{self, sticky_block};
@@ -1150,7 +1151,7 @@ impl App {
                     pick.placement == winter_model::editor::PickPlacement::EditorBottom
                 });
             let target_tab = self.chrome.editor_pick().map(|p| p.tab).unwrap_or(focused);
-            let anchor = pane_rect_of(&rects, target_tab);
+            let anchor = pane_rect_of(&bounds, target_tab);
             // An editor's list is drawn on the editor card in its pane, as
             // its menus are; the window's own palette is centred on the
             // window.
@@ -1164,7 +1165,7 @@ impl App {
         // An editor's question opens on the editor card in its pane too,
         // where no transient card was left for it.
         if let (Some(view), Some(prompt)) = (input_view.as_mut(), self.chrome.editor_prompt()) {
-            view.pane = pane_rect_of(&rects, prompt.tab);
+            view.pane = pane_rect_of(&bounds, prompt.tab);
         }
         let overlays = self.build_pane_overlays(&rects, renderer.theme());
         let hovered_pane = self.hovered_pane(&bounds);
@@ -1174,8 +1175,9 @@ impl App {
             .then(|| self.build_status_bar(mode, renderer.theme(), search, notice, &focused));
         let status = status.as_ref();
         let find_view = self.find_popup(&rects);
-        // The key menus are sized to, and centred in, the focused pane.
-        let focused_pane = pane_rect_of(&rects, focused);
+        // The key menus are sized to, and centred in, the focused pane: the
+        // whole of it, its gutter and breadcrumb row too, not just its text.
+        let focused_pane = pane_rect_of(&bounds, focused);
         let transient_view = self.transient_popup(focused);
         // A menu just opened starts where menus open, fitted to its content;
         // one already up keeps where it was dragged and the size it was
@@ -1319,17 +1321,31 @@ impl App {
             match_underline: self.config.palette_match_underline,
             theme,
         };
-        let mut view = self.chrome.picker().map(|picker| {
-            session_view(
-                &picker.view(),
-                &self.pickers.panel,
-                &look,
-                &mut palette_icons,
-            )
-        });
+        let session = self
+            .chrome
+            .picker()
+            .map(|picker| (picker.id(), picker.view()));
+        let mut view = session
+            .as_ref()
+            .map(|(_, shown)| session_view(shown, &self.pickers.panel, &look, &mut palette_icons));
         if let Some(v) = view.as_mut() {
             v.offset = self.chrome.picker_offset;
             v.size = self.chrome.picker_size;
+        }
+        // Scout's rows are drawn in their editor's syntax colors, the rows
+        // shown worked out as they show; ones not reached in time come on
+        // the next frame.
+        if let (Some(v), Some((SCOUT_PICKER, shown)), Some(scout)) =
+            (view.as_mut(), &session, &self.pickers.scout)
+        {
+            let places: Vec<usize> = shown
+                .rows
+                .iter()
+                .map(|row| row.row.key.0 as usize)
+                .collect();
+            if color_scout_rows(&mut self.open_tabs, scout, &places, v, theme) {
+                self.dirty = true;
+            }
         }
         if view.is_none() {
             palette_icons.clear();
@@ -1449,7 +1465,9 @@ pub(super) type Cells = Vec<(usize, usize)>;
 // ========================================================================
 
 /// Where tab `tab`'s pane is on the surface, as `(x, y, w, h)`, when it is
-/// shown among `rects`.
+/// shown among `rects`. The popups an editor opens are placed by its pane's
+/// bounds, so a card or a docked list lines up with the pane's edges rather
+/// than with where its gutter happens to end.
 fn pane_rect_of(rects: &[(TabId, Rect)], tab: TabId) -> Option<(f32, f32, f32, f32)> {
     rects.iter().find(|(id, _)| *id == tab).map(|(_, r)| {
         let pane = App::layout_rect_to_pane(*r);

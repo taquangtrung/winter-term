@@ -14,12 +14,12 @@ use std::ops::RangeInclusive;
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
 use std::sync::Once;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use super::editor::{
     Appearance, Editor, EditorHint, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus,
     JobReply, JumpStep, JumpTarget, Notice, OpenTarget, Page, Popups, PromptReply, ScrollPosition,
-    SearchReport, TokenInspectData, Toolbar,
+    SearchReport, TargetStyles, TokenInspectData, Toolbar,
 };
 use super::input::table::KeyHelp;
 use super::input::Key;
@@ -531,6 +531,10 @@ impl<H: Held> Page for Guarded<H> {
 
     fn jump_targets(&self) -> Option<Vec<JumpTarget>> {
         self.read(|editor| editor.jump_targets())
+    }
+
+    fn jump_styles(&mut self, targets: &[usize], budget: Duration) -> TargetStyles {
+        self.write(|editor| editor.jump_styles(targets, budget))
     }
 
     fn jump_cursor(&self) -> Option<usize> {

@@ -68,6 +68,7 @@ pub(in crate::window) fn session_view(
                 .filter_map(|kind| palette_icon(icons, kind))
                 .collect(),
             description: shown.row.description.clone(),
+            description_colors: Vec::new(),
             description_matches: shown.lit.description.clone(),
             detail: shown.row.detail.clone(),
             detail_matches: shown.lit.detail.clone(),

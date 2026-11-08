@@ -22,6 +22,10 @@ pub struct PickerItem {
     pub description: String,
     /// Char indices in `description` that matched the query.
     pub description_matches: Vec<usize>,
+    /// The colors the description is drawn in, as runs of `(characters,
+    /// color)`, in place of dim: a line of code in its syntax colors.
+    /// Characters past the runs, and every one with none, are drawn dim.
+    pub description_colors: Vec<(usize, Rgb)>,
     /// A second line under the label. Empty for an entry of one line.
     pub detail: String,
     /// Char indices in `detail` that matched the query.
@@ -73,7 +77,8 @@ pub enum PickerPlacement {
     /// Window-wise picker: centered horizontally and vertically in the main window.
     #[default]
     WindowCenter,
-    /// Editor-wise picker: anchored at the bottom of the active editor pane rectangle `(x, y, w, h)`.
+    /// Editor-wise picker: docked along the bottom of the editor's pane `(x, y, w, h)`, its
+    /// gutter included, across the pane's full width.
     EditorBottom((f32, f32, f32, f32)),
     /// A list an editor asked for: the editor card, centred in the editor's
     /// pane `(x, y, w, h)`, as the editor's menus are.

@@ -34,6 +34,7 @@ pub(in crate::window) use extension::{ExtensionChoice, ExtensionSource, PickerLi
 pub(in crate::window) use files::FileSource;
 pub(in crate::window) use listing::{Entry, Listing};
 pub(in crate::window) use locate::LocateSource;
+pub(in crate::window) use scout::{color_scout_rows, ScoutLines, SCOUT_PICKER};
 pub(in crate::window) use search::{ProjectSearch, TodoSearch};
 pub(in crate::window) use typed::Typed;
 

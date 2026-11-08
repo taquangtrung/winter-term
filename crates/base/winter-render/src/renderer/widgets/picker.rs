@@ -20,7 +20,7 @@ use crate::renderer::raster::{
     editor_card_size, font_scale, DIALOG_MIN_WIDTH, DROPDOWN_SHADOW, ICON_GAP_CELLS,
     ICON_HEIGHT_RATIO, PALETTE_ITEM_PAD_Y, POPUP_EDGE_ROOM,
 };
-use crate::theme::Theme;
+use crate::theme::{Rgb, Theme};
 use glyphon::{Color, FontSystem, SwashCache};
 
 // ========================================================================
@@ -613,6 +613,7 @@ pub(in crate::renderer) fn picker_rgba(
             Run {
                 accent: match_color,
                 base: foreground,
+                colors: &[],
                 matches: &item.match_positions,
                 text: &item.label,
                 underline,
@@ -629,6 +630,7 @@ pub(in crate::renderer) fn picker_rgba(
                 Run {
                     accent: match_color,
                     base: muted,
+                    colors: &item.description_colors,
                     matches: &item.description_matches,
                     text: &item.description,
                     underline,
@@ -645,6 +647,7 @@ pub(in crate::renderer) fn picker_rgba(
                 Run {
                     accent: match_color,
                     base: foreground,
+                    colors: &[],
                     matches: &item.detail_matches,
                     text: &item.detail,
                     underline,
@@ -707,6 +710,9 @@ pub(in crate::renderer) fn picker_rgba(
 struct Run<'a> {
     accent: Color,
     base: Color,
+    /// The colors the text is drawn in, as runs of `(characters, color)`, in
+    /// place of `base`; empty for text all in `base`.
+    colors: &'a [(usize, Rgb)],
     matches: &'a [usize],
     text: &'a str,
     underline: bool,
@@ -723,9 +729,14 @@ fn draw_run(
 ) -> i32 {
     let mut buffer = shape_chrome_line(font_system, ctx, run.text, run.base, true, true);
     let width = buffer_width(&buffer).ceil() as i32;
-    match run.matches.is_empty() {
+    match run.matches.is_empty() && run.colors.is_empty() {
         true => frame.draw_text(font_system, swash_cache, &mut buffer, at, run.base),
         false => {
+            let colors: Vec<(usize, Color)> = run
+                .colors
+                .iter()
+                .map(|&(chars, color)| (chars, color.to_glyphon()))
+                .collect();
             let (rgba, canvas) = frame.pixels();
             draw_highlighted_label(
                 font_system,
@@ -735,6 +746,7 @@ fn draw_run(
                 canvas,
                 run.text,
                 run.matches,
+                &colors,
                 run.base,
                 run.accent,
                 run.underline,
@@ -973,6 +985,43 @@ mod tests {
         let expected_y = 50.0 + 700.0 - expected_panel_h - DROPDOWN_SHADOW;
         assert_eq!(image.x, expected_x);
         assert_eq!(image.y, expected_y);
+    }
+
+    #[test]
+    fn test_a_description_is_drawn_in_the_colors_it_carries() {
+        let mut font_system = FontSystem::new();
+        let mut swash = SwashCache::new();
+        let ctx = sample_font_ctx();
+        let theme = Theme::dark();
+        let red = Rgb {
+            r: 255,
+            g: 0,
+            b: 0,
+            a: 255,
+        };
+        let mut draw = |colors: Vec<(usize, Rgb)>| {
+            let mut view = sample_picker("Scout", false);
+            view.items[0].description = "let x = 1;".to_string();
+            view.items[0].description_colors = colors;
+            picker_rgba(
+                &mut font_system,
+                &mut swash,
+                &ctx,
+                &theme,
+                &view,
+                1000.0,
+                800.0,
+            )
+            .rgba
+        };
+        let colored = draw(vec![(3, red)]);
+        assert_ne!(colored, draw(Vec::new()), "the colors change how it reads");
+        let has_red = colored
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .any(|px| px[0] > 200 && px[1] < 60 && px[2] < 60);
+        assert!(has_red, "the first run in its own color");
     }
 
     #[test]

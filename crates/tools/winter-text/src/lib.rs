@@ -93,9 +93,9 @@ use winter_model::editor::{
     self as editor, CommandOutput, Editor, EditorCommand, EditorHint, EditorMenuItem,
     EditorOutcome, EditorRequest, EditorStatus, GitViewRequest, JobReply, JobRequest, JumpStep,
     JumpTarget, Notice, OpenTarget, Page, Popups, PromptMode, PromptReply, PromptRequest,
-    ScrollPosition, SearchReport, COPY_RICH, DIFF_BUFFER, DIFF_CLIPBOARD, DIFF_DISK, LSP_COMMANDS,
-    MERGE_NEXT, MERGE_PREV, MERGE_RESOLVE, PROBLEM_COMMANDS, SAVE_ALL, SYNCTEX_FORWARD,
-    TOGGLE_SWATCHES,
+    ScrollPosition, SearchReport, TargetStyles, COPY_RICH, DIFF_BUFFER, DIFF_CLIPBOARD, DIFF_DISK,
+    LSP_COMMANDS, MERGE_NEXT, MERGE_PREV, MERGE_RESOLVE, PROBLEM_COMMANDS, SAVE_ALL,
+    SYNCTEX_FORWARD, TOGGLE_SWATCHES,
 };
 use winter_model::input::table::KeyHelp;
 use winter_model::input::{Key, KeyCode};
@@ -2432,6 +2432,10 @@ impl Page for TextEditor {
                 .collect();
         }
         Some(targets)
+    }
+
+    fn jump_styles(&mut self, targets: &[usize], budget: Duration) -> TargetStyles {
+        self.target_styles(targets, budget)
     }
 
     fn jump_cursor(&self) -> Option<usize> {

@@ -26,7 +26,7 @@ mod search;
 use std::any::Any;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub use super::notify::Notice;
 
@@ -53,6 +53,7 @@ pub use prompt::{
 pub use search::{
     contains_match, find_match, match_spans, row_search_report, text_regex, JumpStep, JumpTarget,
     SearchHit, SearchOptions, SearchPattern, SearchReport, SearchRequest, SearchResult,
+    TargetStyle, TargetStyles,
 };
 
 // ========================================================================
@@ -775,6 +776,13 @@ pub trait Page: AsAny {
     /// line, a row) a [`JumpStep`] takes.
     fn jump_targets(&self) -> Option<Vec<JumpTarget>> {
         None
+    }
+
+    /// The syntax colors of jump targets `targets`, for a list drawing the
+    /// ones it shows: worked out as `budget` allows, the rest said to be
+    /// pending. Editors whose targets have no colors never implement it.
+    fn jump_styles(&mut self, _targets: &[usize], _budget: Duration) -> TargetStyles {
+        TargetStyles::default()
     }
 
     /// Current cursor row or position index corresponding to target indices

@@ -29,6 +29,7 @@ use winter_picker::{
 use crate::window::editor::ActivePick;
 use crate::window::input::overlay::{Overlay, PickerOverlay};
 use crate::window::App;
+use sources::ScoutLines;
 
 // ========================================================================
 // Constants
@@ -66,6 +67,9 @@ pub(in crate::window) struct PickerMemory {
     pub(in crate::window) panel: PanelState,
     parked: Option<Parked<WindowOutcome>>,
     pub(in crate::window) recency: Recency,
+    /// The editor lines Scout lists, while it is the picker last opened over
+    /// an editor (see [`ScoutLines`]).
+    pub(in crate::window) scout: Option<ScoutLines>,
 }
 
 // ========================================================================

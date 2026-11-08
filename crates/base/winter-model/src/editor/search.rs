@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use regex::{Regex, RegexBuilder};
 
-use crate::paint::IconKind;
+use crate::paint::{IconKind, StyleRun};
 
 // ========================================================================
 // Data Structures
@@ -19,6 +19,26 @@ pub struct JumpTarget {
     /// How the list shows it.
     pub label: String,
     /// The editor's own index for it, as a [`JumpStep`] names it.
+    pub target: usize,
+}
+
+/// What an editor could color of the jump targets a list shows: the syntax
+/// colors of each target's text past its line number.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TargetStyles {
+    /// Whether some targets asked for were not reached in the time given,
+    /// so asking again (the next frame) colors more of them.
+    pub pending: bool,
+    /// The targets colored, in no particular order.
+    pub styles: Vec<TargetStyle>,
+}
+
+/// One jump target's colors.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TargetStyle {
+    /// The colors of its text past its line number, as runs.
+    pub runs: Vec<StyleRun>,
+    /// The target, as [`JumpTarget::target`] names it.
     pub target: usize,
 }
 

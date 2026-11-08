@@ -394,7 +394,9 @@ pub(in crate::renderer) fn composite_buffer(
     );
 }
 /// Render `text` into `rgba` at `offset`, coloring characters listed in
-/// `match_positions` with `accent_color` and the rest with `base_color`.
+/// `match_positions` with `accent_color` and the rest by `colors`, runs of
+/// `(characters, color)` from the start (a line of code in its syntax
+/// colors), past which they take `base_color`.
 /// When `underline` is true, a 1-pixel line is drawn below each matched span.
 #[allow(clippy::too_many_arguments)]
 pub(in crate::renderer) fn draw_highlighted_label(
@@ -405,6 +407,7 @@ pub(in crate::renderer) fn draw_highlighted_label(
     canvas: (u32, u32),
     text: &str,
     match_positions: &[usize],
+    colors: &[(usize, Color)],
     base_color: Color,
     accent_color: Color,
     underline: bool,
@@ -425,6 +428,17 @@ pub(in crate::renderer) fn draw_highlighted_label(
     let family = ui_family(font_system);
     let base_attrs = Attrs::new().family(family).color(base_color).weight(weight);
     let mut attrs_list = glyphon::AttrsList::new(&base_attrs);
+    // The runs' colors first, so a matched character's accent goes over its own.
+    let mut chars = text.char_indices();
+    for &(count, color) in colors {
+        let span = Attrs::new().family(family).color(color).weight(weight);
+        let mut run = chars.by_ref().take(count).peekable();
+        let Some(&(start, _)) = run.peek() else {
+            break;
+        };
+        let end = run.last().map_or(start, |(at, ch)| at + ch.len_utf8());
+        attrs_list.add_span(start..end, &span);
+    }
     let mut matched_bytes: std::collections::HashSet<usize> = std::collections::HashSet::new();
     let mut byte = 0usize;
     for (i, ch) in text.chars().enumerate() {

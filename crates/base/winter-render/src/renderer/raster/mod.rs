@@ -65,14 +65,15 @@ pub(in crate::renderer) fn font_scale(ctx: &super::glyphs::FontCtx) -> f32 {
 /// The editor card's share of its pane, across and down: less of its height
 /// than its width, so a tall pane does not draw a short menu in a tall card.
 const EDITOR_CARD_WIDTH_SHARE: f32 = 0.6;
-const EDITOR_CARD_HEIGHT_SHARE: f32 = 0.5;
+const EDITOR_CARD_HEIGHT_SHARE: f32 = 0.4;
 
 /// The editor card's smallest and largest size at the reference font, in
-/// pixels: tall enough for about ten entries of a list, and no taller.
+/// pixels: tall enough for a menu of about ten entries, or a list of about
+/// eight, and no taller, so a short menu is not drawn in a tall card.
 const EDITOR_CARD_MIN_W: f32 = 480.0;
 const EDITOR_CARD_MAX_W: f32 = 720.0;
-const EDITOR_CARD_MIN_H: f32 = 280.0;
-const EDITOR_CARD_MAX_H: f32 = 420.0;
+const EDITOR_CARD_MIN_H: f32 = 240.0;
+const EDITOR_CARD_MAX_H: f32 = 340.0;
 
 /// The narrowest and shortest an editor card shrinks to in a pane too small
 /// for it, in pixels.

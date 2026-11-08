@@ -432,6 +432,56 @@ fn test_copying_as_rich_text_hands_over_the_painted_lines_and_their_text() {
 }
 
 #[test]
+fn test_a_listed_line_is_colored_for_its_trimmed_text() {
+    // Scout draws a line of code in its syntax colors, cut to the text past
+    // the line's indentation, as the list shows it.
+    let tmp = TempDir::new("jump-colors");
+    let path = tmp.file("a.rs", "fn main() {\n    let x = 1;\n}\n");
+    let mut editor = TextEditor::new(path, None).expect("opens");
+    let styles = editor.jump_styles(&[1], Duration::MAX);
+    assert!(!styles.pending);
+    let line = &styles.styles[0];
+    assert_eq!(line.target, 1);
+    let covered: usize = line.runs.iter().map(|run| run.chars).sum();
+    assert_eq!(
+        covered,
+        "let x = 1;".chars().count(),
+        "the trimmed text, no more"
+    );
+    assert!(
+        line.runs
+            .iter()
+            .any(|run| matches!(run.style, Style::Syntax(_))),
+        "in its syntax colors: {:?}",
+        line.runs
+    );
+}
+
+#[test]
+fn test_only_the_lines_a_list_shows_are_colored() {
+    // A line far below, shown in the list, is colored without coloring the
+    // lines above it: they are only learned.
+    let tmp = TempDir::new("jump-shown");
+    let above = "let a = 1;\n".repeat(300);
+    let path = tmp.file("a.rs", &format!("{above}pub tag: &'static str,\n"));
+    let mut editor = TextEditor::new(path, None).expect("opens");
+    let styles = editor.jump_styles(&[300], Duration::MAX);
+    assert_eq!(styles.styles.len(), 1, "the line far below is colored");
+    assert!(editor.colors_of(150).is_empty(), "a line above it is not");
+}
+
+#[test]
+fn test_a_line_not_reached_in_time_is_pending() {
+    let tmp = TempDir::new("jump-pending");
+    let above = "let a = 1;\n".repeat(3000);
+    let path = tmp.file("a.rs", &format!("{above}let far = 2;\n"));
+    let mut editor = TextEditor::new(path, None).expect("opens");
+    let styles = editor.jump_styles(&[3000], Duration::ZERO);
+    assert!(styles.pending, "asked again, it colors more");
+    assert!(styles.styles.is_empty());
+}
+
+#[test]
 fn test_a_long_line_is_folded_into_rows_that_fit_when_wrapping_and_cut_when_not() {
     let tmp = TempDir::new("wrap-whole");
     let long = "word ".repeat(40);

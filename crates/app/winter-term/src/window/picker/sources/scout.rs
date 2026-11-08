@@ -7,12 +7,17 @@
 //! lines, Dir's entries), each row a line's number and its text, matched on
 //! the text. Going to a row is a jump, recorded so `C-o` comes back.
 
+use std::time::Duration;
+
 use winter_model::editor::JumpTarget;
 use winter_model::layout::TabId;
 use winter_model::mode::Mode;
 use winter_picker::{MatchOn, Preview, PreviewKind, Resume, Row, RowKey};
+use winter_render::{PickerView, Theme};
 
 use super::listing::{Entry, Listing};
+use crate::window::frame::frame_grid::span_rgb;
+use crate::window::layout::open_tabs::OpenTabs;
 use crate::window::picker::WindowOutcome;
 use crate::window::terminal::navigation;
 use crate::window::App;
@@ -24,9 +29,25 @@ use crate::window::App;
 /// Said when the focused tab has no outline.
 const NO_OUTLINE: &str = "nothing to outline here";
 
+/// Scout's picker, by its id.
+pub(in crate::window) const SCOUT_PICKER: &str = "scout";
+
+/// The longest a redraw of Scout spends learning the lines above the rows
+/// it shows, so they can be colored: a jump deep into a large file colors
+/// over a few frames rather than holding one.
+const SCOUT_STYLE_BUDGET: Duration = Duration::from_millis(8);
+
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// The editor tab Scout lists the lines of, and the line each of its rows
+/// is, so the rows shown can be drawn in the editor's syntax colors.
+pub(in crate::window) struct ScoutLines {
+    /// The line each row is, by the row's place in the listing.
+    pub(in crate::window) targets: Vec<usize>,
+    pub(in crate::window) tab: TabId,
+}
 
 /// Scout's listing, and the place each of its rows goes to.
 struct ScoutListing {
@@ -42,7 +63,7 @@ impl App {
     /// Open Scout over the tab `focused`: its lines or its places, the one
     /// the cursor is on selected.
     pub(in crate::window) fn open_scout(&mut self, focused: TabId) {
-        if let Some(slot) = self.open_tabs.page(&focused) {
+        if let Some(slot) = self.open_tabs.page_mut(&focused) {
             let Some(targets) = slot.page.jump_targets() else {
                 return;
             };
@@ -50,9 +71,14 @@ impl App {
             let cursor = slot.page.jump_cursor();
             let listing = scout_listing(title, targets);
             let start = cursor.and_then(|cursor| nearest(&listing.targets, cursor));
+            self.pickers.scout = Some(ScoutLines {
+                targets: listing.targets.clone(),
+                tab: focused,
+            });
             self.open_live(listing.listing, start);
             return;
         }
+        self.pickers.scout = None;
         let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return;
         };
@@ -127,7 +153,7 @@ fn scout_listing(title: String, targets: Vec<JumpTarget>) -> ScoutListing {
         true => MatchOn::LABEL,
         false => MatchOn::DESCRIPTION,
     };
-    let mut listing = Listing::new("scout", title)
+    let mut listing = Listing::new(SCOUT_PICKER, title)
         .placeholder("Text on the line")
         .match_on(on)
         .preview(PreviewKind::Live)
@@ -151,6 +177,38 @@ fn scout_listing(title: String, targets: Vec<JumpTarget>) -> ScoutListing {
         listing,
         targets: places,
     }
+}
+
+/// Draw the rows `view` shows, whose places in Scout's listing are `shown`,
+/// in the colors the editor `scout` lists draws their lines in: only those
+/// rows are colored, each redraw. Whether some were not reached in the time
+/// a redraw gives, so the next redraw colors more.
+pub(in crate::window) fn color_scout_rows(
+    open_tabs: &mut OpenTabs,
+    scout: &ScoutLines,
+    shown: &[usize],
+    view: &mut PickerView,
+    theme: &Theme,
+) -> bool {
+    let Some(slot) = open_tabs.page_mut(&scout.tab) else {
+        return false;
+    };
+    let lines: Vec<usize> = shown
+        .iter()
+        .filter_map(|&at| scout.targets.get(at).copied())
+        .collect();
+    let styles = slot.page.jump_styles(&lines, SCOUT_STYLE_BUDGET);
+    for (item, line) in view.items.iter_mut().zip(&lines) {
+        let Some(found) = styles.styles.iter().find(|style| style.target == *line) else {
+            continue;
+        };
+        item.description_colors = found
+            .runs
+            .iter()
+            .map(|run| (run.chars, span_rgb(run.style, theme)))
+            .collect();
+    }
+    styles.pending
 }
 
 /// A target's label taken apart: the line number it leads with, and the

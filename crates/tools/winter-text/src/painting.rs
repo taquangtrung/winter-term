@@ -3,8 +3,8 @@
 
 use std::time::Duration;
 
-use winter_model::editor::EditorOutcome;
-use winter_model::paint::{GutterLane, GutterMark, Row, Span, Style, TAB_WIDTH};
+use winter_model::editor::{EditorOutcome, TargetStyle, TargetStyles};
+use winter_model::paint::{GutterLane, GutterMark, Row, Span, Style, StyleRun, TAB_WIDTH};
 
 use super::{guides, runs, swatch, Cell, TextEditor};
 
@@ -227,6 +227,57 @@ impl TextEditor {
             .get(index)
             .and_then(Option::as_deref)
             .unwrap_or_default()
+    }
+
+    /// The syntax colors of lines `rows`, for a list showing them (scout),
+    /// each cut to its text past its indentation. Only those lines are
+    /// colored: the lines above the deepest are learned (the cheap pass, no
+    /// colors) as far as `budget` allows, and a line not reached by then is
+    /// left pending for the next ask.
+    pub(super) fn target_styles(&mut self, rows: &[usize], budget: Duration) -> TargetStyles {
+        let Some(&deepest) = rows.iter().max() else {
+            return TargetStyles::default();
+        };
+        let doc = self.doc_mut();
+        if doc.grammar.is_none() {
+            return TargetStyles::default();
+        }
+        doc.color_upto = doc.color_upto.max(deepest);
+        doc.learn_states(budget);
+        for &row in rows {
+            doc.color_lines(row, row + 1);
+        }
+        let mut styles = TargetStyles::default();
+        for &row in rows {
+            let Some(line) = self.buffer().lines().get(row) else {
+                continue;
+            };
+            if self.colors_of(row).is_empty() {
+                styles.pending |= !line.is_empty();
+                continue;
+            }
+            let text = line.trim();
+            let lead = line.chars().take_while(|c| c.is_whitespace()).count();
+            styles.styles.push(TargetStyle {
+                runs: self.style_runs(row, lead, text.chars().count()),
+                target: row,
+            });
+        }
+        styles
+    }
+
+    /// The colors of `chars` characters of line `index` from character
+    /// `from`, as runs, from what has been worked out: none for a line not
+    /// colored yet.
+    pub(super) fn style_runs(&self, index: usize, from: usize, chars: usize) -> Vec<StyleRun> {
+        let mut runs: Vec<StyleRun> = Vec::new();
+        for &style in self.colors_of(index).iter().skip(from).take(chars) {
+            match runs.last_mut() {
+                Some(run) if run.style == style => run.chars += 1,
+                Some(_) | None => runs.push(StyleRun { chars: 1, style }),
+            }
+        }
+        runs
     }
 
     /// The lines a selection covers, or the whole file, as painted rows and

@@ -352,6 +352,7 @@ fn draw_row(
                 canvas,
                 &item.label,
                 &item.match_positions,
+                &[],
                 foreground,
                 match_color,
                 view.match_underline,

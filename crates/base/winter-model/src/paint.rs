@@ -314,6 +314,17 @@ pub struct Skipped {
     pub rows: usize,
 }
 
+/// A run of characters sharing one style, kept apart from the text it
+/// colors: how a line's syntax colors travel with a copy of its text (a
+/// picker row) without the text twice.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct StyleRun {
+    /// How many characters the run covers.
+    pub chars: usize,
+    /// How they are colored.
+    pub style: Style,
+}
+
 /// A run of text sharing one style.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Span {

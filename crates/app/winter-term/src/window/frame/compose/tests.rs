@@ -657,3 +657,23 @@ fn test_the_scrollbar_the_keyboard_scrolled_is_lit_wherever_the_pointer_rests() 
     let lit = LitScrollbars::resolve(None, Some(editor), Some(other), Some(other), other);
     assert_eq!((lit.active, lit.hovered), (Some(other), None));
 }
+
+#[test]
+fn test_scout_draws_the_rows_it_shows_in_their_syntax_colors() {
+    let dir = std::env::temp_dir().join(format!("winter-scout-colors-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let file = dir.join("a.rs");
+    std::fs::write(&file, "fn main() {\n    let x = 1;\n}\n").expect("temp file");
+    let editor = winter_text::TextEditor::new(file, None).expect("opens");
+    let mut app = App::new();
+    let tab = app.show_editor(editor::EditorKind::Text, Box::new(editor));
+    app.open_scout(tab);
+    let view = app.palette_popup().expect("Scout is up");
+    assert!(
+        view.items
+            .iter()
+            .all(|item| !item.description_colors.is_empty()),
+        "every line shown is in its colors"
+    );
+    let _ = std::fs::remove_dir_all(dir);
+}
