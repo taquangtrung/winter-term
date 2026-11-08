@@ -1,5 +1,6 @@
 //! Cell decorations drawn in the background pass: underlines in each SGR 4
-//! style, the overline, and the strikethrough bar. The curly underline (a
+//! style, the overline, the strikethrough bar, and an editor's indentation
+//! guides. The curly underline (a
 //! problem's squiggle, SGR `4:3`) is a smooth anti-aliased wave drawn
 //! through the dot pipeline; the rest are bars.
 
@@ -9,6 +10,7 @@ use super::super::colors::grid_color_to_rgb;
 use super::cell_color::lerp_to_bg;
 use super::{quad_vertices, BgVertex, DotVertex};
 use crate::theme::Theme;
+use crate::INDENT_GUIDE;
 use winter_emulator::{Cell, Color as GridColor, UnderlineStyle};
 
 // ========================================================================
@@ -21,6 +23,11 @@ const UNDERLINE_THICKNESS: f32 = 1.0;
 const UNDERLINE_BOTTOM_OFFSET: f32 = 2.0;
 /// Height of the strikethrough bar drawn for SGR 9.
 const STRIKETHROUGH_THICKNESS: f32 = 1.0;
+/// Width of an indentation guide's line, as thin as an underline, and how
+/// far it stands in from its cell's left edge, so it clears the glyph of
+/// the column before it.
+const INDENT_GUIDE_THICKNESS: f32 = 1.0;
+const INDENT_GUIDE_INSET: f32 = 1.0;
 /// Distance from the top of a cell to the top of its overline bar (SGR 53).
 const OVERLINE_TOP_OFFSET: f32 = 1.0;
 /// Space between the two bars of a double underline.
@@ -120,12 +127,29 @@ pub(super) fn push_decorations(
             ));
         }
     }
+    // The glyph's foreground color, which a strikethrough and a guide take.
+    let text_color = match cell.style.foreground {
+        GridColor::Default => style.theme.foreground.as_linear(),
+        foreground => grid_color_to_rgb(&foreground, style.theme),
+    };
+    // An indentation guide: a hairline just in from the cell's left edge,
+    // where the indented text of its level starts, the full row tall, so the rows of a
+    // block join into one line.
+    if cell.ch == INDENT_GUIDE {
+        let px_left = (x0 + INDENT_GUIDE_INSET).round();
+        out.extend_from_slice(&quad_vertices(
+            px_left,
+            row_top,
+            px_left + INDENT_GUIDE_THICKNESS,
+            row_top + ch,
+            fade(text_color),
+            surface_w,
+            surface_h,
+        ));
+    }
     if cell.style.strikethrough {
         // Through the middle of the cell, in the glyph's foreground color.
-        let strike_color = match cell.style.foreground {
-            GridColor::Default => style.theme.foreground.as_linear(),
-            foreground => grid_color_to_rgb(&foreground, style.theme),
-        };
+        let strike_color = text_color;
         let py_top = row_top + (ch - STRIKETHROUGH_THICKNESS) / 2.0;
         out.extend_from_slice(&quad_vertices(
             x0,
@@ -349,6 +373,60 @@ mod tests {
             dots.iter().all(|dot| dot.u == 0.0 && dot.v.abs() == 1.0),
             "feathered across, not along"
         );
+    }
+
+    #[test]
+    fn test_an_indentation_guide_is_a_hairline_the_cell_s_full_height() {
+        // A line one pixel wide down the cell's left edge, whatever the
+        // font's box lines are, and the row's full height so a block's rows
+        // join.
+        let theme = Theme::default();
+        let style = DecorationStyle {
+            bg_lin: (0.0, 0.0, 0.0),
+            dim: false,
+            hovered_link: 0,
+            surface: (100.0, 100.0),
+            theme: &theme,
+            url_underline: false,
+        };
+        let cell = Cell {
+            ch: INDENT_GUIDE,
+            ..Cell::default()
+        };
+        let (mut out, mut dots) = (Vec::new(), Vec::new());
+        push_decorations(&mut out, &mut dots, &cell, (10.0, 20.0, 9.0, 18.0), &style);
+        assert_eq!(out.len(), 6, "one quad");
+        let to_px = |vertex: &BgVertex| ((vertex.x + 1.0) * 50.0, (1.0 - vertex.y) * 50.0);
+        let xs: Vec<f32> = out.iter().map(|v| to_px(v).0).collect();
+        let ys: Vec<f32> = out.iter().map(|v| to_px(v).1).collect();
+        let width = xs.iter().cloned().fold(f32::MIN, f32::max)
+            - xs.iter().cloned().fold(f32::MAX, f32::min);
+        let left = xs.iter().cloned().fold(f32::MAX, f32::min);
+        assert!(
+            (left - (10.0 + INDENT_GUIDE_INSET)).abs() < 1e-3,
+            "just in from the cell's left edge, got {left}"
+        );
+        let top = ys.iter().cloned().fold(f32::MAX, f32::min);
+        let bottom = ys.iter().cloned().fold(f32::MIN, f32::max);
+        assert!(
+            (width - INDENT_GUIDE_THICKNESS).abs() < 1e-3,
+            "one pixel wide, got {width}"
+        );
+        assert!(
+            (top - 20.0).abs() < 1e-3 && (bottom - 38.0).abs() < 1e-3,
+            "the row's height"
+        );
+
+        let plain = Cell::default();
+        let mut none = Vec::new();
+        push_decorations(
+            &mut none,
+            &mut dots,
+            &plain,
+            (10.0, 20.0, 9.0, 18.0),
+            &style,
+        );
+        assert!(none.is_empty(), "a plain cell draws no line");
     }
 
     #[test]

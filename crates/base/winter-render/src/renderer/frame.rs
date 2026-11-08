@@ -30,6 +30,7 @@ use crate::glyph_quad::GlyphQuadPlacement;
 use crate::image::ImagePlacement;
 use crate::tabbar::TopTabbar;
 use crate::theme::Rgb;
+use crate::INDENT_GUIDE;
 use glyphon::{Attrs, BufferLine, Color, Shaping, TextArea, TextBounds};
 use wgpu::{
     Buffer, LoadOp, RenderPass, RenderPassColorAttachment, RenderPassDescriptor, RenderPipeline,
@@ -670,7 +671,10 @@ impl GpuRenderer {
                 // layer doesn't draw a misaligned, proportionally-shaped
                 // fallback on top of it. When the font has braille, keep it
                 // so the font renders it directly (crisp and anti-aliased).
-                let ch = if label_char.is_none() && !self.fonts.font_has_braille && is_braille(raw)
+                // An indentation guide is drawn as a line in the background
+                // pass too, never as a glyph.
+                let ch = if label_char.is_none()
+                    && ((!self.fonts.font_has_braille && is_braille(raw)) || raw == INDENT_GUIDE)
                 {
                     ' '
                 } else {

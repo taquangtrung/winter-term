@@ -6,6 +6,7 @@
 //! through the blank lines inside it.
 
 use winter_model::paint::{Style, TAB_WIDTH};
+use winter_render::INDENT_GUIDE;
 
 use super::Cell;
 
@@ -23,9 +24,6 @@ const MAX_STEP: usize = 8;
 
 /// A level the file gives no clue of, as the editor indents by.
 const DEFAULT_STEP: usize = 4;
-
-/// What a guide is drawn with.
-const GUIDE: char = '│';
 
 // ========================================================================
 // Functions
@@ -52,7 +50,7 @@ pub(super) fn mark(cells: &mut Vec<Cell>, columns: &[usize]) {
     }
     for col in columns {
         if let Some(cell) = cells.get_mut(*col).filter(|cell| cell.0 == ' ') {
-            cell.0 = GUIDE;
+            cell.0 = INDENT_GUIDE;
             cell.1 = Style::IndentGuide;
         }
     }
@@ -142,9 +140,16 @@ mod tests {
             .collect();
         mark(&mut cells, &[0, 2]);
         let drawn: String = cells.iter().map(|cell| cell.0).collect();
-        assert_eq!(drawn, "│ x", "the text keeps its cell");
+        assert_eq!(
+            drawn,
+            format!("{INDENT_GUIDE} x"),
+            "the text keeps its cell"
+        );
         let mut blank: Vec<Cell> = Vec::new();
         mark(&mut blank, &[0, 4]);
-        assert_eq!(blank.iter().map(|cell| cell.0).collect::<String>(), "│   │");
+        assert_eq!(
+            blank.iter().map(|cell| cell.0).collect::<String>(),
+            format!("{INDENT_GUIDE}   {INDENT_GUIDE}")
+        );
     }
 }

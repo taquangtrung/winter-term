@@ -951,6 +951,33 @@ fn test_the_function_the_view_is_inside_is_pinned_over_its_top_dim() {
 }
 
 #[test]
+fn test_a_pinned_line_s_guides_keep_their_color_while_its_text_recedes() {
+    let tmp = TempDir::new("sticky-guides");
+    let body: String = (0..40)
+        .map(|at| format!("        let x{at} = {at};\n"))
+        .collect();
+    let text = format!("fn outer() {{\n    fn inner() {{\n{body}    }}\n}}\n");
+    let path = tmp.file("main.rs", &text);
+    let mut editor = TextEditor::new(path, None).expect("opens");
+    editor.buffer_mut().move_to_line(30);
+    let frame = editor.content(12, 60, false);
+    let inner = frame
+        .rows
+        .iter()
+        .take(2)
+        .find(|row| row.iter().any(|span| span.text.contains("fn inner")))
+        .expect("the inner function pinned");
+    assert!(
+        inner.iter().any(|span| span.style == Style::IndentGuide),
+        "its guide as in the lines under it: {inner:?}"
+    );
+    assert!(inner
+        .iter()
+        .filter(|span| span.style != Style::IndentGuide)
+        .all(|span| span.style == Style::Dim));
+}
+
+#[test]
 fn test_the_file_s_changes_since_its_last_commit_are_marked_ahead_of_its_numbers() {
     let tmp = TempDir::new("git-changes");
     let mut editor = tmp.editor("one\nTWO\nthree\nfour\n");

@@ -127,6 +127,13 @@ pub const POPUP_INPUT_HEIGHT_RANGE: (f32, f32) = (1.0, 4.0);
 /// as an editor's icons, can fade by the same amount.
 pub const DIM_FACTOR: f32 = 0.4;
 
+/// The character an editor paints an indentation guide's cell with: a
+/// Unicode noncharacter, which text never holds, so a program's own `│` is
+/// never mistaken for one. The renderer draws it as a hairline down the
+/// cell's left edge, not as a font's glyph, whose stroke is as thick as
+/// the font draws box lines and grows with a glyph scaled to fill the cell.
+pub const INDENT_GUIDE: char = '\u{FDD0}';
+
 /// How opaque the two alternating tones of a sentence band are, over the
 /// background in the cursor line's hue: low and close together, so the bands
 /// read as a subtle rhythm rather than a zebra stripe. A terminal's sentences

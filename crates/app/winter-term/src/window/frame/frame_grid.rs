@@ -22,6 +22,11 @@ const PAGE_DIFF_LINE_MIX: f32 = 0.15;
 /// the way a diff editor's word highlight sits on top of its line one.
 const PAGE_DIFF_EDIT_MIX: f32 = 0.38;
 
+/// How far an indentation guide's line is blended from the divider color
+/// toward the background: dimmer than the lines between panes, so the
+/// guides sit behind the code rather than beside it.
+const INDENT_GUIDE_MIX: f32 = 0.4;
+
 /// How far a hunk header's band is blended toward the theme's blue: darker
 /// than a file's band, so the hunk reads as sitting under its file.
 const PAGE_HUNK_MIX: f32 = 0.22;
@@ -447,9 +452,9 @@ fn span_style(style: paint::Style, theme: &Theme) -> Style {
             foreground: mix_rgb(theme.foreground, theme.background, PAGE_DIM_MIX),
             ..Style::default()
         },
-        // An indentation guide, as faint as the lines between panes.
+        // An indentation guide, fainter than the lines between panes.
         paint::Style::IndentGuide => Style {
-            foreground: theme_rgb(theme.divider),
+            foreground: mix_rgb(theme.divider, theme.background, INDENT_GUIDE_MIX),
             ..Style::default()
         },
         // A name changed in place, flagged with the selection's background.

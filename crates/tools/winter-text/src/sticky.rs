@@ -118,7 +118,11 @@ impl TextEditor {
                 continue;
             };
             for span in &mut painted {
-                span.style = Style::Dim;
+                // The text recedes; an indentation guide is already faint and
+                // keeps the color it has in the lines under it.
+                if span.style != Style::IndentGuide {
+                    span.style = Style::Dim;
+                }
                 span.lit = false;
                 span.selected = false;
                 span.squiggle = None;
