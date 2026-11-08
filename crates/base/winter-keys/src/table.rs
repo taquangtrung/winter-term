@@ -353,7 +353,7 @@ fn starts_with(chords: &[Key], typed: &[Key]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::input::KeyCode;
+    use crate::KeyCode;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum Act {

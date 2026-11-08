@@ -25,7 +25,7 @@ const GROUP_ARROW: &str = " \u{2192}";
 /// would shadow or be shadowed by, so a prefix is never also a command and a
 /// lookup can always tell whether to run, wait, or give up.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub(crate) struct SequenceMap {
+pub struct SequenceMap {
     entries: Vec<SequenceEntry>,
 }
 
@@ -38,7 +38,7 @@ struct SequenceEntry {
 
 /// What the keys typed so far amount to.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum SequenceMatch<'a> {
+pub enum SequenceMatch<'a> {
     /// They are a whole binding: run the command named here.
     Exact(&'a str),
     /// No binding starts with them.
@@ -54,7 +54,7 @@ pub(crate) enum SequenceMatch<'a> {
 impl SequenceMap {
     /// Bind `keys` to `name`, dropping every binding that shares a prefix
     /// with it: the same keys, a sequence it starts, or one that starts it.
-    pub(crate) fn bind(&mut self, keys: Vec<Key>, name: String) {
+    pub fn bind(&mut self, keys: Vec<Key>, name: String) {
         self.entries.retain(|entry| {
             !entry
                 .keys
@@ -67,7 +67,7 @@ impl SequenceMap {
 
     /// Drop every binding whose first chord is `key`, for a chord being bound
     /// on its own: a key that runs a command cannot also open a sequence.
-    pub(crate) fn unbind_leader(&mut self, key: &Key) {
+    pub fn unbind_leader(&mut self, key: &Key) {
         self.entries.retain(|entry| {
             !entry
                 .keys
@@ -78,12 +78,12 @@ impl SequenceMap {
 
     /// Drop every binding whose command `is_rebound` claims, for a command
     /// being rebound (under any of its names).
-    pub(crate) fn unbind_commands(&mut self, is_rebound: impl Fn(&str) -> bool) {
+    pub fn unbind_commands(&mut self, is_rebound: impl Fn(&str) -> bool) {
         self.entries.retain(|entry| !is_rebound(&entry.name));
     }
 
     /// Whether any binding opens with `key`, as typed.
-    pub(crate) fn has_leader(&self, key: &Key) -> bool {
+    pub fn has_leader(&self, key: &Key) -> bool {
         self.entries.iter().any(|entry| {
             entry
                 .keys
@@ -93,7 +93,7 @@ impl SequenceMap {
     }
 
     /// The keys bound to `name`, if any.
-    pub(crate) fn keys_for(&self, name: &str) -> Option<&[Key]> {
+    pub fn keys_for(&self, name: &str) -> Option<&[Key]> {
         self.entries
             .iter()
             .find(|entry| entry.name == name)
@@ -101,7 +101,7 @@ impl SequenceMap {
     }
 
     /// What `typed` amounts to against these bindings.
-    pub(crate) fn lookup(&self, typed: &[Key]) -> SequenceMatch<'_> {
+    pub fn lookup(&self, typed: &[Key]) -> SequenceMatch<'_> {
         let mut is_prefix = false;
         for entry in self
             .entries
@@ -123,7 +123,7 @@ impl SequenceMap {
     /// command it completes, as `label` words its name, or for a key that
     /// opens a longer sequence, the categories of the commands it leads to
     /// and [`GROUP_ARROW`] (`"Git, Window \u{2192}"`).
-    pub(crate) fn continuations(
+    pub fn continuations(
         &self,
         typed: &[Key],
         label: impl Fn(&str) -> String,

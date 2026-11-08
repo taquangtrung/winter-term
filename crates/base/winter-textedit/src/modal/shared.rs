@@ -10,10 +10,11 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::input::Key;
-use crate::textedit::buffer::Register;
-use crate::textedit::kill::KillRing;
-use crate::textedit::search::Search;
+use winter_keys::Key;
+
+use crate::buffer::Register;
+use crate::kill::KillRing;
+use crate::search::Search;
 
 // ========================================================================
 // Data Structures

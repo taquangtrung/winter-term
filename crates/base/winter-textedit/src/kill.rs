@@ -3,7 +3,7 @@
 
 use std::collections::VecDeque;
 
-use crate::textedit::buffer::Register;
+use crate::buffer::Register;
 
 // ========================================================================
 // Constants

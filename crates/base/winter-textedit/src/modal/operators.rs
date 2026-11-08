@@ -1,11 +1,12 @@
 //! Operators, and the motions and text objects that say how far they reach.
 
-use crate::editor::Notice;
-use crate::input::{Key, KeyCode, Mods, TextObject};
-use crate::textedit::buffer::Register;
-use crate::textedit::kill::Merge;
+use winter_keys::{Key, KeyCode, Mods};
+use winter_notify::Notice;
+
+use crate::buffer::Register;
+use crate::kill::Merge;
 use crate::vim::grammar::{OperatorKind, MAX_COUNT};
-use crate::vim::motion::CursorMove;
+use crate::vim::motion::{CursorMove, TextObject};
 use crate::vim::nav::bare_motion;
 use crate::vim::objects::{
     bracket_object, paragraph_object, quote_object, sentence_object, word_object, Span,

@@ -2,11 +2,12 @@
 //! places that are not a file: a one-line answer to a question, or a column of
 //! names, one per listed entry, being renamed in place.
 
-use crate::editor::Notice;
-use crate::input::Key;
-use crate::paint::Shown;
-use crate::textedit::buffer::TextBuffer;
-use crate::textedit::modal::{EditMode, EditOutcome, EditView, Marks, ModalEditor};
+use winter_keys::Key;
+use winter_notify::Notice;
+
+use crate::buffer::TextBuffer;
+use crate::modal::{EditMode, EditOutcome, EditView, Marks, ModalEditor};
+use crate::place::Shown;
 
 // ========================================================================
 // Data Structures
@@ -150,7 +151,7 @@ impl TextField {
 mod tests {
     use super::*;
 
-    use crate::input::KeyCode;
+    use winter_keys::KeyCode;
 
     fn key(code: KeyCode) -> Key {
         Key {

@@ -1,7 +1,9 @@
 //! The key a part-typed command was waiting on.
 
-use crate::editor::Notice;
-use crate::input::{Key, KeyCode, MacroStep, Mods};
+use winter_keys::{Key, KeyCode, Mods};
+use winter_notify::Notice;
+
+use crate::vim::grammar::MacroStep;
 use crate::vim::grammar::{
     is_register_name, is_settable_mark, mark_name, table_entry, BLACK_HOLE_REGISTER, GOTO_MOTIONS,
     JUMP_MARK, LINE_PLACEMENTS,

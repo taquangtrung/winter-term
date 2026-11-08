@@ -1,8 +1,9 @@
 //! Searching, and moving the cursor by motions.
 
-use crate::editor::Notice;
-use crate::paint::Place;
-use crate::textedit::search::Search;
+use winter_notify::Notice;
+
+use crate::place::Place;
+use crate::search::Search;
 use crate::vim::motion::CursorMove;
 use crate::vim::objects::word_object;
 

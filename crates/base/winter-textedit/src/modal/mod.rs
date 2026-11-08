@@ -32,12 +32,15 @@ mod visual;
 
 use std::collections::HashMap;
 
-use crate::editor::{EditorStatus, Notice, SearchReport};
-use crate::input::{Key, KeyCode, MacroStep, Mods};
-use crate::paint::{Place, Shown};
-use crate::textedit::buffer::{Register, TextBuffer};
-use crate::textedit::search::Search;
-use crate::vim::grammar::{OperatorKind, BLACK_HOLE_REGISTER, GOTO_MOTIONS, LINE_PLACEMENTS};
+use winter_keys::{Key, KeyCode, Mods};
+use winter_notify::Notice;
+
+use crate::buffer::{Register, TextBuffer};
+use crate::place::{Place, Shown};
+use crate::search::{Search, SearchReport};
+use crate::vim::grammar::{
+    MacroStep, OperatorKind, BLACK_HOLE_REGISTER, GOTO_MOTIONS, LINE_PLACEMENTS,
+};
 use crate::vim::motion::{CursorMove, FindChar};
 use crate::vim::nav::VimNav;
 
@@ -71,6 +74,19 @@ const READ_ONLY_MESSAGE: &str = "buffer is read-only";
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// What an editor puts in the window's status bar while it has the keyboard:
+/// where the keys stand, rather than what the editor shows. What the editor
+/// shows stays in its own rows.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EditorStatus {
+    /// The editor's own mode, drawn where a terminal's is. `None` for an editor
+    /// with no mode of its own, which the bar marks as an editor.
+    pub mode: Option<EditMode>,
+    /// Short facts about where the cursor is and what is part-typed, drawn
+    /// at the bar's right edge in order: `12:5`, `340 lines`, `"a`.
+    pub segments: Vec<String>,
+}
 
 /// Which of the modes has the keyboard.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]

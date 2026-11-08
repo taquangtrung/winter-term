@@ -36,7 +36,7 @@ use super::input::table::KeyHelp;
 use super::input::{Key, MacroStep};
 use super::paint::{Caret, ColumnName, Frame, GutterLane, IconKind, Point, Row};
 use super::picture::{Picture, Tile};
-use super::textedit::modal::EditMode;
+pub use super::textedit::modal::EditorStatus;
 
 pub use commands::*;
 pub use compare::{CompareRequest, DiffMerge, DiffRequest, DiffText, FileShape, GitViewRequest};
@@ -82,19 +82,6 @@ pub struct EditorHint {
     pub menu: bool,
     /// What the sequence is called, shown as the hint's heading.
     pub title: String,
-}
-
-/// What an editor puts in the window's status bar while it has the keyboard:
-/// where the keys stand, rather than what the editor shows. What the editor
-/// shows stays in its own rows.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct EditorStatus {
-    /// The editor's own mode, drawn where a terminal's is. `None` for an editor
-    /// with no mode of its own, which the bar marks as an editor.
-    pub mode: Option<EditMode>,
-    /// Short facts about where the cursor is and what is part-typed, drawn
-    /// at the bar's right edge in order: `12:5`, `340 lines`, `"a`.
-    pub segments: Vec<String>,
 }
 
 /// A file's text as the editor holding it has it, for a view following it

@@ -1,7 +1,8 @@
 //! Normal mode: the keys that move, edit in place, and open commands.
 
-use crate::editor::Notice;
-use crate::input::{Key, KeyCode, Mods};
+use winter_keys::{Key, KeyCode, Mods};
+use winter_notify::Notice;
+
 use crate::vim::grammar::{operator_of, push_count_digit, OperatorKind};
 use crate::vim::nav::VimKey;
 

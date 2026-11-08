@@ -1,10 +1,11 @@
 //! Insert and Replace: the Emacs keys of typing, and writing over text.
 
-use crate::editor::Notice;
-use crate::input::{Key, KeyCode, Mods};
-use crate::paint::Place;
-use crate::textedit::buffer::{TextBuffer, WordCase};
-use crate::textedit::kill::Merge;
+use winter_keys::{Key, KeyCode, Mods};
+use winter_notify::Notice;
+
+use crate::buffer::{TextBuffer, WordCase};
+use crate::kill::Merge;
+use crate::place::Place;
 use crate::vim::words::prev_word_start;
 
 use super::{

@@ -7021,6 +7021,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "winter-keys"
+version = "0.1.0"
+
+[[package]]
 name = "winter-lsp"
 version = "0.1.0"
 dependencies = [
@@ -7039,7 +7043,10 @@ dependencies = [
  "winter-base",
  "winter-emulator",
  "winter-ext-api",
+ "winter-keys",
+ "winter-notify",
  "winter-render",
+ "winter-textedit",
 ]
 
 [[package]]
@@ -7062,6 +7069,10 @@ dependencies = [
  "uds_windows",
  "winter-base",
 ]
+
+[[package]]
+name = "winter-notify"
+version = "0.1.0"
 
 [[package]]
 name = "winter-pdf"
@@ -7251,6 +7262,16 @@ dependencies = [
  "winter-synctex",
  "winter-syntax",
  "winter-vcs",
+]
+
+[[package]]
+name = "winter-textedit"
+version = "0.1.0"
+dependencies = [
+ "unicode-segmentation",
+ "unicode-width 0.1.14",
+ "winter-keys",
+ "winter-notify",
 ]
 
 [[package]]

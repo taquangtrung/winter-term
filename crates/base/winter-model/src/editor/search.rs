@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use regex::{Regex, RegexBuilder};
+pub use winter_textedit::search::{match_spans, SearchReport};
 
 use crate::paint::{IconKind, StyleRun};
 
@@ -148,21 +149,6 @@ pub struct SearchHit {
     pub text: String,
 }
 
-/// The search an editor just ran or repeated, which the host highlights in the
-/// tab and counts in the status bar the way it does a terminal's.
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
-pub struct SearchReport {
-    /// The cursor's place among the matches, counting from one, or 0 when it
-    /// is on none.
-    pub index: usize,
-    /// The text looked for.
-    pub query: String,
-    /// Whether the search runs backwards, so the bar shows `?` rather than `/`.
-    pub reverse: bool,
-    /// How many matches there are, or 0 when the editor does not count them.
-    pub total: usize,
-}
-
 // ========================================================================
 // Functions
 // ========================================================================
@@ -232,33 +218,6 @@ pub fn row_search_report(
         }
     }
     report
-}
-
-/// Every place `query` occurs in `text`, as `(start, end)` character columns,
-/// overlapping ones included. A query typed in lower case matches either
-/// case, and one with a capital in it matches exactly: the rule every editor
-/// searches by, so what a search lands on is what is highlighted.
-pub fn match_spans(text: &str, query: &str) -> Vec<(usize, usize)> {
-    let folded = !query.chars().any(char::is_uppercase);
-    // Folded a character at a time, so a column of the folded text is a
-    // column of the text even where lowering a letter would lengthen it.
-    let fold = |s: &str| -> Vec<char> {
-        s.chars()
-            .map(|c| match folded {
-                true => c.to_lowercase().next().unwrap_or(c),
-                false => c,
-            })
-            .collect()
-    };
-    let needle = fold(query);
-    let haystack = fold(text);
-    if needle.is_empty() || haystack.len() < needle.len() {
-        return Vec::new();
-    }
-    (0..=haystack.len() - needle.len())
-        .filter(|&start| haystack[start..].starts_with(&needle))
-        .map(|start| (start, start + needle.len()))
-        .collect()
 }
 
 /// Whether `query` occurs anywhere in `text`, by [`match_spans`]'s rule.

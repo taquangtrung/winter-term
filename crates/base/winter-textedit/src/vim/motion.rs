@@ -2,6 +2,8 @@
 //! and the char-search they share. The foundation's naming layer — the
 //! terminal grid and the editors both speak in these terms.
 
+use winter_keys::KeyCode;
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -119,5 +121,44 @@ impl CursorMove {
                 | Self::WordEndBack
                 | Self::WordEndBackBig
         )
+    }
+}
+
+/// A vim text object target (word, delimited quotes, or bracket pairs).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TextObject {
+    /// A bracket pair, given as its opening and closing characters.
+    Brackets(char, char),
+    /// A paragraph: the run of lines around the cursor that are all blank or
+    /// all not, which over a terminal's output is one block of it.
+    Paragraph,
+    /// A quoted run delimited by this character.
+    Quotes(char),
+    /// A sentence: up to a `.`, `!` or `?` and the quotes or brackets that
+    /// close after it.
+    Sentence,
+    /// A word, where punctuation breaks the run.
+    Word,
+    /// A WORD, where only whitespace breaks the run.
+    WordBig,
+}
+
+impl TextObject {
+    /// The object a key names after an `i` or an `a`, so an object added here
+    /// works for every operator that takes one, on every surface that has
+    /// them, rather than having to be added to each separately.
+    pub fn of_key(code: KeyCode) -> Option<Self> {
+        Some(match code {
+            KeyCode::Char('w') => Self::Word,
+            KeyCode::Char('W') => Self::WordBig,
+            KeyCode::Char('p') => Self::Paragraph,
+            KeyCode::Char('s') => Self::Sentence,
+            KeyCode::Char(c @ ('"' | '\'' | '`')) => Self::Quotes(c),
+            KeyCode::Char('(' | ')' | 'b') => Self::Brackets('(', ')'),
+            KeyCode::Char('[' | ']') => Self::Brackets('[', ']'),
+            KeyCode::Char('{' | '}' | 'B') => Self::Brackets('{', '}'),
+            KeyCode::Char('<' | '>') => Self::Brackets('<', '>'),
+            _ => return None,
+        })
     }
 }

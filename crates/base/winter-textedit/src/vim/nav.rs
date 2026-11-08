@@ -3,9 +3,10 @@
 //! wherever it is not otherwise claimed. See [`super`] for the layering and
 //! the override contract.
 
+use winter_keys::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
+use winter_keys::{Key, KeyCode, Mods};
+
 use super::motion::CursorMove;
-use crate::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
-use crate::input::{Key, KeyCode, Mods};
 
 // ========================================================================
 // Constants

@@ -1992,4 +1992,20 @@ mod tests {
         assert_eq!(keymap.resolve_sequence(&[alt_g], None), SequenceStep::Miss);
         assert!(keymap.edit_binding(&alt_g).is_some());
     }
+
+    #[test]
+    fn test_binding_a_shifted_symbol_matches_the_key_alt_shift_sends() {
+        // `M-?` is what Alt-Shift-/ sends: the Shift is in the glyph.
+        let alt_question = Key {
+            shift: true,
+            ..Key::with_alt(KeyCode::Char('?'))
+        };
+        let mut bindings = HashMap::new();
+        bindings.insert("M-?".to_string(), "zoom_pane".to_string());
+        let keymap = Keymap::from_config(Some(&bindings), None);
+        assert_eq!(
+            keymap.direct_action(&alt_question, false),
+            Some(WindowAction::Zoom.to_action())
+        );
+    }
 }

@@ -48,9 +48,12 @@ crates/ext       extensions shipped with Winter, on the sdk alone
 | `libs` | `winter-wasm` | Runs extensions installed as components, sandboxed. |
 | `base` | `winter-base` | OS plumbing: per-user paths, atomic writes, helper processes, remote places. |
 | `base` | `winter-emulator` | Parser, scrollback, cell grid, VT screen. |
+| `base` | `winter-keys` | Keys independent of any window toolkit: chords in Emacs notation, multi-key sequences, key tables. |
 | `base` | `winter-model` | Modes, layout, key resolution, and the `Editor` trait. |
+| `base` | `winter-notify` | Notifications: toasts and the session's log, driven by a clock the caller passes in. |
 | `base` | `winter-proto` | TBP v1: wire types, codec, trust tiers. |
 | `base` | `winter-render` | wgpu text and chrome renderer. |
+| `base` | `winter-textedit` | Modal text editing: Emacs keys while typing, the Vim grammar, motions, and text objects. |
 | `sdk` | `winter-ext-api` | The API extensions are written against. |
 | `sdk` | `winter-ext-guest` | Builds an extension as a WebAssembly component. |
 | `ext` | `winter-copilot` | GitHub Copilot, shipped with Winter as a WebAssembly component. |

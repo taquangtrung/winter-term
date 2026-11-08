@@ -8,8 +8,9 @@
 //! mark, and what the `g` and `z` motions are. A rule changed here changes on
 //! both surfaces, so the two cannot drift apart.
 
+use winter_keys::{Key, KeyCode, Mods};
+
 use super::motion::CursorMove;
-use crate::input::{Key, KeyCode, Mods};
 
 // ========================================================================
 // Constants
@@ -81,6 +82,18 @@ pub enum OperatorKind {
     Outdent,
     /// `y`: copy the text, leaving it where it is.
     Yank,
+}
+
+/// One thing done with a keyboard macro, in the register named, or for
+/// `None` the default one (the last recorded, to replay).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MacroStep {
+    /// Start recording keys into the register.
+    Record(Option<char>),
+    /// Play the register's keys back.
+    Replay(Option<char>),
+    /// Stop recording, keeping what was recorded.
+    Stop,
 }
 
 // ========================================================================

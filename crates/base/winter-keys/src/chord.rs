@@ -72,7 +72,7 @@ pub fn format_sequence(keys: &[Key]) -> String {
 /// Parse a key-binding spec of one or more chords (e.g. `"C-h"` or
 /// `"M-g M-h"`) into its keys. Returns `None` on any unrecognized chord or a
 /// length outside `1..=MAX_SEQUENCE_LEN`.
-pub(super) fn parse_chord_sequence(spec: &str) -> Option<Vec<Key>> {
+pub fn parse_chord_sequence(spec: &str) -> Option<Vec<Key>> {
     let keys = spec
         .split_whitespace()
         .map(parse_chord)
@@ -89,7 +89,7 @@ pub(super) fn parse_chord_sequence(spec: &str) -> Option<Vec<Key>> {
 /// `S-o` -> `'O'`, ...); binding specs use the physical key label, so a
 /// held-Shift chord that misses on the transformed glyph retries on the
 /// untransformed one.
-pub(super) fn find_chord<T: Clone>(entries: &[(Key, T)], key: &Key) -> Option<T> {
+pub fn find_chord<T: Clone>(entries: &[(Key, T)], key: &Key) -> Option<T> {
     let find = |key: &Key| {
         entries
             .iter()
@@ -100,7 +100,7 @@ pub(super) fn find_chord<T: Clone>(entries: &[(Key, T)], key: &Key) -> Option<T>
 }
 /// Whether the pressed key is the bound chord, as typed or else unshifted:
 /// the one-chord form of [`find_chord`]'s matching, for a sequence's chords.
-pub(super) fn is_chord_match(bound: &Key, pressed: &Key) -> bool {
+pub fn is_chord_match(bound: &Key, pressed: &Key) -> bool {
     bound == pressed || unshifted(pressed).as_ref() == Some(bound)
 }
 /// `key` with its shifted glyph turned back into the physical key it was
@@ -118,12 +118,12 @@ fn unshifted(key: &Key) -> Option<Key> {
 }
 /// Whether `c` is a symbol typed with Shift (`?`, `+`, `(`), so its Shift is
 /// in the glyph. Capital letters are not: they fold to lowercase plus Shift.
-pub(super) fn is_shifted_symbol(c: char) -> bool {
+pub fn is_shifted_symbol(c: char) -> bool {
     !c.is_ascii_uppercase() && unshift_char(c).is_some()
 }
 /// Map a Shift-modified character back to its physical key for US QWERTY,
 /// so binding specs like `"S+M+\\"` match the winit `logical_key` `'|'`.
-pub(super) fn unshift_char(c: char) -> Option<char> {
+pub fn unshift_char(c: char) -> Option<char> {
     Some(match c {
         'A'..='Z' => c.to_ascii_lowercase(),
         '!' => '1',
@@ -159,7 +159,7 @@ pub(super) fn unshift_char(c: char) -> Option<char> {
 ///
 /// A letter is kept as the lowercase letter with Shift held, however it is
 /// spelled.
-pub(super) fn parse_chord(token: &str) -> Option<Key> {
+pub fn parse_chord(token: &str) -> Option<Key> {
     parse_emacs_chord(token).map(|key| key.canonical())
 }
 /// The Emacs spelling of a chord: see [`parse_chord`].
@@ -201,7 +201,7 @@ fn parse_emacs_chord(token: &str) -> Option<Key> {
 /// Parse a key name into a [`KeyCode`]: a single character is a `Char`, a
 /// function key is `F1`..`F24` as written, and the other named keys
 /// (`Space`, `Enter`, ...) map case-insensitively.
-pub(super) fn parse_key_code(name: &str) -> Option<KeyCode> {
+pub fn parse_key_code(name: &str) -> Option<KeyCode> {
     // Emacs' `DEL` is the Backspace key; `Del` and `Delete` are Delete.
     if name == "DEL" {
         return Some(KeyCode::Backspace);
@@ -234,7 +234,7 @@ pub(super) fn parse_key_code(name: &str) -> Option<KeyCode> {
     })
 }
 /// Parse an `F1`..`F24` function-key name into [`KeyCode::F`].
-pub(super) fn parse_function_key(name: &str) -> Option<KeyCode> {
+pub fn parse_function_key(name: &str) -> Option<KeyCode> {
     let number: u8 = name.strip_prefix(FUNCTION_KEY_PREFIX)?.parse().ok()?;
     (1..=MAX_FUNCTION_KEY)
         .contains(&number)
@@ -247,9 +247,6 @@ pub(super) fn parse_function_key(name: &str) -> Option<KeyCode> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use super::super::{Keymap, WindowAction};
     use super::*;
 
     #[test]
@@ -340,13 +337,6 @@ mod tests {
         };
         assert_eq!(parse_chord("M-?"), Some(alt_question));
         assert_eq!(format_key(&alt_question), "M-?");
-        let mut bindings = HashMap::new();
-        bindings.insert("M-?".to_string(), "zoom_pane".to_string());
-        let keymap = Keymap::from_config(Some(&bindings), None);
-        assert_eq!(
-            keymap.direct_action(&alt_question, false),
-            Some(WindowAction::Zoom.to_action())
-        );
         let super_x = parse_chord("s-x").expect("s- is Super");
         assert!(super_x.sup && !super_x.ctrl && !super_x.alt && !super_x.shift);
         assert_eq!(

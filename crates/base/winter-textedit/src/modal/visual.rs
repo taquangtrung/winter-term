@@ -1,8 +1,9 @@
 //! Visual mode: acting on a selection.
 
-use crate::editor::Notice;
-use crate::input::{Key, KeyCode, Mods};
-use crate::textedit::buffer::Register;
+use winter_keys::{Key, KeyCode, Mods};
+use winter_notify::Notice;
+
+use crate::buffer::Register;
 use crate::vim::grammar::{operator_of, OperatorKind};
 
 use super::{
