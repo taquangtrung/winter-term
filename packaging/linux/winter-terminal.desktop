@@ -1,0 +1,11 @@
+[Desktop Entry]
+Name=Winter Terminal
+Comment=Terminal-first IDE with GPU rendering, Vim editing, and editors as tabs
+Exec=winter
+Icon=winter-terminal
+Type=Application
+Terminal=false
+Categories=System;TerminalEmulator;Utility;
+Keywords=terminal;pty;emulator;wgpu;
+StartupNotify=true
+StartupWMClass=winter

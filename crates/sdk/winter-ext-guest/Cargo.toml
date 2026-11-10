@@ -1,0 +1,16 @@
+[package]
+name = "winter-ext-guest"
+description = "Builds a Winter extension as a WebAssembly component, to be installed as a file rather than compiled into Winter."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "editor", "extension", "wasm"]
+categories = ["api-bindings", "wasm"]
+rust-version.workspace = true
+
+[dependencies]
+winter-ext-api.workspace = true
+wit-bindgen.workspace = true

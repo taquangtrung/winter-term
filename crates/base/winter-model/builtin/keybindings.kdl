@@ -1,0 +1,241 @@
+// winter default keybindings: embedded in the binary as the built-in
+// defaults (see model::input::Keymap::default), and also installed as
+// a reference copy at ~/.config/winter-term/keybindings.kdl.
+//
+// This is not a "sample with placeholder values": it IS what ships. Copy it
+// to ~/.config/winter-term/keybindings.kdl (or %APPDATA%\winter-term on
+// Windows) and edit it there; unmentioned commands keep these defaults,
+// mentioned ones are replaced by your version.
+//
+// The file is one list, `commands { }`. Each line names a command and then
+// its chords:
+//   new_tab "C-S-t"
+//   font_increase "C-=" "C-+"
+//   toggle_archive "none" in="dir"
+// Lines naming the same command add up; "none" takes an editor's key away.
+//
+// A line binds a window command, or a line edit (delete_word_backward,
+// prompt_undo, ...), unless `in` names the editor it binds in: in="git",
+// in="dir", in="dir.edit", in="editor", ..., each listed in the Keys view
+// with its commands. An editor's bindings apply only while it has focus,
+// ahead of the window's. `normal`, `insert`, and `visual` keys are Vim's,
+// built in.
+//
+// A line with platform="macos" (or "linux", "windows") binds only on that
+// platform, over the lines that name none. The defaults follow each
+// platform's own conventions this way: a terminal's Ctrl+Shift chords on
+// Linux and Windows, which leave every Ctrl+letter to the shell, and the Cmd
+// chords added on macOS, where Cmd never reaches the shell at all.
+//
+// Chords are written the way Emacs writes them: modifier prefixes, then the key.
+//   C- = Ctrl, M- = Alt (Meta), S- = Shift, s- = Super (the logo key; Cmd on
+//     macOS), always in that order: "C-M-S-s-n". On macOS, Option is M-
+//     only while `option-as-alt` in settings.kdl says so.
+//   Named keys: RET, TAB, SPC, ESC, DEL (Backspace), <delete>, <insert>,
+//     <home>, <end>, <prior> (PageUp), <next> (PageDown), <up>, <down>,
+//     <left>, <right>, and the function keys F1..F24, written so, not <f1>.
+//   A single character is itself (e.g. j); a letter is always lowercase, so
+//     S-s is "S-s", never "S".
+//   Up to four chords separated by spaces form a sequence (e.g. "M-g M-h"),
+//     each matched as a whole chord. Several sequences may share a first chord,
+//     and a chord that opens one cannot also be bound on its own. After the
+//     first chord a hint lists what can follow; ESC, or any key that continues
+//     nothing, drops the sequence.
+//
+// A command that isn't one of the window's own is looked up against the
+// command palette's names instead (e.g. mux_new_session, export_block_svg,
+// cd_recent) and dispatches the same way selecting that palette entry would.
+//
+// Pane/tab commands for one specific index are close_pane_N / focus_pane_N /
+// goto_tab_N (N = 1..9); each binds exact chords to that one pane/tab, so you
+// can point any key at any index, e.g.:
+//   focus_pane_1 "M-q"
+
+commands {
+    // Split the focused pane (Windows Terminal's Alt+Shift+-), and as
+    // iTerm2 splits on macOS.
+    split_horizontal "M-S--"
+    split_horizontal "s-S-d" platform="macos"
+    split_vertical "M-S-\\"
+    split_vertical "s-d" platform="macos"
+
+    // Zoom the focused pane to fill the window (toggle).
+    zoom_pane "M-S-="
+    zoom_pane "s-S-RET" platform="macos"
+
+    // Close the focused pane, with every tab in it, or every other pane.
+    close_pane "M-S-w"
+    close_other_panes "M-S-o"
+
+    // Move focus between panes.
+    focus_left "M-h"
+    focus_down "M-j"
+    focus_up "M-k"
+    focus_right "M-l"
+
+    // Scroll the terminal screen: Shift+PageUp and Shift+PageDown as in
+    // xterm, GNOME Terminal, and Konsole; Ctrl+Shift+Home and End as in
+    // Windows Terminal.
+    scroll_page_up "S-<prior>" "M-S-h"
+    scroll_page_down "S-<next>" "M-S-l"
+    scroll_line_up "M-S-k"
+    scroll_line_down "M-S-j"
+    scroll_to_top "C-S-<home>"
+    scroll_to_bottom "C-S-<end>"
+
+    // Tabs, as browsers and terminals switch, open, and close them.
+    next_tab "C-TAB" "C-<next>"
+    next_tab "s-S-]" platform="macos"
+    prev_tab "C-S-TAB" "C-<prior>"
+    prev_tab "s-S-[" platform="macos"
+    new_tab "C-S-t"
+    new_tab "s-t" platform="macos"
+    new_window "C-S-n"
+    new_window "s-n" platform="macos"
+    close_tab "C-S-w" "C-S-q"
+    close_tab "s-w" platform="macos"
+    // Close every other tab in the focused pane.
+    close_other_tabs "M-S-q"
+
+    // Walk the file:line references the last command printed (compiler
+    // errors, test failures), opening each in the text editor.
+    next_error "F8"
+    prev_error "S-F8"
+    // Run one of the project's builds in its Compile tab (VS Code's Run
+    // Build Task): the LaTeX document a .tex file belongs to, the project's
+    // .winter/tasks.kdl, or what its files suggest.
+    compile_task "C-S-b"
+    compile_task "s-S-b" platform="macos"
+    // From the line of LaTeX under the cursor to where it was set in the
+    // PDF built from it (SyncTeX forward), F6: in this
+    // pane, or in the other with S-F6 or F7. From a .bib file, a \cite of
+    // the entry under the cursor. Back from the PDF is its own `S`, a
+    // double-click, or the menu's SyncTeX Backward.
+    synctex_forward "F6"
+    synctex_forward_beside "S-F6" "F7"
+
+    // Focus pane N.
+    focus_pane_1 "M-1"
+    focus_pane_2 "M-2"
+    focus_pane_3 "M-3"
+    focus_pane_4 "M-4"
+    focus_pane_5 "M-5"
+    focus_pane_6 "M-6"
+    focus_pane_7 "M-7"
+    focus_pane_8 "M-8"
+    focus_pane_9 "M-9"
+
+    // Go to tab N.
+    goto_tab_1 "C-1"
+    goto_tab_1 "s-1" platform="macos"
+    goto_tab_2 "C-2"
+    goto_tab_2 "s-2" platform="macos"
+    goto_tab_3 "C-3"
+    goto_tab_3 "s-3" platform="macos"
+    goto_tab_4 "C-4"
+    goto_tab_4 "s-4" platform="macos"
+    goto_tab_5 "C-5"
+    goto_tab_5 "s-5" platform="macos"
+    goto_tab_6 "C-6"
+    goto_tab_6 "s-6" platform="macos"
+    goto_tab_7 "C-7"
+    goto_tab_7 "s-7" platform="macos"
+    goto_tab_8 "C-8"
+    goto_tab_8 "s-8" platform="macos"
+    goto_tab_9 "C-9"
+    goto_tab_9 "s-9" platform="macos"
+
+    // Clipboard.
+    copy_selection "C-S-c"
+    copy_selection "s-c" platform="macos"
+    paste_from_clipboard "C-S-v"
+    paste_from_clipboard "s-v" platform="macos"
+
+    // Settings and font size.
+    open_settings "C-,"
+    open_settings "s-," platform="macos"
+    font_increase "C-=" "C-+"
+    font_increase "s-=" "s-+" platform="macos"
+    font_decrease "C--"
+    font_decrease "s--" platform="macos"
+    font_reset "C-0"
+    font_reset "s-0" platform="macos"
+
+    // Palettes.
+    toggle_command_palette "M-x"
+    toggle_history_palette "C-S-r"
+    // Back to the most recently used terminal tab of the focused pane.
+    reveal_terminal "C-S-m"
+    // The symbols of the focused file, as VS Code's Go to Symbol.
+    outline "C-S-o"
+    outline "s-S-o" platform="macos"
+    // The dock along the bottom of the window, as VS Code's panel: opens with
+    // a shell, puts it away when it has the keyboard, else focuses it.
+    toggle_dock "C-S-j"
+    toggle_dock "s-j" platform="macos"
+    // Every tab open now, then the files and directories opened lately, as
+    // one list to go back to any of them from. The pane switcher
+    // (`select_pane`) is still in the command palette as "Go to Pane".
+    recent_list "C-S-z"
+    recent_list "s-S-z" platform="macos"
+    // Every file in the focused tab's project (its git repository, else its
+    // directory), to fuzzy-find one and open it. Held by the window, so it
+    // never reaches the shell, where C-M-z would arrive as ESC C-z and
+    // suspend the job just as C-z does.
+    project_files "C-M-z"
+    project_files "s-M-z" platform="macos"
+    // Every file under the focused tab's working directory, to fuzzy-find
+    // one and open it: the same picker, kept to where the tab is.
+    find_file "M-S-z"
+    // Search the project as you type, as VS Code's Search: the lines found
+    // stream in; a `*` stands for anything, and ` @ <file>` after the
+    // pattern filters by path.
+    live_search "C-S-f"
+    live_search "s-S-f" platform="macos"
+
+    // Editors: a pane holding an editor tab instead of a terminal. The file
+    // browser and Git sit where VS Code keeps its Explorer and Source Control.
+    dir_page "C-S-d"
+    file_browser "C-S-e"
+    file_browser "s-S-e" platform="macos"
+    git_page "C-S-g"
+    proc_page "C-S-,"
+    // Kill the focused tab's buffer: closing a tab only buries it. Asks first
+    // about unsaved text or a build still running; on a terminal, closes it.
+    kill_buffer "C-S-k"
+
+    // Jump between prompt blocks, as Terminal.app and iTerm2 step through
+    // their marks on macOS.
+    prev_block "C-S-<up>"
+    prev_block "s-<up>" platform="macos"
+    next_block "C-S-<down>"
+    next_block "s-<down>" platform="macos"
+
+    // Line edits in the prompt and the pickers: delete the word before the
+    // cursor, and undo or redo an edit. Also delete_word_forward,
+    // delete_to_line_start, and delete_to_line_end.
+    delete_word_backward "C-DEL"
+    prompt_undo "C-/"
+    prompt_redo "C-\\"
+}
+
+// Git's own commands. Its single-key commands (s, c, b, ...) are built in;
+// a line with in="git" binds the rest, such as open_remote (the
+// repository's remote in a browser).
+//
+// The text editor's commands. Its language server chords (M-. to the
+// definition, M-, for what a name is, C-c C-/ for references, C-c C-r to
+// rename, M-\ for a fix) work while a server serves the file (LSP: Start
+// runs one). The problems every back-end found, a server's and the
+// spelling's, are stepped through in the file with S-M-n and S-M-p and
+// through the writing issues with M-s e, M-s ], and M-s [, all built in.
+// A line with in="editor" binds the rest:
+//   lsp_definition, lsp_references, lsp_hover, lsp_rename, lsp_code_action,
+//   lsp_format, problem_first, problem_next, problem_prev,
+//   problem_first_error, problem_next_error, problem_prev_error,
+//   problem_list, navigate_back, navigate_forward, editor_goto_offset,
+//   editor_show_offset, bibtex_sort_year_ascending, and the rest the Keys
+//   view lists.
+//
+// The directory listing's commands: a line with in="dir" binds them, such
+// as toggle_edit (editing listed names as text, as Emacs's wdired).

@@ -1,0 +1,13 @@
+[package]
+name = "winter-keys"
+description = "Keys for keyboard-driven apps: chords in Emacs notation, multi-key sequences, and key tables that drive dispatch, help, and rebinding from one place."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["keymap", "keybindings", "emacs", "vim", "chord"]
+categories = ["gui"]
+rust-version.workspace = true
+include = ["Cargo.toml", "src/**/*.rs"]

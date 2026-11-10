@@ -1,0 +1,104 @@
+en-us.aff/en-us.dic and en-gb.aff/en-gb.dic are the Hunspell dictionary files
+from the npm packages `dictionary-en` (v4.0.0) and `dictionary-en-gb` (v3.0.0)
+respectively (github.com/wooorm/dictionaries), copied here as static assets -
+not an npm dependency - since neither package is safely bundleable through
+this project's esbuild config (their own loader does a top-level-await
+fs.readFile relative to the package's own install location, which doesn't
+resolve correctly once bundled into dist/extension.js). dictionary.ts parses
+these two files itself; see its file header for why that's a hand-written
+parser rather than a Hunspell library like nspell.
+
+Both .aff/.dic file pairs have manual patches on top of the unmodified
+upstream data (see git history for src/spell/data for exact diffs). If
+re-syncing from a newer dictionary-en/dictionary-en-gb release, reapply
+these, and check whether the newer release already fixed them upstream:
+
+  - `audit` is missing the `B` (SFX -able) flag, so "auditable" was flagged
+    as a misspelling despite being a real word (audit/GMDS -> audit/GMDSB).
+  - No suffix rule derives an -ity/-ability form from anything, so
+    "auditability" was also missing. Added a new SFX Q rule to both .aff
+    files, mirroring SFX B's own [^aeiou]/ee/[^aeiou]e conditions but with
+    "ability" instead of "able" - English's -able/-ability alternation is
+    its own irregular pattern (capable -> capability, not capableity via a
+    second suffix chained onto -able), not something continuation classes
+    would help with even if this .aff format used them (it doesn't - see
+    dictionary.ts's file header). `audit` was flagged with Q too
+    (audit/GMDSB -> audit/GMDSBQ), superseding an earlier version of this
+    patch that added "auditability" as its own standalone stem - the new
+    SFX Q rule is reusable for any future word with the same gap, whereas a
+    standalone stem only ever fixes that one word.
+  - `link` is missing the `B` (-able), `Q` (-ability), and `U` (PFX un-)
+    flags, so "linkable"/"linkability"/"unlinkable"/"unlinkability" (common
+    terms in privacy/blockchain writing) were all flagged as misspellings
+    despite the underlying rules already existing (link/MDRSG ->
+    link/MDRSGBQU).
+  - "review" was missing entirely (not even the base word), added as
+    review/MDRSZGB (mirrors preview/MDRSZG's flag set, plus `B` for
+    "reviewable"). `verify` was missing the `R` (-er/-ier) flag, added for
+    "verifier" (verify/DSNG -> verify/DSNGR). "subcommand" was missing -
+    added as its own standalone stem (subcommand/SM), matching how every
+    other sub- word here is already a standalone entry rather than a
+    productive PFX rule (subcategory, subclass, subcommittee, ... - not
+    every English noun productively takes "sub-", unlike "re-"/"un-").
+  - "anonymize"/"anonymization" were both missing (only "anonymous"
+    existed). Added as their own standalone stems (anonymize/DRSZG,
+    anonymization/M), matching how "-ize"/"-ization" pairs are handled
+    everywhere else here (e.g. modernize/DRSZG + modernization/M,
+    organize/AESDG + organization/ASM) - "-ization" is never derived from
+    the "-ize" verb via a suffix rule in this dictionary.
+
+Both are SCOWL (Spell Checker Oriented Word Lists) dictionaries - the same
+upstream project the previous flat-file version of this dictionary (see git
+history) was already sourced from, just via SCOWL's own Hunspell-format
+release instead of Debian's `wamerican`/`wbritish` packages. The word list
+portion is Copyright 2000-2018 by Kevin Atkinson, under the SCOWL license
+below; the affix file (en-us.aff/en-gb.aff) is a modified version of Geoff
+Kuenning's Ispell english.aff and is covered by his BSD license, also below.
+
+    SF project page: http://wordlist.sourceforge.net/
+
+    The collective work is Copyright 2000-2018 by Kevin Atkinson.
+
+    Permission to use, copy, modify, distribute and sell these word
+    lists, the associated scripts, the output created from the scripts,
+    and its documentation for any purpose is hereby granted without fee,
+    provided that the above copyright notice appears in all copies and
+    that both that copyright notice and this permission notice appear in
+    supporting documentation. Kevin Atkinson makes no representations
+    about the suitability of this array for any purpose. It is provided
+    "as is" without express or implied warranty.
+
+    Since the original word lists come from the Ispell distribution:
+
+    Copyright 1993, Geoff Kuenning, Granada Hills, CA
+    All rights reserved.
+
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+    3. All modifications to the source code must be clearly marked as
+       such.  Binary redistributions based on modified source code
+       must be clearly marked as modified versions in the documentation
+       and/or other materials provided with the distribution.
+    (clause 4 removed with permission from Geoff Kuenning)
+    5. The name of Geoff Kuenning may not be used to endorse or promote
+       products derived from this software without specific prior
+       written permission.
+
+    THIS SOFTWARE IS PROVIDED BY GEOFF KUENNING AND CONTRIBUTORS ``AS IS'' AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+    ARE DISCLAIMED.  IN NO EVENT SHALL GEOFF KUENNING OR CONTRIBUTORS BE LIABLE
+    FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS
+    OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION)
+    HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
+    LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY
+    OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF
+    SUCH DAMAGE.

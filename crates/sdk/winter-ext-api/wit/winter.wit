@@ -1,0 +1,361 @@
+// The contract between Winter and an extension built as a WebAssembly
+// component: the same API `winter-ext-api` gives a Rust crate, carried
+// across the sandbox. Paths travel as strings, views as numbers the guest
+// hands out, slow work as numbers the host runs off its thread, and a picker
+// as a number the guest hands out, what happens in it handed back with it.
+
+package winter:extension@0.2.0;
+
+interface types {
+    /// How a run of text is colored, picked from the theme.
+    enum tone {
+        accent,
+        dim,
+        error,
+        heading,
+        info,
+        normal,
+        warning,
+    }
+
+    /// A run of a line sharing one tone.
+    record styled {
+        text: string,
+        tone: tone,
+    }
+
+    /// One line a view draws: runs of text, left to right.
+    type line = list<styled>;
+
+    /// How bad a problem is.
+    enum severity {
+        error,
+        hint,
+        info,
+        warning,
+    }
+
+    /// One problem in a file: lines from zero, columns in UTF-16 units.
+    record diagnostic {
+        end: u32,
+        line: u32,
+        message: string,
+        severity: severity,
+        start: u32,
+    }
+
+    /// A file as the editor in front holds it.
+    record document {
+        path: string,
+        text: string,
+    }
+
+    /// The value of a setting.
+    variant setting-value {
+        number(s64),
+        switch(bool),
+        text(string),
+    }
+
+    /// A setting the extension reads from its block of `settings.kdl`.
+    record setting {
+        default: setting-value,
+        doc: string,
+        name: string,
+    }
+
+    /// One setting as it stands, by name.
+    record setting-entry {
+        name: string,
+        value: setting-value,
+    }
+
+    /// A machine Winter runs on.
+    enum platform {
+        linux-arm64,
+        linux-x64,
+        mac-arm64,
+        mac-x64,
+        windows-arm64,
+        windows-x64,
+    }
+
+    /// Where a server's program is fetched from for one platform.
+    record install {
+        member: string,
+        platform: platform,
+        url: string,
+    }
+
+    /// A server the extension runs, reading every local file open.
+    record server-spec {
+        args: list<string>,
+        init-options: option<string>,
+        install: list<install>,
+        name: string,
+        program: string,
+    }
+
+    /// The answer to a request, under the tag it was sent with: JSON, or
+    /// the error it gave.
+    record server-answer {
+        %result: result<string, string>,
+        tag: u64,
+    }
+
+    /// What a server says of its own state.
+    record server-status {
+        error: bool,
+        message: option<string>,
+    }
+
+    /// What a server says.
+    variant server-said {
+        answer(server-answer),
+        exited(string),
+        message(string),
+        open-url(string),
+        ready,
+        status(server-status),
+    }
+
+    /// What one of the extension's servers, by its name, said.
+    record server-event {
+        said: server-said,
+        server: string,
+    }
+
+    /// The two kinds of inline suggestion.
+    enum inline-kind {
+        edit,
+        ghost,
+    }
+
+    /// What an inline source offers now.
+    record inline-offer {
+        edit: bool,
+        ghost: bool,
+    }
+
+    /// A place in a document: lines from zero, columns in UTF-16 units.
+    record text-position {
+        column: u32,
+        line: u32,
+    }
+
+    record text-range {
+        end: text-position,
+        start: text-position,
+    }
+
+    /// Winter asking an inline source for a suggestion at the cursor.
+    record inline-request {
+        at: text-position,
+        insert-spaces: bool,
+        invoked: bool,
+        kind: inline-kind,
+        path: string,
+        tab-size: u32,
+        ticket: u64,
+        uri: string,
+        version: option<s64>,
+    }
+
+    /// One suggestion, and the source's own note of it.
+    record inline-edit {
+        range: text-range,
+        receipt: string,
+        text: string,
+    }
+
+    /// What an inline source answers.
+    variant inline-answer {
+        edit(inline-edit),
+        ghost(list<inline-edit>),
+        nothing,
+    }
+
+    /// Something that happened in Winter.
+    variant event {
+        configured(list<setting-entry>),
+        server(server-event),
+        changed(string),
+        closed(string),
+        focused(option<string>),
+        opened(string),
+        saved(string),
+    }
+
+    /// Where completion is asked for.
+    record completion-request {
+        column: u32,
+        language: string,
+        line: string,
+        path: string,
+        row: u32,
+    }
+
+    /// One thing that could go at the cursor.
+    record completion-item {
+        detail: option<string>,
+        insert: string,
+        label: string,
+    }
+
+    /// What a completion back-end offers.
+    record completions {
+        items: list<completion-item>,
+        start: u32,
+    }
+
+    /// One thing a row of a picker can do: what the guest is told, and
+    /// what the action menu calls it.
+    record picker-action {
+        id: string,
+        title: string,
+    }
+
+    /// One row of a picker.
+    record picker-row {
+        actions: list<picker-action>,
+        description: option<string>,
+        detail: option<string>,
+        file: option<string>,
+        label: string,
+        preview: option<string>,
+    }
+
+    /// A picker to open: whether the guest hears its query, its first rows,
+    /// whether more are pushed after, and its title.
+    record picker-spec {
+        hears-query: bool,
+        rows: list<picker-row>,
+        streamed: bool,
+        title: string,
+    }
+
+    /// The action chosen, and the place of the row it was chosen on.
+    record picker-choice {
+        action: string,
+        row: u32,
+    }
+
+    /// What happened in a picker.
+    variant picker-event {
+        chosen(picker-choice),
+        closed,
+        query(string),
+    }
+
+    /// A command or a kind of view: its name (for a command, its id as
+    /// written), and what it is called.
+    record titled {
+        name: string,
+        title: string,
+    }
+
+    /// One action a view answers: what the view is told, what it does, and
+    /// the keys it starts on, in `keybindings.kdl` notation. Winter matches
+    /// presses against these; a view never sees a key.
+    record view-key {
+        id: string,
+        keys: list<string>,
+        label: string,
+    }
+
+    /// A kind of view: its name, what its tabs are called, and the actions
+    /// its views answer.
+    record view-spec {
+        keys: list<view-key>,
+        name: string,
+        title: string,
+    }
+
+    /// Everything an extension adds, as it activates.
+    record manifest {
+        api-version: u32,
+        commands: list<titled>,
+        completions: list<string>,
+        id: string,
+        inlines: list<titled>,
+        listens: bool,
+        segments: list<string>,
+        servers: list<server-spec>,
+        settings: list<setting>,
+        views: list<view-spec>,
+    }
+}
+
+/// What an extension may ask of Winter.
+interface host {
+    use types.{diagnostic, document, inline-answer, inline-offer, picker-row, picker-spec};
+
+    notify: func(message: string);
+    open-file: func(path: string, line: option<u32>);
+    open-view: func(name: string);
+    /// The file the editor in front is editing, if it edits one.
+    front-document: func() -> option<document>;
+    publish-diagnostics: func(path: string, diagnostics: list<diagnostic>);
+    run-command: func(id: string);
+    /// Open an `https` page in the browser.
+    open-url: func(url: string);
+    copy-text: func(text: string);
+    /// Start the extension's server `name`: `program` where given.
+    start-server: func(name: string, program: option<string>);
+    install-server: func(name: string);
+    /// Send the server `name` a request, its answer coming under `tag`.
+    server-request: func(name: string, tag: u64, method: string, params: string);
+    server-notify: func(name: string, method: string, params: string);
+    /// Say what the inline source `name` offers from now on.
+    offer-inline: func(name: string, offer: inline-offer);
+    answer-inline: func(ticket: u64, answer: inline-answer);
+    set-status: func(name: string, text: option<string>);
+    /// Run the guest's work numbered `work` off Winter's thread.
+    spawn: func(work: u32);
+    request-repaint: func();
+    /// Open the picker the guest numbers `picker`; what happens in it comes
+    /// back through the guest's `tell-picker` with that number.
+    open-picker: func(picker: u64, spec: picker-spec);
+    /// Give the picker numbered `picker` more rows; `done` once no more come.
+    push-rows: func(picker: u64, rows: list<picker-row>, done: bool);
+}
+
+/// What Winter asks of an extension.
+interface guest {
+    use types.{completion-request, completions, event, inline-kind, inline-request, line, manifest, picker-event};
+
+    activate: func() -> manifest;
+    run-command: func(name: string);
+    handle-event: func(event: event);
+    complete: func(name: string, request: completion-request) -> option<completions>;
+    open-view: func(name: string) -> u32;
+    close-view: func(view: u32);
+    render: func(view: u32, rows: u32, columns: u32) -> list<line>;
+    cursor-line: func(view: u32) -> option<u32>;
+    /// The view as a page of HTML, laid out in place of its lines, or none
+    /// for the lines.
+    page: func(view: u32) -> option<string>;
+    /// Do the action `action` the view's kind declared: Winter matched a
+    /// key bound to it.
+    on-action: func(view: u32, action: string);
+    on-click: func(view: u32, line: u32, column: u32) -> bool;
+    on-scroll: func(view: u32, lines: s32) -> bool;
+    /// Do the work numbered `work`, off Winter's thread.
+    run-work: func(work: u32);
+    /// Hand the finished work's result back, on Winter's thread.
+    finish-work: func(work: u32);
+    /// Tell what happened in the picker numbered `picker`, on Winter's
+    /// thread.
+    tell-picker: func(picker: u64, event: picker-event);
+    /// Ask the inline source `name` for a suggestion, on Winter's thread.
+    ask-inline: func(name: string, request: inline-request);
+    /// Tell the inline source `name` its suggestion `receipt` notes shows.
+    inline-shown: func(name: string, kind: inline-kind, receipt: string);
+    /// Tell it the suggestion was taken.
+    inline-taken: func(name: string, kind: inline-kind, receipt: string);
+}
+
+world extension {
+    import host;
+    export guest;
+}

@@ -1,0 +1,162 @@
+[package]
+name = "winter-term"
+description = "Winter: a terminal-first IDE with GPU rendering and rich MIME-typed block output."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords.workspace = true
+categories.workspace = true
+rust-version.workspace = true
+readme = "README.md"
+
+[lib]
+name = "winter_app"
+path = "src/lib.rs"
+
+[[bin]]
+name = "winter"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+arboard = "3"
+flate2 = "1"
+open = "5"
+base64.workspace = true
+image = { workspace = true, features = ["png", "jpeg", "gif", "webp"] }
+# HTML blocks drawn as rich text: parsed the way a browser parses (html5ever)
+# and turned into Markdown, with nothing ever run.
+htmd = "0.5"
+kdl.workspace = true
+miette = "7"
+notify = "8"
+# The Markdown preview, read with the parser the renderer already carries
+# and written out as HTML.
+pulldown-cmark = { workspace = true, features = ["html"] }
+# Winter's web engine, which the Markdown preview, the Settings and Keys pages,
+# and extensions' views are drawn with: Blitz lays the HTML out and paints it as
+# a Vello scene, which the renderer draws on the window's own GPU device.
+# Pinned exactly while Blitz is in beta, since each beta breaks its API.
+anyrender = "0.14"
+anyrender_vello = "0.15"
+blitz-dom = { version = "=0.3.0-beta.4", default-features = false, features = ["svg", "system-fonts", "woff", "floats"] }
+blitz-html = { version = "=0.3.0-beta.4", default-features = false }
+blitz-paint = { version = "=0.3.0-beta.4", default-features = false, features = ["svg"] }
+blitz-traits = "=0.3.0-beta.4"
+parley = "0.12"
+# The preview's math, typeset in Rust as SVG drawn in the text's color, so a
+# page needs no script engine. Pinned exactly: young, and kept behind one
+# function in `editors/preview/page.rs` should another take its place.
+mathra = "=1.7.0"
+# The preview's Mermaid diagrams, laid out and drawn in Rust as SVG (its own
+# command line and PNG export left out). Its labels are SVG text, which the
+# engine draws; merman's are HTML inside the SVG, which it does not.
+mermaid-rs-renderer = { version = "0.3.1", default-features = false }
+url = "2"
+regex.workspace = true
+winter-base.workspace = true
+winter-emulator.workspace = true
+winter-model.workspace = true
+winter-picker.workspace = true
+winter-dir.workspace = true
+winter-docker.workspace = true
+winter-git.workspace = true
+winter-monitor.workspace = true
+winter-pdf.workspace = true
+winter-terminal.workspace = true
+winter-text.workspace = true
+winter-mux.workspace = true
+winter-synctex.workspace = true
+winter-syntax.workspace = true
+winter-vcs.workspace = true
+winter-proto.workspace = true
+
+winter-render.workspace = true
+winter-spell.workspace = true
+winter-lsp.workspace = true
+winter-ext-api.workspace = true
+# Extensions compiled in, each behind a feature of its own.
+winter-simple-ext = { workspace = true, optional = true }
+# Extensions installed as WebAssembly components, sandboxed.
+winter-wasm = { workspace = true, optional = true }
+pollster.workspace = true
+portable-pty.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sha2 = { workspace = true, optional = true }
+unicode-width.workspace = true
+vte.workspace = true
+vello.workspace = true
+wgpu.workspace = true
+winit = "0.30"
+chrono = { version = "0.4.45", default-features = false, features = ["clock", "std"] }
+keyring = "4.2.0"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1"
+windows-sys.workspace = true
+
+[build-dependencies]
+flate2 = "1"
+
+[target.'cfg(windows)'.build-dependencies]
+winresource.workspace = true
+
+# Documenting a single Linux target keeps docs.rs from attempting builds
+# on platforms whose system dependencies it cannot provide.
+[package.metadata.docs.rs]
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+
+[package.metadata.deb]
+name = "winter-term"
+maintainer = "Quang Trung Ta <taquangtrungvn@gmail.com>"
+extended-description = """\
+Terminal-first IDE with GPU rendering and \
+rich MIME-typed block output."""
+license-file = ["../../../LICENSE", "0"]
+section = "x11"
+priority = "optional"
+depends = "$auto"
+# The package was previously shipped as "winter-terminal"; these let dpkg
+# replace that install cleanly instead of failing with a file conflict over
+# usr/bin/winter and the desktop/icon assets both packages ship.
+replaces = "winter-terminal"
+conflicts = "winter-terminal"
+assets = [
+    ["target/release/winter", "usr/bin/winter", "755"],
+    # The extensions Winter ships (`make extensions-release`), where it looks
+    # for them from usr/bin.
+    ["../../../target/release/extensions/copilot/copilot.wasm", "usr/lib/winter/extensions/copilot/copilot.wasm", "644"],
+    ["../../../packaging/linux/winter-terminal.desktop", "usr/share/applications/winter-terminal.desktop", "644"],
+    ["assets/icons/winter-terminal.png", "usr/share/pixmaps/winter-terminal.png", "644"],
+    ["assets/icons/winter-terminal-64.png", "usr/share/icons/hicolor/64x64/apps/winter-terminal.png", "644"],
+    ["builtin/settings.kdl", "usr/share/doc/winter-term/examples/settings.kdl", "644"],
+    ["../../base/winter-model/builtin/keybindings.kdl", "usr/share/doc/winter-term/examples/keybindings.kdl", "644"],
+    ["../../../clients/shell-integration/winter.bash", "usr/share/winter-term/shell-integration/winter.bash", "644"],
+    ["../../../clients/shell-integration/winter.zsh", "usr/share/winter-term/shell-integration/winter.zsh", "644"],
+    ["../../../clients/shell-integration/winter.fish", "usr/share/winter-term/shell-integration/winter.fish", "644"],
+    ["../../../README.md", "usr/share/doc/winter-term/README.md", "644"],
+    ["../../../LICENSE", "usr/share/doc/winter-term/LICENSE", "644"],
+]
+
+[features]
+default = ["wasm-extensions"]
+# The example extension: `example.word_count` and `example.flag_todos`.
+example-extension = ["dep:winter-simple-ext"]
+# Extensions installed as files, `<id>.wasm` in the config directory's
+# `extensions`, each run in a sandbox of its own.
+wasm-extensions = ["dep:sha2", "dep:winter-wasm"]
+
+[dev-dependencies]
+winter-lsp = { workspace = true, features = ["test-support"] }
+winter-model = { workspace = true, features = ["test-support"] }
+winter-picker = { workspace = true, features = ["test-support"] }
+winter-pdf = { workspace = true, features = ["test-support"] }
+winter-terminal = { workspace = true, features = ["test-support"] }

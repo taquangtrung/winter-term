@@ -1,0 +1,32 @@
+[package]
+name = "winter-model"
+description = "Winter's interaction model: modes, layout, key resolution, and the Editor trait every editor tab implements."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "editor", "vim", "keymap"]
+categories = ["text-editors"]
+rust-version.workspace = true
+include = ["Cargo.toml", "src/**/*.rs", "builtin/*"]
+
+[features]
+# Helpers the app's tests build on: key constructors, and reaching the editor
+# a guard wraps.
+test-support = ["winter-textedit/test-support"]
+
+[dependencies]
+kdl.workspace = true
+regex.workspace = true
+unicode-segmentation.workspace = true
+unicode-width.workspace = true
+vello.workspace = true
+winter-base.workspace = true
+winter-emulator.workspace = true
+winter-ext-api.workspace = true
+winter-keys.workspace = true
+winter-notify.workspace = true
+winter-render.workspace = true
+winter-textedit.workspace = true

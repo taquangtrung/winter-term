@@ -1,0 +1,134 @@
+[workspace]
+members = [
+    "crates/app/winter-term",
+    "crates/base/winter-base",
+    "crates/base/winter-keys",
+    "crates/base/winter-notify",
+    "crates/base/winter-textedit",
+    "crates/base/winter-model",
+    "crates/libs/winter-picker",
+    "crates/tools/winter-dir",
+    "crates/tools/winter-docker",
+    "crates/tools/winter-git",
+    "crates/tools/winter-monitor",
+    "crates/tools/winter-pdf",
+    "crates/tools/winter-terminal",
+    "crates/tools/winter-text",
+    "crates/libs/winter-mux",
+    "crates/libs/winter-synctex",
+    "crates/libs/winter-syntax",
+    "crates/libs/winter-vcs",
+    "crates/base/winter-emulator",
+    "crates/base/winter-proto",
+    "crates/base/winter-render",
+    "crates/libs/winter-spell",
+    "crates/libs/winter-lsp",
+    "crates/sdk/winter-ext-api",
+    "crates/ext/winter-copilot",
+    "crates/ext/winter-simple-ext",
+    "crates/sdk/winter-ext-guest",
+    "crates/libs/winter-wasm",
+    "clients/client-rs",
+]
+# Vendored third-party crates are patch targets, not workspace members, so
+# workspace-wide test and lint runs leave them alone.
+exclude = ["vendor"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Quang Trung Ta <taquangtrungvn@gmail.com>"]
+license = "MIT"
+repository = "https://github.com/taquangtrung/winter-term"
+homepage = "https://github.com/taquangtrung/winter-term"
+keywords = ["terminal", "pty", "multiplexer", "terminal-emulator", "vim"]
+categories = ["command-line-interface", "command-line-utilities"]
+readme = "README.md"
+# The verified floor, not an aspiration: `rust-toolchain.toml` pins 1.99.1 and
+# CI builds the MSRV job against exactly this value. The dependency graph
+# already forces most of it (kdl declares 1.95, cosmic-text 1.89), so a lower
+# number here would be a claim that cannot build. Bump deliberately, and only
+# after the MSRV CI job passes at the new value.
+rust-version = "1.99"
+
+[workspace.dependencies]
+anyhow = "1"
+base64 = "0.22"
+# Each crate turns on the formats it decodes.
+image = { version = "0.25", default-features = false }
+kdl = { version = "6", features = ["serde"] }
+pollster = "0.4"
+# Each crate turns on what it renders to.
+pulldown-cmark = { version = "0.12", default-features = false }
+winter-base = { version = "0.1.0", path = "crates/base/winter-base" }
+winter-emulator = { version = "0.1.0", path = "crates/base/winter-emulator" }
+winter-keys = { version = "0.1.0", path = "crates/base/winter-keys" }
+winter-model = { version = "0.1.0", path = "crates/base/winter-model" }
+winter-notify = { version = "0.1.0", path = "crates/base/winter-notify" }
+winter-textedit = { version = "0.1.0", path = "crates/base/winter-textedit" }
+winter-picker = { version = "0.1.0", path = "crates/libs/winter-picker" }
+winter-dir = { version = "0.1.0", path = "crates/tools/winter-dir" }
+winter-docker = { version = "0.1.0", path = "crates/tools/winter-docker" }
+winter-git = { version = "0.1.0", path = "crates/tools/winter-git" }
+winter-monitor = { version = "0.1.0", path = "crates/tools/winter-monitor" }
+winter-pdf = { version = "0.1.0", path = "crates/tools/winter-pdf" }
+winter-terminal = { version = "0.1.0", path = "crates/tools/winter-terminal" }
+winter-text = { version = "0.1.0", path = "crates/tools/winter-text" }
+winter-mux = { version = "0.1.0", path = "crates/libs/winter-mux" }
+winter-synctex = { version = "0.1.0", path = "crates/libs/winter-synctex" }
+winter-syntax = { version = "0.1.0", path = "crates/libs/winter-syntax" }
+winter-vcs = { version = "0.1.0", path = "crates/libs/winter-vcs" }
+winter-proto = { version = "0.1.0", path = "crates/base/winter-proto" }
+winter-render = { version = "0.1.0", path = "crates/base/winter-render" }
+winter-spell = { version = "0.1.0", path = "crates/libs/winter-spell" }
+winter-lsp = { version = "0.1.0", path = "crates/libs/winter-lsp" }
+winter-ext-api = { version = "0.1.0", path = "crates/sdk/winter-ext-api" }
+winter-simple-ext = { version = "0.1.0", path = "crates/ext/winter-simple-ext" }
+winter-ext-guest = { version = "0.1.0", path = "crates/sdk/winter-ext-guest" }
+winter-wasm = { version = "0.1.0", path = "crates/libs/winter-wasm" }
+# WebAssembly extensions: the runtime Winter runs them in, compiling with
+# Cranelift and caching what it compiled, and the WASI they are sandboxed by.
+wasmtime = { version = "50", default-features = false, features = ["cache", "component-model", "cranelift", "parallel-compilation", "runtime", "std"] }
+wasmtime-wasi = { version = "50", default-features = false, features = ["p2"] }
+# Reads the package an extension's component carries, before running it; the
+# version wasmtime itself parses with.
+wasmparser = { version = "0.261", default-features = false, features = ["component-model", "std"] }
+# What an extension built as a WebAssembly component is compiled with.
+wit-bindgen = { version = "0.63", default-features = false, features = ["macros", "realloc", "std"] }
+portable-pty = "0.9"
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+# Hashes the extension components the user approved, to run only those.
+sha2 = "0.10"
+thiserror = "2"
+regex = "1"
+unicode-normalization = "0.1"
+unicode-segmentation = "1"
+unicode-width = "0.1"
+# Default features deliberately left on: `std` is what gives the unbounded
+# OSC buffer. vte 0.13 defaulted to `no_std` (a fixed 1 KiB ArrayVec) and so
+# needed `default-features = false` to get the same thing; 0.15 inverted that,
+# so disabling defaults now silently truncates any TBP escape over 1 KiB.
+vte = "0.15"
+vello = "0.11"
+wgpu = "30"
+windows-sys = { version = "0.61", features = ["Win32_System_Console"] }
+winresource = "0.1"
+
+# portable-pty 0.9.0 with one Windows fix: never LoadLibrary a bare "conpty.dll"
+# (a PATH search that can load another app's deadlocking ConPTY build). See
+# vendor/portable-pty/src/win/psuedocon.rs. Drop this once upstream stops
+# searching PATH for the sideloaded DLL.
+[patch.crates-io]
+portable-pty = { path = "vendor/portable-pty" }
+
+# Dependencies built optimized even in a debug build: text shaping and the GPU
+# layer run every frame, and unoptimized they make `make dev` lag on every
+# key. Winter's own crates stay unoptimized, so rebuilding them stays fast,
+# but for the renderer, whose overlays are painted a pixel at a time.
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.dev.package.winter-render]
+opt-level = 3

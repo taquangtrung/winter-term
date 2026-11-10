@@ -1,0 +1,19 @@
+[package]
+name = "winter-synctex"
+description = "SyncTeX both ways, as Winter's tools share it: from a spot on a PDF page to the line of LaTeX that set it, and back."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["synctex", "latex", "pdf", "editor"]
+categories = ["text-processing"]
+rust-version.workspace = true
+
+[dependencies]
+regex.workspace = true
+winter-model.workspace = true
+
+[dev-dependencies]
+winter-model = { workspace = true, features = ["test-support"] }
