@@ -354,6 +354,9 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) cards: misty::Toasts,
     /// The status bar misty draws along the window's bottom.
     pub(in crate::window) status_bar: misty::StatusBar,
+    /// Each pane's popups as the last frame worked them out, for misty to
+    /// draw.
+    pub(in crate::window) pane_popups: Vec<frame::pane_popups::PanePopups>,
     /// The status bar the last frame built, for misty's bar to draw and
     /// take the pointer by.
     pub(in crate::window) drawn_status: Option<winter_render::StatusBar>,

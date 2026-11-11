@@ -22,6 +22,7 @@ use super::frame_grid::{build_frame_grid, build_outlined_grid, screen_row_starts
 use super::inspect::token_inspect_popup;
 use super::popups::{card_runs, key_hint_title, session_view, which_key_view, PickerLook};
 use crate::window::editor::buffers::ScreenSkip;
+use crate::window::frame::pane_popups::PanePopups;
 use crate::window::input::sequence::WHICH_KEY_DELAY;
 use crate::window::layout::bands::{crumb_bar, PaneBands};
 use crate::window::layout::open_tabs::OpenTabs;
@@ -722,9 +723,6 @@ fn build_pane_views<'a>(input: PaneViewInput<'a>) -> Vec<PaneView<'a>> {
                 outlines: &[],
                 selection: sel_tuple,
                 selection_block: sel_block,
-                completion: None,
-                drop_list: None,
-                info: None,
                 toolbar: sticky_headers
                     .iter()
                     .find(|(tab, _)| tab == id)
@@ -852,14 +850,6 @@ fn editor_pane_view<'a>(
         outlines: &paint.outlines,
         selection: sel_tuple,
         selection_block: sel_block,
-        // Only where the keys go: a popup in a pane typed into no longer
-        // would answer nothing.
-        completion: paint
-            .completion
-            .as_ref()
-            .filter(|_| focused && window_focused),
-        info: paint.info.as_ref(),
-        drop_list: paint.drop_list.as_ref(),
         toolbar: paint.toolbar.as_ref(),
         url_underline: false,
     }
@@ -1231,6 +1221,20 @@ impl App {
         let focused_bands = self.term.block_bands(focused);
         // Rasterized before the renderer is taken mutably below, since filling
         // the icon cache needs it mutably too.
+        // Only where the keys go: a completion list in a pane typed into no
+        // longer would answer nothing.
+        let keyed = (self.input.focus.window).then_some(focused);
+        self.chrome.pane_popups = editor_paints
+            .iter()
+            .map(|paint| PanePopups {
+                completion: paint
+                    .completion
+                    .clone()
+                    .filter(|_| Some(paint.tab) == keyed),
+                drop_list: paint.drop_list.clone(),
+                info: paint.info.clone(),
+            })
+            .collect();
         let icon_placements = self.icon_placements(&editor_paints, &gutters, &rects, (cw, ch));
         let shown_editors: Vec<TabId> = editor_paints.iter().map(|paint| paint.tab).collect();
         let picture_placements = self.editor_canvas_placements(&shown_editors, &rects, ch);

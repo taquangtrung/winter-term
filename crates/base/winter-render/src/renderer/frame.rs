@@ -20,8 +20,7 @@ use super::glyphs::{
 };
 use super::raster::{view::TabbarText, DIM_FACTOR};
 use super::widgets::{
-    CompletionView, DropListView, FindView, InfoView, InputView, TokenInspectView, ToolbarView,
-    TransientView, WhichKeyView,
+    FindView, InputView, TokenInspectView, ToolbarView, TransientView, WhichKeyView,
 };
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView};
@@ -245,21 +244,9 @@ impl GpuRenderer {
         let toolbars: Vec<&ToolbarView> = panes.iter().filter_map(|pane| pane.toolbar).collect();
         // One of each popup is drawn, so the focused pane's, the one the keys
         // reach: the first pane's in tree order took the slot from it.
-        let focused_first = || {
-            panes
-                .iter()
-                .filter(|pane| pane.focused)
-                .chain(panes.iter().filter(|pane| !pane.focused))
-        };
-        let completion = focused_first().find_map(|pane| pane.completion);
-        let info = focused_first().find_map(|pane| pane.info);
-        let drop_list = focused_first().find_map(|pane| pane.drop_list);
         self.prepare_overlay_images(
             images,
             &toolbars,
-            completion,
-            info,
-            drop_list,
             tabbar,
             input,
             find,
@@ -1119,9 +1106,6 @@ impl GpuRenderer {
         &mut self,
         images: &[ImagePlacement],
         toolbars: &[&ToolbarView],
-        completion: Option<&CompletionView>,
-        info: Option<&InfoView>,
-        drop_list: Option<&DropListView>,
         tabbar: Option<&TopTabbar>,
         input: Option<&InputView>,
         find: Option<&FindView>,
@@ -1139,15 +1123,6 @@ impl GpuRenderer {
         // Everything from here floats over the content, over the lines drawn
         // on the strips too (see `FrameLayers::over_image_verts`).
         let base = all_images.len();
-        if let Some(view) = drop_list {
-            all_images.extend(self.rasterize_drop_list(view, w, h));
-        }
-        if let Some(view) = info {
-            all_images.extend(self.rasterize_info(view, w, h));
-        }
-        if let Some(view) = completion {
-            all_images.extend(self.rasterize_completion(view, w, h));
-        }
         if let Some(c) = tabbar {
             all_images.extend(self.rasterize_dropdown(c, w, h));
             all_images.extend(self.rasterize_url_tooltip(c, w, h));
@@ -1381,19 +1356,16 @@ fn strip_pane<'a>(pane: &PaneView<'a>, strip: GridStrip<'a>) -> PaneView<'a> {
         blink_visible: true,
         block_band: None,
         bracket_colors: &[],
-        completion: None,
         cursor_line_row: None,
         cursor_shape: pane.cursor_shape,
         cursor_unfocused: false,
         cursor_visible: false,
         dim: pane.dim,
-        drop_list: None,
         find_labels: &[],
         focused: false,
         grid: strip.grid,
         gutter: Vec::new(),
         hovered_link: 0,
-        info: None,
         jump_target_row: None,
         labels: None,
         line_flash: None,

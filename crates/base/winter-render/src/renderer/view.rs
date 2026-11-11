@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::display::CellOverlay;
-use super::widgets::{CompletionView, DropListView, InfoView, ToolbarView};
+use super::widgets::ToolbarView;
 use crate::theme::Rgb;
 use winter_emulator::{CursorShape, Grid};
 
@@ -128,13 +128,6 @@ pub struct PaneView<'a> {
     pub scrollbar_active: bool,
     /// Whether the pointer is hovering over or dragging this pane's scrollbar.
     pub scrollbar_hover: bool,
-    /// The completion popup open in the pane, hung under the word it
-    /// completes.
-    pub completion: Option<&'a CompletionView>,
-    /// The info card open over the pane's text.
-    pub info: Option<&'a InfoView>,
-    /// The drop-down list open over the pane (the PDF viewer's outline).
-    pub drop_list: Option<&'a DropListView>,
     /// The toolbar drawn over the pane's top rows in the window's own font,
     /// for an editor that has one; the rows under it are left blank for it.
     pub toolbar: Option<&'a ToolbarView>,

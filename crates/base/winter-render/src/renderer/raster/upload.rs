@@ -17,10 +17,7 @@ use crate::image::ImagePlacement;
 use crate::renderer::glyphs::FontCtx;
 use crate::renderer::parts::titlebar::tabbar_strip_rgba;
 use crate::renderer::raster::chrome::{title_bar_height, TITLE_BAR_TOP_PAD};
-use crate::renderer::widgets::completion::completion_rgba;
-use crate::renderer::widgets::drop_list::drop_list_rgba;
 use crate::renderer::widgets::find::find_rgba;
-use crate::renderer::widgets::info::info_rgba;
 use crate::renderer::widgets::input::{confirm_button_rects, input_rgba, resolve_confirm_buttons};
 use crate::renderer::widgets::menu::{context_menu_rgba, dropdown_rgba, submenu_rgba};
 use crate::renderer::widgets::token_inspect::token_inspect_rgba;
@@ -29,8 +26,7 @@ use crate::renderer::widgets::tooltip::url_tooltip_rgba;
 use crate::renderer::widgets::transient::{transient_item_hits, transient_rgba, TransientHit};
 use crate::renderer::widgets::which_key::{which_key_item_hits, which_key_rgba, WhichKeyHit};
 use crate::renderer::widgets::{
-    CompletionView, DropListView, FindView, InfoView, InputView, TokenInspectView, ToolbarView,
-    TransientView, WhichKeyView,
+    FindView, InputView, TokenInspectView, ToolbarView, TransientView, WhichKeyView,
 };
 use crate::renderer::FrameHits;
 use crate::renderer::GpuRenderer;
@@ -77,15 +73,6 @@ const INPUT_TEXTURE_ID: u64 = u64::MAX - 9;
 /// slot below it.
 const TOOLBAR_TEXTURE_BASE: u64 = u64::MAX - 400;
 
-/// The texture of the completion popup.
-const COMPLETION_TEXTURE_ID: u64 = u64::MAX - 30;
-
-/// The texture of the drop-down list open over a pane.
-const DROP_LIST_TEXTURE_ID: u64 = u64::MAX - 32;
-
-/// The texture of the info card.
-const INFO_TEXTURE_ID: u64 = u64::MAX - 31;
-
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -109,9 +96,6 @@ pub(in crate::renderer) struct OverlayCaches {
     pub(in crate::renderer) pane_strips: HashMap<u64, RasterCache<PaneStripKey>>,
     tabbar_strip: RasterCache<TopTabbar>,
     token_inspect: RasterCache<TokenInspectView>,
-    completion: RasterCache<CompletionView>,
-    drop_list: RasterCache<DropListView>,
-    info: RasterCache<InfoView>,
     /// One per pane toolbar texture, keyed by its texture id, with where its
     /// buttons were drawn.
     toolbars: HashMap<u64, ToolbarCache>,
@@ -327,83 +311,6 @@ impl GpuRenderer {
     // --------------------------------------------------------------------
     // Overlays
     // --------------------------------------------------------------------
-
-    /// Rasterize the completion popup and upload it to the GPU.
-    pub(in crate::renderer) fn rasterize_completion(
-        &mut self,
-        view: &CompletionView,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        self.cached_overlay(
-            |c| &mut c.completion,
-            context,
-            view,
-            |r| {
-                r.paint_overlay(COMPLETION_TEXTURE_ID, |p| {
-                    completion_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        view,
-                        surface_w,
-                        surface_h,
-                    )
-                })
-            },
-        )
-    }
-
-    /// Rasterize the drop-down list open over a pane and upload it to the
-    /// GPU.
-    pub(in crate::renderer) fn rasterize_drop_list(
-        &mut self,
-        view: &DropListView,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        self.cached_overlay(
-            |c| &mut c.drop_list,
-            context,
-            view,
-            |r| {
-                r.paint_overlay(DROP_LIST_TEXTURE_ID, |p| {
-                    drop_list_rgba(p.font_system, p.swash_cache, &p.ctx, p.theme, view)
-                })
-            },
-        )
-    }
-
-    /// Rasterize the info card and upload it to the GPU.
-    pub(in crate::renderer) fn rasterize_info(
-        &mut self,
-        view: &InfoView,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        self.cached_overlay(
-            |c| &mut c.info,
-            context,
-            view,
-            |r| {
-                r.paint_overlay(INFO_TEXTURE_ID, |p| {
-                    info_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        view,
-                        surface_w,
-                        surface_h,
-                    )
-                })
-            },
-        )
-    }
 
     /// Rasterize each pane's toolbar, reusing what was painted for one that
     /// has not changed, and keep where its buttons were drawn for a press.
@@ -969,9 +876,6 @@ mod tests {
             TOKEN_INSPECT_TEXTURE_ID,
             FIND_TEXTURE_ID,
             INPUT_TEXTURE_ID,
-            COMPLETION_TEXTURE_ID,
-            DROP_LIST_TEXTURE_ID,
-            INFO_TEXTURE_ID,
         ];
         let count = ids.len();
         ids.sort_unstable();

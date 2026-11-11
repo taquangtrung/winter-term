@@ -180,6 +180,7 @@ impl App {
         self.render_frame(&view);
         frame.draw_texture(&texture, bounds);
         self.draw_status_bar(frame);
+        self.draw_pane_popups(frame);
         self.draw_cards(frame);
         self.draw_picker(frame);
     }
