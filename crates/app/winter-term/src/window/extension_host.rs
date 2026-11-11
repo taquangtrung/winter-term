@@ -1007,7 +1007,10 @@ mod tests {
             "its hint, after its label"
         );
         assert!(
-            matches!(&view.rows[0].row.icon, Some(IconKind::File { name }) if name == "first.md"),
+            view.rows[0].row.icon
+                == crate::icons::name_for(&IconKind::File {
+                    name: "first.md".to_string()
+                }),
             "its file's icon"
         );
         assert!(view.rows[1].row.icon.is_none(), "no file, no icon");

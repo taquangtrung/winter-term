@@ -3198,6 +3198,7 @@ dependencies = [
  "pollster",
  "regex",
  "resvg",
+ "serde",
  "taffy",
  "thiserror 2.0.20",
  "unicode-bidi",
@@ -7346,16 +7347,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "winter-picker"
-version = "0.1.0"
-dependencies = [
- "regex",
- "serde",
- "winter-base",
- "winter-model",
-]
-
-[[package]]
 name = "winter-proto"
 version = "0.1.0"
 dependencies = [
@@ -7470,7 +7461,6 @@ dependencies = [
  "winter-monitor",
  "winter-mux",
  "winter-pdf",
- "winter-picker",
  "winter-proto",
  "winter-render",
  "winter-simple-ext",

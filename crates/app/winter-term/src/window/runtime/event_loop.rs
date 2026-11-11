@@ -276,6 +276,11 @@ impl App {
 
             Input::FileDropped(_) | Input::FileHovered(_) | Input::FileHoverCancelled => {}
         }
+        // What was typed into an open picker's query reaches it now, with
+        // the window's context.
+        if let Some(window) = window {
+            self.type_into_picker(&mut cx.event_cx(window));
+        }
         // A key, a click, or the window's own focus may have moved the
         // keyboard; the programs that asked hear where it went.
         self.sync_focus_reports();

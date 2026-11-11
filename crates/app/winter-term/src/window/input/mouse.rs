@@ -1800,13 +1800,13 @@ mod tests {
     }
 
     /// A picker of two rows that do nothing.
-    fn two_rows() -> winter_picker::ListSource<crate::window::picker::WindowOutcome> {
+    fn two_rows() -> misty::picker::ListSource<crate::window::picker::WindowOutcome> {
         let rows = ["One", "Two"]
             .into_iter()
             .zip(0..)
-            .map(|(label, key)| winter_picker::Row::new(winter_picker::RowKey(key), label))
+            .map(|(label, key)| misty::picker::Row::new(misty::picker::RowKey(key), label))
             .collect();
-        winter_picker::ListSource::new("test", "", rows, |_| None)
+        misty::picker::ListSource::new("test", "", rows, "", |_| None)
     }
 
     #[test]

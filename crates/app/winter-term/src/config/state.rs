@@ -23,10 +23,10 @@ pub struct AppState {
     pub palette_history: Vec<String>,
     /// Each picker's earlier queries, newest first.
     #[serde(default)]
-    pub picker_history: winter_picker::History,
+    pub picker_history: misty::picker::History,
     /// How often and how lately each picker's rows were chosen.
     #[serde(default)]
-    pub picker_recency: winter_picker::Recency,
+    pub picker_recency: misty::picker::Recency,
     /// Directories opened in a listing, most recent first.
     #[serde(default)]
     pub recent_dirs: Vec<PathBuf>,

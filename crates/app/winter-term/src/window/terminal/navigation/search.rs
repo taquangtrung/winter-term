@@ -628,7 +628,7 @@ pub(in crate::window) fn painted_match_spans(
 /// under Scout lights what Scout matched.
 pub(in crate::window) fn query_match_spans(
     grid: &winter_emulator::Grid,
-    query: &winter_picker::query::Query,
+    query: &misty::picker::Query,
 ) -> Vec<(usize, usize, usize)> {
     let top = grid.to_absolute_row(0);
     (0..grid.rows())

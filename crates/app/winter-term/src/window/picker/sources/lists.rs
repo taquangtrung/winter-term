@@ -8,15 +8,17 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+use misty::picker::{ActionId, PreviewKind, Row, RowKey};
 use winter_model::editor::OpenTarget;
 use winter_model::layout::TabId;
 use winter_model::paint::IconKind;
 use winter_model::path::abbreviate_home;
-use winter_picker::{ActionId, FilePreview, Preview, PreviewKind, Row, RowKey};
 
 use super::listing::{Entry, Listing, ListingAction};
 use crate::window::editor::buffers::{buffer_label, tab_icon};
+use crate::window::picker::sources::IconRow;
 use crate::window::picker::WindowOutcome;
+use crate::window::picker::{FilePreview, Preview};
 use crate::window::recent::merged;
 use crate::window::App;
 
@@ -85,7 +87,7 @@ impl App {
             if self.any_tab_holding(None, &path).is_some() {
                 continue;
             }
-            let row = Row::new(RowKey(0), abbreviate_home(&path)).with_icon(file_icon(&path));
+            let row = Row::new(RowKey(0), abbreviate_home(&path)).with_icon_kind(file_icon(&path));
             let preview = Preview::File(FilePreview {
                 column: None,
                 line: 1,
@@ -104,7 +106,7 @@ impl App {
             if !path.is_dir() {
                 continue;
             }
-            let row = Row::new(RowKey(0), abbreviate_home(&path)).with_icon(dir_icon(&path));
+            let row = Row::new(RowKey(0), abbreviate_home(&path)).with_icon_kind(dir_icon(&path));
             list.push(Entry::new(row, WindowOutcome::OpenDir(path)));
         }
         list
@@ -150,7 +152,7 @@ impl App {
                 let label = format!("{}: {}", pane_index + 1, self.tab_full_name(tab));
                 let row = Row::new(RowKey(0), label)
                     .with_hint((tab_index + 1).to_string())
-                    .with_icon(self.tab_icon_kind(tab));
+                    .with_icon_kind(self.tab_icon_kind(tab));
                 list.push(Entry::new(row, WindowOutcome::FocusTab(tab)));
             }
         }
@@ -174,7 +176,7 @@ impl App {
                 .collect::<Vec<_>>()
         });
         for dir in dirs.unwrap_or_default() {
-            let row = Row::new(RowKey(0), dir.clone()).with_icon(dir_icon(Path::new(&dir)));
+            let row = Row::new(RowKey(0), dir.clone()).with_icon_kind(dir_icon(Path::new(&dir)));
             list.push(Entry::new(row, WindowOutcome::ChangeDirectory(dir)));
         }
         list
@@ -292,14 +294,14 @@ impl App {
         let label = buffer_label(slot.kind(), slot.page.as_editor()?);
         let row = Row::new(RowKey(0), label)
             .with_hint(hint)
-            .with_icon(tab_icon(slot.kind(), slot.page));
+            .with_icon_kind(tab_icon(slot.kind(), slot.page));
         let kill = Some(WindowOutcome::KillBuffer(tab));
         Some(Entry::new(row, WindowOutcome::ShowBuffer(tab)).with_actions(vec![kill]))
     }
 
     /// A tab's row: its full name and its icon.
     fn tab_row(&self, tab: TabId) -> Row {
-        Row::new(RowKey(0), self.tab_full_name(tab)).with_icon(self.tab_icon_kind(tab))
+        Row::new(RowKey(0), self.tab_full_name(tab)).with_icon_kind(self.tab_icon_kind(tab))
     }
 
     /// Where the shells have been, newest first, from each terminal's record

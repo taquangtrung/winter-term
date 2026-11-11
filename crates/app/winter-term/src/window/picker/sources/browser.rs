@@ -19,17 +19,19 @@ use std::sync::mpsc;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::thread;
 
+use misty::picker::{
+    Action, ActionId, Batch, Feed, MatchOn, Matching, Resume, Row, RowKey, Source, SourceKey,
+};
 use winter_base::remote::{self, Kind, Place, Remote, RemoteError};
 use winter_base::wake::wake_window;
 use winter_model::editor::OpenTarget;
 use winter_model::input::table::{find, Binding, KeyTable};
-use winter_model::input::Key;
 use winter_model::paint::IconKind;
 use winter_model::path::{abbreviate_home, clean_path, expand_home};
-use winter_picker::{
-    Action, ActionId, Batch, Feed, MatchOn, Matching, Resume, Row, RowKey, Source, SourceKey,
-};
 
+use crate::window::input::misty::winter_key;
+use crate::window::picker::sources::IconRow;
+use crate::window::picker::Preview;
 use crate::window::picker::WindowOutcome;
 
 // ========================================================================
@@ -224,7 +226,7 @@ impl BrowserSource {
     }
 }
 
-impl Source<WindowOutcome> for BrowserSource {
+impl Source<WindowOutcome, Preview> for BrowserSource {
     fn id(&self) -> &'static str {
         "browser"
     }
@@ -297,7 +299,7 @@ impl Source<WindowOutcome> for BrowserSource {
             .file_name()?
             .to_string_lossy()
             .into_owned();
-        let row = Row::new(NEW_FILE_ROW, query).with_icon(IconKind::File { name });
+        let row = Row::new(NEW_FILE_ROW, query).with_icon_kind(IconKind::File { name });
         Some(row.with_hint(NEW_FILE_HINT))
     }
 
@@ -332,10 +334,11 @@ impl Source<WindowOutcome> for BrowserSource {
 
     fn key(
         &mut self,
-        key: &Key,
+        key: &misty::Key,
         row: Option<RowKey>,
         query: &str,
     ) -> Option<SourceKey<WindowOutcome>> {
+        let key = &winter_key(*key);
         let item = row.and_then(|row| self.item(row));
         match find(&KEYS, key) {
             // `./` is where the browser already is.
@@ -447,7 +450,7 @@ fn item_row(key: RowKey, item: &DirItem) -> Row {
         },
         false => IconKind::File { name },
     };
-    let row = Row::new(key, item.label.clone()).with_icon(icon);
+    let row = Row::new(key, item.label.clone()).with_icon_kind(icon);
     match item.label.as_str() {
         CURRENT_LABEL => row.with_hint(CURRENT_HINT),
         PARENT_LABEL => row.with_hint(PARENT_HINT),
@@ -557,7 +560,9 @@ fn join(dir: &Path, query: &str) -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use winter_model::input::KeyCode;
+    use winter_model::input::{Key, KeyCode};
+
+    use crate::window::input::misty::misty_key;
 
     use super::*;
 
@@ -590,12 +595,16 @@ mod tests {
             expanded: false,
             name: String::new(),
         };
-        assert_eq!(icon(0), Some(plain), "`./`");
+        assert_eq!(icon(0), crate::icons::name_for(&plain), "`./`");
         let src = IconKind::Dir {
             expanded: false,
             name: "src".to_string(),
         };
-        assert_eq!(icon(2), Some(src), "a folder keeps its name's icon");
+        assert_eq!(
+            icon(2),
+            crate::icons::name_for(&src),
+            "a folder keeps its name's icon"
+        );
     }
 
     #[test]
@@ -605,7 +614,7 @@ mod tests {
         *browser.items.lock().unwrap() = listing(&root).unwrap();
         let here = RowKey(0);
         assert_eq!(
-            browser.key(&Key::plain(KeyCode::Enter), Some(here), ""),
+            browser.key(&misty_key(&Key::plain(KeyCode::Enter)), Some(here), ""),
             None,
             "only `../` steps on `Enter`"
         );
@@ -614,7 +623,7 @@ mod tests {
             Some(WindowOutcome::OpenDir(root.clone()))
         );
         assert_eq!(
-            browser.key(&Key::plain(KeyCode::Tab), Some(here), ""),
+            browser.key(&misty_key(&Key::plain(KeyCode::Tab)), Some(here), ""),
             None,
             "`./` is not stepped into"
         );
@@ -628,18 +637,18 @@ mod tests {
         *browser.items.lock().unwrap() = listing(&root).unwrap();
         let src = RowKey(2);
         assert_eq!(
-            browser.key(&Key::plain(KeyCode::Tab), Some(src), ""),
+            browser.key(&misty_key(&Key::plain(KeyCode::Tab)), Some(src), ""),
             Some(SourceKey::Reset)
         );
         assert_eq!(browser.dir, root.join("src"));
         assert_eq!(
-            browser.key(&Key::plain(KeyCode::Left), None, ""),
+            browser.key(&misty_key(&Key::plain(KeyCode::Left)), None, ""),
             Some(SourceKey::Reset)
         );
         assert_eq!(browser.dir, root);
         let file = RowKey(4);
         assert_eq!(
-            browser.key(&Key::plain(KeyCode::Tab), Some(file), ""),
+            browser.key(&misty_key(&Key::plain(KeyCode::Tab)), Some(file), ""),
             None,
             "a file is not stepped into"
         );
@@ -712,7 +721,7 @@ mod tests {
         );
         assert_eq!(browser.query_row("new.rs"), None, "nothing is made");
         assert_eq!(
-            browser.key(&Key::plain(KeyCode::Enter), Some(src), ""),
+            browser.key(&misty_key(&Key::plain(KeyCode::Enter)), Some(src), ""),
             Some(SourceKey::Reset)
         );
         assert_eq!(browser.dir, root.join("src"));
@@ -722,7 +731,7 @@ mod tests {
     fn test_a_slash_after_a_typed_path_goes_there() {
         let root = tree();
         let mut browser = BrowserSource::new(root.clone());
-        let slash = Key::plain(KeyCode::Char('/'));
+        let slash = misty_key(&Key::plain(KeyCode::Char('/')));
         assert_eq!(browser.key(&slash, None, "src"), Some(SourceKey::Reset));
         assert_eq!(browser.dir, root.join("src"));
         assert_eq!(

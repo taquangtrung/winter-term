@@ -4,8 +4,8 @@
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use misty::picker::{Row, RowKey, SavedLines};
 use winter_base::project;
-use winter_picker::{Row, RowKey, SavedLines};
 
 use super::outcome::{MuxNew, MuxRemote, MuxRequest, SaveHits, WorkspaceRequest};
 use super::sources::{
@@ -205,7 +205,7 @@ impl App {
     ) -> Listing {
         let mut listing = Listing::new(id, title)
             .placeholder("Session name")
-            .resume(winter_picker::Resume::Never);
+            .resume(misty::picker::Resume::Never);
         for session in mux_session_entries(empty) {
             let row = Row::new(RowKey(0), session.clone());
             let name = session
@@ -384,7 +384,7 @@ mod tests {
 
     #[test]
     fn test_a_listing_is_named_by_its_title_without_the_hint_after_it() {
-        use winter_picker::Source;
+        use misty::picker::Source;
         let listing = super::super::sources::listing::Listing::new(
             "recent_dirs",
             "Recent directories: Enter changes to one",

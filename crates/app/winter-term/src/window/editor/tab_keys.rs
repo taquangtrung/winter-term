@@ -1,8 +1,8 @@
 //! The keys of the focused tab (`F1 h`): an editor's own, else the
 //! window's.
 
+use misty::picker::{Resume, Row, RowKey};
 use winter_model::layout::TabId;
-use winter_picker::{Resume, Row, RowKey};
 
 use crate::window::commands::BUILTIN;
 use crate::window::picker::sources::{Entry, Listing};

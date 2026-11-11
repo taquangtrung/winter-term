@@ -38,10 +38,12 @@ pub(in crate::window) use scout::{color_scout_rows, ScoutLines, SCOUT_PICKER};
 pub(in crate::window) use search::{ProjectSearch, TodoSearch};
 pub(in crate::window) use typed::Typed;
 
+use misty::picker::{ActionId, Row, Source};
 use winter_model::input::table::{find, Binding, KeyTable, Listed};
 use winter_model::input::Key;
-use winter_picker::{ActionId, Source};
+use winter_model::paint::IconKind;
 
+use crate::window::picker::Preview;
 use crate::window::picker::WindowOutcome;
 use crate::window::App;
 
@@ -110,6 +112,27 @@ pub(crate) const KEY_TABLES: &[&dyn Listed] =
     &[&browser::KEYS, &BUFFER_KEYS, &FILE_KEYS, &SEARCH_KEYS];
 
 // ========================================================================
+// Traits
+// ========================================================================
+
+/// A row's icon named by what it depicts, as Winter's bundled icons
+/// resolve it: the icon name misty's rows carry.
+pub(in crate::window) trait IconRow {
+    /// This row with the icon `kind` resolves to, or none when nothing is
+    /// bundled for it.
+    fn with_icon_kind(self, kind: IconKind) -> Self;
+}
+
+impl IconRow for Row {
+    fn with_icon_kind(self, kind: IconKind) -> Self {
+        match crate::icons::name_for(&kind) {
+            Some(name) => self.with_icon(name),
+            None => self,
+        }
+    }
+}
+
+// ========================================================================
 // Functions
 // ========================================================================
 
@@ -130,7 +153,7 @@ pub(in crate::window) fn action_for(id: &str, key: &Key) -> Option<ActionId> {
 pub(in crate::window) fn rebuild(
     app: &mut App,
     id: &str,
-) -> Option<Box<dyn Source<WindowOutcome>>> {
+) -> Option<Box<dyn Source<WindowOutcome, Preview>>> {
     let focused = app.layout().focused();
     let listing = match id {
         "buffers" => app.buffer_listing(),

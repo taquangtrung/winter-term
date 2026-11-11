@@ -4,14 +4,13 @@
 //! their panes, each cropped to its pane.
 
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
 
 use winter_render::renderer::GpuRenderer;
 use winter_render::ImagePlacement;
 
 use winter_model::editor::Appearance;
 use winter_model::layout::{Rect, TabId};
-use winter_model::paint::{IconKind, Row};
+use winter_model::paint::Row;
 use winter_model::picture::{Content, PictureClip, PictureFrame};
 
 use crate::window::App;
@@ -48,10 +47,6 @@ pub(in crate::window) struct Textures {
     /// What the GPU holds for what each editor shows over its pane, by tab
     /// and the key the editor gave it.
     pub(in crate::window) editors: HashMap<(TabId, u64), EditorTexture>,
-    /// Each icon the open palette's entries name, resolved to its SVG once
-    /// rather than on every frame the palette is drawn. Emptied whenever no
-    /// palette is open, so it never outgrows one list.
-    pub(in crate::window) palette_icons: HashMap<IconKind, Option<Arc<[u8]>>>,
 }
 
 /// How content is drawn into its texture.

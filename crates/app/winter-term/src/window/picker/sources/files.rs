@@ -10,17 +10,18 @@ use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex, PoisonError};
 use std::thread;
 
+use misty::picker::{
+    Action, ActionId, Batch, Feed, MatchOn, Matching, PreviewKind, Resume, Row, RowKey, Source,
+};
 use winter_base::process;
 use winter_base::wake::wake_window;
 use winter_model::editor::OpenTarget;
 use winter_model::paint::IconKind;
 use winter_model::path::abbreviate_home;
-use winter_picker::{
-    Action, ActionId, Batch, Feed, FilePreview, MatchOn, Matching, Preview, PreviewKind, Resume,
-    Row, RowKey, Source,
-};
 
+use crate::window::picker::sources::IconRow;
 use crate::window::picker::WindowOutcome;
+use crate::window::picker::{FilePreview, Preview};
 
 // ========================================================================
 // Constants
@@ -94,7 +95,7 @@ impl FileSource {
     }
 }
 
-impl Source<WindowOutcome> for FileSource {
+impl Source<WindowOutcome, Preview> for FileSource {
     fn id(&self) -> &'static str {
         self.id
     }
@@ -165,7 +166,7 @@ impl Source<WindowOutcome> for FileSource {
                 title: "Open".to_string(),
             },
             Action {
-                button: Some(BESIDE_ICON),
+                button: crate::icons::name_for(&BESIDE_ICON),
                 id: OPEN_BESIDE,
                 title: "Open Beside".to_string(),
             },
@@ -226,7 +227,7 @@ fn send_files(files: &[String], send: &mpsc::Sender<Batch>) {
 /// A file's row: its path from the root, with its type's icon.
 fn file_row(key: RowKey, path: &str) -> Row {
     let name = path.rsplit('/').next().unwrap_or(path).to_string();
-    Row::new(key, path).with_icon(IconKind::File { name })
+    Row::new(key, path).with_icon_kind(IconKind::File { name })
 }
 
 /// The files under `root`, as `/`-separated paths from it, sorted: git's

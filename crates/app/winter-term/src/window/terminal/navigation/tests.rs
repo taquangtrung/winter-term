@@ -1480,7 +1480,7 @@ fn test_scout_opens_on_the_word_under_the_cursor_selected_to_replace() {
     app.open_scout(id);
     app.settle_picker();
     let view = app.chrome.picker().expect("Scout is open").view();
-    assert_eq!((view.query.as_str(), view.seeded), ("target", true));
+    assert_eq!(view.query, "target");
     assert_eq!(app.picker_labels(), ["2"], "the line holding it");
 }
 

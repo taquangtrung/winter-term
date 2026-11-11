@@ -5,6 +5,7 @@
 //! A key no table binds goes to the source (the browser's `Tab`) and then to
 //! the query, which takes the Emacs keys of every input field.
 
+use misty::picker::PickerAct;
 use winter_model::input::table::{Binding, KeyTable, Listed};
 
 // ========================================================================
@@ -12,7 +13,7 @@ use winter_model::input::table::{Binding, KeyTable, Listed};
 // ========================================================================
 
 /// The picker's keys, block `picker`.
-pub const KEYS: KeyTable<PickerAct> = KeyTable {
+pub(crate) const KEYS: KeyTable<PickerAct> = KeyTable {
     block: "picker",
     bindings: &[
         Binding {
@@ -88,37 +89,18 @@ pub const KEYS: KeyTable<PickerAct> = KeyTable {
 
 /// The picker's key tables, for the one list the Keys editor shows and
 /// `keybindings.kdl` rebinds by.
-pub const KEY_TABLES: &[&dyn Listed] = &[&KEYS];
+pub(crate) const KEY_TABLES: &[&dyn Listed] = &[&KEYS];
 
 // ========================================================================
-// Data Structures
+// Functions
 // ========================================================================
 
-/// What a picker key does.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum PickerAct {
-    /// Run the selected row's first action, or the answer typed.
-    Accept,
-    /// Show the selected row's actions.
-    ActionMenu,
-    /// Close the picker, or the action menu over it.
-    Close,
-    /// Bring back a later query.
-    HistoryNext,
-    /// Bring back an earlier query.
-    HistoryPrevious,
-    /// Select the next row.
-    Next,
-    /// Move the selection a page down.
-    PageDown,
-    /// Move the selection a page up.
-    PageUp,
-    /// Select the previous row.
-    Previous,
-    /// Save the rows to a buffer.
-    Save,
-    /// Show or hide the side panel.
-    TogglePanel,
+/// The hint the picker's hints line shows for `act`: its first key and
+/// its label, or `None` for an act the table binds to no key.
+pub(crate) fn hint(act: PickerAct) -> Option<String> {
+    let binding = KEYS.bindings.iter().find(|binding| binding.action == act)?;
+    let key = binding.keys.first()?;
+    Some(format!("{key} {}", binding.label))
 }
 
 // ========================================================================

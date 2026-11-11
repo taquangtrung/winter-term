@@ -10,15 +10,16 @@ use std::collections::HashSet;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use misty::picker::{
+    Action, ActionId, Batch, Feed, MatchOn, Matching, PreviewKind, Resume, Row, RowKey, Source,
+};
 use winter_base::wake::wake_window;
 use winter_ext_api::{PickerId, PickerRow};
 use winter_model::paint::IconKind;
-use winter_picker::{
-    Action, ActionId, Batch, Feed, FilePreview, MatchOn, Matching, Preview, PreviewKind, Resume,
-    Row, RowKey, Source,
-};
 
+use crate::window::picker::sources::IconRow;
 use crate::window::picker::WindowOutcome;
+use crate::window::picker::{FilePreview, Preview};
 
 // ========================================================================
 // Constants
@@ -97,7 +98,7 @@ impl ExtensionSource {
     }
 }
 
-impl Source<WindowOutcome> for ExtensionSource {
+impl Source<WindowOutcome, Preview> for ExtensionSource {
     fn id(&self) -> &'static str {
         "extension"
     }
@@ -273,7 +274,7 @@ fn rows_from(rows: &[PickerRow], first: usize) -> Vec<Row> {
                 .and_then(|path| path.file_name())
                 .map(|name| name.to_string_lossy().into_owned());
             match name {
-                Some(name) => shown.with_icon(IconKind::File { name }),
+                Some(name) => shown.with_icon_kind(IconKind::File { name }),
                 None => shown,
             }
         })

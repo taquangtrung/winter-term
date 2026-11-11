@@ -25,7 +25,7 @@ use super::*;
 use crate::window::picker::sources::listing::CHOOSE;
 use crate::window::picker::sources::Listing;
 use crate::window::picker::WindowOutcome;
-use winter_picker::Source;
+use misty::picker::Source;
 
 mod buffer_views;
 mod builds;
@@ -255,7 +255,7 @@ impl Editor for WaitedEditor {
 
 /// What each row of `listing` does when chosen, in order.
 fn row_actions(listing: &mut Listing) -> Vec<Option<WindowOutcome>> {
-    let winter_picker::Feed::Fixed(rows) = listing.feed("") else {
+    let misty::picker::Feed::Fixed(rows) = listing.feed("") else {
         panic!("a listing gives its rows at once");
     };
     rows.iter()

@@ -6,14 +6,16 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
+use misty::picker::{
+    Action, ActionId, Feed, Highlights, MatchOn, Matching, Resume, Row, RowKey, Source,
+};
 use winter_model::editor::OpenTarget;
 use winter_model::paint::IconKind;
 use winter_model::path::abbreviate_home;
-use winter_picker::{
-    Action, ActionId, Feed, Highlights, MatchOn, Matching, Resume, Row, RowKey, Source,
-};
 
 use super::stream::{place_key, stream_lines};
+use crate::window::picker::sources::IconRow;
+use crate::window::picker::Preview;
 use crate::window::picker::WindowOutcome;
 
 // ========================================================================
@@ -58,7 +60,7 @@ impl LocateSource {
     }
 }
 
-impl Source<WindowOutcome> for LocateSource {
+impl Source<WindowOutcome, Preview> for LocateSource {
     fn id(&self) -> &'static str {
         "locate"
     }
@@ -170,7 +172,7 @@ fn path_row(key: RowKey, path: &Path) -> Row {
         },
         false => IconKind::File { name },
     };
-    Row::new(key, abbreviate_home(path)).with_icon(icon)
+    Row::new(key, abbreviate_home(path)).with_icon_kind(icon)
 }
 
 /// The locate program this machine has, looked for once.

@@ -5,14 +5,15 @@
 
 use std::path::PathBuf;
 
+use misty::picker::Picker;
 use winter_model::button::{Button, ButtonGroup};
 use winter_model::editor::PromptReply;
 use winter_model::layout::TabId;
 use winter_model::notify::Notice;
 use winter_model::textedit::field::TextField;
-use winter_picker::Picker;
 
 use crate::window::editor::{ActivePick, ActivePrompt, PendingClose};
+use crate::window::picker::Preview;
 use crate::window::picker::WindowOutcome;
 use crate::window::App;
 use crate::window::Chrome;
@@ -102,7 +103,7 @@ pub(in crate::window) struct ClosePrompt {
 /// The picker, and the editor question it answers while it shows a list of
 /// that editor's own choices.
 pub(in crate::window) struct PickerOverlay {
-    pub(in crate::window) picker: Box<Picker<WindowOutcome>>,
+    pub(in crate::window) picker: Box<Picker<WindowOutcome, Preview>>,
     /// The question a pick answers; `None` for the window's own pickers.
     pub(in crate::window) pick: Option<ActivePick>,
 }
@@ -385,7 +386,7 @@ impl App {
 
 impl Chrome {
     /// The open picker, if the overlay is one.
-    pub(in crate::window) fn picker(&self) -> Option<&Picker<WindowOutcome>> {
+    pub(in crate::window) fn picker(&self) -> Option<&Picker<WindowOutcome, Preview>> {
         let Some(Overlay::Picker(overlay)) = &self.overlay else {
             return None;
         };
@@ -393,7 +394,7 @@ impl Chrome {
     }
 
     /// The open picker, to change it in place.
-    pub(in crate::window) fn picker_mut(&mut self) -> Option<&mut Picker<WindowOutcome>> {
+    pub(in crate::window) fn picker_mut(&mut self) -> Option<&mut Picker<WindowOutcome, Preview>> {
         let Some(Overlay::Picker(overlay)) = &mut self.overlay else {
             return None;
         };

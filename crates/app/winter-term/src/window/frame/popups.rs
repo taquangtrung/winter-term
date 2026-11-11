@@ -1,12 +1,8 @@
 //! The popups composed over the panes each frame: the picker, and the
 //! which-key hint for a pending prefix.
 
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use winter_model::paint::IconKind;
+use misty::picker::{MenuView, PreviewKind, SessionView, Status};
 use winter_model::paint::Style;
-use winter_picker::{MenuView, PreviewKind, SessionView, Status};
 use winter_render::{InfoSpan, PanelLine, PanelSpan, PanelView, PickerItem, PickerView, Theme};
 
 use crate::window::frame::frame_grid::{span_rgb, span_style};
@@ -47,14 +43,10 @@ pub(in crate::window) struct PickerLook<'a> {
 /// The renderer's view of a picker session: its rows on screen, its query,
 /// its title with its counts, its key hints, and its side panel. While the
 /// action menu is open, the list shows the selected row's actions.
-///
-/// `icons` holds what each icon kind resolved to on earlier frames, so a long
-/// list is not walked through the icon tables again every frame.
 pub(in crate::window) fn session_view(
     view: &SessionView,
     panel: &PanelState,
     look: &PickerLook,
-    icons: &mut HashMap<IconKind, Option<Arc<[u8]>>>,
 ) -> PickerView {
     let items = view
         .rows
@@ -64,8 +56,8 @@ pub(in crate::window) fn session_view(
             buttons: shown
                 .buttons
                 .iter()
-                .filter_map(|action| action.button.as_ref())
-                .filter_map(|kind| palette_icon(icons, kind))
+                .filter_map(|action| action.button.as_deref())
+                .filter_map(crate::icons::named_svg)
                 .collect(),
             description: shown.row.description.clone(),
             description_colors: Vec::new(),
@@ -73,11 +65,7 @@ pub(in crate::window) fn session_view(
             detail: shown.row.detail.clone(),
             detail_matches: shown.lit.detail.clone(),
             hint: shown.row.hint.clone(),
-            icon: shown
-                .row
-                .icon
-                .as_ref()
-                .and_then(|kind| palette_icon(icons, kind)),
+            icon: shown.row.icon.as_deref().and_then(crate::icons::named_svg),
             label: shown.row.label.clone(),
             match_positions: shown.lit.label.clone(),
         })
@@ -89,13 +77,15 @@ pub(in crate::window) fn session_view(
     };
     let shown_panel = view.panel && view.preview_kind == PreviewKind::Panel;
     PickerView {
-        caret: view.caret,
+        // Drawn at the query's end until misty's quick pick draws the
+        // picker, and its field the caret.
+        caret: view.query.chars().count(),
         caret_visible: look.caret_visible,
         empty_message,
         hints: view
             .hints
             .iter()
-            .map(|hint| format!("{} {}", hint.key, hint.label))
+            .filter_map(|act| crate::window::picker::keys::hint(*act))
             .collect::<Vec<_>>()
             .join(HINT_SEPARATOR),
         items,
@@ -103,10 +93,10 @@ pub(in crate::window) fn session_view(
         panel: shown_panel.then(|| panel_view(panel, look.theme)),
         placeholder: view.placeholder.clone(),
         query: view.query.clone(),
-        query_selected: view.seeded,
+        query_selected: false,
         selected: view.selected.unwrap_or(usize::MAX),
         title: view.heading(),
-        title_count: view.count(),
+        title_count: view.count(&misty::strings::Strings::english()),
         menu: view
             .menu
             .as_ref()
@@ -210,19 +200,6 @@ pub(in crate::window) fn card_runs(line: &str, styles: &[Style], theme: &Theme) 
         last = Some(style);
     }
     runs
-}
-
-/// The SVG for `kind`, from `icons` when an earlier frame resolved it.
-pub(in crate::window) fn palette_icon(
-    icons: &mut HashMap<IconKind, Option<Arc<[u8]>>>,
-    kind: &IconKind,
-) -> Option<Arc<[u8]>> {
-    if let Some(hit) = icons.get(kind) {
-        return hit.clone();
-    }
-    let svg = crate::icons::shared_svg(kind);
-    icons.insert(kind.clone(), svg.clone());
-    svg
 }
 
 /// The which-key popup, once a pending prefix has been held long enough to be

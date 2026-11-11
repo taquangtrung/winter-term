@@ -18,10 +18,10 @@ use crate::editors::compile::task::{self, Task};
 use crate::editors::compile::{
     CompileEditor, NEXT_PLACE_COMMAND, PREVIOUS_PLACE_COMMAND, RERUN_COMMAND,
 };
+use misty::picker::{Resume, Row, RowKey};
 use winter_base::project;
 use winter_model::editor::{BuildStart, SAVE_ALL};
 use winter_model::layout::TabId;
-use winter_picker::{Resume, Row, RowKey};
 
 use crate::window::picker::sources::{Entry, Listing};
 use crate::window::picker::WindowOutcome;

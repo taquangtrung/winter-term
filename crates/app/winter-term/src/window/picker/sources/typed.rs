@@ -2,8 +2,9 @@
 //! name, a mux session to start. There are no rows; `Enter` hands the query
 //! on.
 
-use winter_picker::{Action, ActionId, Feed, Matching, Resume, RowKey, Source};
+use misty::picker::{Action, ActionId, Feed, Matching, Resume, RowKey, Source};
 
+use crate::window::picker::Preview;
 use crate::window::picker::WindowOutcome;
 
 // ========================================================================
@@ -48,7 +49,7 @@ impl Typed {
     }
 }
 
-impl Source<WindowOutcome> for Typed {
+impl Source<WindowOutcome, Preview> for Typed {
     fn id(&self) -> &'static str {
         self.id
     }

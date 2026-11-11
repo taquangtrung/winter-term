@@ -253,6 +253,7 @@ impl App {
     /// Let the threads feeding this app wake misty's event loop, through
     /// `waker`, when they have news.
     pub(in crate::window) fn connect_waker(&mut self, waker: misty::Waker<()>) {
+        self.pickers.waker = Some(waker.clone());
         self.runtime.waker.connect(move || waker.wake());
         self.runtime.waker.share();
     }
@@ -541,7 +542,7 @@ impl RuntimeState {
 /// Each picker's earlier queries as the saved state left them: the command
 /// palette's taken from the history the palette used to keep alone, until
 /// its own has any.
-fn picker_history(state: &crate::config::AppState) -> winter_picker::History {
+fn picker_history(state: &crate::config::AppState) -> misty::picker::History {
     let mut history = state.picker_history.clone();
     if history.of(COMMANDS).is_empty() {
         for query in state.palette_history.iter().rev() {

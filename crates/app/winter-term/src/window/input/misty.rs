@@ -84,6 +84,41 @@ pub(in crate::window) fn winter_key(key: Key) -> input::Key {
     .canonical()
 }
 
+/// Misty's key for Winter's `key`.
+pub(in crate::window) fn misty_key(key: &input::Key) -> Key {
+    let code = match key.code {
+        input::KeyCode::Backspace => KeyCode::Backspace,
+        input::KeyCode::Char(c) => KeyCode::Char(c),
+        input::KeyCode::Delete => KeyCode::Delete,
+        input::KeyCode::Down => KeyCode::Down,
+        input::KeyCode::End => KeyCode::End,
+        input::KeyCode::Enter => KeyCode::Enter,
+        input::KeyCode::Escape => KeyCode::Esc,
+        input::KeyCode::F(n) => KeyCode::F(n),
+        input::KeyCode::Home => KeyCode::Home,
+        input::KeyCode::Insert => KeyCode::Insert,
+        input::KeyCode::Left => KeyCode::Left,
+        input::KeyCode::PageDown => KeyCode::PageDown,
+        input::KeyCode::PageUp => KeyCode::PageUp,
+        input::KeyCode::Right => KeyCode::Right,
+        input::KeyCode::Space => KeyCode::Char(' '),
+        input::KeyCode::Tab => KeyCode::Tab,
+        input::KeyCode::Up => KeyCode::Up,
+    };
+    let mut mods = Mods::NONE;
+    for (held, flag) in [
+        (key.alt, Mods::ALT),
+        (key.ctrl, Mods::CTRL),
+        (key.shift, Mods::SHIFT),
+        (key.sup, Mods::SUPER),
+    ] {
+        if held {
+            mods |= flag;
+        }
+    }
+    Key::new(code, mods)
+}
+
 /// The winit modifiers for misty's `mods`.
 pub(in crate::window) fn winit_modifiers(mods: Mods) -> Modifiers {
     let mut state = ModifiersState::empty();

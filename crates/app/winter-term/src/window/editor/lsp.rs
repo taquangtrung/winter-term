@@ -9,12 +9,12 @@ use std::sync::mpsc;
 use super::extension_inline::InlineOffers;
 use super::extension_servers::ExtensionServers;
 use crate::window::App;
+use misty::picker::{Resume, Row, RowKey};
 use winter_base::wake::Waker;
 use winter_lsp::servers::{self, Server, INSTALL_COMMAND_TITLE};
 use winter_lsp::{Event, Hub, Incoming, ServerId};
 use winter_model::editor::{EditorOutcome, Notice};
 use winter_model::layout::TabId;
-use winter_picker::{Resume, Row, RowKey};
 use winter_text::TextEditor;
 
 use crate::window::picker::sources::{Entry, Listing};

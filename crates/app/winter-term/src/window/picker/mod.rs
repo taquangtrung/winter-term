@@ -1,4 +1,4 @@
-//! The window's side of the picker framework (`winter-picker`): opening a
+//! The window's side of the picker framework (misty's `misty::picker`): opening a
 //! picker over a source, routing keys to it through its key tables, taking
 //! in what its source and matcher sent, carrying out what a row chose, and
 //! keeping the last picker session to resume.
@@ -7,30 +7,34 @@
 //! - `preview`: a live picker's preview in its pane, and the side panel's.
 //! - [`sources`]: one source per picker.
 
+pub(crate) mod keys;
 mod open;
 pub(in crate::window) mod outcome;
-mod preview;
+pub(in crate::window) mod preview;
 pub(in crate::window) mod sources;
 
 pub(in crate::window) use outcome::WindowOutcome;
 
-pub(in crate::window) use preview::PanelState;
+pub(in crate::window) use preview::{FilePreview, PanelState, Preview};
 
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use misty::picker::{
+    self, History, Parked, Picker, PickerAct, PreviewKind, Recency, Reply, Source,
+};
+use misty::EventCx;
 use winter_model::input::table::find;
 use winter_model::input::Key;
 use winter_model::layout::TabId;
 use winter_model::vim::objects::keyword_at;
-use winter_picker::{
-    History, Parked, Picker, PickerAct, PreviewKind, Recency, Reply, Source, KEYS,
-};
 
 use crate::window::editor::ActivePick;
+use crate::window::input::misty::misty_key;
 use crate::window::input::overlay::{Overlay, PickerOverlay};
 use crate::window::terminal::navigation::vim::line_chars;
 use crate::window::App;
+use keys::KEYS;
 use sources::ScoutLines;
 
 // ========================================================================
@@ -48,6 +52,13 @@ const OPENING_PATIENCE: Duration = Duration::from_millis(30);
 /// Whether pickers match on the window's thread: under test, so a test never
 /// waits on a matcher's thread.
 const SYNCHRONOUS: bool = cfg!(test);
+
+/// The size of the window a test types into a picker through.
+#[cfg(test)]
+const TEST_WINDOW: (u32, u32) = (800, 600);
+
+/// Said when a picker is asked to save its rows and none match.
+const NOTHING_TO_SAVE: &str = "no rows to save";
 
 /// Said when there is no picker session to resume.
 const NOTHING_TO_RESUME: &str = "no picker to resume";
@@ -67,8 +78,16 @@ pub(in crate::window) struct PickerMemory {
     /// The side panel's preview of the selected row, read off the window's
     /// thread.
     pub(in crate::window) panel: PanelState,
-    parked: Option<Parked<WindowOutcome>>,
+    parked: Option<Parked<WindowOutcome, Preview>>,
     pub(in crate::window) recency: Recency,
+    /// The keys typed into the open picker's query and not yet handed to
+    /// it, which takes them with the window's context at the end of the
+    /// input they came in.
+    typed: Vec<misty::Key>,
+    /// What wakes misty's loop when a picker's matcher has news; `None`
+    /// before the window is open, when pickers match on the window's
+    /// thread.
+    pub(in crate::window) waker: Option<misty::Waker<()>>,
     /// The editor lines Scout lists, while it is the picker last opened over
     /// an editor (see [`ScoutLines`]).
     pub(in crate::window) scout: Option<ScoutLines>,
@@ -99,7 +118,10 @@ impl App {
     // --------------------------------------------------------------------
 
     /// Open a picker over `source`, in place of whatever holds the keyboard.
-    pub(in crate::window) fn open_picker(&mut self, source: Box<dyn Source<WindowOutcome>>) {
+    pub(in crate::window) fn open_picker(
+        &mut self,
+        source: Box<dyn Source<WindowOutcome, Preview>>,
+    ) {
         self.open_picker_answering(source, None);
     }
 
@@ -107,7 +129,7 @@ impl App {
     /// is told when it goes unanswered.
     pub(in crate::window) fn open_picker_answering(
         &mut self,
-        source: Box<dyn Source<WindowOutcome>>,
+        source: Box<dyn Source<WindowOutcome, Preview>>,
         pick: Option<ActivePick>,
     ) {
         let id = source.id();
@@ -125,7 +147,16 @@ impl App {
         let seed = (seeds && source.takes_word_at_point())
             .then(|| self.word_at_point(self.layout().focused()))
             .flatten();
-        let mut picker = Box::new(Picker::open(source, history, recency, panel, SYNCHRONOUS));
+        let memory = picker::PickerMemory {
+            history,
+            panel,
+            recency,
+        };
+        let picker = match (&self.pickers.waker, SYNCHRONOUS) {
+            (Some(waker), false) => Picker::open(source, memory, waker.clone()),
+            (None, _) | (Some(_), true) => Picker::synchronous(source, memory),
+        };
+        let mut picker = Box::new(picker);
         if let Some(word) = seed {
             picker.seed(&word, Instant::now());
         }
@@ -154,7 +185,7 @@ impl App {
     pub(in crate::window) fn toggle_picker(
         &mut self,
         id: &str,
-        build: impl FnOnce(&mut App) -> Option<Box<dyn Source<WindowOutcome>>>,
+        build: impl FnOnce(&mut App) -> Option<Box<dyn Source<WindowOutcome, Preview>>>,
     ) {
         if self.is_picker_open(id) {
             self.dismiss_overlay();
@@ -206,10 +237,33 @@ impl App {
             Some(act) => picker.act(act, lines, now),
             None => match sources::action_for(picker.id(), key) {
                 Some(action) => picker.run_action(action),
-                None => picker.key(key, now),
+                None => {
+                    // Typed into the query with the window's context, at
+                    // the end of the input (see `type_into_picker`).
+                    self.pickers.typed.push(misty_key(key));
+                    Reply::Consumed
+                }
             },
         };
         self.answer_reply(reply, focused);
+    }
+
+    /// Hand the keys typed into the open picker's query since the input
+    /// began to it, with the window's context `cx` (its clipboard).
+    pub(in crate::window) fn type_into_picker(&mut self, cx: &mut EventCx<'_>) {
+        if self.pickers.typed.is_empty() {
+            return;
+        }
+        let typed = std::mem::take(&mut self.pickers.typed);
+        let focused = self.layout().focused();
+        let now = Instant::now();
+        for key in typed {
+            let Some(picker) = self.chrome.picker_mut() else {
+                return;
+            };
+            let reply = picker.key(key, cx, now);
+            self.answer_reply(reply, focused);
+        }
     }
 
     /// Text pasted while a picker is open goes to its query.
@@ -311,7 +365,7 @@ impl App {
             Reply::Close => self.dismiss_overlay(),
             Reply::Consumed => {}
             Reply::Ignored => return,
-            Reply::Notice(notice) => self.set_notice(notice),
+            Reply::NothingToSave => self.set_notice(NOTHING_TO_SAVE),
             Reply::Run(outcome) => self.finish_picker(outcome, focused),
         }
         self.dirty = true;
@@ -370,7 +424,7 @@ impl App {
 
     /// Keep `overlay`'s picker session to resume, and whether its panel
     /// shows, for the next time it opens.
-    fn keep_picker(&mut self, picker: Picker<WindowOutcome>) {
+    fn keep_picker(&mut self, picker: Picker<WindowOutcome, Preview>) {
         if picker.preview_kind() == PreviewKind::Panel {
             self.pickers
                 .shown_panels
@@ -412,7 +466,7 @@ impl App {
             let working = self
                 .chrome
                 .picker()
-                .is_some_and(|picker| picker.view().status == winter_picker::Status::Working);
+                .is_some_and(|picker| picker.view().status == misty::picker::Status::Working);
             if !working || Instant::now() > deadline {
                 // Once more, past the preview's pause the last tick started.
                 self.tick_picker(Instant::now() + SETTLE_PAST * 2);
@@ -426,10 +480,12 @@ impl App {
     /// separated by spaces, into the open picker, settling it after each.
     pub(in crate::window) fn press_in_picker(&mut self, spec: &str) {
         let focused = self.layout().focused();
+        let mut window = misty::testing::TestWindow::new(TEST_WINDOW.0, TEST_WINDOW.1);
         for word in spec.split_whitespace() {
             let keys = winter_model::input::table::keys(word).expect("a key spec");
             for key in keys {
                 self.press_picker_key(&key, focused);
+                self.type_into_picker(&mut window.cx());
                 self.settle_picker();
             }
         }

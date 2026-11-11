@@ -7,8 +7,8 @@
 
 use std::path::{Path, PathBuf};
 
+use misty::picker::{Row, RowKey};
 use winter_model::path::expand_home;
-use winter_picker::{Row, RowKey};
 
 use crate::editors::extensions::ExtensionsPage;
 use crate::extensions::manage::{self, Places, Review};

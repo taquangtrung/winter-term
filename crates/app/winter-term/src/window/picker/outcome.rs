@@ -3,10 +3,10 @@
 
 use std::path::PathBuf;
 
+use misty::picker::SavedLines;
 use winter_model::editor::{OpenTarget, SearchHit};
 use winter_model::layout::TabId;
 use winter_model::path::abbreviate_home;
-use winter_picker::SavedLines;
 
 #[cfg(feature = "wasm-extensions")]
 use crate::window::extension_installs::ExtensionRequest;

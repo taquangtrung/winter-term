@@ -287,10 +287,10 @@ fn test_every_buffer_list_row_draws_the_icon_its_tab_would() {
     app.close_editor(buried);
 
     let mut listing = app.buffer_listing();
-    let winter_picker::Feed::Fixed(rows) = listing.feed("") else {
+    let misty::picker::Feed::Fixed(rows) = listing.feed("") else {
         panic!("a listing gives its rows at once");
     };
-    let buffers: Vec<Option<IconKind>> = rows
+    let buffers: Vec<Option<String>> = rows
         .into_iter()
         .filter(|row| {
             matches!(
@@ -303,8 +303,8 @@ fn test_every_buffer_list_row_draws_the_icon_its_tab_would() {
     assert_eq!(
         buffers,
         [
-            Some(IconKind::Editor { kind: "git" }),
-            Some(IconKind::Editor { kind: "grep" }),
+            crate::icons::name_for(&IconKind::Editor { kind: "git" }),
+            crate::icons::name_for(&IconKind::Editor { kind: "grep" }),
         ]
     );
 }
@@ -533,7 +533,7 @@ fn test_a_file_s_tab_is_listed_by_its_full_path_in_the_buffer_and_recent_lists()
     let tab = app.show_editor(EditorKind::Text, Box::new(editor));
     let full = file.display().to_string();
     let label_of = |mut listing: Listing, outcome: WindowOutcome| {
-        let winter_picker::Feed::Fixed(rows) = listing.feed("") else {
+        let misty::picker::Feed::Fixed(rows) = listing.feed("") else {
             panic!("a listing gives its rows at once");
         };
         rows.into_iter()
@@ -568,7 +568,7 @@ fn test_a_recent_file_open_in_a_pane_is_listed_once_as_its_tab() {
     app.recent.files.insert(0, file.clone());
 
     let mut recent = app.recent_listing();
-    let winter_picker::Feed::Fixed(rows) = recent.feed("") else {
+    let misty::picker::Feed::Fixed(rows) = recent.feed("") else {
         panic!("a listing gives its rows at once");
     };
     let outcomes: Vec<WindowOutcome> = rows

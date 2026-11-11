@@ -970,7 +970,7 @@ impl App {
     /// search lights them. `None` while Scout is not open.
     fn scout_highlight_cells(&self, id: TabId) -> Option<(Cells, Cells)> {
         let picker = self.chrome.picker().filter(|picker| picker.id() == SCOUT)?;
-        let query = winter_picker::query::Query::parse(picker.query());
+        let query = misty::picker::Query::parse(picker.query());
         if query.is_empty() {
             return Some(Default::default());
         }
@@ -1159,7 +1159,7 @@ impl App {
         if let (Some(view), Some(rect)) = (palette_view.as_mut(), origin) {
             view.placement = PickerPlacement::Transient(rect);
         } else if let (Some(view), Some(picker)) = (palette_view.as_mut(), self.chrome.picker()) {
-            let at_bottom = picker.preview_kind() == winter_picker::PreviewKind::Live
+            let at_bottom = picker.preview_kind() == misty::picker::PreviewKind::Live
                 || self.chrome.editor_pick().is_some_and(|pick| {
                     pick.placement == winter_model::editor::PickPlacement::EditorBottom
                 });
@@ -1323,10 +1323,8 @@ impl App {
         )
     }
 
-    /// The palette as the renderer draws it, its icons resolved through the
-    /// cache kept between frames, which is emptied once the palette closes.
+    /// The palette as the renderer draws it.
     fn palette_popup(&mut self) -> Option<PickerView> {
-        let mut palette_icons = std::mem::take(&mut self.textures.palette_icons);
         let fallback;
         let theme = match self.renderer.as_ref() {
             Some(renderer) => renderer.theme(),
@@ -1346,7 +1344,7 @@ impl App {
             .map(|picker| (picker.id(), picker.view()));
         let mut view = session
             .as_ref()
-            .map(|(_, shown)| session_view(shown, &self.pickers.panel, &look, &mut palette_icons));
+            .map(|(_, shown)| session_view(shown, &self.pickers.panel, &look));
         if let Some(v) = view.as_mut() {
             v.offset = self.chrome.picker_offset;
             v.size = self.chrome.picker_size;
@@ -1366,10 +1364,6 @@ impl App {
                 self.dirty = true;
             }
         }
-        if view.is_none() {
-            palette_icons.clear();
-        }
-        self.textures.palette_icons = palette_icons;
         view
     }
 

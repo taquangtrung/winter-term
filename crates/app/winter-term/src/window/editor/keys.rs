@@ -3,15 +3,16 @@
 
 use std::path::{Path, PathBuf};
 
+use misty::picker::{Resume, Row, RowKey};
 use winter_model::editor::{EditorOutcome, EditorRequest, FileEdit, PromptMode};
 use winter_model::input::{Key, KeyCode, Mods};
 use winter_model::layout::TabId;
 use winter_model::paint::Point;
 use winter_model::textedit::modal::EditMode;
 use winter_model::vim::nav::space_page;
-use winter_picker::{Resume, Row, RowKey};
 
 use crate::window::input::overlay::Overlay;
+use crate::window::picker::sources::IconRow;
 use crate::window::picker::sources::{Entry, Listing};
 use crate::window::picker::WindowOutcome;
 use crate::window::runtime::jobs::STOP_TASKS_KEY;
@@ -461,7 +462,7 @@ impl App {
                 for item in request.items {
                     let mut row = Row::new(RowKey(0), item.clone());
                     if let Some(icon) = icons.next() {
-                        row = row.with_icon(icon);
+                        row = row.with_icon_kind(icon);
                     }
                     listing.push(Entry::new(row, WindowOutcome::AnswerEditor(item)));
                 }

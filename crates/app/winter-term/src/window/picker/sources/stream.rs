@@ -9,8 +9,8 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use misty::picker::{Batch, Feed, Row, RowKey};
 use winter_base::wake::wake_window;
-use winter_picker::{Batch, Feed, Row, RowKey};
 
 // ========================================================================
 // Constants

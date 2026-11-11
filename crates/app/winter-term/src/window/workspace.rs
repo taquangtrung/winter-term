@@ -20,10 +20,10 @@ use std::path::{Path, PathBuf};
 use crate::control::{WorkspaceAnswer, WorkspaceCommand};
 use crate::session::Session;
 use crate::workspace::{self, Store, Workspace};
+use misty::picker::{Resume, Row, RowKey};
 use winter_base::project;
 use winter_model::layout::{Layout, TabId};
 use winter_model::path::abbreviate_home;
-use winter_picker::{Resume, Row, RowKey};
 
 use crate::window::picker::outcome::WorkspaceRequest;
 use crate::window::picker::sources::{Entry, Listing};

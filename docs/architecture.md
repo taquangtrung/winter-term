@@ -43,7 +43,6 @@ crates/ext       extensions shipped with Winter, on the sdk alone
 | `libs` | `winter-synctex` | SyncTeX both ways, between a PDF page and the LaTeX that set it. |
 | `libs` | `winter-syntax` | Syntax coloring: the TextMate scopes each run sits in. |
 | `libs` | `winter-mux` | Sessions that outlive the window, over a local socket or SSH. |
-| `libs` | `winter-picker` | The picker framework: sessions over sources of rows. |
 | `libs` | `winter-vcs` | Git as the tools share it: its command lines, its output read, a tree watched. |
 | `libs` | `winter-wasm` | Runs extensions installed as components, sandboxed. |
 | `base` | `winter-base` | OS plumbing: per-user paths, atomic writes, helper processes, remote places. |

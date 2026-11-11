@@ -5,12 +5,13 @@
 use std::path::{Path, PathBuf};
 
 use crate::editors::image::ImageEditor;
+use crate::window::picker::sources::IconRow;
+use misty::picker::{Resume, Row, RowKey};
 use winter_base::remote;
 use winter_model::editor::OpenTarget;
 use winter_model::layout::TabId;
 use winter_model::paint::IconKind;
 use winter_pdf::PdfEditor;
-use winter_picker::{Resume, Row, RowKey};
 
 use crate::window::editor::EditorKind;
 use crate::window::App;
@@ -43,8 +44,8 @@ impl App {
             .into_iter()
             .filter(|kind| *kind != showing)
         {
-            let row =
-                Row::new(RowKey(0), kind.title()).with_icon(IconKind::Editor { kind: kind.name() });
+            let row = Row::new(RowKey(0), kind.title())
+                .with_icon_kind(IconKind::Editor { kind: kind.name() });
             let open = crate::window::picker::WindowOutcome::OpenWith(kind.name().to_string());
             listing.push(crate::window::picker::sources::Entry::new(row, open));
         }

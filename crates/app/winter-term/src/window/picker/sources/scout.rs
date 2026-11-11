@@ -9,15 +9,17 @@
 
 use std::time::Duration;
 
+use misty::picker::{MatchOn, PreviewKind, Resume, Row, RowKey};
 use winter_model::editor::JumpTarget;
 use winter_model::layout::TabId;
 use winter_model::mode::Mode;
-use winter_picker::{MatchOn, Preview, PreviewKind, Resume, Row, RowKey};
 use winter_render::{PickerView, Theme};
 
 use super::listing::{Entry, Listing};
 use crate::window::frame::frame_grid::span_rgb;
 use crate::window::layout::open_tabs::OpenTabs;
+use crate::window::picker::sources::IconRow;
+use crate::window::picker::Preview;
 use crate::window::picker::WindowOutcome;
 use crate::window::terminal::navigation;
 use crate::window::App;
@@ -123,7 +125,7 @@ impl App {
         for target in targets {
             let mut row = Row::new(RowKey(0), target.label);
             if let Some(icon) = target.icon {
-                row = row.with_icon(icon);
+                row = row.with_icon_kind(icon);
             }
             let entry = Entry::new(row, WindowOutcome::Jump(target.target));
             listing.push(entry.with_preview(Preview::Target(target.target)));
@@ -167,7 +169,7 @@ fn scout_listing(title: String, targets: Vec<JumpTarget>) -> ScoutListing {
             false => Row::new(RowKey(0), number).with_description(text),
         };
         let row = match target.icon {
-            Some(icon) => row.with_icon(icon),
+            Some(icon) => row.with_icon_kind(icon),
             None => row,
         };
         places.push(target.target);
@@ -233,7 +235,7 @@ fn nearest(targets: &[usize], at: usize) -> Option<usize> {
 
 #[cfg(test)]
 mod tests {
-    use winter_picker::{Matching, Source};
+    use misty::picker::{Matching, Source};
 
     use super::*;
 
@@ -245,7 +247,7 @@ mod tests {
             scout.listing.matching(),
             Matching::Words(MatchOn::DESCRIPTION)
         );
-        let winter_picker::Feed::Fixed(rows) = scout.listing.feed("") else {
+        let misty::picker::Feed::Fixed(rows) = scout.listing.feed("") else {
             panic!("fixed rows");
         };
         assert_eq!(rows[0].label, "12");

@@ -6,7 +6,6 @@ members = [
     "crates/base/winter-notify",
     "crates/base/winter-textedit",
     "crates/base/winter-model",
-    "crates/libs/winter-picker",
     "crates/tools/winter-dir",
     "crates/tools/winter-docker",
     "crates/tools/winter-git",
@@ -67,7 +66,6 @@ winter-keys = { version = "0.1.0", path = "crates/base/winter-keys" }
 winter-model = { version = "0.1.0", path = "crates/base/winter-model" }
 winter-notify = { version = "0.1.0", path = "crates/base/winter-notify" }
 winter-textedit = { version = "0.1.0", path = "crates/base/winter-textedit" }
-winter-picker = { version = "0.1.0", path = "crates/libs/winter-picker" }
 # The GUI toolkit Winter is moving onto (local branch only: misty is not
 # published yet).
 misty = { version = "0.1.0", path = "../misty/crates/misty" }

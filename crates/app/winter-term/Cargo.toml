@@ -60,7 +60,6 @@ regex.workspace = true
 winter-base.workspace = true
 winter-emulator.workspace = true
 winter-model.workspace = true
-winter-picker.workspace = true
 winter-dir.workspace = true
 winter-docker.workspace = true
 winter-git.workspace = true
@@ -75,7 +74,7 @@ winter-vcs.workspace = true
 winter-proto.workspace = true
 
 winter-render.workspace = true
-misty.workspace = true
+misty = { workspace = true, features = ["serde"] }
 winter-spell.workspace = true
 winter-lsp.workspace = true
 winter-ext-api.workspace = true
@@ -158,6 +157,6 @@ wasm-extensions = ["dep:sha2", "dep:winter-wasm"]
 [dev-dependencies]
 winter-lsp = { workspace = true, features = ["test-support"] }
 winter-model = { workspace = true, features = ["test-support"] }
-winter-picker = { workspace = true, features = ["test-support"] }
+misty = { workspace = true, features = ["testing"] }
 winter-pdf = { workspace = true, features = ["test-support"] }
 winter-terminal = { workspace = true, features = ["test-support"] }

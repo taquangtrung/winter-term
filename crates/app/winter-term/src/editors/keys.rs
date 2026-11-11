@@ -16,6 +16,7 @@ use std::fmt::Write;
 
 use crate::config::schema::WINDOW_BLOCK;
 use crate::editors::{key_tables, COMMAND_BLOCKS, UNBOUND};
+use misty::picker::Query;
 use winter_model::editor::{
     menu_groups, present, Appearance, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus,
     Notice, Page, ScrollPosition,
@@ -26,7 +27,6 @@ use winter_model::paint::{Frame, Point, Row};
 use winter_model::picture::Tile;
 use winter_model::textedit::field::TextField;
 use winter_model::textedit::modal::{EditMode, EditOutcome};
-use winter_picker::query::Query;
 
 use super::web_page::{escape, PageView};
 

@@ -147,7 +147,7 @@ const KEY_TABLE_GROUPS: &[&[&dyn Listed]] = &[
     EXTENSIONS_KEY_TABLES,
     launcher::KEY_TABLES,
     keys::KEY_TABLES,
-    winter_picker::KEY_TABLES,
+    crate::window::PICKER_FRAMEWORK_KEY_TABLES,
     crate::window::PICKER_KEY_TABLES,
 ];
 

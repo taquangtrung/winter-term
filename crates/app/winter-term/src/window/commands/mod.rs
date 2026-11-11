@@ -10,6 +10,8 @@
 //! ([`Run::Action`]).
 
 use crate::config::ThemeSetting;
+use crate::window::picker::sources::IconRow;
+use misty::picker::{MatchOn, PreviewKind, Row, RowKey};
 use winter_lsp::servers::INSTALL_COMMAND_TITLE;
 use winter_model::editor::{FORWARDED_COMMANDS, LSP_COMMANDS, PROBLEM_COMMANDS, WRITING_COMMANDS};
 use winter_model::input::{self, window_action_by_name, Keymap};
@@ -17,7 +19,6 @@ use winter_model::layout::{Direction, FocusDir, Rect, TabId};
 use winter_model::mode::Mode;
 use winter_model::paint::IconKind;
 use winter_model::textedit::field::TextField;
-use winter_picker::{MatchOn, PreviewKind, Row, RowKey};
 
 use super::editor::compile::TRUST_TASKS_TITLE;
 use super::input::overlay::{Overlay, RenameInput};
@@ -1120,7 +1121,7 @@ pub(in crate::window) fn command_listing(keymap: &Keymap) -> Listing {
         };
         let mut row = Row::new(RowKey(0), builtin.title).with_hint(shortcut);
         if let Some(icon) = command_icon(builtin.id) {
-            row = row.with_icon(icon);
+            row = row.with_icon_kind(icon);
         }
         let run = WindowOutcome::RunCommand(builtin.id.to_string());
         listing.push(Entry::new(row, run).with_recency(builtin.id));

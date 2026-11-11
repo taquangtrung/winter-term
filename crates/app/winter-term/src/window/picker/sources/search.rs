@@ -11,19 +11,20 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, PoisonError};
 
+use misty::picker::{
+    Action, ActionId, Feed, Highlights, MatchOn, Matching, PreviewKind, Resume, Row, RowKey, Source,
+};
 use regex::{Regex, RegexBuilder};
 use winter_base::process;
 use winter_model::editor::{OpenTarget, SearchHit};
 use winter_model::paint::IconKind;
 use winter_model::path::abbreviate_home;
-use winter_picker::{
-    Action, ActionId, Feed, FilePreview, Highlights, MatchOn, Matching, Preview, PreviewKind,
-    Resume, Row, RowKey, Source,
-};
 
 use super::stream::{place_key, stream_lines};
 use crate::window::picker::outcome::SaveHits;
+use crate::window::picker::sources::IconRow;
 use crate::window::picker::WindowOutcome;
+use crate::window::picker::{FilePreview, Preview};
 
 // ========================================================================
 // Constants
@@ -139,7 +140,7 @@ impl ProjectSearch {
     }
 }
 
-impl Source<WindowOutcome> for ProjectSearch {
+impl Source<WindowOutcome, Preview> for ProjectSearch {
     fn id(&self) -> &'static str {
         "project_search"
     }
@@ -251,7 +252,7 @@ impl TodoSearch {
     }
 }
 
-impl Source<WindowOutcome> for TodoSearch {
+impl Source<WindowOutcome, Preview> for TodoSearch {
     fn id(&self) -> &'static str {
         "todo"
     }
@@ -452,7 +453,7 @@ fn place_row(key: RowKey, hit: &Hit) -> Row {
     Row::new(key, label)
         .with_description(dir)
         .with_detail(cut_around(&hit.text, hit.column))
-        .with_icon(IconKind::File {
+        .with_icon_kind(IconKind::File {
             name: name.to_string(),
         })
 }

@@ -10,13 +10,12 @@ use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
+use misty::picker::{PreviewUpdate, Query};
 use winter_model::background::{Background, POLL};
 use winter_model::editor::JumpStep;
 use winter_model::layout::TabId;
 use winter_model::mode::Mode;
 use winter_model::paint::Style;
-use winter_picker::query::Query;
-use winter_picker::{Preview, PreviewUpdate};
 
 use crate::window::App;
 
@@ -37,6 +36,28 @@ const PANEL_READER: &str = "picker-preview";
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// What a preview shows. The window draws it and opens nothing.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Preview {
+    /// A file, centred on a line.
+    File(FilePreview),
+    /// One of the pane's own places, by the index its editor gave it.
+    Target(usize),
+    /// Text to show as it is.
+    Text(String),
+}
+
+/// A file to preview, and the place in it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FilePreview {
+    /// The column of the match, from one, when known.
+    pub column: Option<usize>,
+    /// The line to centre on, from one.
+    pub line: usize,
+    /// The file.
+    pub path: PathBuf,
+}
 
 /// The side panel's preview: what it shows, and the read under way.
 #[derive(Default)]
@@ -80,7 +101,7 @@ impl App {
     /// about: an editor's own place, or a terminal's line.
     pub(in crate::window) fn live_preview(
         &mut self,
-        update: PreviewUpdate,
+        update: PreviewUpdate<Preview>,
         _query: &str,
         focused: TabId,
     ) {
@@ -127,7 +148,7 @@ impl App {
     }
 
     /// Start reading what the side panel shows for the selected row.
-    pub(in crate::window) fn panel_preview(&mut self, update: PreviewUpdate, query: &str) {
+    pub(in crate::window) fn panel_preview(&mut self, update: PreviewUpdate<Preview>, query: &str) {
         let preview = match update {
             PreviewUpdate::Clear => None,
             PreviewUpdate::Show(preview) => Some(preview),
@@ -150,7 +171,7 @@ impl App {
                     styles: Vec::new(),
                 });
             }
-            Some(Preview::Tab(_) | Preview::Target(_)) | None => panel.clear(),
+            Some(Preview::Target(_)) | None => panel.clear(),
         }
         self.dirty = true;
     }

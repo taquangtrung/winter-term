@@ -84,6 +84,10 @@ use self::picker::PickerMemory;
 /// one list.
 pub(crate) const PICKER_KEY_TABLES: &[&dyn winter_model::input::table::Listed] =
     picker::sources::KEY_TABLES;
+
+/// The keys every picker answers, for the Keys editor's one list.
+pub(crate) const PICKER_FRAMEWORK_KEY_TABLES: &[&dyn winter_model::input::table::Listed] =
+    picker::keys::KEY_TABLES;
 use self::recent::RecentLists;
 use self::runtime::jobs::Jobs;
 use self::runtime::lifecycle::ConfigWatch;

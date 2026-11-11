@@ -2,11 +2,12 @@
 //! row doing what its outcomes say. Most pickers are one: the command
 //! palette, the recent list, the buffers, the panes, Scout.
 
-use winter_model::paint::IconKind;
-use winter_picker::{
-    Action, ActionId, Feed, MatchOn, Matching, Preview, PreviewKind, Resume, Row, RowKey, Source,
+use misty::picker::{
+    Action, ActionId, Feed, MatchOn, Matching, PreviewKind, Resume, Row, RowKey, Source,
 };
+use winter_model::paint::IconKind;
 
+use crate::window::picker::Preview;
 use crate::window::picker::WindowOutcome;
 
 // ========================================================================
@@ -160,7 +161,7 @@ impl Listing {
     }
 }
 
-impl Source<WindowOutcome> for Listing {
+impl Source<WindowOutcome, Preview> for Listing {
     fn id(&self) -> &'static str {
         self.id
     }
@@ -217,7 +218,7 @@ impl Source<WindowOutcome> for Listing {
             .zip(&entry.outcomes)
             .filter(|(_, outcome)| outcome.is_some())
             .map(|(action, _)| Action {
-                button: action.button.clone(),
+                button: action.button.as_ref().and_then(crate::icons::name_for),
                 id: action.id,
                 title: action.title.to_string(),
             })
