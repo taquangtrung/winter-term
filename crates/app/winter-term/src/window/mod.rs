@@ -354,6 +354,11 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) cards: misty::Toasts,
     /// The status bar misty draws along the window's bottom.
     pub(in crate::window) status_bar: misty::StatusBar,
+    /// The which-key popup misty draws.
+    pub(in crate::window) which_key: misty::WhichKey,
+    /// The which-key popup as the last frame worked it out, for misty to
+    /// draw and take clicks by.
+    pub(in crate::window) drawn_which_key: Option<winter_render::WhichKeyView>,
     /// Each pane's popups as the last frame worked them out, for misty to
     /// draw.
     pub(in crate::window) pane_popups: Vec<frame::pane_popups::PanePopups>,

@@ -24,10 +24,7 @@ use crate::renderer::widgets::token_inspect::token_inspect_rgba;
 use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
 use crate::renderer::widgets::tooltip::url_tooltip_rgba;
 use crate::renderer::widgets::transient::{transient_item_hits, transient_rgba, TransientHit};
-use crate::renderer::widgets::which_key::{which_key_item_hits, which_key_rgba, WhichKeyHit};
-use crate::renderer::widgets::{
-    FindView, InputView, TokenInspectView, ToolbarView, TransientView, WhichKeyView,
-};
+use crate::renderer::widgets::{FindView, InputView, TokenInspectView, ToolbarView, TransientView};
 use crate::renderer::FrameHits;
 use crate::renderer::GpuRenderer;
 use crate::tabbar::{
@@ -53,9 +50,6 @@ const TABBAR_STRIP_TEXTURE_ID: u64 = u64::MAX - 2;
 
 /// Reserved id for the rasterized URL hover tooltip.
 const URL_TOOLTIP_TEXTURE_ID: u64 = u64::MAX - 6;
-
-/// Reserved id for the rasterized which-key hint popup.
-const WHICH_KEY_TEXTURE_ID: u64 = u64::MAX - 8;
 
 /// Reserved id for the rasterized transient popup window.
 const TRANSIENT_TEXTURE_ID: u64 = u64::MAX - 21;
@@ -101,7 +95,6 @@ pub(in crate::renderer) struct OverlayCaches {
     toolbars: HashMap<u64, ToolbarCache>,
     transient: RasterCache<TransientView>,
     url_tooltip: RasterCache<TopTabbar>,
-    which_key: RasterCache<WhichKeyView>,
 }
 
 /// A pane toolbar as last rasterized: what it was painted from, the image
@@ -458,60 +451,6 @@ impl GpuRenderer {
         placed
     }
 
-    /// Rasterize the which-key hint overlay and upload it to the GPU.
-    pub(in crate::renderer) fn rasterize_which_key(
-        &mut self,
-        which_key: &WhichKeyView,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        let placed = self.cached_overlay(
-            |c| &mut c.which_key,
-            context,
-            which_key,
-            |r| {
-                r.paint_overlay(WHICH_KEY_TEXTURE_ID, |p| {
-                    Some(which_key_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        which_key,
-                        surface_w,
-                        surface_h,
-                    ))
-                })
-            },
-        );
-        self.hits.which_key_rect = placed.first().map(|image| {
-            (
-                image.x + DROPDOWN_SHADOW,
-                image.y + DROPDOWN_SHADOW,
-                image.width - 2.0 * DROPDOWN_SHADOW,
-                image.height - 2.0 * DROPDOWN_SHADOW,
-            )
-        });
-        self.hits.which_key_hits = match self.hits.which_key_rect {
-            Some(card_rect) => {
-                let ctx = FontCtx {
-                    bold_weight: self.fonts.bold_weight.as_deref(),
-                    cell_h: self.fonts.cell_height,
-                    cell_w: self.fonts.cell_width,
-                    family: self.fonts.font_family.as_deref(),
-                    field_h: self.popup_field_height(),
-                    font_has_bold: self.fonts.font_has_bold,
-                    font_size: self.fonts.font_size,
-                    line_height: self.fonts.line_height,
-                    normal_weight: self.fonts.normal_weight.as_deref(),
-                };
-                which_key_item_hits(&mut self.font_system, &ctx, which_key, card_rect)
-            }
-            None => Vec::new(),
-        };
-        placed
-    }
-
     /// Rasterize the transient popup window and upload it to the GPU.
     pub(in crate::renderer) fn rasterize_transient(
         &mut self,
@@ -827,25 +766,6 @@ impl FrameHits {
             x >= left && x < left + w && y >= top && y < top + h
         })
     }
-
-    /// Whether the surface point `(x, y)` is on the which-key popup HUD card.
-    pub fn which_key_card_at(&self, x: f32, y: f32) -> bool {
-        self.which_key_rect
-            .is_some_and(|(left, top, w, h)| x >= left && x < left + w && y >= top && y < top + h)
-    }
-
-    /// Where the which-key popup HUD card was last drawn.
-    pub fn which_key_rect(&self) -> Option<(f32, f32, f32, f32)> {
-        self.which_key_rect
-    }
-
-    /// The item under surface point `(x, y)` in the which-key popup HUD, if any.
-    pub fn which_key_at(&self, x: f32, y: f32) -> Option<&WhichKeyHit> {
-        self.which_key_hits.iter().find(|hit| {
-            let (left, top, w, h) = hit.rect;
-            x >= left && x < left + w && y >= top && y < top + h
-        })
-    }
 }
 
 // ========================================================================
@@ -872,7 +792,6 @@ mod tests {
             TABBAR_STRIP_TEXTURE_ID,
             URL_TOOLTIP_TEXTURE_ID,
             TRANSIENT_TEXTURE_ID,
-            WHICH_KEY_TEXTURE_ID,
             TOKEN_INSPECT_TEXTURE_ID,
             FIND_TEXTURE_ID,
             INPUT_TEXTURE_ID,

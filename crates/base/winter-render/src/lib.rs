@@ -24,7 +24,7 @@ pub use renderer::{
     PickerItem, PickerPlacement, PickerView, StatusBar, StatusBell, StatusHover, StatusNotice,
     StatusPrompt, StatusSearch, StatusSegment, SwitchKind, TokenInspectView, ToolbarColumn,
     ToolbarItem, ToolbarTone, ToolbarView, TransientCommand, TransientHit, TransientSwitch,
-    TransientView, WhichKeyHit, WhichKeyView, THIN_SPACE,
+    TransientView, WhichKeyView, THIN_SPACE,
 };
 pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};
 pub use tabbar::{

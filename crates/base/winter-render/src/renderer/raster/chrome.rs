@@ -1,24 +1,15 @@
-//! The chrome every floating window is drawn in, after VS Code's widget
-//! chrome: one soft shadow, one hairline border, one surface color, and one
-//! title bar shape, so every kind reads as one family. Each rasterizer lays
-//! out and paints only its own contents.
+//! The chrome every floating window the renderer still draws is drawn in,
+//! after VS Code's widget chrome: one soft shadow, one hairline border, one
+//! surface color, and one title bar shape, so every kind reads as one
+//! family. Each rasterizer lays out and paints only its own contents. The
+//! picker, the key hints, the completion list, and the info card are
+//! misty's widgets, drawn by the app.
 //!
-//! The floating windows come in five classes, by where they sit and whether
-//! they wait for an answer:
-//!
-//! | | waits for an answer | only shows |
-//! |---|---|---|
-//! | centred on the window | picker, dialog | HUD |
-//! | at the cursor or pointer | popup | tooltip |
-//!
-//! - A **picker** (a list to filter and choose from) and a **dialog** (a
-//!   question typed or confirmed) are headed by a [`TitleBar::Decorated`]
-//!   bar, the title centred across and down it.
-//! - A **HUD** (the key hints) is headed by a [`TitleBar::Undecorated`]
-//!   one, the title at the left. It takes no keys and goes on its own.
-//! - A **popup** (the fixes, the completions) and a **tooltip** (a link's
-//!   address, what a name is, the scopes under the cursor) have no title
-//!   bar, and hang from the cell they are about, placed by [`anchored`].
+//! - A **dialog** (a question typed or confirmed) is headed by a
+//!   [`TitleBar::Decorated`] bar, the title centred across and down it.
+//! - A **popup** (the fixes) and a **tooltip** (a link's address, the scopes
+//!   under the cursor) have no title bar, and hang from the cell they are
+//!   about, placed by [`anchored`].
 
 use std::cell::RefCell;
 use std::collections::VecDeque;
@@ -76,10 +67,6 @@ const BORDER_W: f32 = 1.0;
 /// Between a floating popup and the cell it hangs from, in pixels.
 const ANCHOR_GAP: f32 = 2.0;
 
-/// An undecorated title's opacity: a heading, quieter than the rows it
-/// heads.
-const UNDECORATED_TITLE_ALPHA: f32 = 0.85;
-
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -111,9 +98,6 @@ pub(in crate::renderer) enum TitleBar {
     /// A tinted bar, the title bold and centred across it and down it: a
     /// picker's or a dialog's, which ask something.
     Decorated,
-    /// No bar, the title at its left in a quieter weight: a HUD's, which
-    /// only shows something.
-    Undecorated,
 }
 
 // ========================================================================
@@ -339,7 +323,6 @@ impl Chrome {
         let room = (self.panel_w - 2.0 * ctx.cell_w - hint_w - icon_total_w).max(0.0);
         let (bold, color) = match bar {
             TitleBar::Decorated => (true, foreground),
-            TitleBar::Undecorated => (false, with_alpha(foreground, UNDECORATED_TITLE_ALPHA)),
         };
         let mut title_buf = shape_fitted(font_system, ctx, title, color, bold, true, room);
         let title_w = buffer_width(&title_buf).ceil();
@@ -349,7 +332,6 @@ impl Chrome {
                 self.draw_header_background(theme, header_h);
                 self.margin + ((self.panel_w - total_content_w) / 2.0).max(0.0)
             }
-            TitleBar::Undecorated => self.margin + ctx.cell_w,
         };
         draw_divider(self, theme, self.margin + header_h, self.panel_w);
         if let (Some(mut i_buf), Some((_, icon_color))) = (icon_buf, icon) {
@@ -427,16 +409,6 @@ pub(in crate::renderer) fn shape_fitted(
         }
         chars -= 1;
     }
-}
-
-/// `color` at `alpha` of full opacity.
-fn with_alpha(color: Color, alpha: f32) -> Color {
-    Color::rgba(
-        color.r(),
-        color.g(),
-        color.b(),
-        (alpha * 255.0).round() as u8,
-    )
 }
 
 /// The top-left corner of a `panel_w` x `panel_h` panel hung from `anchor`,
@@ -646,7 +618,6 @@ mod tests {
         let bottom = frame.draw_title(&mut font_system, &mut swash, &ctx, &theme, bar, title, "");
         let surface = match bar {
             TitleBar::Decorated => mix_rgb(theme.menu_bg, theme.divider, HEADER_BG_MIX),
-            TitleBar::Undecorated => theme.menu_bg,
         };
         // Down to the divider, not onto it.
         let ink = ink_box(
@@ -675,28 +646,6 @@ mod tests {
         assert!(
             (above - below).abs() <= line_h / 2.0,
             "{above} above the ink, {below} below"
-        );
-    }
-
-    #[test]
-    fn test_a_plain_title_sits_at_the_left_on_an_untinted_bar() {
-        let ((left, _, right, _), _, (cell_w, _)) = titled(TitleBar::Undecorated, "Branch");
-        assert!(
-            left < right,
-            "the title drew on the plain surface, not a tint"
-        );
-        let start = MARGIN + cell_w;
-        assert!(
-            (left as f32 - start).abs() <= cell_w / 2.0,
-            "starts at {left}, not {start}"
-        );
-    }
-
-    #[test]
-    fn test_both_title_bars_end_level() {
-        assert_eq!(
-            titled(TitleBar::Decorated, "a").1,
-            titled(TitleBar::Undecorated, "a").1
         );
     }
 

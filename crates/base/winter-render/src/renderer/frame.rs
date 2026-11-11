@@ -19,9 +19,7 @@ use super::glyphs::{
     FallbackGlyphQuadFit,
 };
 use super::raster::{view::TabbarText, DIM_FACTOR};
-use super::widgets::{
-    FindView, InputView, TokenInspectView, ToolbarView, TransientView, WhichKeyView,
-};
+use super::widgets::{FindView, InputView, TokenInspectView, ToolbarView, TransientView};
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView};
 use crate::glyph_quad::GlyphQuadPlacement;
@@ -183,7 +181,6 @@ impl GpuRenderer {
         images: &[ImagePlacement],
         input: Option<&InputView>,
         find: Option<&FindView>,
-        which_key: Option<&WhichKeyView>,
         transient: Option<&TransientView>,
         token_inspect: Option<&TokenInspectView>,
     ) {
@@ -250,7 +247,6 @@ impl GpuRenderer {
             tabbar,
             input,
             find,
-            which_key,
             transient,
             token_inspect,
             surface,
@@ -1109,7 +1105,6 @@ impl GpuRenderer {
         tabbar: Option<&TopTabbar>,
         input: Option<&InputView>,
         find: Option<&FindView>,
-        which_key: Option<&WhichKeyView>,
         transient: Option<&TransientView>,
         token_inspect: Option<&TokenInspectView>,
         surface: SurfaceSize,
@@ -1137,12 +1132,6 @@ impl GpuRenderer {
         match find {
             Some(f) => all_images.extend(self.rasterize_find(f, w, h)),
             None => self.hits.find_rect = None,
-        }
-        if let Some(wk) = which_key {
-            all_images.extend(self.rasterize_which_key(wk, w, h));
-        } else {
-            self.hits.which_key_rect = None;
-            self.hits.which_key_hits.clear();
         }
         if let Some(tr) = transient {
             all_images.extend(self.rasterize_transient(tr, w, h));

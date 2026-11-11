@@ -1,7 +1,6 @@
 //! What floats over the panes, each drawn in the chrome the shared
 //! [`super::raster::chrome`] paints (which also names the five classes),
-//! from the views in [`view`]: the dialogs ([`input`]); the key-hint HUD
-//! ([`which_key`]); the tooltips, a link's address ([`tooltip`]), and the
+//! from the views in [`view`]: the dialogs ([`input`]); the tooltips, a link's address ([`tooltip`]), and the
 //! scopes under the cursor ([`token_inspect`]); and the menus ([`menu`]),
 //! the find card ([`find`]). The picker, the completion list, the info
 //! card, and the drop list are misty's widgets now, drawn by the app.
@@ -15,7 +14,6 @@ pub(in crate::renderer) mod toolbar;
 pub(in crate::renderer) mod tooltip;
 pub(in crate::renderer) mod transient;
 mod view;
-pub(in crate::renderer) mod which_key;
 
 pub use transient::TransientHit;
 pub use view::{
@@ -24,7 +22,6 @@ pub use view::{
     PickerView, SwitchKind, TokenInspectView, ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView,
     TransientCommand, TransientSwitch, TransientView, WhichKeyView,
 };
-pub use which_key::WhichKeyHit;
 
 // ========================================================================
 // Constants

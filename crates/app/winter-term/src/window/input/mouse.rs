@@ -276,35 +276,6 @@ impl App {
                 self.dirty = true;
                 return;
             }
-            // Which-key popup HUD / Git transient menus
-            if let Some(hit) = self
-                .renderer
-                .as_ref()
-                .and_then(|r| r.hits().which_key_at(x, y))
-            {
-                let key = hit.key.clone();
-                self.click_which_key(&key);
-                self.dirty = true;
-                return;
-            }
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().which_key_card_at(x, y))
-            {
-                // Click landed inside the popup HUD card (e.g. title or padding)
-                return;
-            }
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().which_key_rect().is_some())
-            {
-                // Clicking outside an open which-key / popup HUD closes it cleanly
-                self.dismiss_which_key_popup();
-                self.dirty = true;
-                return;
-            }
             if (self.chrome.menus.open.is_some() || y < self.top_chrome_height())
                 && self.handle_tabbar_click(x, y)
             {

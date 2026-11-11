@@ -181,6 +181,7 @@ impl App {
         frame.draw_texture(&texture, bounds);
         self.draw_status_bar(frame);
         self.draw_pane_popups(frame);
+        self.draw_which_key(frame);
         self.draw_cards(frame);
         self.draw_picker(frame);
     }
@@ -228,6 +229,7 @@ impl App {
             && window.is_some_and(|window| {
                 let mut ecx = cx.event_cx(window);
                 self.point_at_picker(input, &mut ecx)
+                    || self.point_at_which_key(input, &mut ecx)
                     || self.point_at_cards(input, &mut ecx)
                     || self.point_at_status_bar(input, &mut ecx)
             });

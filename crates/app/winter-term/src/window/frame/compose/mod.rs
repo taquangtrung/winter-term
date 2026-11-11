@@ -1198,7 +1198,8 @@ impl App {
                 .with_offset(self.chrome.transient_offset)
                 .with_min_size(drawn.map(|(_, _, w, h)| (w, h)))
         });
-        let which_key_view = self.which_key_popup(focused).map(|view| WhichKeyView {
+        // Misty draws the which-key popup over the frame.
+        self.chrome.drawn_which_key = self.which_key_popup(focused).map(|view| WhichKeyView {
             anchor_rect: focused_pane,
             ..view
         });
@@ -1301,7 +1302,6 @@ impl App {
             &placements,
             input_view.as_ref(),
             find_view.as_ref(),
-            which_key_view.as_ref(),
             transient_view.as_ref(),
             token_inspect_view.as_ref(),
         );

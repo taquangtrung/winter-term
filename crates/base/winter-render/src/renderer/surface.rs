@@ -157,8 +157,6 @@ impl GpuRenderer {
                 transient_hits: Vec::new(),
                 transient_rect: None,
                 transient_title_rect: None,
-                which_key_hits: Vec::new(),
-                which_key_rect: None,
             },
             device,
             format,
