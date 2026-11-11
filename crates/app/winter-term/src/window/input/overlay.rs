@@ -6,6 +6,7 @@
 use std::path::PathBuf;
 
 use misty::picker::Picker;
+use misty::QuickPick;
 use winter_model::button::{Button, ButtonGroup};
 use winter_model::editor::PromptReply;
 use winter_model::layout::TabId;
@@ -103,7 +104,8 @@ pub(in crate::window) struct ClosePrompt {
 /// The picker, and the editor question it answers while it shows a list of
 /// that editor's own choices.
 pub(in crate::window) struct PickerOverlay {
-    pub(in crate::window) picker: Box<Picker<WindowOutcome, Preview>>,
+    /// The picker, as misty's quick pick draws and drives it.
+    pub(in crate::window) quick: Box<QuickPick<WindowOutcome, Preview>>,
     /// The question a pick answers; `None` for the window's own pickers.
     pub(in crate::window) pick: Option<ActivePick>,
 }
@@ -390,7 +392,7 @@ impl Chrome {
         let Some(Overlay::Picker(overlay)) = &self.overlay else {
             return None;
         };
-        Some(&overlay.picker)
+        Some(overlay.quick.picker())
     }
 
     /// The open picker, to change it in place.
@@ -398,7 +400,7 @@ impl Chrome {
         let Some(Overlay::Picker(overlay)) = &mut self.overlay else {
             return None;
         };
-        Some(&mut overlay.picker)
+        Some(overlay.quick.picker_mut())
     }
 
     /// The editor question the open picker is collecting an answer to.

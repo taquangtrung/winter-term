@@ -605,7 +605,7 @@ mod tests {
             Overlay::Rename(input) => Some(input.field.text().to_string()),
             Overlay::ThemeName(field) | Overlay::ZaiKey(field) => Some(field.text().to_string()),
             Overlay::EditorPrompt(prompt) => Some(prompt.field.text().to_string()),
-            Overlay::Picker(overlay) => Some(overlay.picker.query().to_string()),
+            Overlay::Picker(overlay) => Some(overlay.quick.picker().query().to_string()),
             Overlay::Close(_) | Overlay::Error(_) => None,
         }
     }

@@ -23,7 +23,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use misty::picker::{
     self, History, Parked, Picker, PickerAct, PreviewKind, Recency, Reply, Source,
 };
-use misty::EventCx;
+use misty::{EventCx, QuickPick};
 use winter_model::input::table::find;
 use winter_model::input::Key;
 use winter_model::layout::TabId;
@@ -166,7 +166,8 @@ impl App {
         // belongs to the picker it was done to.
         self.chrome.picker_offset = None;
         self.chrome.picker_size = None;
-        self.open_overlay(Overlay::Picker(Box::new(PickerOverlay { pick, picker })));
+        let quick = Box::new(QuickPick::new(*picker).without_default_keys());
+        self.open_overlay(Overlay::Picker(Box::new(PickerOverlay { pick, quick })));
     }
 
     /// The word under the cursor of tab `tab`: an editor's, or a terminal's
@@ -215,9 +216,10 @@ impl App {
         self.pickers.panel.clear();
         self.chrome.picker_offset = None;
         self.chrome.picker_size = None;
+        let quick = Box::new(QuickPick::new(*picker).without_default_keys());
         self.open_overlay(Overlay::Picker(Box::new(PickerOverlay {
             pick: None,
-            picker,
+            quick,
         })));
     }
 
@@ -352,11 +354,11 @@ impl App {
     /// goes back to where it was, and the session is kept to resume. The
     /// question it answered, if any, has been told already.
     pub(in crate::window) fn picker_dismissed(&mut self, overlay: PickerOverlay) {
-        if overlay.picker.preview_kind() == PreviewKind::Live {
+        if overlay.quick.picker().preview_kind() == PreviewKind::Live {
             let focused = self.layout().focused();
             self.cancel_jump(focused);
         }
-        self.keep_picker(*overlay.picker);
+        self.keep_picker(overlay.quick.into_picker());
     }
 
     /// Do what a key or a tick's reply asks.
@@ -379,8 +381,8 @@ impl App {
             return;
         };
         self.remember_choice(&overlay);
-        let PickerOverlay { pick, picker } = overlay;
-        self.keep_picker(*picker);
+        let PickerOverlay { pick, quick } = overlay;
+        self.keep_picker(quick.into_picker());
         match outcome {
             WindowOutcome::AnswerEditor(choice) => {
                 if let Some(pick) = pick {
@@ -402,7 +404,7 @@ impl App {
     /// Remember the query `overlay`'s picker ran with, and the row chosen,
     /// for this picker's history and its ranking by use, here and on disk.
     fn remember_choice(&mut self, overlay: &PickerOverlay) {
-        let picker = &overlay.picker;
+        let picker = overlay.quick.picker();
         let id = picker.id();
         self.pickers.history.record(id, picker.query());
         let used = picker
