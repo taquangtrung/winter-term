@@ -49,7 +49,6 @@ crates/ext       extensions shipped with Winter, on the sdk alone
 | `base` | `winter-emulator` | Parser, scrollback, cell grid, VT screen. |
 | `base` | `winter-keys` | Keys independent of any window toolkit: chords in Emacs notation, multi-key sequences, key tables. |
 | `base` | `winter-model` | Modes, layout, key resolution, and the `Editor` trait. |
-| `base` | `winter-notify` | Notifications: toasts and the session's log, driven by a clock the caller passes in. |
 | `base` | `winter-proto` | TBP v1: wire types, codec, trust tiers. |
 | `base` | `winter-render` | wgpu text and chrome renderer. |
 | `base` | `winter-textedit` | Modal text editing: Emacs keys while typing, the Vim grammar, motions, and text objects. |
