@@ -507,26 +507,6 @@ pub(in crate::renderer) fn centered_in_rect(
     )
 }
 
-/// The top-left corner that places a `panel_w` x `panel_h` panel horizontally
-/// centered and anchored at the bottom of a bounding rectangle `(rect_x, rect_y, rect_w, rect_h)`,
-/// clamped within the surface bounds `(surface_w, surface_h)`.
-pub(in crate::renderer) fn bottom_in_rect(
-    surface_w: f32,
-    surface_h: f32,
-    panel_w: f32,
-    panel_h: f32,
-    rect: (f32, f32, f32, f32),
-    margin_bottom: f32,
-) -> (f32, f32) {
-    let (rx, ry, rw, rh) = rect;
-    let ideal_x = rx + (rw - panel_w) / 2.0;
-    let ideal_y = ry + rh - panel_h - margin_bottom;
-    (
-        ideal_x.clamp(0.0, (surface_w - panel_w).max(0.0)).floor(),
-        ideal_y.clamp(0.0, (surface_h - panel_h).max(0.0)).floor(),
-    )
-}
-
 // ========================================================================
 // Fields and dividers
 // ========================================================================
@@ -769,27 +749,6 @@ mod tests {
         assert_eq!(
             centered_in_rect(surface.0, surface.1, 300.0, 200.0, narrow_pane),
             (0.0, 0.0)
-        );
-    }
-
-    #[test]
-    fn test_bottom_in_rect_places_panel_at_bottom_of_pane_and_clamps() {
-        let surface = (1920.0, 1080.0);
-        let pane = (400.0, 200.0, 600.0, 400.0);
-        // Panel 300x150 at bottom of 600x400 pane at (400, 200) with 0 margin:
-        // x = 400 + (600 - 300)/2 = 550
-        // y = 200 + 400 - 150 - 0 = 450
-        assert_eq!(
-            bottom_in_rect(surface.0, surface.1, 300.0, 150.0, pane, 0.0),
-            (550.0, 450.0)
-        );
-
-        // Clamping to surface
-        let low_pane = (400.0, 900.0, 600.0, 300.0);
-        // y = 900 + 300 - 150 = 1050, clamped to 1080 - 150 = 930
-        assert_eq!(
-            bottom_in_rect(surface.0, surface.1, 300.0, 150.0, low_pane, 0.0),
-            (550.0, 930.0)
         );
     }
 }

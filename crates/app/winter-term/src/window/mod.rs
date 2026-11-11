@@ -357,12 +357,6 @@ pub(in crate::window) struct Chrome {
     /// that came up while another was open, oldest first: each opens once
     /// the one before it is answered.
     pub(in crate::window) held: VecDeque<Overlay>,
-    /// How far the open picker has been dragged from where its placement puts
-    /// it, `(dx, dy)`: reset as each picker opens.
-    pub(in crate::window) picker_offset: Option<(f32, f32)>,
-    /// The open picker's size `(width, height)` once resized by the mouse:
-    /// reset as each picker opens.
-    pub(in crate::window) picker_size: Option<(f32, f32)>,
     /// The focused tab's project and branch as the status bar last read
     /// them off the disk.
     pub(in crate::window) place: status::PlaceCache,

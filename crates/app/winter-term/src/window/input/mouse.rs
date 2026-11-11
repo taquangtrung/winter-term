@@ -7,8 +7,8 @@ use std::time::{Duration, Instant};
 use misty::AppContext;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
-use winit::window::{CursorIcon, ResizeDirection};
-use winter_render::{PaneRect, POPUP_EDGE_ROOM};
+use winit::window::CursorIcon;
+use winter_render::PaneRect;
 
 use winter_model::input::{Key, KeyCode};
 use winter_model::layout::TabId;
@@ -17,7 +17,7 @@ use winter_model::paint::Point;
 use crate::window::input::overlay::Overlay;
 use crate::window::layout::bands::crumb_of;
 use crate::window::strip::{StripHit, DRAG_THRESHOLD_PX};
-use crate::window::terminal::pointer::{PickerResize, ScrollbarDrag};
+use crate::window::terminal::pointer::ScrollbarDrag;
 use crate::window::{
     App, Selection, APPROX_CELL_HEIGHT, SCROLLBAR_CLICK_WIDTH, SCROLL_LINES_PER_WHEEL_NOTCH,
 };
@@ -25,18 +25,6 @@ use crate::window::{
 // ========================================================================
 // Constants
 // ========================================================================
-
-/// Border width in pixels inside the picker edge that responds to resize.
-const PICKER_RESIZE_BORDER_PX: f32 = 6.0;
-
-/// Slop in pixels outside the picker edge that still responds to resize.
-const PICKER_RESIZE_MARGIN_PX: f32 = 4.0;
-
-/// Minimum width in pixels when resizing a floating picker.
-const PICKER_MIN_WIDTH_PX: f32 = 300.0;
-
-/// Minimum height in pixels when resizing a floating picker.
-const PICKER_MIN_HEIGHT_PX: f32 = 100.0;
 
 /// Longest gap between two presses that still reads as a double click.
 const DOUBLE_CLICK_INTERVAL: Duration = Duration::from_millis(400);
@@ -250,74 +238,6 @@ impl App {
                 .as_ref()
                 .is_some_and(|r| r.hits().input_at(x, y))
             {
-                return;
-            }
-            // Floating picker / Command palette: resize by edges, drag by title bar, dismiss on outside click
-            if let Some(dir) = self.picker_edge_resize_direction(x, y) {
-                if let Some((px, py, pw, ph)) =
-                    self.renderer.as_ref().and_then(|r| r.hits().picker_rect())
-                {
-                    self.input.pointer.mouse_down = true;
-                    self.input.pointer.picker_resize = Some(PickerResize {
-                        start_mouse: (x, y),
-                        start_rect: (px, py, pw, ph),
-                        direction: dir,
-                    });
-                    self.dirty = true;
-                    return;
-                }
-            }
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().picker_title_at(x, y))
-            {
-                self.input.pointer.mouse_down = true;
-                if self.take_double_click() {
-                    self.chrome.picker_offset = None;
-                    self.chrome.picker_size = None;
-                    self.input.pointer.picker_drag = None;
-                } else {
-                    self.input.pointer.picker_drag = Some((x, y));
-                }
-                self.dirty = true;
-                return;
-            }
-            let button = self
-                .renderer
-                .as_ref()
-                .and_then(|r| r.hits().picker_button_at(x, y));
-            if let Some(button) = button {
-                self.click_picker_button(button.item, button.button);
-                return;
-            }
-            // A click on an entry, of the list or of the action menu over it,
-            // picks it as `RET` would.
-            let row = self
-                .renderer
-                .as_ref()
-                .and_then(|r| r.hits().picker_row_at(x, y));
-            if let Some(row) = row {
-                self.click_picker_row(row.at);
-                self.dirty = true;
-                return;
-            }
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().picker_card_at(x, y) || r.hits().picker_float_at(x, y))
-            {
-                return;
-            }
-            // Any card of the picker's up, a list at the cursor too, goes
-            // with a click elsewhere.
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().is_picker_drawn())
-            {
-                self.close_open_picker();
-                self.dirty = true;
                 return;
             }
             // Transient popup window (commands with parameters / git transients)
@@ -671,8 +591,6 @@ impl App {
             (ElementState::Released, MouseButton::Left) => {
                 self.input.pointer.mouse_down = false;
                 self.input.pointer.divider_drag = None;
-                self.input.pointer.picker_drag = None;
-                self.input.pointer.picker_resize = None;
                 self.input.pointer.transient_drag = None;
                 self.input.pointer.press_cell = None;
                 let was_dragging_sb = self.input.pointer.scrollbar_drag.take().is_some();
@@ -781,28 +699,6 @@ impl App {
 
         // Divider drag: highest priority, blocks selection and PTY forwarding.
         if self.input.pointer.mouse_down {
-            if let Some(resize) = self.input.pointer.picker_resize {
-                self.drag_resize_picker(x, y, resize);
-                self.dirty = true;
-                if let Some(window) = &self.window {
-                    window.set_cursor(CursorIcon::from(resize.direction));
-                }
-                return;
-            }
-
-            if let Some((prev_x, prev_y)) = self.input.pointer.picker_drag {
-                let card = self.renderer.as_ref().and_then(|r| r.hits().picker_rect());
-                let (dx, dy) = self.card_move_within(card, (x - prev_x, y - prev_y));
-                let cur = self.chrome.picker_offset.unwrap_or((0.0, 0.0));
-                self.chrome.picker_offset = Some((cur.0 + dx, cur.1 + dy));
-                self.input.pointer.picker_drag = Some((x, y));
-                self.dirty = true;
-                if let Some(window) = &self.window {
-                    window.set_cursor(CursorIcon::Grabbing);
-                }
-                return;
-            }
-
             if let Some((prev_x, prev_y)) = self.input.pointer.transient_drag {
                 let card = self
                     .renderer
@@ -1149,19 +1045,13 @@ impl App {
                 None => CursorIcon::Default,
             };
         }
-        if let Some(resize) = self.input.pointer.picker_resize {
-            return CursorIcon::from(resize.direction);
-        }
-        if self.input.pointer.picker_drag.is_some() || self.input.pointer.transient_drag.is_some() {
+        if self.input.pointer.transient_drag.is_some() {
             return CursorIcon::Grabbing;
-        }
-        if let Some(direction) = self.picker_edge_resize_direction(x, y) {
-            return CursorIcon::from(direction);
         }
         if self
             .renderer
             .as_ref()
-            .is_some_and(|r| r.hits().picker_title_at(x, y) || r.hits().transient_title_at(x, y))
+            .is_some_and(|r| r.hits().transient_title_at(x, y))
         {
             return CursorIcon::Grab;
         }
@@ -1400,49 +1290,6 @@ impl App {
         self.input.keys.prefix_since = None;
     }
 
-    /// The edge or corner resize direction if `(x, y)` is near the boundary
-    /// of the floating picker card, or `None`.
-    pub(in crate::window) fn picker_edge_resize_direction(
-        &self,
-        x: f32,
-        y: f32,
-    ) -> Option<ResizeDirection> {
-        let (px, py, pw, ph) = self
-            .renderer
-            .as_ref()
-            .and_then(|r| r.hits().picker_rect())?;
-        if x < px - PICKER_RESIZE_MARGIN_PX
-            || x > px + pw + PICKER_RESIZE_MARGIN_PX
-            || y < py - PICKER_RESIZE_MARGIN_PX
-            || y > py + ph + PICKER_RESIZE_MARGIN_PX
-        {
-            return None;
-        }
-        let west = x <= px + PICKER_RESIZE_BORDER_PX;
-        let east = x >= px + pw - PICKER_RESIZE_BORDER_PX;
-        let north = y <= py + PICKER_RESIZE_BORDER_PX;
-        let south = y >= py + ph - PICKER_RESIZE_BORDER_PX;
-        if north && west {
-            Some(ResizeDirection::NorthWest)
-        } else if north && east {
-            Some(ResizeDirection::NorthEast)
-        } else if south && west {
-            Some(ResizeDirection::SouthWest)
-        } else if south && east {
-            Some(ResizeDirection::SouthEast)
-        } else if west {
-            Some(ResizeDirection::West)
-        } else if east {
-            Some(ResizeDirection::East)
-        } else if north {
-            Some(ResizeDirection::North)
-        } else if south {
-            Some(ResizeDirection::South)
-        } else {
-            None
-        }
-    }
-
     /// How far a card drawn at `card` moves for a drag of `delta` while
     /// staying in the window: a drag past an edge moves it no further, so
     /// dragging back moves it at once rather than first unwinding the
@@ -1461,85 +1308,6 @@ impl App {
             (left + dx).clamp(0.0, (surface_w - w).max(0.0)) - left,
             (top + dy).clamp(0.0, (surface_h - h).max(0.0)) - top,
         )
-    }
-
-    /// Update picker window dimensions and offset as the mouse is dragged during edge resize.
-    pub(in crate::window) fn drag_resize_picker(&mut self, x: f32, y: f32, resize: PickerResize) {
-        // The window the renderer places the picker in, not the pane band.
-        let (surface_w, surface_h) = self.surface_px();
-        let (sx, sy) = resize.start_mouse;
-        let (r_left, r_top, r_width, r_height) = resize.start_rect;
-        let delta_x = x - sx;
-        let delta_y = y - sy;
-
-        let mut new_left = r_left;
-        let mut new_top = r_top;
-        let mut new_width = r_width;
-        let mut new_height = r_height;
-
-        let max_w = (surface_w - POPUP_EDGE_ROOM).max(PICKER_MIN_WIDTH_PX);
-        let max_h = (surface_h - POPUP_EDGE_ROOM).max(PICKER_MIN_HEIGHT_PX);
-
-        match resize.direction {
-            ResizeDirection::East => {
-                new_width = (r_width + delta_x).clamp(PICKER_MIN_WIDTH_PX, max_w);
-            }
-            ResizeDirection::West => {
-                let clamped_w = (r_width - delta_x).clamp(PICKER_MIN_WIDTH_PX, max_w);
-                new_left = r_left + (r_width - clamped_w);
-                new_width = clamped_w;
-            }
-            ResizeDirection::South => {
-                new_height = (r_height + delta_y).clamp(PICKER_MIN_HEIGHT_PX, max_h);
-            }
-            ResizeDirection::North => {
-                let clamped_h = (r_height - delta_y).clamp(PICKER_MIN_HEIGHT_PX, max_h);
-                new_top = r_top + (r_height - clamped_h);
-                new_height = clamped_h;
-            }
-            ResizeDirection::NorthEast => {
-                new_width = (r_width + delta_x).clamp(PICKER_MIN_WIDTH_PX, max_w);
-                let clamped_h = (r_height - delta_y).clamp(PICKER_MIN_HEIGHT_PX, max_h);
-                new_top = r_top + (r_height - clamped_h);
-                new_height = clamped_h;
-            }
-            ResizeDirection::NorthWest => {
-                let clamped_w = (r_width - delta_x).clamp(PICKER_MIN_WIDTH_PX, max_w);
-                new_left = r_left + (r_width - clamped_w);
-                new_width = clamped_w;
-                let clamped_h = (r_height - delta_y).clamp(PICKER_MIN_HEIGHT_PX, max_h);
-                new_top = r_top + (r_height - clamped_h);
-                new_height = clamped_h;
-            }
-            ResizeDirection::SouthEast => {
-                new_width = (r_width + delta_x).clamp(PICKER_MIN_WIDTH_PX, max_w);
-                new_height = (r_height + delta_y).clamp(PICKER_MIN_HEIGHT_PX, max_h);
-            }
-            ResizeDirection::SouthWest => {
-                let clamped_w = (r_width - delta_x).clamp(PICKER_MIN_WIDTH_PX, max_w);
-                new_left = r_left + (r_width - clamped_w);
-                new_width = clamped_w;
-                new_height = (r_height + delta_y).clamp(PICKER_MIN_HEIGHT_PX, max_h);
-            }
-        }
-
-        new_left = new_left.clamp(0.0, (surface_w - new_width).max(0.0));
-        new_top = new_top.clamp(0.0, (surface_h - new_height).max(0.0));
-
-        // The offset is from where the picker's placement puts a card this
-        // size, as the renderer measures it, so the card stays under the
-        // pointer rather than jumping.
-        let (base_x, base_y) = self
-            .renderer
-            .as_ref()
-            .and_then(|r| r.hits().picker_base((new_width, new_height)))
-            .unwrap_or((0.0, 0.0));
-        let dx = new_left - base_x;
-        let dy = new_top - base_y;
-
-        self.chrome.picker_size = Some((new_width, new_height));
-        self.chrome.picker_offset = Some((dx, dy));
-        self.dirty = true;
     }
 }
 
@@ -1797,107 +1565,6 @@ mod tests {
         // Both switches remain checked!
         assert!(tr.switches.iter().any(|sw| sw.key == "-a" && sw.checked));
         assert!(tr.switches.iter().any(|sw| sw.key == "-s" && sw.checked));
-    }
-
-    /// A picker of two rows that do nothing.
-    fn two_rows() -> misty::picker::ListSource<crate::window::picker::WindowOutcome> {
-        let rows = ["One", "Two"]
-            .into_iter()
-            .zip(0..)
-            .map(|(label, key)| misty::picker::Row::new(misty::picker::RowKey(key), label))
-            .collect();
-        misty::picker::ListSource::new("test", "", rows, "", |_| None)
-    }
-
-    #[test]
-    fn test_picker_drag_offset_and_dismiss_and_double_click_reset() {
-        let mut app = App::new();
-        app.open_picker(Box::new(two_rows()));
-        assert!(app.chrome.picker().is_some());
-        assert_eq!(app.chrome.picker_offset, None);
-
-        // Simulate dragging picker
-        app.input.pointer.picker_drag = Some((300.0, 100.0));
-        app.input.pointer.mouse_down = true;
-        app.on_cursor_moved(winit::dpi::PhysicalPosition::new(350.0, 140.0));
-        assert_eq!(app.chrome.picker_offset, Some((50.0, 40.0)));
-        assert_eq!(app.input.pointer.picker_drag, Some((350.0, 140.0)));
-
-        // Release ends drag
-        app.input.pointer.picker_drag = None;
-        app.input.pointer.mouse_down = false;
-        assert_eq!(app.chrome.picker_offset, Some((50.0, 40.0)));
-
-        // Double click resets offset
-        app.input.pointer.cursor_pos = (350.0, 140.0);
-        app.input.pointer.last_click = Some((std::time::Instant::now(), 350.0, 140.0));
-        assert!(app.take_double_click());
-        app.chrome.picker_offset = None;
-        assert_eq!(app.chrome.picker_offset, None);
-
-        // Close picker
-        app.close_open_picker();
-        assert!(app.chrome.picker().is_none());
-    }
-
-    #[test]
-    fn test_picker_edge_resize_and_cursor_icon() {
-        let mut app = App::new();
-        app.open_picker(Box::new(two_rows()));
-        assert!(app.chrome.picker().is_some());
-
-        // Simulate picker resize from East edge
-        let start_rect = (100.0, 50.0, 400.0, 300.0);
-        app.input.pointer.picker_resize = Some(PickerResize {
-            start_mouse: (500.0, 200.0),
-            start_rect,
-            direction: ResizeDirection::East,
-        });
-        app.input.pointer.mouse_down = true;
-
-        // While resizing, cursor icon reflects resize direction
-        assert_eq!(app.cursor_icon_at(550.0, 200.0), CursorIcon::EResize);
-
-        // Move cursor 50px right
-        app.on_cursor_moved(winit::dpi::PhysicalPosition::new(550.0, 200.0));
-        assert_eq!(app.chrome.picker_size, Some((450.0, 300.0)));
-
-        // Release ends resize
-        app.handle_mouse_input(
-            winit::event::ElementState::Released,
-            winit::event::MouseButton::Left,
-        );
-        assert_eq!(app.input.pointer.picker_resize, None);
-        assert_eq!(app.chrome.picker_size, Some((450.0, 300.0)));
-
-        // Test SouthEast corner resize
-        app.input.pointer.picker_resize = Some(PickerResize {
-            start_mouse: (550.0, 350.0),
-            start_rect: (100.0, 50.0, 450.0, 300.0),
-            direction: ResizeDirection::SouthEast,
-        });
-        app.input.pointer.mouse_down = true;
-        assert_eq!(app.cursor_icon_at(560.0, 370.0), CursorIcon::SeResize);
-
-        app.on_cursor_moved(winit::dpi::PhysicalPosition::new(570.0, 370.0));
-        assert_eq!(app.chrome.picker_size, Some((470.0, 320.0)));
-
-        // Release
-        app.handle_mouse_input(
-            winit::event::ElementState::Released,
-            winit::event::MouseButton::Left,
-        );
-        assert_eq!(app.input.pointer.picker_resize, None);
-
-        // Double click reset resets size as well
-        app.chrome.picker_offset = Some((10.0, 20.0));
-        app.input.pointer.cursor_pos = (200.0, 60.0);
-        app.input.pointer.last_click = Some((std::time::Instant::now(), 200.0, 60.0));
-        assert!(app.take_double_click());
-        app.chrome.picker_offset = None;
-        app.chrome.picker_size = None;
-        assert_eq!(app.chrome.picker_size, None);
-        assert_eq!(app.chrome.picker_offset, None);
     }
 
     #[test]

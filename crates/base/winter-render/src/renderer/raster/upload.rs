@@ -18,17 +18,12 @@ use crate::renderer::glyphs::FontCtx;
 use crate::renderer::parts::titlebar::tabbar_strip_rgba;
 use crate::renderer::raster::chrome::{title_bar_height, TITLE_BAR_TOP_PAD};
 use crate::renderer::view::ToastRect;
-use crate::renderer::widgets::completion::{self, completion_rgba};
+use crate::renderer::widgets::completion::completion_rgba;
 use crate::renderer::widgets::drop_list::drop_list_rgba;
 use crate::renderer::widgets::find::find_rgba;
 use crate::renderer::widgets::info::info_rgba;
 use crate::renderer::widgets::input::{confirm_button_rects, input_rgba, resolve_confirm_buttons};
 use crate::renderer::widgets::menu::{context_menu_rgba, dropdown_rgba, submenu_rgba};
-use crate::renderer::widgets::picker::{
-    picker_base_origin, picker_button_hits, picker_caret_rect, picker_panel, picker_rgba,
-    picker_row_rects, selected_row_anchor, PickerButtonHit, PickerRowHit,
-};
-use crate::renderer::widgets::popup::{popup_rgba, popup_row_rects};
 use crate::renderer::widgets::toast;
 use crate::renderer::widgets::token_inspect::token_inspect_rgba;
 use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
@@ -36,8 +31,8 @@ use crate::renderer::widgets::tooltip::url_tooltip_rgba;
 use crate::renderer::widgets::transient::{transient_item_hits, transient_rgba, TransientHit};
 use crate::renderer::widgets::which_key::{which_key_item_hits, which_key_rgba, WhichKeyHit};
 use crate::renderer::widgets::{
-    CompletionView, DropListView, FindView, InfoView, InputView, PickerView, TokenInspectView,
-    ToolbarView, TransientView, WhichKeyView,
+    CompletionView, DropListView, FindView, InfoView, InputView, TokenInspectView, ToolbarView,
+    TransientView, WhichKeyView,
 };
 use crate::renderer::FrameHits;
 use crate::renderer::{GpuRenderer, ToastCard, ToastHit};
@@ -62,12 +57,6 @@ const CONTEXT_MENU_TEXTURE_ID: u64 = u64::MAX - 5;
 /// Reserved id for the rasterized top-tabbar strip (band + rounded tab pills).
 const TABBAR_STRIP_TEXTURE_ID: u64 = u64::MAX - 2;
 
-/// Reserved id for the rasterized command-palette overlay.
-const PALETTE_TEXTURE_ID: u64 = u64::MAX - 3;
-
-/// Reserved id for the picker's action menu, hung from its selected entry.
-const PALETTE_MENU_TEXTURE_ID: u64 = u64::MAX - 22;
-
 /// Reserved id for the rasterized URL hover tooltip.
 const URL_TOOLTIP_TEXTURE_ID: u64 = u64::MAX - 6;
 
@@ -80,9 +69,6 @@ const WHICH_KEY_TEXTURE_ID: u64 = u64::MAX - 8;
 
 /// Reserved id for the rasterized transient popup window.
 const TRANSIENT_TEXTURE_ID: u64 = u64::MAX - 21;
-
-/// The picker's caret, drawn over the picker apart from it.
-const PALETTE_CARET_TEXTURE_ID: u64 = u64::MAX - 23;
 
 /// Reserved id for the rasterized token inspect popup.
 const TOKEN_INSPECT_TEXTURE_ID: u64 = u64::MAX - 20;
@@ -129,7 +115,6 @@ pub(in crate::renderer) struct OverlayCaches {
     dropdown: RasterCache<TopTabbar>,
     find: RasterCache<FindView>,
     input: RasterCache<InputView>,
-    palette: RasterCache<PickerView>,
     /// One per pane strip texture, keyed by its texture id.
     pub(in crate::renderer) pane_strips: HashMap<u64, RasterCache<PaneStripKey>>,
     tabbar_strip: RasterCache<TopTabbar>,
@@ -288,34 +273,6 @@ impl GpuRenderer {
             surface_h,
             surface_w,
             theme_generation: self.theme_generation,
-        }
-    }
-
-    /// The picker's caret at `rect`, as `(left, top, width, height)` in
-    /// surface pixels: one pixel of the cursor's color, stretched over it.
-    fn caret_placement(&mut self, rect: (f32, f32, f32, f32)) -> ImagePlacement {
-        let color = self.theme.cursor_bg;
-        let pixel = [color.r, color.g, color.b, u8::MAX];
-        self.image_pass.upload(
-            &self.device,
-            &self.queue,
-            PALETTE_CARET_TEXTURE_ID,
-            &pixel,
-            1,
-            1,
-        );
-        let (x, y, width, height) = rect;
-        ImagePlacement {
-            alpha: 1.0,
-            height,
-            id: PALETTE_CARET_TEXTURE_ID,
-            u_max: 1.0,
-            u_min: 0.0,
-            v_max: 1.0,
-            v_min: 0.0,
-            width,
-            x,
-            y,
         }
     }
 
@@ -514,169 +471,6 @@ impl GpuRenderer {
                     .toolbar_hits
                     .push((view.owner, (top, top + height), cache.hits.clone()));
             }
-        }
-        placed
-    }
-
-    /// Rasterize the command palette overlay and upload it to the GPU.
-    pub(in crate::renderer) fn rasterize_palette(
-        &mut self,
-        palette: &PickerView,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        // The centred picker is painted without its caret, which is drawn
-        // over it apart: a blink paints nothing again.
-        let card;
-        let painted = match palette.anchor {
-            None => {
-                card = PickerView {
-                    caret_visible: false,
-                    ..palette.clone()
-                };
-                &card
-            }
-            Some(_) => palette,
-        };
-        let mut placed = self.cached_overlay(
-            |c| &mut c.palette,
-            context,
-            painted,
-            |r| {
-                let mut placed = r.paint_overlay(PALETTE_TEXTURE_ID, |p| {
-                    Some(match painted.anchor {
-                        Some(anchor) => popup_rgba(
-                            p.font_system,
-                            p.swash_cache,
-                            &p.ctx,
-                            p.theme,
-                            painted,
-                            anchor,
-                            surface_w,
-                            surface_h,
-                        ),
-                        None => picker_rgba(
-                            p.font_system,
-                            p.swash_cache,
-                            &p.ctx,
-                            p.theme,
-                            painted,
-                            surface_w,
-                            surface_h,
-                        ),
-                    })
-                });
-                // The action menu, hung from the selected entry over the list:
-                // over a list at the cursor, from where that list was drawn.
-                let list_card = placed.first().map(card_of);
-                if let Some(menu) = painted.menu.as_deref() {
-                    placed.extend(r.paint_overlay(PALETTE_MENU_TEXTURE_ID, |p| {
-                        let anchor = match (painted.anchor, list_card) {
-                            (Some(_), Some((x, y, w, _))) => {
-                                popup_row_rects(&p.ctx, painted, (x, y, w))
-                                    .into_iter()
-                                    .find(|(at, _)| *at == painted.selected)
-                                    .map(|(_, (left, top, _, h))| (left, top, top + h))
-                            }
-                            (Some(_), None) => None,
-                            (None, _) => selected_row_anchor(&p.ctx, painted, surface_w, surface_h),
-                        }?;
-                        Some(popup_rgba(
-                            p.font_system,
-                            p.swash_cache,
-                            &p.ctx,
-                            p.theme,
-                            menu,
-                            anchor,
-                            surface_w,
-                            surface_h,
-                        ))
-                    }));
-                }
-                placed
-            },
-        );
-        let list_card = placed
-            .iter()
-            .find(|image| image.id == PALETTE_TEXTURE_ID)
-            .map(card_of);
-        let menu_card = placed
-            .iter()
-            .find(|image| image.id == PALETTE_MENU_TEXTURE_ID)
-            .map(card_of);
-        self.hits.picker_rect = match palette.anchor {
-            None => list_card,
-            Some(_) => None,
-        };
-        // A list at the cursor and the action menu are cards a click lands
-        // on too, though neither is dragged nor resized.
-        self.hits.picker_floats = match palette.anchor {
-            None => menu_card.into_iter().collect(),
-            Some(_) => list_card.into_iter().chain(menu_card).collect(),
-        };
-        self.hits.picker_base = Some((palette.placement, (surface_w, surface_h)));
-        let ctx = FontCtx {
-            bold_weight: self.fonts.bold_weight.as_deref(),
-            cell_h: self.fonts.cell_height,
-            cell_w: self.fonts.cell_width,
-            family: self.fonts.font_family.as_deref(),
-            field_h: self.popup_field_height(),
-            font_has_bold: self.fonts.font_has_bold,
-            font_size: self.fonts.font_size,
-            line_height: self.fonts.line_height,
-            normal_weight: self.fonts.normal_weight.as_deref(),
-        };
-        // How far a page key moves the selection: the rows the list shows.
-        let rows = match palette.anchor {
-            Some(_) => completion::MAX_ROWS,
-            None => picker_panel(&ctx, palette, surface_w, surface_h).rows,
-        };
-        self.hits.picker_title_rect = match self.hits.picker_rect {
-            Some((px, py, pw, _)) => {
-                let header_h = if palette.title.is_empty() {
-                    ctx.cell_h * 0.5
-                } else {
-                    TITLE_BAR_TOP_PAD + title_bar_height(&ctx)
-                };
-                Some((px, py, pw, header_h))
-            }
-            None => None,
-        };
-        self.hits.picker_rows = Some(rows);
-        let list_rows: Vec<(usize, (f32, f32, f32, f32))> = match (palette.anchor, list_card) {
-            (Some(_), Some((x, y, w, _))) => popup_row_rects(&ctx, palette, (x, y, w)),
-            (Some(_), None) => Vec::new(),
-            (None, _) => picker_row_rects(&ctx, palette, surface_w, surface_h)
-                .into_iter()
-                .enumerate()
-                .collect(),
-        };
-        let menu_rows = match (palette.menu.as_deref(), menu_card) {
-            (Some(menu), Some((x, y, w, _))) => popup_row_rects(&ctx, menu, (x, y, w)),
-            (Some(_), None) | (None, _) => Vec::new(),
-        };
-        self.hits.picker_row_hits = list_rows
-            .into_iter()
-            .map(|(at, rect)| PickerRowHit {
-                at,
-                menu: false,
-                rect,
-            })
-            .chain(menu_rows.into_iter().map(|(at, rect)| PickerRowHit {
-                at,
-                menu: true,
-                rect,
-            }))
-            .collect();
-        let caret = (palette.anchor.is_none() && palette.caret_visible)
-            .then(|| picker_caret_rect(&mut self.font_system, &ctx, palette, surface_w, surface_h));
-        self.hits.picker_buttons = match palette.anchor {
-            Some(_) => Vec::new(),
-            None => picker_button_hits(&mut self.font_system, &ctx, palette, surface_w, surface_h),
-        };
-        if let Some(rect) = caret {
-            placed.push(self.caret_placement(rect));
         }
         placed
     }
@@ -1198,75 +992,6 @@ impl FrameHits {
             })
     }
 
-    /// Whether the surface point `(x, y)` is on the floating picker card.
-    pub fn picker_card_at(&self, x: f32, y: f32) -> bool {
-        self.picker_rect
-            .is_some_and(|(left, top, w, h)| x >= left && x < left + w && y >= top && y < top + h)
-    }
-
-    /// Whether the surface point `(x, y)` is on the floating picker draggable title bar.
-    pub fn picker_title_at(&self, x: f32, y: f32) -> bool {
-        self.picker_title_rect
-            .is_some_and(|(left, top, w, h)| x >= left && x < left + w && y >= top && y < top + h)
-    }
-
-    /// Where the floating picker card was last drawn.
-    pub fn picker_rect(&self) -> Option<(f32, f32, f32, f32)> {
-        self.picker_rect
-    }
-
-    /// Whether the surface point `(x, y)` is on a card of the picker's that
-    /// is not dragged: a list at the cursor, or the action menu.
-    pub fn picker_float_at(&self, x: f32, y: f32) -> bool {
-        self.picker_floats
-            .iter()
-            .any(|&(left, top, w, h)| x >= left && x < left + w && y >= top && y < top + h)
-    }
-
-    /// Whether any card of the picker's was last drawn.
-    pub fn is_picker_drawn(&self) -> bool {
-        self.picker_rect.is_some() || !self.picker_floats.is_empty()
-    }
-
-    /// The entry of the picker, or of its action menu, at the surface point
-    /// `(x, y)`: the menu's first, as it is drawn over the list.
-    pub fn picker_row_at(&self, x: f32, y: f32) -> Option<PickerRowHit> {
-        let over = |hit: &&PickerRowHit| {
-            let (left, top, w, h) = hit.rect;
-            x >= left && x < left + w && y >= top && y < top + h
-        };
-        let mut hits = self.picker_row_hits.iter();
-        let menu = hits.clone().filter(over).find(|hit| hit.menu);
-        menu.or_else(|| hits.find(over)).copied()
-    }
-
-    /// Where a `size` picker card goes before any drag, as the picker last
-    /// drawn is placed: what a drag offset is measured from.
-    pub fn picker_base(&self, size: (f32, f32)) -> Option<(f32, f32)> {
-        self.picker_base
-            .map(|(placement, surface)| picker_base_origin(placement, size, surface))
-    }
-
-    /// The window size the overlays were last placed in.
-    pub fn picker_surface(&self) -> Option<(f32, f32)> {
-        self.picker_base.map(|(_, surface)| surface)
-    }
-
-    /// The button of the picker's selected entry at the surface point
-    /// `(x, y)`, when one is there.
-    pub fn picker_button_at(&self, x: f32, y: f32) -> Option<PickerButtonHit> {
-        self.picker_buttons.iter().copied().find(|hit| {
-            let (left, top, w, h) = hit.rect;
-            x >= left && x < left + w && y >= top && y < top + h
-        })
-    }
-
-    /// How many result rows the picker last drawn shows: how far a page
-    /// key moves its selection. `None` while no picker is up.
-    pub fn picker_rows(&self) -> Option<usize> {
-        self.picker_rows
-    }
-
     /// Whether the surface point `(x, y)` is on the transient popup window card.
     pub fn transient_card_at(&self, x: f32, y: f32) -> bool {
         self.transient_rect
@@ -1316,17 +1041,6 @@ impl FrameHits {
 // Free functions
 // ========================================================================
 
-/// The card an overlay image holds, as `(x, y, width, height)` on the
-/// surface: the image less the shadow around it.
-fn card_of(image: &ImagePlacement) -> (f32, f32, f32, f32) {
-    (
-        image.x + DROPDOWN_SHADOW,
-        image.y + DROPDOWN_SHADOW,
-        image.width - 2.0 * DROPDOWN_SHADOW,
-        image.height - 2.0 * DROPDOWN_SHADOW,
-    )
-}
-
 // ========================================================================
 // Tests
 // ========================================================================
@@ -1345,8 +1059,6 @@ mod tests {
             SUBMENU_TEXTURE_ID,
             CONTEXT_MENU_TEXTURE_ID,
             TABBAR_STRIP_TEXTURE_ID,
-            PALETTE_TEXTURE_ID,
-            PALETTE_MENU_TEXTURE_ID,
             URL_TOOLTIP_TEXTURE_ID,
             TRANSIENT_TEXTURE_ID,
             WHICH_KEY_TEXTURE_ID,

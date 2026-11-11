@@ -21,8 +21,8 @@ use super::glyphs::{
 use super::parts::status::status_metrics;
 use super::raster::{view::TabbarText, DIM_FACTOR};
 use super::widgets::{
-    CompletionView, DropListView, FindView, InfoView, InputView, PickerView, TokenInspectView,
-    ToolbarView, TransientView, WhichKeyView,
+    CompletionView, DropListView, FindView, InfoView, InputView, TokenInspectView, ToolbarView,
+    TransientView, WhichKeyView,
 };
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView, StatusBar, ToastCard};
@@ -194,7 +194,6 @@ impl GpuRenderer {
         status: Option<&StatusBar>,
         tabbar: Option<&TopTabbar>,
         images: &[ImagePlacement],
-        palette: Option<&PickerView>,
         input: Option<&InputView>,
         find: Option<&FindView>,
         toasts: &[ToastCard],
@@ -326,7 +325,6 @@ impl GpuRenderer {
             info,
             drop_list,
             tabbar,
-            palette,
             input,
             find,
             toasts,
@@ -1199,7 +1197,6 @@ impl GpuRenderer {
         info: Option<&InfoView>,
         drop_list: Option<&DropListView>,
         tabbar: Option<&TopTabbar>,
-        palette: Option<&PickerView>,
         input: Option<&InputView>,
         find: Option<&FindView>,
         toasts: &[ToastCard],
@@ -1208,7 +1205,7 @@ impl GpuRenderer {
         token_inspect: Option<&TokenInspectView>,
         surface: SurfaceSize,
     ) {
-        // The open dropdown and command palette are rasterized to textures and
+        // The open dropdown and the popups are rasterized to textures and
         // drawn by the image pass (after the text pass) so they overlay content.
         let (w, h) = (surface.width, surface.height);
         let mut all_images: Vec<ImagePlacement> = images.to_vec();
@@ -1230,17 +1227,6 @@ impl GpuRenderer {
         if let Some(c) = tabbar {
             all_images.extend(self.rasterize_dropdown(c, w, h));
             all_images.extend(self.rasterize_url_tooltip(c, w, h));
-        }
-        if let Some(p) = palette {
-            all_images.extend(self.rasterize_palette(p, w, h));
-        } else {
-            self.hits.picker_rect = None;
-            self.hits.picker_title_rect = None;
-            self.hits.picker_rows = None;
-            self.hits.picker_buttons.clear();
-            self.hits.picker_base = None;
-            self.hits.picker_floats.clear();
-            self.hits.picker_row_hits.clear();
         }
         match input {
             Some(i) => all_images.extend(self.rasterize_input(i, w, h)),

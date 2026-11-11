@@ -21,11 +21,10 @@ pub use renderer::{
     clamp_font_size, start_font_load, ButtonView, CellOverlay, ColumnAlign, CompletionRow,
     CompletionView, DropListRow, DropListView, FindView, FontConfig, FontLoad, GridStrip, InfoSpan,
     InfoView, InputView, NoticeKind, PaneRect, PaneView, PanelLine, PanelSpan, PanelView,
-    PickerButtonHit, PickerItem, PickerPlacement, PickerRowHit, PickerView, StatusBar, StatusBell,
-    StatusHover, StatusNotice, StatusPrompt, StatusSearch, StatusSegment, SwitchKind, ToastCard,
-    ToastHit, TokenInspectView, ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView,
-    TransientCommand, TransientHit, TransientSwitch, TransientView, WhichKeyHit, WhichKeyView,
-    THIN_SPACE,
+    PickerItem, PickerPlacement, PickerView, StatusBar, StatusBell, StatusHover, StatusNotice,
+    StatusPrompt, StatusSearch, StatusSegment, SwitchKind, ToastCard, ToastHit, TokenInspectView,
+    ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView, TransientCommand, TransientHit,
+    TransientSwitch, TransientView, WhichKeyHit, WhichKeyView, THIN_SPACE,
 };
 pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};
 pub use tabbar::{

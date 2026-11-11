@@ -164,13 +164,6 @@ impl App {
         }
     }
 
-    /// Put away whatever picker is open, as a click outside it does.
-    pub(in crate::window) fn close_open_picker(&mut self) {
-        if self.chrome.picker().is_some() {
-            self.dismiss_overlay();
-        }
-    }
-
     /// Keep the lines a search found in a Grep buffer of its own, shown
     /// beside the tab the picker was opened from.
     pub(in crate::window) fn save_hits(&mut self, save: SaveHits) {

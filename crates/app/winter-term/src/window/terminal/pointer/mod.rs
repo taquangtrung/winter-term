@@ -8,8 +8,6 @@ pub(in crate::window) use clipboard::Clipboards;
 
 use std::time::Instant;
 
-use winit::window::ResizeDirection;
-
 use winter_model::input::VisualKind;
 use winter_model::layout::TabId;
 use winter_render::renderer::PaneRect;
@@ -28,15 +26,6 @@ pub(in crate::window) struct ScrollbarDrag {
     pub(in crate::window) grab_offset: f32,
 }
 
-/// Active resize of the floating picker window: start mouse coordinate, starting bounding box,
-/// and edge/corner resize direction.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(in crate::window) struct PickerResize {
-    pub(in crate::window) start_mouse: (f32, f32),
-    pub(in crate::window) start_rect: (f32, f32, f32, f32),
-    pub(in crate::window) direction: ResizeDirection,
-}
-
 /// Transient pointer input: where the pointer is, what it is dragging, and
 /// the timing state that turns clicks into double- and triple-clicks.
 #[derive(Debug)]
@@ -49,11 +38,6 @@ pub(in crate::window) struct PointerState {
     /// Previous cursor pixel position during a split-divider drag, or `None`
     /// when no drag is in progress. Cleared on mouse release.
     pub(in crate::window) divider_drag: Option<(f32, f32)>,
-    /// Previous cursor pixel position during a picker window drag, or `None`
-    /// when no drag is in progress. Cleared on mouse release.
-    pub(in crate::window) picker_drag: Option<(f32, f32)>,
-    /// Active resize of the floating picker window, or `None`. Cleared on mouse release.
-    pub(in crate::window) picker_resize: Option<PickerResize>,
     /// Previous cursor pixel position during a transient window drag, or `None`
     /// when no drag is in progress. Cleared on mouse release.
     pub(in crate::window) transient_drag: Option<(f32, f32)>,
@@ -136,8 +120,6 @@ impl Default for PointerState {
             auto_scroll_next: Instant::now(),
             cursor_pos: (0.0, 0.0),
             divider_drag: None,
-            picker_drag: None,
-            picker_resize: None,
             transient_drag: None,
             hovered_editor: None,
             hovered_pane: None,

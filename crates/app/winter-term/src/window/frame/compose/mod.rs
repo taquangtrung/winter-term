@@ -1293,7 +1293,6 @@ impl App {
             status,
             Some(&tabbar),
             &placements,
-            None,
             input_view.as_ref(),
             find_view.as_ref(),
             &toasts,
@@ -1347,10 +1346,6 @@ impl App {
         let mut view = session
             .as_ref()
             .map(|(_, shown)| session_view(shown, &self.pickers.panel, &look));
-        if let Some(v) = view.as_mut() {
-            v.offset = self.chrome.picker_offset;
-            v.size = self.chrome.picker_size;
-        }
         // Scout's rows are drawn in their editor's syntax colors, the rows
         // shown worked out as they show; ones not reached in time come on
         // the next frame.

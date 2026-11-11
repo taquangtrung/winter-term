@@ -21,9 +21,7 @@ pub(in crate::window) use preview::{FilePreview, PanelState, Preview};
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use misty::picker::{
-    self, History, Parked, Picker, PickerAct, PreviewKind, Recency, Reply, Source,
-};
+use misty::picker::{self, History, Parked, Picker, PreviewKind, Recency, Reply, Source};
 use misty::{EventCx, QuickPick};
 use winter_model::input::table::find;
 use winter_model::input::Key;
@@ -41,10 +39,6 @@ use sources::ScoutLines;
 // ========================================================================
 // Constants
 // ========================================================================
-
-/// How many lines a page key moves before the picker has been drawn, which
-/// is when it says how many it shows.
-const UNDRAWN_LINES: usize = 10;
 
 /// How long a picker opening waits for its first rows before it is drawn
 /// without them: two frames, so a list ready at once never flashes empty.
@@ -168,8 +162,6 @@ impl App {
         self.pickers.panel.clear();
         // Each picker opens where its placement puts it: a drag or resize
         // belongs to the picker it was done to.
-        self.chrome.picker_offset = None;
-        self.chrome.picker_size = None;
         let quick = Box::new(QuickPick::new(*picker).without_default_keys());
         self.open_overlay(Overlay::Picker(Box::new(PickerOverlay { pick, quick })));
     }
@@ -218,8 +210,6 @@ impl App {
         });
         picker.settle(OPENING_PATIENCE);
         self.pickers.panel.clear();
-        self.chrome.picker_offset = None;
-        self.chrome.picker_size = None;
         let quick = Box::new(QuickPick::new(*picker).without_default_keys());
         self.open_overlay(Overlay::Picker(Box::new(PickerOverlay {
             pick: None,
@@ -234,15 +224,14 @@ impl App {
     /// Route `key` to the open picker: its own table first, then the table
     /// of its source's actions, then the source and the query.
     pub(in crate::window) fn press_picker_key(&mut self, key: &Key, focused: TabId) {
-        let lines = self.picker_lines();
-        let now = Instant::now();
-        let Some(picker) = self.chrome.picker_mut() else {
+        let Some(quick) = self.chrome.quick_pick_mut() else {
             return;
         };
         let reply = match find(&KEYS, key) {
-            Some(act) => picker.act(act, lines, now),
-            None => match sources::action_for(picker.id(), key) {
-                Some(action) => picker.run_action(action),
+            // The quick pick knows the lines it shows, for the page keys.
+            Some(act) => quick.act(act),
+            None => match sources::action_for(quick.picker().id(), key) {
+                Some(action) => quick.picker_mut().run_action(action),
                 None => {
                     // Typed into the query with the window's context, at
                     // the end of the input (see `type_into_picker`).
@@ -280,38 +269,6 @@ impl App {
         }
     }
 
-    /// A click on a button of the selected row.
-    pub(in crate::window) fn click_picker_button(&mut self, item: usize, button: usize) {
-        let focused = self.layout().focused();
-        let Some(picker) = self.chrome.picker_mut() else {
-            return;
-        };
-        let view = picker.view();
-        let action = view
-            .rows
-            .get(item)
-            .and_then(|row| row.buttons.get(button))
-            .map(|action| action.id);
-        let Some(action) = action else {
-            return;
-        };
-        let reply = picker.click_button(item, action);
-        self.answer_reply(reply, focused);
-    }
-
-    /// A click on entry `at` of the open picker, or of the action menu over
-    /// it: picked, as `RET` picks the selected entry.
-    pub(in crate::window) fn click_picker_row(&mut self, at: usize) {
-        let focused = self.layout().focused();
-        let lines = self.picker_lines();
-        let Some(picker) = self.chrome.picker_mut() else {
-            return;
-        };
-        picker.select_shown(at);
-        let reply = picker.act(PickerAct::Accept, lines, Instant::now());
-        self.answer_reply(reply, focused);
-    }
-
     // --------------------------------------------------------------------
     // Ticking
     // --------------------------------------------------------------------
@@ -321,13 +278,7 @@ impl App {
     pub(in crate::window) fn tick_picker(&mut self, now: Instant) -> Option<Instant> {
         let panel_again = self.take_panel_preview();
         let focused = self.layout().focused();
-        // Until the picker is drawn, it keeps the lines it opened with rather
-        // than shrinking to a guess and growing back once it is measured.
-        let lines = self.drawn_picker_lines();
         let picker = self.chrome.picker_mut()?;
-        if let Some(lines) = lines {
-            picker.set_lines(lines);
-        }
         let kind = picker.preview_kind();
         let query = picker.query().to_string();
         let tick = picker.tick(now);
@@ -440,18 +391,6 @@ impl App {
         if let Some(parked) = picker.park() {
             self.pickers.parked = Some(parked);
         }
-    }
-
-    /// How many lines of rows the open picker shows, as last drawn.
-    fn picker_lines(&self) -> usize {
-        self.drawn_picker_lines().unwrap_or(UNDRAWN_LINES)
-    }
-
-    /// How many lines of rows the open picker shows, once it has been drawn.
-    fn drawn_picker_lines(&self) -> Option<usize> {
-        self.renderer
-            .as_ref()
-            .and_then(|renderer| renderer.hits().picker_rows())
     }
 }
 

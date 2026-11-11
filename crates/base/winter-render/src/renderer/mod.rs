@@ -41,10 +41,9 @@ pub use glyphs::{clamp_font_size, start_font_load, FontConfig, FontLoad};
 pub use raster::POPUP_EDGE_ROOM;
 pub use widgets::{
     ButtonView, ColumnAlign, CompletionRow, CompletionView, DropListRow, DropListView, FindView,
-    InfoSpan, InfoView, InputView, PanelLine, PanelSpan, PanelView, PickerButtonHit, PickerItem,
-    PickerPlacement, PickerRowHit, PickerView, SwitchKind, TokenInspectView, ToolbarColumn,
-    ToolbarItem, ToolbarTone, ToolbarView, TransientCommand, TransientHit, TransientSwitch,
-    TransientView, WhichKeyHit, WhichKeyView,
+    InfoSpan, InfoView, InputView, PanelLine, PanelSpan, PanelView, PickerItem, PickerPlacement,
+    PickerView, SwitchKind, TokenInspectView, ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView,
+    TransientCommand, TransientHit, TransientSwitch, TransientView, WhichKeyHit, WhichKeyView,
 };
 
 // ========================================================================
@@ -151,22 +150,6 @@ pub struct FrameHits {
     /// Where each pane toolbar's buttons were last drawn: whose bar, the
     /// band's top and bottom edges, and each button's span across it.
     toolbar_hits: Vec<(u64, (f32, f32), Vec<widgets::toolbar::ToolbarHit>)>,
-    /// Where the floating picker / command palette card was last drawn, as `(x, y, width, height)`.
-    picker_rect: Option<(f32, f32, f32, f32)>,
-    /// Where the floating picker's draggable title bar was last drawn, as `(x, y, width, height)`.
-    picker_title_rect: Option<(f32, f32, f32, f32)>,
-    /// How many result rows the picker last drawn shows.
-    picker_rows: Option<usize>,
-    /// Where the selected entry's buttons were last drawn.
-    picker_buttons: Vec<widgets::picker::PickerButtonHit>,
-    /// How the picker last drawn was placed, and in what window size: what
-    /// a drag offset is measured from.
-    picker_base: Option<(PickerPlacement, (f32, f32))>,
-    /// Where the picker's cards that are not dragged were last drawn: a list
-    /// at the cursor, and the action menu.
-    picker_floats: Vec<(f32, f32, f32, f32)>,
-    /// Where each entry of the picker and of its action menu was last drawn.
-    picker_row_hits: Vec<widgets::picker::PickerRowHit>,
     /// Where the transient popup window was last drawn, as `(x, y, width, height)`.
     transient_rect: Option<(f32, f32, f32, f32)>,
     /// Where the transient popup window's draggable title bar was last drawn, as `(x, y, width, height)`.

@@ -14,8 +14,6 @@ pub(in crate::renderer) mod find;
 pub(in crate::renderer) mod info;
 pub(in crate::renderer) mod input;
 pub(in crate::renderer) mod menu;
-pub(in crate::renderer) mod picker;
-pub(in crate::renderer) mod popup;
 pub(in crate::renderer) mod toast;
 pub(in crate::renderer) mod token_inspect;
 pub(in crate::renderer) mod toolbar;
@@ -24,7 +22,6 @@ pub(in crate::renderer) mod transient;
 mod view;
 pub(in crate::renderer) mod which_key;
 
-pub use picker::{PickerButtonHit, PickerRowHit};
 pub use transient::TransientHit;
 pub use view::{
     ButtonView, ColumnAlign, CompletionRow, CompletionView, DropListRow, DropListView, FindView,

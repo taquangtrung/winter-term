@@ -610,18 +610,6 @@ fn test_a_question_a_transient_asked_opens_on_its_card() {
 }
 
 #[test]
-fn test_each_picker_opens_where_its_placement_puts_it() {
-    // A drag or resize belongs to the picker it was done to, not the next.
-    let (mut app, pane, _heard) = app_asking();
-    app.chrome.overlay = None;
-    app.chrome.picker_offset = Some((40.0, 60.0));
-    app.chrome.picker_size = Some((500.0, 400.0));
-    app.act_on_editor_outcome(pane, EditorOutcome::Pick(checkout_pick()));
-    assert_eq!(app.chrome.picker_offset, None);
-    assert_eq!(app.chrome.picker_size, None);
-}
-
-#[test]
 fn test_another_editors_transient_card_is_not_taken() {
     let (mut app, pane, _heard) = app_asking();
     app.chrome.overlay = None;

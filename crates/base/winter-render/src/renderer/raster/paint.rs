@@ -1,11 +1,9 @@
 //! Low-level pixel work shared by every chrome surface.
 
-use glyphon::{Attrs, BufferLine, Color, Family, FontSystem, Shaping, SwashCache, TextBounds};
+use glyphon::{Attrs, Color, Family, FontSystem, Shaping, SwashCache, TextBounds};
 use resvg::usvg::Options;
 
-use crate::renderer::glyphs::{
-    base_family, effective_bold_weight, parse_weight, FontCtx, DEFAULT_BOLD_WEIGHT,
-};
+use crate::renderer::glyphs::{base_family, effective_bold_weight, parse_weight, FontCtx};
 use crate::renderer::svg::rasterize_in_box;
 use crate::theme::Rgb;
 
@@ -393,113 +391,6 @@ pub(in crate::renderer) fn composite_buffer(
         },
     );
 }
-/// Render `text` into `rgba` at `offset`, coloring characters listed in
-/// `match_positions` with `accent_color` and the rest by `colors`, runs of
-/// `(characters, color)` from the start (a line of code in its syntax
-/// colors), past which they take `base_color`.
-/// When `underline` is true, a 1-pixel line is drawn below each matched span.
-#[allow(clippy::too_many_arguments)]
-pub(in crate::renderer) fn draw_highlighted_label(
-    font_system: &mut FontSystem,
-    swash_cache: &mut SwashCache,
-    ctx: &FontCtx,
-    rgba: &mut [u8],
-    canvas: (u32, u32),
-    text: &str,
-    match_positions: &[usize],
-    colors: &[(usize, Color)],
-    base_color: Color,
-    accent_color: Color,
-    underline: bool,
-    bold: bool,
-    offset: (i32, i32),
-) {
-    let (canvas_w, canvas_h) = canvas;
-    let weight = if bold {
-        parse_weight(ctx.bold_weight, DEFAULT_BOLD_WEIGHT)
-    } else {
-        glyphon::cosmic_text::Weight::MEDIUM
-    };
-
-    // Shape the whole label in one buffer so every glyph shares the same font
-    // and size; color the matched characters with attribute spans. Shaping the
-    // label in per-match fragments lets cosmic-text resolve different fallback
-    // fonts per segment, which makes the matched glyphs render unevenly.
-    let family = ui_family(font_system);
-    let base_attrs = Attrs::new().family(family).color(base_color).weight(weight);
-    let mut attrs_list = glyphon::AttrsList::new(&base_attrs);
-    // The runs' colors first, so a matched character's accent goes over its own.
-    let mut chars = text.char_indices();
-    for &(count, color) in colors {
-        let span = Attrs::new().family(family).color(color).weight(weight);
-        let mut run = chars.by_ref().take(count).peekable();
-        let Some(&(start, _)) = run.peek() else {
-            break;
-        };
-        let end = run.last().map_or(start, |(at, ch)| at + ch.len_utf8());
-        attrs_list.add_span(start..end, &span);
-    }
-    let mut matched_bytes: std::collections::HashSet<usize> = std::collections::HashSet::new();
-    let mut byte = 0usize;
-    for (i, ch) in text.chars().enumerate() {
-        let len = ch.len_utf8();
-        if match_positions.binary_search(&i).is_ok() {
-            let span = Attrs::new()
-                .family(family)
-                .color(accent_color)
-                .weight(weight);
-            attrs_list.add_span(byte..byte + len, &span);
-            matched_bytes.insert(byte);
-        }
-        byte += len;
-    }
-
-    let mut buffer = glyphon::Buffer::new(
-        font_system,
-        glyphon::Metrics::new(ctx.font_size, ctx.line_height),
-    );
-    buffer.set_size(Some(f32::MAX), Some(ctx.line_height));
-    buffer.lines.clear();
-    buffer.lines.push(BufferLine::new(
-        text,
-        glyphon::cosmic_text::LineEnding::default(),
-        attrs_list,
-        Shaping::Advanced,
-    ));
-    buffer.shape_until_scroll(font_system, false);
-    composite_buffer(
-        font_system,
-        swash_cache,
-        rgba,
-        canvas,
-        &mut buffer,
-        offset,
-        base_color,
-    );
-
-    // Underline the matched glyphs, located from the shaped layout.
-    let underline_y = offset.1 + ctx.line_height as i32 - 2;
-    if underline && underline_y >= 0 && underline_y < canvas_h as i32 {
-        let uy = underline_y as u32;
-        for run in buffer.layout_runs() {
-            for glyph in run.glyphs.iter() {
-                if !matched_bytes.contains(&glyph.start) {
-                    continue;
-                }
-                let gx0 = offset.0 + glyph.x as i32;
-                let gx1 = gx0 + glyph.w.ceil() as i32;
-                for px in gx0.max(0)..gx1.min(canvas_w as i32) {
-                    let idx = (uy * canvas_w + px as u32) as usize * 4;
-                    rgba[idx] = accent_color.r();
-                    rgba[idx + 1] = accent_color.g();
-                    rgba[idx + 2] = accent_color.b();
-                    rgba[idx + 3] = 255;
-                }
-            }
-        }
-    }
-}
-
 /// The square hover pill behind a button's icon: one cell-height (to whole
 /// pixels) on a side wherever it is drawn, so every button's pill is the same
 /// size, centered on `(cx, cy)` to within half a pixel and snapped to whole
