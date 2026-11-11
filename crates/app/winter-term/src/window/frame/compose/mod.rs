@@ -1285,13 +1285,15 @@ impl App {
             jumping_terminal: self.term.scout_origin.map(|(tab, _)| tab),
             window_focused: self.input.focus.window,
         });
+        // Misty's quick pick draws the picker over the frame.
+        self.pickers.drawn = palette_view.take();
         renderer.render(
             target,
             &views,
             status,
             Some(&tabbar),
             &placements,
-            palette_view.as_ref(),
+            None,
             input_view.as_ref(),
             find_view.as_ref(),
             &toasts,

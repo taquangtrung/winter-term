@@ -403,6 +403,16 @@ impl Chrome {
         Some(overlay.quick.picker_mut())
     }
 
+    /// The open picker's view, to draw it and hand it the pointer.
+    pub(in crate::window) fn quick_pick_mut(
+        &mut self,
+    ) -> Option<&mut QuickPick<WindowOutcome, Preview>> {
+        let Some(Overlay::Picker(overlay)) = &mut self.overlay else {
+            return None;
+        };
+        Some(&mut overlay.quick)
+    }
+
     /// The editor question the open picker is collecting an answer to.
     pub(in crate::window) fn editor_pick(&self) -> Option<&ActivePick> {
         let Some(Overlay::Picker(overlay)) = &self.overlay else {

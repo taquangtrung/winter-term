@@ -171,6 +171,7 @@ impl App {
             .unwrap_or_else(|| texture.texture().create_view(&Default::default()));
         self.render_frame(&view);
         frame.draw_texture(&texture, bounds);
+        self.draw_picker(frame);
     }
 
     /// The texture frames of `size` are rendered into: last frame's while
@@ -208,7 +209,14 @@ impl App {
         if let Some(window) = window {
             self.input.modifiers = misty_input::winit_modifiers(cx.event_cx(window).mods());
         }
+        let pointer = matches!(
+            input,
+            Input::PointerButton(_) | Input::PointerMoved(_) | Input::PointerLeft | Input::Wheel(_)
+        );
+        let picked = pointer
+            && window.is_some_and(|window| self.point_at_picker(input, &mut cx.event_cx(window)));
         match input {
+            _ if picked => {}
             Input::Key(key) => self.on_key(*key, true, cx),
             Input::KeyReleased(key) => self.on_key(*key, false, cx),
             Input::Ime(ime) => self.on_ime(ime, cx),

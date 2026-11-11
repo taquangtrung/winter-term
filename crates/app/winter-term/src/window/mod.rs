@@ -40,6 +40,7 @@ mod input;
 mod layout;
 mod macro_record;
 mod menus;
+pub(in crate::window) mod misty_theme;
 mod notices;
 mod picker;
 mod recent;

@@ -12,6 +12,7 @@ mod open;
 pub(in crate::window) mod outcome;
 pub(in crate::window) mod preview;
 pub(in crate::window) mod sources;
+mod view;
 
 pub(in crate::window) use outcome::WindowOutcome;
 
@@ -84,6 +85,9 @@ pub(in crate::window) struct PickerMemory {
     /// it, which takes them with the window's context at the end of the
     /// input they came in.
     typed: Vec<misty::Key>,
+    /// The open picker as the last frame worked it out (where it goes, its
+    /// rows' colors, its side panel), for misty's quick pick to draw.
+    pub(in crate::window) drawn: Option<winter_render::PickerView>,
     /// What wakes misty's loop when a picker's matcher has news; `None`
     /// before the window is open, when pickers match on the window's
     /// thread.
