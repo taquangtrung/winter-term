@@ -12,10 +12,8 @@ pub(in crate::renderer) mod menu;
 pub(in crate::renderer) mod token_inspect;
 pub(in crate::renderer) mod toolbar;
 pub(in crate::renderer) mod tooltip;
-pub(in crate::renderer) mod transient;
 mod view;
 
-pub use transient::TransientHit;
 pub use view::{
     ButtonView, ColumnAlign, CompletionRow, CompletionView, DropListRow, DropListView, FindView,
     InfoSpan, InfoView, InputView, PanelLine, PanelSpan, PanelView, PickerItem, PickerPlacement,

@@ -66,10 +66,7 @@ impl App {
             .collect();
         // A card held for a list is the last key's: this key asks anew.
         self.chrome.transient_card = None;
-        let card = self
-            .renderer
-            .as_ref()
-            .and_then(|r| r.hits().transient_rect());
+        let card = self.transient_card_rect();
         let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
             return false;
         };

@@ -11,4 +11,5 @@ pub(in crate::window) mod inspect;
 mod overlays;
 pub(in crate::window) mod pane_popups;
 pub(in crate::window) mod popups;
+pub(in crate::window) mod transient;
 pub(in crate::window) mod which_key;

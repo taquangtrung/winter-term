@@ -23,8 +23,8 @@ pub use renderer::{
     InfoView, InputView, NoticeKind, PaneRect, PaneView, PanelLine, PanelSpan, PanelView,
     PickerItem, PickerPlacement, PickerView, StatusBar, StatusBell, StatusHover, StatusNotice,
     StatusPrompt, StatusSearch, StatusSegment, SwitchKind, TokenInspectView, ToolbarColumn,
-    ToolbarItem, ToolbarTone, ToolbarView, TransientCommand, TransientHit, TransientSwitch,
-    TransientView, WhichKeyView, THIN_SPACE,
+    ToolbarItem, ToolbarTone, ToolbarView, TransientCommand, TransientSwitch, TransientView,
+    WhichKeyView, THIN_SPACE,
 };
 pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};
 pub use tabbar::{

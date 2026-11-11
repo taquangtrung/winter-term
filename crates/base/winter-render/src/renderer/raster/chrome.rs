@@ -257,24 +257,6 @@ impl Chrome {
         );
     }
 
-    /// Draw the title bar along the panel's top edge, as `bar` says, over a
-    /// hairline divider: `title` (cut short to fit) centred down the bar,
-    /// and `hint` (when not empty) right-aligned in the muted color. Returns
-    /// the canvas y where the content below the title bar begins.
-    #[allow(clippy::too_many_arguments)]
-    pub(in crate::renderer) fn draw_title(
-        &mut self,
-        font_system: &mut FontSystem,
-        swash_cache: &mut SwashCache,
-        ctx: &FontCtx,
-        theme: &Theme,
-        bar: TitleBar,
-        title: &str,
-        hint: &str,
-    ) -> f32 {
-        self.draw_title_with_icon(font_system, swash_cache, ctx, theme, bar, title, hint, None)
-    }
-
     /// Like [`Self::draw_title`], but with an optional icon glyph and color
     /// preceding the title text.
     #[allow(clippy::too_many_arguments)]
@@ -445,40 +427,6 @@ pub(in crate::renderer) fn centered(
     )
 }
 
-/// The top-left corner that places a `panel_w` x `panel_h` panel horizontally
-/// centered and anchored at `top_y` from the top of the surface.
-pub(in crate::renderer) fn top_anchored(
-    surface_w: f32,
-    surface_h: f32,
-    panel_w: f32,
-    panel_h: f32,
-    top_y: f32,
-) -> (f32, f32) {
-    (
-        ((surface_w - panel_w) / 2.0).floor().max(0.0),
-        top_y.min((surface_h - panel_h).max(0.0)).floor(),
-    )
-}
-
-/// The top-left corner that places a `panel_w` x `panel_h` panel centered
-/// within a bounding rectangle `(rect_x, rect_y, rect_w, rect_h)`, clamped
-/// within the surface bounds `(surface_w, surface_h)`.
-pub(in crate::renderer) fn centered_in_rect(
-    surface_w: f32,
-    surface_h: f32,
-    panel_w: f32,
-    panel_h: f32,
-    rect: (f32, f32, f32, f32),
-) -> (f32, f32) {
-    let (rx, ry, rw, rh) = rect;
-    let ideal_x = rx + (rw - panel_w) / 2.0;
-    let ideal_y = ry + (rh - panel_h) / 2.0;
-    (
-        ideal_x.clamp(0.0, (surface_w - panel_w).max(0.0)).floor(),
-        ideal_y.clamp(0.0, (surface_h - panel_h).max(0.0)).floor(),
-    )
-}
-
 // ========================================================================
 // Fields and dividers
 // ========================================================================
@@ -573,7 +521,6 @@ pub(in crate::renderer) fn draw_caret(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::test_support::*;
 
     #[test]
     fn test_a_field_is_its_rows_of_the_font_tall_and_never_less_than_a_line() {
@@ -583,72 +530,9 @@ mod tests {
         assert_eq!(field_height(18.0, 21.2, 1.0), 22.0);
     }
 
-    /// The box `(left, top, right, bottom)` of canvas pixels in `rows` that
-    /// differ from `surface`, which is where text was drawn. Only the
-    /// panel's interior is scanned: the border runs down both sides of every
-    /// row and would make any line of text look centred.
-    fn ink_box(frame: &mut Chrome, surface: Rgb, rows: (u32, u32)) -> (u32, u32, u32, u32) {
-        let inside = (frame.margin + 2.0 * BORDER_W) as u32;
-        let (rgba, (width, _)) = frame.pixels();
-        let (mut left, mut top, mut right, mut bottom) = (u32::MAX, u32::MAX, 0, 0);
-        for y in rows.0..rows.1 {
-            for x in inside..width - inside {
-                let idx = ((y * width + x) * 4) as usize;
-                let differs = rgba[idx] != surface.r
-                    || rgba[idx + 1] != surface.g
-                    || rgba[idx + 2] != surface.b;
-                if differs {
-                    (left, top) = (left.min(x), top.min(y));
-                    (right, bottom) = (right.max(x), bottom.max(y));
-                }
-            }
-        }
-        (left, top, right, bottom)
-    }
-
     /// A 400 x 120 panel with `title` drawn as `bar` says, the ink of the
     /// title, where the content below it begins, and the font's cell width
     /// and line height.
-    fn titled(bar: TitleBar, title: &str) -> ((u32, u32, u32, u32), f32, (f32, f32)) {
-        let mut font_system = FontSystem::new();
-        let mut swash = SwashCache::new();
-        let theme = Theme::dark();
-        let ctx = sample_font_ctx();
-        let mut frame = Chrome::new(&theme, PANEL_W, 120.0, MARGIN);
-        let bottom = frame.draw_title(&mut font_system, &mut swash, &ctx, &theme, bar, title, "");
-        let surface = match bar {
-            TitleBar::Decorated => mix_rgb(theme.menu_bg, theme.divider, HEADER_BG_MIX),
-        };
-        // Down to the divider, not onto it.
-        let ink = ink_box(
-            &mut frame,
-            surface,
-            ((MARGIN + 2.0 * BORDER_W) as u32, bottom as u32 - 1),
-        );
-        (ink, bottom, (ctx.cell_w, ctx.line_height))
-    }
-
-    const PANEL_W: f32 = 400.0;
-    const MARGIN: f32 = 8.0;
-
-    #[test]
-    fn test_a_decorated_title_is_centred_across_and_down_its_bar() {
-        let ((left, top, right, bottom), bar_bottom, (cell_w, line_h)) =
-            titled(TitleBar::Decorated, "Branch");
-        assert!(left < right, "the title drew something");
-        let across = (left + right) as f32 / 2.0;
-        let panel_centre = MARGIN + PANEL_W / 2.0;
-        assert!(
-            (across - panel_centre).abs() <= cell_w,
-            "centred across at {across}, not {panel_centre}"
-        );
-        let (above, below) = (top as f32 - MARGIN, bar_bottom - bottom as f32);
-        assert!(
-            (above - below).abs() <= line_h / 2.0,
-            "{above} above the ink, {below} below"
-        );
-    }
-
     #[test]
     fn test_an_anchored_panel_hangs_below_flips_above_and_stays_inside() {
         let surface = (800.0, 600.0);
@@ -679,25 +563,5 @@ mod tests {
         let image = frame.into_image(40.4, 20.6);
         assert_eq!((image.x, image.y), (32.0, 13.0));
         assert_eq!((image.width, image.height), (116, 66));
-    }
-
-    #[test]
-    fn test_centered_in_rect_places_panel_at_pane_center_and_clamps() {
-        let surface = (1920.0, 1080.0);
-        let pane = (400.0, 200.0, 600.0, 400.0);
-        // Panel 300x200 centered in 600x400 pane at (400, 200):
-        // x = 400 + (600 - 300)/2 = 550
-        // y = 200 + (400 - 200)/2 = 300
-        assert_eq!(
-            centered_in_rect(surface.0, surface.1, 300.0, 200.0, pane),
-            (550.0, 300.0)
-        );
-
-        // When pane is at left edge and narrow, clamped to >= 0
-        let narrow_pane = (0.0, 0.0, 100.0, 100.0);
-        assert_eq!(
-            centered_in_rect(surface.0, surface.1, 300.0, 200.0, narrow_pane),
-            (0.0, 0.0)
-        );
     }
 }

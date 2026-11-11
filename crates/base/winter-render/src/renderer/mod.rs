@@ -42,7 +42,7 @@ pub use widgets::{
     ButtonView, ColumnAlign, CompletionRow, CompletionView, DropListRow, DropListView, FindView,
     InfoSpan, InfoView, InputView, PanelLine, PanelSpan, PanelView, PickerItem, PickerPlacement,
     PickerView, SwitchKind, TokenInspectView, ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView,
-    TransientCommand, TransientHit, TransientSwitch, TransientView, WhichKeyView,
+    TransientCommand, TransientSwitch, TransientView, WhichKeyView,
 };
 
 // ========================================================================
@@ -133,12 +133,6 @@ pub struct FrameHits {
     /// Where each pane toolbar's buttons were last drawn: whose bar, the
     /// band's top and bottom edges, and each button's span across it.
     toolbar_hits: Vec<(u64, (f32, f32), Vec<widgets::toolbar::ToolbarHit>)>,
-    /// Where the transient popup window was last drawn, as `(x, y, width, height)`.
-    transient_rect: Option<(f32, f32, f32, f32)>,
-    /// Where the transient popup window's draggable title bar was last drawn, as `(x, y, width, height)`.
-    transient_title_rect: Option<(f32, f32, f32, f32)>,
-    /// Where each visible item in the transient popup window was drawn.
-    transient_hits: Vec<widgets::transient::TransientHit>,
 }
 
 /// The font in force and the cell it makes, with what it can draw itself and the glyphs drawn from a fallback.

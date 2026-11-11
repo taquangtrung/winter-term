@@ -1183,21 +1183,11 @@ impl App {
         // The key menus are sized to, and centred in, the focused pane: the
         // whole of it, its gutter and breadcrumb row too, not just its text.
         let focused_pane = pane_rect_of(&bounds, focused);
-        let transient_view = self.transient_popup(focused);
-        // A menu just opened starts where menus open, fitted to its content;
-        // one already up keeps where it was dragged and the size it was
-        // drawn at, so a child menu or the way back does not make it jump.
-        let held = self.chrome.transient_shown == Some(focused);
-        if transient_view.is_some() && !held {
-            self.chrome.transient_offset = None;
-        }
-        self.chrome.transient_shown = transient_view.as_ref().map(|_| focused);
-        let drawn = renderer.hits().transient_rect().filter(|_| held);
-        let transient_view = transient_view.map(|tr| {
-            tr.with_anchor_rect(focused_pane)
-                .with_offset(self.chrome.transient_offset)
-                .with_min_size(drawn.map(|(_, _, w, h)| (w, h)))
-        });
+        // Misty draws the key menu over the frame, centred in the focused
+        // pane, holding where it was dragged and the size it grew to.
+        self.chrome.drawn_transient = self
+            .transient_popup(focused)
+            .map(|tr| tr.with_anchor_rect(focused_pane));
         // Misty draws the which-key popup over the frame.
         self.chrome.drawn_which_key = self.which_key_popup(focused).map(|view| WhichKeyView {
             anchor_rect: focused_pane,
@@ -1302,7 +1292,6 @@ impl App {
             &placements,
             input_view.as_ref(),
             find_view.as_ref(),
-            transient_view.as_ref(),
             token_inspect_view.as_ref(),
         );
 

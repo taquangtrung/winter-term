@@ -234,48 +234,6 @@ impl App {
             {
                 return;
             }
-            // Transient popup window (commands with parameters / git transients)
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().transient_title_at(x, y))
-            {
-                self.input.pointer.mouse_down = true;
-                if self.take_double_click() {
-                    self.chrome.transient_offset = None;
-                    self.input.pointer.transient_drag = None;
-                } else {
-                    self.input.pointer.transient_drag = Some((x, y));
-                }
-                self.dirty = true;
-                return;
-            }
-            if let Some(hit) = self
-                .renderer
-                .as_ref()
-                .and_then(|r| r.hits().transient_at(x, y))
-            {
-                let key = hit.key.clone();
-                self.click_which_key(&key);
-                self.dirty = true;
-                return;
-            }
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().transient_card_at(x, y))
-            {
-                return;
-            }
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().transient_rect().is_some())
-            {
-                self.dismiss_which_key_popup();
-                self.dirty = true;
-                return;
-            }
             if (self.chrome.menus.open.is_some() || y < self.top_chrome_height())
                 && self.handle_tabbar_click(x, y)
             {
@@ -556,7 +514,6 @@ impl App {
             (ElementState::Released, MouseButton::Left) => {
                 self.input.pointer.mouse_down = false;
                 self.input.pointer.divider_drag = None;
-                self.input.pointer.transient_drag = None;
                 self.input.pointer.press_cell = None;
                 let was_dragging_sb = self.input.pointer.scrollbar_drag.take().is_some();
                 if was_dragging_sb {
@@ -640,28 +597,9 @@ impl App {
             self.hover_dialog(x, y);
             return;
         }
-        if !self.input.pointer.mouse_down {
-            self.hover_transient(x, y);
-        }
 
         // Divider drag: highest priority, blocks selection and PTY forwarding.
         if self.input.pointer.mouse_down {
-            if let Some((prev_x, prev_y)) = self.input.pointer.transient_drag {
-                let card = self
-                    .renderer
-                    .as_ref()
-                    .and_then(|r| r.hits().transient_rect());
-                let (dx, dy) = self.card_move_within(card, (x - prev_x, y - prev_y));
-                let cur = self.chrome.transient_offset.unwrap_or((0.0, 0.0));
-                self.chrome.transient_offset = Some((cur.0 + dx, cur.1 + dy));
-                self.input.pointer.transient_drag = Some((x, y));
-                self.dirty = true;
-                if let Some(window) = &self.window {
-                    window.set_cursor(CursorIcon::Grabbing);
-                }
-                return;
-            }
-
             if let Some((prev_x, prev_y)) = self.input.pointer.divider_drag {
                 let dx = x - prev_x;
                 let dy = y - prev_y;
@@ -927,35 +865,6 @@ impl App {
         }
     }
 
-    /// The pointer over a row of the transient up selects it, as the arrows
-    /// do, so the row lit is the one `RET` runs.
-    fn hover_transient(&mut self, x: f32, y: f32) {
-        let Some(hit) = self
-            .renderer
-            .as_ref()
-            .and_then(|r| r.hits().transient_at(x, y))
-            .map(|hit| (hit.index, hit.is_switch))
-        else {
-            return;
-        };
-        let focused = self.layout().focused();
-        let Some(view) = self.transient_popup(focused) else {
-            return;
-        };
-        let (index, is_switch) = hit;
-        let row = match is_switch {
-            true => index,
-            false => view.switches.len() + index,
-        };
-        if row == view.selected {
-            return;
-        }
-        if let Some(slot) = self.open_tabs.page_mut(&focused) {
-            slot.page.select_transient_row(row);
-            self.dirty = true;
-        }
-    }
-
     /// The pointer moving while a dialog is up: its buttons light under it,
     /// and the window behind sees nothing (no hover, drag, or report to a
     /// program).
@@ -991,16 +900,6 @@ impl App {
                 Some(_) => CursorIcon::Pointer,
                 None => CursorIcon::Default,
             };
-        }
-        if self.input.pointer.transient_drag.is_some() {
-            return CursorIcon::Grabbing;
-        }
-        if self
-            .renderer
-            .as_ref()
-            .is_some_and(|r| r.hits().transient_title_at(x, y))
-        {
-            return CursorIcon::Grab;
         }
 
         let is_tab_dragging = self.tabs.drag_start.is_some_and(|(_, sx, sy)| {
@@ -1237,25 +1136,6 @@ impl App {
         self.input.keys.prefix_since = None;
     }
 
-    /// How far a card drawn at `card` moves for a drag of `delta` while
-    /// staying in the window: a drag past an edge moves it no further, so
-    /// dragging back moves it at once rather than first unwinding the
-    /// overshoot.
-    fn card_move_within(
-        &self,
-        card: Option<(f32, f32, f32, f32)>,
-        delta: (f32, f32),
-    ) -> (f32, f32) {
-        let Some((left, top, w, h)) = card else {
-            return delta;
-        };
-        let (surface_w, surface_h) = self.surface_px();
-        let (dx, dy) = delta;
-        (
-            (left + dx).clamp(0.0, (surface_w - w).max(0.0)) - left,
-            (top + dy).clamp(0.0, (surface_h - h).max(0.0)) - top,
-        )
-    }
 }
 
 // ========================================================================
@@ -1512,31 +1392,6 @@ mod tests {
         // Both switches remain checked!
         assert!(tr.switches.iter().any(|sw| sw.key == "-a" && sw.checked));
         assert!(tr.switches.iter().any(|sw| sw.key == "-s" && sw.checked));
-    }
-
-    #[test]
-    fn test_transient_drag_offset_and_double_click_reset() {
-        let mut app = App::new();
-        assert_eq!(app.chrome.transient_offset, None);
-
-        // Simulate dragging transient window
-        app.input.pointer.transient_drag = Some((300.0, 100.0));
-        app.input.pointer.mouse_down = true;
-        app.on_cursor_moved(winit::dpi::PhysicalPosition::new(340.0, 160.0));
-        assert_eq!(app.chrome.transient_offset, Some((40.0, 60.0)));
-        assert_eq!(app.input.pointer.transient_drag, Some((340.0, 160.0)));
-
-        // Release ends drag
-        app.input.pointer.transient_drag = None;
-        app.input.pointer.mouse_down = false;
-        assert_eq!(app.chrome.transient_offset, Some((40.0, 60.0)));
-
-        // Double click resets offset
-        app.input.pointer.cursor_pos = (340.0, 160.0);
-        app.input.pointer.last_click = Some((std::time::Instant::now(), 340.0, 160.0));
-        assert!(app.take_double_click());
-        app.chrome.transient_offset = None;
-        assert_eq!(app.chrome.transient_offset, None);
     }
 
     #[test]

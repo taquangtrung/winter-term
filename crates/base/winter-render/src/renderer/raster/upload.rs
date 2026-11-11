@@ -16,15 +16,13 @@ use super::DROPDOWN_SHADOW;
 use crate::image::ImagePlacement;
 use crate::renderer::glyphs::FontCtx;
 use crate::renderer::parts::titlebar::tabbar_strip_rgba;
-use crate::renderer::raster::chrome::{title_bar_height, TITLE_BAR_TOP_PAD};
 use crate::renderer::widgets::find::find_rgba;
 use crate::renderer::widgets::input::{confirm_button_rects, input_rgba, resolve_confirm_buttons};
 use crate::renderer::widgets::menu::{context_menu_rgba, dropdown_rgba, submenu_rgba};
 use crate::renderer::widgets::token_inspect::token_inspect_rgba;
 use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
 use crate::renderer::widgets::tooltip::url_tooltip_rgba;
-use crate::renderer::widgets::transient::{transient_item_hits, transient_rgba, TransientHit};
-use crate::renderer::widgets::{FindView, InputView, TokenInspectView, ToolbarView, TransientView};
+use crate::renderer::widgets::{FindView, InputView, TokenInspectView, ToolbarView};
 use crate::renderer::FrameHits;
 use crate::renderer::GpuRenderer;
 use crate::tabbar::{
@@ -50,9 +48,6 @@ const TABBAR_STRIP_TEXTURE_ID: u64 = u64::MAX - 2;
 
 /// Reserved id for the rasterized URL hover tooltip.
 const URL_TOOLTIP_TEXTURE_ID: u64 = u64::MAX - 6;
-
-/// Reserved id for the rasterized transient popup window.
-const TRANSIENT_TEXTURE_ID: u64 = u64::MAX - 21;
 
 /// Reserved id for the rasterized token inspect popup.
 const TOKEN_INSPECT_TEXTURE_ID: u64 = u64::MAX - 20;
@@ -93,7 +88,6 @@ pub(in crate::renderer) struct OverlayCaches {
     /// One per pane toolbar texture, keyed by its texture id, with where its
     /// buttons were drawn.
     toolbars: HashMap<u64, ToolbarCache>,
-    transient: RasterCache<TransientView>,
     url_tooltip: RasterCache<TopTabbar>,
 }
 
@@ -451,80 +445,6 @@ impl GpuRenderer {
         placed
     }
 
-    /// Rasterize the transient popup window and upload it to the GPU.
-    pub(in crate::renderer) fn rasterize_transient(
-        &mut self,
-        transient: &TransientView,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        let placed = self.cached_overlay(
-            |c| &mut c.transient,
-            context,
-            transient,
-            |r| {
-                r.paint_overlay(TRANSIENT_TEXTURE_ID, |p| {
-                    Some(transient_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        transient,
-                        surface_w,
-                        surface_h,
-                    ))
-                })
-            },
-        );
-        self.hits.transient_rect = placed.first().map(|image| {
-            (
-                image.x + DROPDOWN_SHADOW,
-                image.y + DROPDOWN_SHADOW,
-                image.width - 2.0 * DROPDOWN_SHADOW,
-                image.height - 2.0 * DROPDOWN_SHADOW,
-            )
-        });
-        self.hits.transient_hits = match self.hits.transient_rect {
-            Some(card_rect) => {
-                let ctx = FontCtx {
-                    bold_weight: self.fonts.bold_weight.as_deref(),
-                    cell_h: self.fonts.cell_height,
-                    cell_w: self.fonts.cell_width,
-                    family: self.fonts.font_family.as_deref(),
-                    field_h: self.popup_field_height(),
-                    font_has_bold: self.fonts.font_has_bold,
-                    font_size: self.fonts.font_size,
-                    line_height: self.fonts.line_height,
-                    normal_weight: self.fonts.normal_weight.as_deref(),
-                };
-                transient_item_hits(&mut self.font_system, &ctx, transient, card_rect)
-            }
-            None => Vec::new(),
-        };
-        // A transient with no title has no bar to drag by: a strip there would
-        // lie over its first row.
-        self.hits.transient_title_rect = match self.hits.transient_rect {
-            Some(_) if transient.title.is_empty() => None,
-            Some((tx, ty, tw, _)) => {
-                let ctx = FontCtx {
-                    bold_weight: self.fonts.bold_weight.as_deref(),
-                    cell_h: self.fonts.cell_height,
-                    cell_w: self.fonts.cell_width,
-                    family: self.fonts.font_family.as_deref(),
-                    field_h: self.popup_field_height(),
-                    font_has_bold: self.fonts.font_has_bold,
-                    font_size: self.fonts.font_size,
-                    line_height: self.fonts.line_height,
-                    normal_weight: self.fonts.normal_weight.as_deref(),
-                };
-                Some((tx, ty, tw, TITLE_BAR_TOP_PAD + title_bar_height(&ctx)))
-            }
-            None => None,
-        };
-        placed
-    }
-
     /// Rasterize the token inspect overlay and upload it to the GPU.
     pub(in crate::renderer) fn rasterize_token_inspect(
         &mut self,
@@ -741,31 +661,6 @@ impl FrameHits {
                     .map(|hit| (*owner, hit.button))
             })
     }
-
-    /// Whether the surface point `(x, y)` is on the transient popup window card.
-    pub fn transient_card_at(&self, x: f32, y: f32) -> bool {
-        self.transient_rect
-            .is_some_and(|(left, top, w, h)| x >= left && x < left + w && y >= top && y < top + h)
-    }
-
-    /// Whether the surface point `(x, y)` is on the transient popup window draggable title bar.
-    pub fn transient_title_at(&self, x: f32, y: f32) -> bool {
-        self.transient_title_rect
-            .is_some_and(|(left, top, w, h)| x >= left && x < left + w && y >= top && y < top + h)
-    }
-
-    /// Where the transient popup window card was last drawn.
-    pub fn transient_rect(&self) -> Option<(f32, f32, f32, f32)> {
-        self.transient_rect
-    }
-
-    /// The item under surface point `(x, y)` in the transient popup window, if any.
-    pub fn transient_at(&self, x: f32, y: f32) -> Option<&TransientHit> {
-        self.transient_hits.iter().find(|hit| {
-            let (left, top, w, h) = hit.rect;
-            x >= left && x < left + w && y >= top && y < top + h
-        })
-    }
 }
 
 // ========================================================================
@@ -791,7 +686,6 @@ mod tests {
             CONTEXT_MENU_TEXTURE_ID,
             TABBAR_STRIP_TEXTURE_ID,
             URL_TOOLTIP_TEXTURE_ID,
-            TRANSIENT_TEXTURE_ID,
             TOKEN_INSPECT_TEXTURE_ID,
             FIND_TEXTURE_ID,
             INPUT_TEXTURE_ID,

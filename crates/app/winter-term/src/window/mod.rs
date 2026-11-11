@@ -354,6 +354,13 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) cards: misty::Toasts,
     /// The status bar misty draws along the window's bottom.
     pub(in crate::window) status_bar: misty::StatusBar,
+    /// The key menu misty draws, while one is up.
+    pub(in crate::window) transient: Option<misty::Transient>,
+    /// The title of the key menu up, to tell a new menu from the same one.
+    pub(in crate::window) transient_title: Option<String>,
+    /// The key menu as the last frame worked it out, for misty to draw and
+    /// take the pointer by.
+    pub(in crate::window) drawn_transient: Option<winter_render::TransientView>,
     /// The which-key popup misty draws.
     pub(in crate::window) which_key: misty::WhichKey,
     /// The which-key popup as the last frame worked it out, for misty to
@@ -375,12 +382,6 @@ pub(in crate::window) struct Chrome {
     /// The focused tab's project and branch as the status bar last read
     /// them off the disk.
     pub(in crate::window) place: status::PlaceCache,
-    /// How far the transient up has been dragged from the middle of its pane,
-    /// `(dx, dy)`: reset as a transient opens.
-    pub(in crate::window) transient_offset: Option<(f32, f32)>,
-    /// The tab whose transient was drawn last frame, so the next frame knows
-    /// whether its transient is the same one still up or a new one.
-    pub(in crate::window) transient_shown: Option<TabId>,
     /// The transient a key just closed, whose card the list its choice asks
     /// for is drawn on.
     pub(in crate::window) transient_card: Option<TransientCard>,

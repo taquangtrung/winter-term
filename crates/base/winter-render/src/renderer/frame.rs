@@ -19,7 +19,7 @@ use super::glyphs::{
     FallbackGlyphQuadFit,
 };
 use super::raster::{view::TabbarText, DIM_FACTOR};
-use super::widgets::{FindView, InputView, TokenInspectView, ToolbarView, TransientView};
+use super::widgets::{FindView, InputView, TokenInspectView, ToolbarView};
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView};
 use crate::glyph_quad::GlyphQuadPlacement;
@@ -181,7 +181,6 @@ impl GpuRenderer {
         images: &[ImagePlacement],
         input: Option<&InputView>,
         find: Option<&FindView>,
-        transient: Option<&TransientView>,
         token_inspect: Option<&TokenInspectView>,
     ) {
         self.drew_blinking_text = false;
@@ -247,7 +246,6 @@ impl GpuRenderer {
             tabbar,
             input,
             find,
-            transient,
             token_inspect,
             surface,
         );
@@ -1105,7 +1103,6 @@ impl GpuRenderer {
         tabbar: Option<&TopTabbar>,
         input: Option<&InputView>,
         find: Option<&FindView>,
-        transient: Option<&TransientView>,
         token_inspect: Option<&TokenInspectView>,
         surface: SurfaceSize,
     ) {
@@ -1132,13 +1129,6 @@ impl GpuRenderer {
         match find {
             Some(f) => all_images.extend(self.rasterize_find(f, w, h)),
             None => self.hits.find_rect = None,
-        }
-        if let Some(tr) = transient {
-            all_images.extend(self.rasterize_transient(tr, w, h));
-        } else {
-            self.hits.transient_rect = None;
-            self.hits.transient_title_rect = None;
-            self.hits.transient_hits.clear();
         }
         if let Some(ti) = token_inspect {
             all_images.extend(self.rasterize_token_inspect(ti, w, h));

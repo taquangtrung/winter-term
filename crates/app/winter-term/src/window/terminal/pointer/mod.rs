@@ -38,9 +38,6 @@ pub(in crate::window) struct PointerState {
     /// Previous cursor pixel position during a split-divider drag, or `None`
     /// when no drag is in progress. Cleared on mouse release.
     pub(in crate::window) divider_drag: Option<(f32, f32)>,
-    /// Previous cursor pixel position during a transient window drag, or `None`
-    /// when no drag is in progress. Cleared on mouse release.
-    pub(in crate::window) transient_drag: Option<(f32, f32)>,
     /// The editor tab the pointer last rested on, told when it leaves.
     pub(in crate::window) hovered_editor: Option<TabId>,
     /// Which pane the pointer is currently hovering over, if any.
@@ -118,7 +115,6 @@ impl Default for PointerState {
             auto_scroll_next: Instant::now(),
             cursor_pos: (0.0, 0.0),
             divider_drag: None,
-            transient_drag: None,
             hovered_editor: None,
             hovered_pane: None,
             hovered_toolbar_button: None,
