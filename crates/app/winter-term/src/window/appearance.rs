@@ -81,10 +81,8 @@ impl App {
     /// Make the Option keys the setting names Alt, on macOS; nothing elsewhere,
     /// where Alt is always Alt.
     pub(in crate::window) fn apply_option_as_alt(&self) {
-        #[cfg(target_os = "macos")]
         if let Some(window) = &self.window {
-            use winit::platform::macos::WindowExtMacOS;
-            window.set_option_as_alt(crate::window::runtime::init::winit_option_as_alt(
+            window.set_option_as_alt(crate::window::runtime::init::misty_option_as_alt(
                 self.config.option_as_alt,
             ));
         }
@@ -225,12 +223,7 @@ impl App {
             ThemeSetting::Auto => self
                 .window
                 .as_ref()
-                .and_then(|w| w.theme())
-                .map(|t| match t {
-                    winit::window::Theme::Dark => Theme::dark(),
-                    winit::window::Theme::Light => Theme::light(),
-                })
-                .unwrap_or_default(),
+                .map_or_else(Theme::default, |w| theme_for(w.color_scheme())),
             // A user theme file; the dark preset, and a word saying why, when
             // it cannot be read.
             ThemeSetting::Named(name) => match crate::config::load_named_theme(name) {
@@ -308,6 +301,18 @@ pub(in crate::window) fn terminal_presentation(renderer: &GpuRenderer) -> Presen
         cell_height_px,
         cell_width_px,
         colors: ThemeColors::from_theme(renderer.theme()),
+    }
+}
+
+// ========================================================================
+// Functions
+// ========================================================================
+
+/// The preset theme for the system's `scheme`: dark unless it says light.
+pub(in crate::window) fn theme_for(scheme: Option<misty::ColorScheme>) -> Theme {
+    match scheme {
+        Some(misty::ColorScheme::Light) => Theme::light(),
+        Some(misty::ColorScheme::Dark) | None => Theme::dark(),
     }
 }
 

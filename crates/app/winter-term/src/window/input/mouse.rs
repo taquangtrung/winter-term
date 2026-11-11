@@ -4,9 +4,9 @@
 
 use std::time::{Duration, Instant};
 
+use misty::AppContext;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
-use winit::event_loop::ActiveEventLoop;
 use winit::window::{CursorIcon, ResizeDirection};
 use winter_render::{PaneRect, POPUP_EDGE_ROOM};
 
@@ -192,10 +192,10 @@ impl App {
         &mut self,
         state: ElementState,
         button: MouseButton,
-        event_loop: &ActiveEventLoop,
+        cx: &mut AppContext<'_, ()>,
     ) {
         self.handle_mouse_input(state, button);
-        self.quit_if_requested(event_loop);
+        self.quit_if_requested(cx);
     }
 
     /// The mouse button handler proper, split from [`Self::on_mouse_input`] so

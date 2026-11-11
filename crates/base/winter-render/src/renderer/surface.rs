@@ -9,77 +9,42 @@ use super::glyphs::{
     FontLoad, DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT,
 };
 use super::PaneRect;
-use super::{ChromeLayout, FontState, FrameHits, GpuRenderer};
+use super::{ChromeLayout, FontState, FrameHits, FrameSize, GpuRenderer};
 use crate::glyph_quad::GlyphQuadPass;
 use crate::image::ImagePass;
 use crate::theme::Theme;
 use glyphon::{Cache, ColorMode, SwashCache, TextAtlas, TextRenderer, Viewport};
-use wgpu::{DeviceDescriptor, MultisampleState, Surface, SurfaceConfiguration, TextureFormat};
+use wgpu::{Device, MultisampleState, Queue, TextureFormat};
 
 // ========================================================================
 // GpuRenderer: surface and configuration
 // ========================================================================
 
 impl GpuRenderer {
-    /// Create the renderer, the wgpu surface, device, and queue.
+    /// Create the renderer on `device` and `queue`, the GPU the window
+    /// draws with, rendering frames `width` by `height` into textures of
+    /// `format`.
     ///
-    /// The `surface` is created externally (by the app crate from a winit
-    /// window) and moved in. Call [`Self::resize`] before the first
-    /// [`Self::render`].
+    /// An sRGB `format` has the GPU encode linear shader output to sRGB on
+    /// write: glyph and overlay antialiasing then blends in linear space
+    /// (gamma-correct), which keeps light-on-dark text crisp instead of thin
+    /// and fuzzy. The bg/image shaders output linear to match. Call
+    /// [`Self::resize`] before the first [`Self::render`].
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
-        surface: Surface<'static>,
-        adapter: wgpu::Adapter,
+        device: Device,
+        queue: Queue,
+        format: TextureFormat,
         width: u32,
         height: u32,
         scale_factor: f64,
         font: FontConfig,
         font_load: FontLoad,
     ) -> Self {
-        let (device, queue) =
-            pollster::block_on(adapter.request_device(&DeviceDescriptor::default()))
-                .expect("request wgpu device");
-        // wgpu's default handler panics on any validation error, so one bad
-        // texture or surface size would take every window down. Report it
-        // instead: what failed is not drawn, and the rest goes on.
-        device.on_uncaptured_error(std::sync::Arc::new(|error| {
-            eprintln!("winter: GPU error: {error}");
-        }));
-
-        let caps = surface.get_capabilities(&adapter);
-        // Prefer an sRGB surface so the GPU encodes linear shader output to sRGB
-        // on write: glyph and overlay antialiasing then blends in linear space
-        // (gamma-correct), which keeps light-on-dark text crisp instead of thin
-        // and fuzzy. The bg/image shaders output linear to match.
-        let format = caps
-            .formats
-            .iter()
-            .find(|f| {
-                matches!(
-                    f,
-                    TextureFormat::Bgra8UnormSrgb | TextureFormat::Rgba8UnormSrgb
-                )
-            })
-            .or_else(|| {
-                caps.formats
-                    .iter()
-                    .find(|f| matches!(f, TextureFormat::Bgra8Unorm | TextureFormat::Rgba8Unorm))
-            })
-            .copied()
-            .unwrap_or(caps.formats[0]);
-
-        let config = SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-            format,
-            width: surface_side(width, &device),
+        let size = FrameSize {
             height: surface_side(height, &device),
-            present_mode: wgpu::PresentMode::AutoVsync,
-            alpha_mode: caps.alpha_modes[0],
-            // Auto is what wgpu chose implicitly before 30 made it explicit.
-            color_space: wgpu::SurfaceColorSpace::Auto,
-            view_formats: vec![],
-            desired_maximum_frame_latency: 2,
+            width: surface_side(width, &device),
         };
-        surface.configure(&device, &config);
 
         // Whatever the config or the environment asked for, a size the text
         // shaper can lay out: a zero line height would panic it.
@@ -205,9 +170,9 @@ impl GpuRenderer {
                 which_key_rect: None,
             },
             device,
+            format,
             queue,
-            surface,
-            config,
+            size,
             font_system,
             swash_cache,
             text_atlas,
@@ -222,7 +187,6 @@ impl GpuRenderer {
             glyph_quad_pass,
             glyph_key_scratch: String::new(),
             theme: Theme::default(),
-            alpha_modes: caps.alpha_modes.clone(),
             text_buffers: Vec::new(),
             status_buffer: None,
             status_right_buffer: None,
@@ -247,13 +211,11 @@ impl GpuRenderer {
     pub fn set_theme(&mut self, theme: Theme) {
         self.theme = theme;
         self.theme_generation += 1;
-        self.sync_alpha_mode();
     }
     /// Set the window's opacity, `0.0` to `1.0`, on top of the theme's own
     /// background alpha.
     pub fn set_window_opacity(&mut self, opacity: f32) {
         self.chrome.window_opacity = opacity.clamp(0.0, 1.0);
-        self.sync_alpha_mode();
     }
     /// How opaque the terminal background is drawn: the window's opacity times
     /// the theme's background alpha.
@@ -264,23 +226,6 @@ impl GpuRenderer {
     /// the desktop through it.
     pub fn is_translucent(&self) -> bool {
         self.background_opacity() < 1.0
-    }
-    /// Pick how the surface combines with the desktop: a mode that honors the
-    /// alpha written to it while the background is translucent, and the
-    /// platform's first, which every window can use, while it is solid.
-    fn sync_alpha_mode(&mut self) {
-        use wgpu::CompositeAlphaMode::{Inherit, PostMultiplied, PreMultiplied};
-        let wanted = match self.is_translucent() {
-            true => [PreMultiplied, PostMultiplied, Inherit]
-                .into_iter()
-                .find(|mode| self.alpha_modes.contains(mode)),
-            false => None,
-        };
-        let mode = wanted.unwrap_or(self.alpha_modes[0]);
-        if self.config.alpha_mode != mode {
-            self.config.alpha_mode = mode;
-            self.surface.configure(&self.device, &self.config);
-        }
     }
     /// Set the thickness (in logical pixels) of the line drawn between adjacent panes.
     pub fn set_divider_width(&mut self, width: f32) {
@@ -345,23 +290,31 @@ impl GpuRenderer {
     pub fn pane_pad(&self) -> f32 {
         crate::pane_h_pad(self.fonts.scale_factor)
     }
-    /// Resize the surface and recompute grid dimensions. Returns `Some((cols, rows))`
+    /// The format of the textures frames are rendered into.
+    pub fn format(&self) -> TextureFormat {
+        self.format
+    }
+
+    /// The size of the frames rendered, `(width, height)` in pixels.
+    pub fn size(&self) -> (u32, u32) {
+        (self.size.width, self.size.height)
+    }
+
+    /// Resize the frames and recompute grid dimensions. Returns `Some((cols, rows))`
     /// if the size or scale factor actually changed.
     pub fn resize(&mut self, width: u32, height: u32, scale_factor: f64) -> Option<(usize, usize)> {
         let width = surface_side(width, &self.device);
         let height = surface_side(height, &self.device);
 
-        let size_changed = self.config.width != width || self.config.height != height;
+        let size_changed = self.size.width != width || self.size.height != height;
         let scale_changed = (self.fonts.scale_factor - scale_factor).abs() > 1e-5;
 
         if !size_changed && !scale_changed {
             return None;
         }
 
-        self.config.width = width;
-        self.config.height = height;
+        self.size = FrameSize { height, width };
         self.fonts.scale_factor = scale_factor;
-        self.surface.configure(&self.device, &self.config);
         self.viewport
             .update(&self.queue, glyphon::Resolution { width, height });
 
@@ -421,31 +374,6 @@ impl GpuRenderer {
         self.fonts.cell_height = cell_h;
         self.fonts.line_height = cell_h;
         Some((self.cols, self.rows))
-    }
-    /// Acquire the next swapchain texture, recovering a stale surface in place.
-    ///
-    /// On `Outdated`/`Lost` (after a resize, GPU reset, or a monitor sleep/wake)
-    /// the surface configuration no longer matches its swapchain. We reconfigure
-    /// and retry once so this frame paints a valid image, rather than leaving the
-    /// freshly reconfigured swapchain showing uninitialized garbage. Transient
-    /// states (`Timeout`, `Occluded`) and validation errors skip the frame; the
-    /// previously presented frame stays on screen until the next redraw.
-    pub(super) fn acquire_surface_texture(&mut self) -> Option<wgpu::SurfaceTexture> {
-        match self.surface.get_current_texture() {
-            wgpu::CurrentSurfaceTexture::Success(texture)
-            | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Some(texture),
-            wgpu::CurrentSurfaceTexture::Outdated | wgpu::CurrentSurfaceTexture::Lost => {
-                self.surface.configure(&self.device, &self.config);
-                match self.surface.get_current_texture() {
-                    wgpu::CurrentSurfaceTexture::Success(texture)
-                    | wgpu::CurrentSurfaceTexture::Suboptimal(texture) => Some(texture),
-                    _ => None,
-                }
-            }
-            wgpu::CurrentSurfaceTexture::Timeout
-            | wgpu::CurrentSurfaceTexture::Occluded
-            | wgpu::CurrentSurfaceTexture::Validation => None,
-        }
     }
 }
 

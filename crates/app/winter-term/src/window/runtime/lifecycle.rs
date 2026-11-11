@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::mpsc;
 use std::time::Instant;
 
-use winit::event_loop::{ActiveEventLoop, EventLoop};
+use misty::AppContext;
 
 use crate::config::Config;
 use crate::control::{self, ControlMessage, ControlRequest, SocketFile};
@@ -163,7 +163,7 @@ impl App {
             .or_else(|| config.keybindings_warning.clone())
             .or_else(|| config.settings_warning.clone());
         // Made before the event loop is, and connected to it once it runs
-        // (see `App::connect_event_loop`): the threads below wake the loop as
+        // (see `App::connect_waker`): the threads below wake the loop as
         // their messages arrive rather than leaving them for its next poll.
         let waker = Waker::default();
         let control = control::spawn_listener();
@@ -214,7 +214,6 @@ impl App {
                 macro_state: Default::default(),
                 modifiers: winit::event::Modifiers::default(),
                 pointer: PointerState::default(),
-                suppress_synthesized_keys: false,
                 wheel: Default::default(),
             },
             term: TerminalState {
@@ -239,6 +238,8 @@ impl App {
             workspace: WorkspaceState::default(),
             next_tab_id: 1,
             window: None,
+            gpu: None,
+            frame_texture: None,
             keymap,
             when_keys,
             window_title: String::new(),
@@ -249,11 +250,10 @@ impl App {
             busy: Busy::default(),
         }
     }
-    /// Let the threads feeding this app wake `event_loop`'s loop when they
-    /// have something for it, rather than leaving it for the next poll. Call
-    /// once, before the loop runs.
-    pub fn connect_event_loop(&mut self, event_loop: &EventLoop<()>) {
-        self.runtime.waker.connect(event_loop.create_proxy());
+    /// Let the threads feeding this app wake misty's event loop, through
+    /// `waker`, when they have news.
+    pub(in crate::window) fn connect_waker(&mut self, waker: misty::Waker<()>) {
+        self.runtime.waker.connect(move || waker.wake());
         self.runtime.waker.share();
     }
 
@@ -297,16 +297,10 @@ impl App {
         self.runtime.geometry_save_due = None;
         let mut state = crate::config::load_state();
         update(&mut state);
-        let window_size = self
-            .window
-            .as_ref()
-            .map(|w| w.inner_size())
-            .map(|s| (s.width, s.height));
-        let window_position = self
-            .window
-            .as_ref()
-            .and_then(|w| w.outer_position().ok())
-            .map(|p| (p.x, p.y));
+        // In logical pixels, as misty opens a window.
+        let geometry = self.window.as_ref().and_then(|w| w.geometry());
+        let window_size = geometry.map(|g| (g.size.width, g.size.height));
+        let window_position = geometry.and_then(|g| g.position).map(|p| (p.x, p.y));
         state.window_size = window_size;
         state.window_position = window_position;
         crate::config::save_state(&state);
@@ -364,17 +358,17 @@ impl App {
 
     /// Quit, where something done since quitting was last looked for asked
     /// to (closing the last tab, the close control). Says whether it did.
-    pub(in crate::window) fn quit_if_requested(&mut self, event_loop: &ActiveEventLoop) -> bool {
+    pub(in crate::window) fn quit_if_requested(&mut self, cx: &mut AppContext<'_, ()>) -> bool {
         let requested = self.runtime.exit.take_requested();
         if requested {
-            self.quit(event_loop);
+            self.quit(cx);
         }
         requested
     }
 
     /// Persist the session and exit the event loop. Shared by the native close
     /// request and the custom window-close control.
-    pub(in crate::window) fn quit(&mut self, event_loop: &ActiveEventLoop) {
+    pub(in crate::window) fn quit(&mut self, cx: &mut AppContext<'_, ()>) {
         // Edits on no disk, or a program that would be ended with the window,
         // are asked about first. The answer comes back as a quit that has
         // already been agreed to.
@@ -393,7 +387,7 @@ impl App {
         }
         self.save_app_state();
         self.open_tabs.clear_terminals();
-        event_loop.exit();
+        cx.exit();
     }
     /// Replace this window with the binary now on disk, keeping the session.
     ///
@@ -404,7 +398,7 @@ impl App {
     /// that is not possible the session is saved, a fresh instance is started,
     /// and this one exits, so the programs end and are started again.
     #[cfg_attr(unix, allow(unused_variables))]
-    pub(in crate::window) fn reload(&mut self, event_loop: &ActiveEventLoop) {
+    pub(in crate::window) fn reload(&mut self, cx: &mut AppContext<'_, ()>) {
         // What a reload would lose is asked about first, as a quit asks; the
         // answer comes back as a reload that has been agreed to.
         if !std::mem::take(&mut self.runtime.exit.reload_confirmed) && self.ask_before_reloading() {
@@ -423,7 +417,7 @@ impl App {
                 let _ = std::process::Command::new(exe).spawn();
             }
             self.open_tabs.clear_terminals();
-            event_loop.exit();
+            cx.exit();
         }
     }
 

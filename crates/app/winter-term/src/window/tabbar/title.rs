@@ -100,9 +100,9 @@ impl App {
         (name, location.clone(), location)
     }
     pub(in crate::window) fn update_window_title(&mut self) {
-        let Some(window) = self.window.clone() else {
+        if self.window.is_none() {
             return;
-        };
+        }
 
         let title = if let Some(palette) = self.chrome.picker() {
             format!("{}: > {}", palette.id(), palette.query())
@@ -123,7 +123,9 @@ impl App {
         // The window manager call is an IPC round-trip; only make it when the
         // title actually changes, not on every keystroke or PTY poll.
         if title != self.window_title {
-            window.set_title(&title);
+            if let Some(window) = &self.window {
+                window.set_title(&title);
+            }
             self.window_title = title;
         }
     }

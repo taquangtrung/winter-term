@@ -68,6 +68,9 @@ winter-model = { version = "0.1.0", path = "crates/base/winter-model" }
 winter-notify = { version = "0.1.0", path = "crates/base/winter-notify" }
 winter-textedit = { version = "0.1.0", path = "crates/base/winter-textedit" }
 winter-picker = { version = "0.1.0", path = "crates/libs/winter-picker" }
+# The GUI toolkit Winter is moving onto (local branch only: misty is not
+# published yet).
+misty = { version = "0.1.0", path = "../misty/crates/misty" }
 winter-dir = { version = "0.1.0", path = "crates/tools/winter-dir" }
 winter-docker = { version = "0.1.0", path = "crates/tools/winter-docker" }
 winter-git = { version = "0.1.0", path = "crates/tools/winter-git" }

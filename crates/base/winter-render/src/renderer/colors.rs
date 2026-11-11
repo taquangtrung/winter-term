@@ -48,31 +48,17 @@ fn srgb_to_linear_f64(c: f64) -> f64 {
     }
 }
 
-/// What to clear the surface to so the background shows as `color` at
-/// `opacity`. The target is sRGB, which encodes what is written, and a
-/// compositor expecting premultiplied color wants the encoded channels already
-/// scaled by the alpha, so the scaling happens before the decode rather than
-/// after it.
-pub(super) fn clear_color(
-    color: Rgb,
-    opacity: f32,
-    alpha_mode: wgpu::CompositeAlphaMode,
-) -> wgpu::Color {
-    let a = opacity.clamp(0.0, 1.0) as f64;
-    let scale = match alpha_mode {
-        wgpu::CompositeAlphaMode::PreMultiplied => a,
-        _ => 1.0,
-    };
-    let channel = |c: u8| srgb_to_linear_f64(c as f64 / 255.0 * scale);
-    let alpha = match alpha_mode {
-        wgpu::CompositeAlphaMode::PreMultiplied | wgpu::CompositeAlphaMode::PostMultiplied => a,
-        _ => 1.0,
-    };
+/// What to clear a frame to so the background shows as `color` at
+/// `opacity`. The target is sRGB, which encodes what is written, so the clear
+/// value is the decoded color; its alpha is straight, as the window that
+/// composites the frame expects, the color kept whole beside it.
+pub(super) fn clear_color(color: Rgb, opacity: f32) -> wgpu::Color {
+    let channel = |c: u8| srgb_to_linear_f64(c as f64 / 255.0);
     wgpu::Color {
         r: channel(color.r),
         g: channel(color.g),
         b: channel(color.b),
-        a: alpha,
+        a: opacity.clamp(0.0, 1.0) as f64,
     }
 }
 
@@ -204,7 +190,6 @@ pub(super) fn cell_text_fg(cell: Option<&Cell>, theme: &Theme) -> (u8, u8, u8) {
 
 #[cfg(test)]
 mod tests {
-    use wgpu::CompositeAlphaMode::{Opaque, PostMultiplied, PreMultiplied};
 
     use super::*;
     use winter_emulator::Style;
@@ -375,23 +360,13 @@ mod tests {
     }
 
     #[test]
-    fn test_clear_color_premultiplies_before_the_srgb_decode() {
+    fn test_clear_color_decodes_the_srgb_color_and_keeps_its_alpha_straight() {
         let white = Rgb::new(255, 255, 255);
-        let solid = clear_color(white, 1.0, Opaque);
+        let solid = clear_color(white, 1.0);
         assert_eq!((solid.r, solid.a), (1.0, 1.0));
-
-        // Opaque and inherited surfaces ignore the alpha: it is written as 1.
-        let ignored = clear_color(white, 0.5, Opaque);
-        assert_eq!((ignored.r, ignored.a), (1.0, 1.0));
-
-        // Half-transparent white, premultiplied: encoded 0.5, which decodes to
-        // about 0.214, not the 0.5 that scaling the linear value would give.
-        let pre = clear_color(white, 0.5, PreMultiplied);
-        assert!((pre.r - 0.214).abs() < 0.001, "{}", pre.r);
-        assert_eq!(pre.a, 0.5);
-
-        // Straight alpha keeps the color whole and carries the alpha beside it.
-        let post = clear_color(white, 0.5, PostMultiplied);
-        assert_eq!((post.r, post.a), (1.0, 0.5));
+        let half = clear_color(white, 0.5);
+        assert_eq!((half.r, half.a), (1.0, 0.5));
+        let grey = clear_color(Rgb::new(128, 128, 128), 1.0);
+        assert!((grey.r - 0.216).abs() < 0.001, "{}", grey.r);
     }
 }

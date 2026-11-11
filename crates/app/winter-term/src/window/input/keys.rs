@@ -5,8 +5,7 @@
 
 use std::time::Instant;
 
-use winit::event::{ElementState, KeyEvent};
-use winit::event_loop::ActiveEventLoop;
+use winit::event::ElementState;
 use winit::keyboard::{Key, NamedKey, NativeKeyCode, PhysicalKey};
 
 use winter_model::input::{self, Action, KeyCode, Mods};
@@ -239,7 +238,10 @@ fn escape_clears_selection(key: &input::Key, mode: Mode, has_selection: bool) ->
 /// keystroke of an OS-level window switch (e.g. M-TAB's `Tab`) arrives
 /// while `winit`'s cached focus state still reads unfocused.
 #[cfg(target_os = "windows")]
-fn is_pre_focus_key_leak(state: ElementState, window_has_focus: bool) -> bool {
+pub(in crate::window) fn is_pre_focus_key_leak(
+    state: ElementState,
+    window_has_focus: bool,
+) -> bool {
     state == ElementState::Pressed && !window_has_focus
 }
 
@@ -248,49 +250,16 @@ fn is_pre_focus_key_leak(state: ElementState, window_has_focus: bool) -> bool {
 // ========================================================================
 
 impl App {
-    /// Route one key press or release: the chrome overlays first (command
-    /// palette, settings page, which-key), then the focused pane's modal
-    /// keymap, and finally the PTY.
-    pub(in crate::window) fn on_keyboard_input(
-        &mut self,
-        event: KeyEvent,
-        event_loop: &ActiveEventLoop,
-    ) {
-        // A key held down after opening a sequence auto-repeats; the repeats
-        // are the same press, not the next chord of the sequence.
-        if event.repeat && self.input.is_sequence_pending() {
-            return;
-        }
-        if self.handle_key(event.state, event.logical_key, event.physical_key) {
-            self.quit(event_loop);
-        }
-    }
-
-    /// The keyboard handler proper, split from [`Self::on_keyboard_input`] so
-    /// tests can drive it without an `ActiveEventLoop` (winit's `KeyEvent`
-    /// has no public constructor). Returns `true` when the app should quit,
-    /// standing in for the former inline `quit(event_loop); return;` sites.
+    /// A key as winit names it, for tests to type what a keyboard would
+    /// (winit's `KeyEvent` has no public constructor). Returns `true` when
+    /// the app should quit.
+    #[cfg(test)]
     pub(in crate::window) fn handle_key(
         &mut self,
         state: ElementState,
         logical_key: Key,
         physical_key: PhysicalKey,
     ) -> bool {
-        // winit synthesizes KeyboardInput::Pressed events for every
-        // physically-held key on XI_FocusIn (handle_pressed_keys). Swallow
-        // those here so e.g. the Tab from M-TAB never reaches the PTY.
-        if state == ElementState::Pressed && self.input.suppress_synthesized_keys {
-            return false;
-        }
-
-        // Windows-only: drop a key event that raced ahead of this
-        // window's own focus-gain notification (see
-        // `is_pre_focus_key_leak`'s doc for why this can happen).
-        #[cfg(target_os = "windows")]
-        if is_pre_focus_key_leak(state, self.window.as_ref().is_some_and(|w| w.has_focus())) {
-            return false;
-        }
-
         let mods_state = self.input.modifiers.state();
         let code = winit_key_to_code(&logical_key, &physical_key);
         let key = input::Key {
@@ -1513,7 +1482,9 @@ mod tests {
         // A handler that reads `key.ctrl` alone reads `C-S-f` as `C-f`:
         // every key is matched by its whole chord, or says why not.
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let found = winter_model::input::test_support::raw_key_reads(&root, &[]);
+        // Misty's keys translated into Winter's, whole, at the boundary.
+        let found =
+            winter_model::input::test_support::raw_key_reads(&root, &["window/input/misty.rs"]);
         assert!(
             found.is_empty(),
             "keys read by their parts:\n{}",

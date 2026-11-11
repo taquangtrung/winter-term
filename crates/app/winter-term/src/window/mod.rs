@@ -44,6 +44,8 @@ mod notices;
 mod picker;
 mod recent;
 pub(crate) mod runtime;
+
+pub use runtime::init::prefer_integrated_gpu;
 mod settings;
 mod status;
 mod strip;
@@ -54,10 +56,7 @@ mod test_support;
 mod workspace;
 
 use std::collections::{HashMap, VecDeque};
-use std::sync::Arc;
 use std::time::{Duration, Instant};
-
-use winit::window::Window;
 
 use crate::config::Config;
 use winter_base::wake::Waker;
@@ -207,7 +206,14 @@ pub struct App {
     pub(in crate::window) renderer: Option<GpuRenderer>,
     /// Next free globally-unique pane id; allocated by [`Self::alloc_tab_id`].
     pub(in crate::window) next_tab_id: u64,
-    pub(in crate::window) window: Option<Arc<Window>>,
+    /// The window, as Winter's code asks things of it; `None` until misty
+    /// has opened it.
+    pub(in crate::window) window: Option<runtime::handle::WindowHandle>,
+    /// The GPU misty draws with, which the renderer draws on; `None` until
+    /// the window is open.
+    pub(in crate::window) gpu: Option<misty::Gpu>,
+    /// The texture the renderer draws each frame into, laid over the window.
+    pub(in crate::window) frame_texture: Option<misty::GpuTexture>,
     /// Configurable split/close/focus key bindings (the `window` keybindings
     /// block), resolved against in Normal mode.
     pub(in crate::window) keymap: Keymap,
@@ -293,11 +299,6 @@ pub(in crate::window) struct InputState {
     /// Transient pointer input: hover, drags, and click timing (see
     /// [`PointerState`]).
     pub(in crate::window) pointer: PointerState,
-    /// Set when the window gains focus; cleared on the next `ModifiersChanged`
-    /// event. While set, `KeyboardInput::Pressed` events are swallowed because
-    /// winit synthesizes presses for all physically-held keys on `XI_FocusIn`,
-    /// and those would otherwise be forwarded to the PTY (e.g. Tab from M-TAB).
-    pub(in crate::window) suppress_synthesized_keys: bool,
     /// The wheel's rows still to reach an editor, a frame at a time, and
     /// the part of a row a touchpad has scrolled short of a whole one.
     pub(in crate::window) wheel: input::mouse::Wheel,

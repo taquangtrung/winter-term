@@ -9,6 +9,7 @@ pub(in crate::window) mod describe;
 pub(crate) mod focus;
 pub(in crate::window) mod ime;
 pub(crate) mod keys;
+pub(in crate::window) mod misty;
 pub(in crate::window) mod mouse;
 pub(crate) mod overlay;
 pub(crate) mod sequence;

@@ -1,20 +1,20 @@
-//! The winit event loop: the window events dispatched to their handlers, and
+//! Winter as misty's application: misty's inputs dispatched to Winter's
+//! handlers, a frame drawn into a texture misty lays over the window, and
 //! the work done between them before the loop sleeps until the next deadline.
 
 use std::cell::RefCell;
 use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
-use winit::application::ApplicationHandler;
-use winit::event::WindowEvent;
-use winit::event_loop::{ActiveEventLoop, ControlFlow};
-use winit::window::WindowId;
-use winter_render::Theme;
+use misty::{AppContext, Application, Frame, GpuTexture, Input, WindowId};
+use winit::dpi::PhysicalSize;
 
 use winter_model::guard::{describe_panic, install_panic_hook};
 use winter_model::input;
 use winter_model::mode::Mode;
 
+use crate::window::appearance::theme_for;
+use crate::window::input::misty as misty_input;
 use crate::window::input::sequence::is_hint_redraw_due;
 use crate::window::{App, CURSOR_BLINK_PERIOD};
 
@@ -68,28 +68,35 @@ fn is_blink_active(blink_configured: bool, window_focused: bool) -> bool {
 }
 
 // ========================================================================
-// App: ApplicationHandler
+// App: Application
 // ========================================================================
 
-impl ApplicationHandler for App {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
-        if self.window.is_some() {
-            return;
+impl Application for App {
+    type Message = ();
+
+    fn init(&mut self, cx: &mut AppContext<'_, ()>, window: WindowId) {
+        self.connect_waker(cx.waker());
+        self.survive(|app| app.init_window(cx, window));
+        self.flush_window(cx);
+    }
+
+    fn input(&mut self, cx: &mut AppContext<'_, ()>, _window: WindowId, input: &Input) {
+        self.survive(|app| app.handle_input(cx, input));
+        self.flush_window(cx);
+    }
+
+    fn about_to_wait(&mut self, cx: &mut AppContext<'_, ()>) -> Option<Instant> {
+        if let Some(window) = &self.window {
+            window.note_geometry(cx.window_geometry(window.id()));
         }
-        self.init_window(event_loop);
+        let mut wakeup = None;
+        self.survive(|app| wakeup = app.prepare_wait(cx));
+        self.flush_window(cx);
+        wakeup
     }
 
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        window_id: WindowId,
-        event: WindowEvent,
-    ) {
-        self.survive(|app| app.handle_window_event(event_loop, window_id, event));
-    }
-
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        self.survive(|app| app.prepare_wait(event_loop));
+    fn render(&mut self, _window: WindowId, frame: &mut Frame) {
+        self.survive(|app| app.draw_into(frame));
     }
 }
 
@@ -132,134 +139,102 @@ impl App {
         }
     }
 
-    fn handle_window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        _window_id: WindowId,
-        event: WindowEvent,
-    ) {
-        // Every window event except a repaint counts as activity for the
-        // `about_to_wait` poll back-off. `RedrawRequested` is excluded because
-        // the app is what asks for those: the cursor blink alone requests one
-        // roughly twice a second, so counting them kept `last_activity`
-        // permanently fresher than `PTY_ACTIVE_WINDOW` and pinned the loop to
-        // `PTY_POLL_INTERVAL` forever, leaving `PTY_POLL_INTERVAL_IDLE`
-        // unreachable with the default config.
-        if !matches!(event, WindowEvent::RedrawRequested) {
-            self.runtime.last_activity = Instant::now();
+    /// Hand what the window was asked to misty.
+    fn flush_window(&mut self, cx: &mut AppContext<'_, ()>) {
+        if let Some(window) = &self.window {
+            window.flush(cx);
         }
-        match event {
-            WindowEvent::Resized(size) => {
-                if size.width > 0 && size.height > 0 {
-                    let mut size_changed = false;
-                    if let Some(renderer) = &mut self.renderer {
-                        if let Some(window) = &self.window {
-                            let scale_factor = window.scale_factor();
-                            if renderer
-                                .resize(size.width, size.height, scale_factor)
-                                .is_some()
-                            {
-                                size_changed = true;
-                            }
-                        }
-                    }
-                    if size_changed {
-                        self.resize_all_panes();
-                        self.dirty = true;
-                        // Windows reports a bogus small size (the legacy "iconic"
-                        // size, not 0x0) when the window is minimized; skip
-                        // persisting it so a later restart doesn't restore a
-                        // near-unusable window.
-                        let minimized = self
-                            .window
-                            .as_ref()
-                            .and_then(|w| w.is_minimized())
-                            .unwrap_or(false);
-                        if !minimized {
-                            self.runtime.note_geometry_change(Instant::now());
-                        }
-                    }
-                }
+    }
+
+    /// Draw a frame into `frame`: the renderer draws into a texture the size
+    /// of the window, which the frame then lays over the whole window. A new
+    /// size or scale resizes the renderer and the panes first.
+    fn draw_into(&mut self, frame: &mut Frame) {
+        let bounds = frame.bounds();
+        let size = PhysicalSize::new(bounds.width as u32, bounds.height as u32);
+        if size.width == 0 || size.height == 0 {
+            return;
+        }
+        let scale_factor = frame.scale_factor();
+        let changed = self
+            .window
+            .as_ref()
+            .is_some_and(|window| window.note_frame(size, scale_factor, frame.is_maximized()));
+        if changed {
+            self.resize_window(size, scale_factor);
+        }
+        let Some(texture) = self.frame_target(size) else {
+            return;
+        };
+        let view = texture
+            .srgb_view()
+            .unwrap_or_else(|| texture.texture().create_view(&Default::default()));
+        self.render_frame(&view);
+        frame.draw_texture(&texture, bounds);
+    }
+
+    /// The texture frames of `size` are rendered into: last frame's while
+    /// the size holds, a new one otherwise.
+    fn frame_target(&mut self, size: PhysicalSize<u32>) -> Option<GpuTexture> {
+        let fits = self.frame_texture.as_ref().is_some_and(|texture| {
+            (texture.width(), texture.height()) == (size.width, size.height)
+        });
+        if !fits {
+            let gpu = self.gpu.as_ref()?;
+            self.frame_texture = GpuTexture::new(gpu, size.width, size.height).ok();
+        }
+        self.frame_texture.clone()
+    }
+
+    /// Resize the renderer and the panes to a window of `size` at
+    /// `scale_factor`.
+    fn resize_window(&mut self, size: PhysicalSize<u32>, scale_factor: f64) {
+        let resized = self
+            .renderer
+            .as_mut()
+            .and_then(|renderer| renderer.resize(size.width, size.height, scale_factor));
+        if resized.is_some() {
+            self.resize_all_panes();
+            self.dirty = true;
+            self.runtime.note_geometry_change(Instant::now());
+        }
+    }
+
+    fn handle_input(&mut self, cx: &mut AppContext<'_, ()>, input: &Input) {
+        // Every input counts as activity for the `about_to_wait` poll
+        // back-off.
+        self.runtime.last_activity = Instant::now();
+        let window = self.window.as_ref().map(|window| window.id());
+        if let Some(window) = window {
+            self.input.modifiers = misty_input::winit_modifiers(cx.event_cx(window).mods());
+        }
+        match input {
+            Input::Key(key) => self.on_key(*key, true, cx),
+            Input::KeyReleased(key) => self.on_key(*key, false, cx),
+            Input::Ime(ime) => self.on_ime(ime, cx),
+
+            Input::PointerButton(button) => {
+                let (state, winit_button) = misty_input::winit_button(button);
+                self.on_cursor_moved(misty_input::winit_position(button.position));
+                self.on_mouse_input(state, winit_button, cx);
             }
-
-            WindowEvent::Moved(_) => {
-                let minimized = self
-                    .window
-                    .as_ref()
-                    .and_then(|w| w.is_minimized())
-                    .unwrap_or(false);
-                if !minimized {
-                    self.runtime.note_geometry_change(Instant::now());
-                }
-            }
-
-            WindowEvent::ScaleFactorChanged { scale_factor, .. } => {
-                let size = self.window.as_ref().map(|w| w.inner_size());
-                if let Some(size) = size {
-                    let mut changed = false;
-                    if let Some(renderer) = &mut self.renderer {
-                        if renderer
-                            .resize(size.width, size.height, scale_factor)
-                            .is_some()
-                        {
-                            changed = true;
-                        }
-                    }
-                    if changed {
-                        self.resize_all_panes();
-                        self.dirty = true;
-                    }
-                }
-            }
-
-            WindowEvent::ModifiersChanged(mods) => {
-                self.input.modifiers = mods;
-                // winit always fires ModifiersChanged after the synthesized
-                // KeyboardInput::Pressed events it issues on XI_FocusIn, so
-                // this is the right moment to stop suppressing. X11-only quirk:
-                // on other platforms `suppress_synthesized_keys` is never set,
-                // so this reset is a no-op there.
-                #[cfg(target_os = "linux")]
-                {
-                    self.input.suppress_synthesized_keys = false;
-                }
-            }
-
-            WindowEvent::KeyboardInput { event, .. } => self.on_keyboard_input(event, event_loop),
-            WindowEvent::Ime(ime) => self.on_ime(ime, event_loop),
-
-            WindowEvent::MouseInput { state, button, .. } => {
-                self.on_mouse_input(state, button, event_loop)
-            }
-
-            WindowEvent::CursorMoved { position, .. } => self.on_cursor_moved(position),
-            WindowEvent::CursorLeft { .. } => self.on_cursor_left(),
-
-            WindowEvent::MouseWheel { delta, .. } => self.on_mouse_wheel(delta),
-
-            WindowEvent::RedrawRequested => {
-                self.render_frame();
+            Input::PointerMoved(point) => self.on_cursor_moved(misty_input::winit_position(*point)),
+            Input::PointerLeft => self.on_cursor_left(),
+            Input::Wheel(wheel) => {
+                self.on_cursor_moved(misty_input::winit_position(wheel.position));
+                self.on_mouse_wheel(misty_input::winit_wheel(wheel.delta));
             }
 
             // A dialog is answered first: closing the window from its title
             // bar or the window manager would put the quit question over it.
-            WindowEvent::CloseRequested => {
+            Input::CloseRequested => {
                 if !self.chrome.dialog_open() {
-                    self.quit(event_loop);
+                    self.quit(cx);
                 }
             }
 
-            WindowEvent::Focused(focused) => {
-                // Suppressing synthesized presses on focus-in is an X11-only
-                // workaround (see the `ModifiersChanged` arm above): winit's
-                // Windows and macOS backends never synthesize those presses,
-                // and never fire a compensating `ModifiersChanged` either, so
-                // setting this flag there would swallow every keystroke until
-                // a modifier key happened to be pressed.
-                #[cfg(target_os = "linux")]
-                if focused {
-                    self.input.suppress_synthesized_keys = true;
-                }
+            Input::FocusGained | Input::FocusLost => {
+                let focused = *input == Input::FocusGained;
                 if !focused {
                     self.input.keys.prefix = input::PendingPrefix::None;
                     self.input.clear_sequence();
@@ -284,13 +259,13 @@ impl App {
                 }
             }
 
-            WindowEvent::ThemeChanged(theme) => {
+            Input::AppearanceChanged(appearance) => {
+                if let Some(window) = &self.window {
+                    window.note_color_scheme(appearance.color_scheme);
+                }
                 if let Some(renderer) = &mut self.renderer {
                     if self.config.theme == crate::config::ThemeSetting::Auto {
-                        let mut colors = match theme {
-                            winit::window::Theme::Dark => Theme::dark(),
-                            winit::window::Theme::Light => Theme::light(),
-                        };
+                        let mut colors = theme_for(appearance.color_scheme);
                         self.config.colors.apply(&mut colors);
                         renderer.set_theme(colors);
                         self.sync_translucency();
@@ -299,7 +274,7 @@ impl App {
                 }
             }
 
-            _ => {}
+            Input::FileDropped(_) | Input::FileHovered(_) | Input::FileHoverCancelled => {}
         }
         // A key, a click, or the window's own focus may have moved the
         // keyboard; the programs that asked hear where it went.
@@ -310,7 +285,7 @@ impl App {
 
     /// The work done between events before the loop sleeps until the next
     /// deadline.
-    fn prepare_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn prepare_wait(&mut self, cx: &mut AppContext<'_, ()>) -> Option<Instant> {
         if self.reload_config_if_changed() {
             self.dirty = true;
         }
@@ -318,8 +293,8 @@ impl App {
         self.serve_control_requests();
         if self.runtime.exit.reload_pending {
             self.runtime.exit.reload_pending = false;
-            self.reload(event_loop);
-            return;
+            self.reload(cx);
+            return None;
         }
 
         self.reap_dead_panes();
@@ -335,8 +310,8 @@ impl App {
         }
         // A tab closed on its own hands the keyboard on.
         self.sync_focus_reports();
-        if self.quit_if_requested(event_loop) {
-            return;
+        if self.quit_if_requested(cx) {
+            return None;
         }
         let any_output = self.drain_all_panes();
 
@@ -505,7 +480,7 @@ impl App {
         if let Some(due) = self.runtime.geometry_save_due {
             wakeup = wakeup.min(due);
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(wakeup));
+        Some(wakeup)
     }
 }
 

@@ -178,19 +178,14 @@ Docs: {repository}",
 // ============================================================================
 
 fn run_window() -> ExitCode {
-    use winit::event_loop::EventLoop;
-
-    let event_loop = match EventLoop::new() {
-        Ok(el) => el,
-        Err(error) => {
-            eprintln!("winter: {error}");
-            return ExitCode::FAILURE;
-        }
-    };
-
-    let mut app = winter_app::window::App::new();
-    app.connect_event_loop(&event_loop);
-    match event_loop.run_app(&mut app) {
+    // Pin the Vulkan loader to the integrated GPU before anything (misty's
+    // wgpu instance, or another thread) reads the environment. On a hybrid
+    // laptop enumerating the discrete GPU's driver costs ~1.7s at instance
+    // creation.
+    winter_app::window::prefer_integrated_gpu();
+    let app = winter_app::window::App::new();
+    let options = app.window_options();
+    match misty::run(app, options) {
         Ok(()) => ExitCode::SUCCESS,
         Err(error) => {
             eprintln!("winter: {error}");

@@ -378,6 +378,7 @@ mod tests {
         "app/winter-term/src/window/editor/keys.rs",
         "app/winter-term/src/window/editor/prompt.rs",
         "app/winter-term/src/window/input/keys.rs",
+        "app/winter-term/src/window/input/misty.rs",
         "app/winter-term/src/window/input/sequence.rs",
         "app/winter-term/src/window/macro_record.rs",
         "app/winter-term/src/window/terminal/prompt_edit.rs",

@@ -189,6 +189,7 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn render(
         &mut self,
+        target: &wgpu::TextureView,
         panes: &[PaneView],
         status: Option<&StatusBar>,
         tabbar: Option<&TopTabbar>,
@@ -207,18 +208,13 @@ impl GpuRenderer {
         if let Some(t) = tabbar {
             self.chrome.modern = t.menu_style == crate::tabbar::MenuStyle::Modern;
         }
-        let surface_texture = match self.acquire_surface_texture() {
-            Some(texture) => texture,
-            None => return,
-        };
-
         let surface = SurfaceSize {
-            height: self.config.height as f32,
-            width: self.config.width as f32,
+            height: self.size.height as f32,
+            width: self.size.width as f32,
         };
         let resolution = glyphon::Resolution {
-            width: self.config.width,
-            height: self.config.height,
+            width: self.size.width,
+            height: self.size.height,
         };
         self.viewport.update(&self.queue, resolution);
 
@@ -387,10 +383,10 @@ impl GpuRenderer {
         // glyphon returns `AtlasFull` when one frame's glyphs outgrow the
         // atlas (a big font size over many panes). That's reachable from
         // real PTY content, not just a bug, so skip this frame the same way
-        // `acquire_surface_texture` already degrades on a transient surface
+        // a lost frame degrades on a transient GPU error
         // error instead of panicking.
         if prepared {
-            self.encode_frame(surface_texture, &ranges);
+            self.encode_frame(target, &ranges);
         }
         // Release every glyph this frame did not draw for eviction. glyphon
         // pins each glyph it prepares until this runs, so without it nothing
@@ -1282,12 +1278,8 @@ impl GpuRenderer {
     // Encoding
     // --------------------------------------------------------------------
 
-    /// Encode and submit the one render pass this frame draws, then present.
-    fn encode_frame(&mut self, surface_texture: wgpu::SurfaceTexture, ranges: &VertexRanges) {
-        let view = surface_texture
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
-
+    /// Encode and submit the one render pass this frame draws into `view`.
+    fn encode_frame(&mut self, view: &wgpu::TextureView, ranges: &VertexRanges) {
         let mut encoder = self
             .device
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -1298,16 +1290,15 @@ impl GpuRenderer {
             let mut pass = encoder.begin_render_pass(&RenderPassDescriptor {
                 label: Some("winter clear + bg"),
                 color_attachments: &[Some(RenderPassColorAttachment {
-                    view: &view,
+                    view,
                     resolve_target: None,
                     depth_slice: None,
                     ops: wgpu::Operations {
-                        // The sRGB surface expects a linear clear value, so decode
+                        // The sRGB target expects a linear clear value, so decode
                         // the (sRGB) background to keep the displayed color exact.
                         load: LoadOp::Clear(clear_color(
                             self.theme.background,
                             self.background_opacity(),
-                            self.config.alpha_mode,
                         )),
                         store: StoreOp::Store,
                     },
@@ -1380,7 +1371,6 @@ impl GpuRenderer {
         }
 
         self.queue.submit(std::iter::once(encoder.finish()));
-        self.queue.present(surface_texture);
     }
 }
 

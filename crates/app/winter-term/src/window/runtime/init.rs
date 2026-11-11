@@ -1,9 +1,9 @@
 //! GPU/window/PTY bootstrap: the heavy init that runs once on `resumed`.
 
-use std::sync::Arc;
-
-use winit::event_loop::ActiveEventLoop;
-use winit::window::WindowAttributes;
+use misty::{
+    AppContext, Decorations, GpuTexture, OptionAsAlt, Position, Size, WindowId, WindowOptions,
+};
+use winit::dpi::PhysicalSize;
 
 use crate::config::{load_state, ThemeSetting, TitleBarStyle};
 use crate::session::Session;
@@ -11,8 +11,9 @@ use winter_render::renderer::GpuRenderer;
 use winter_render::{FontConfig, Theme};
 use winter_terminal::session::Terminal;
 
-use crate::window::appearance::terminal_presentation;
+use crate::window::appearance::{terminal_presentation, theme_for};
 use crate::window::input::ime::enable_ime;
+use crate::window::runtime::handle::WindowHandle;
 use crate::window::{
     content_rows, App, APPROX_CELL_HEIGHT, APPROX_CELL_WIDTH, DEFAULT_COLS, DEFAULT_ROWS, MIN_COLS,
     MIN_ROWS,
@@ -23,15 +24,46 @@ use crate::window::{
 // ========================================================================
 
 impl App {
-    /// Full one-time setup: font scan (background), PTY spawn (background), GTK
-    /// init, window creation, wgpu instance/adapter/device, renderer, theme, and
-    /// the initial pane. Called from `ApplicationHandler::resumed`.
-    pub(in crate::window) fn init_window(&mut self, event_loop: &ActiveEventLoop) {
-        // Pin the Vulkan loader to the integrated GPU before anything (the wgpu
-        // instance, or another thread) reads the environment. On a hybrid laptop
-        // enumerating the discrete GPU's driver costs ~1.7s at instance creation.
-        let pinned_gpu = prefer_integrated_gpu();
+    /// How misty opens Winter's window: its title, frame, translucency,
+    /// icon, Option keys, and the size and place it had when it last closed.
+    /// Stays hidden until the first frame, so the OS never shows it blank.
+    pub fn window_options(&self) -> WindowOptions {
+        // Only request a transparent (alpha-channel) window when the user actually
+        // wants translucency. A needlessly transparent window is recomposited (and
+        // often blurred) by many compositors even when its content is fully opaque.
+        let want_transparency = self.config.opacity < 1.0
+            || self
+                .config
+                .colors
+                .background
+                .is_some_and(|background| !background.is_opaque());
+        // Modern style is borderless: the tab strip is the title bar and carries
+        // its own window controls. System style keeps the native OS decorations.
+        let decorations = match self.config.title_bar_style {
+            TitleBarStyle::System => Decorations::System,
+            TitleBarStyle::Modern => Decorations::Frameless,
+        };
+        let state = load_state();
+        let options = WindowOptions::new(self.render_window_title())
+            .with_decorations(decorations)
+            .with_transparent(want_transparency)
+            .with_min_size(min_size())
+            .with_size(opening_size(state.window_size))
+            .with_option_as_alt(misty_option_as_alt(self.config.option_as_alt));
+        let options = match load_window_icon() {
+            Some(icon) => options.with_icon(icon),
+            None => options,
+        };
+        match state.window_position {
+            Some((x, y)) => options.with_position(Position::new(x, y)),
+            None => options,
+        }
+    }
 
+    /// Full one-time setup once misty has opened `window`: font scan
+    /// (background), PTY spawn (background), the renderer on misty's GPU,
+    /// theme, and the initial pane. Called from misty's `init`.
+    pub(in crate::window) fn init_window(&mut self, cx: &mut AppContext<'_, ()>, window: WindowId) {
         // Kick off the system-font scan first so it runs concurrently with
         // window creation and the whole wgpu instance/adapter/device setup.
         let font_load = winter_render::start_font_load();
@@ -86,92 +118,19 @@ impl App {
             })
         });
 
-        // Only request a transparent (alpha-channel) window when the user actually
-        // wants translucency. A needlessly transparent window is recomposited (and
-        // often blurred) by many compositors even when its content is fully opaque.
-        let want_transparency = self.config.opacity < 1.0
-            || self
-                .config
-                .colors
-                .background
-                .is_some_and(|background| !background.is_opaque());
-        // Modern style is borderless: the tab strip is the title bar and carries
-        // its own window controls. System style keeps the native OS decorations.
+        let Some(gpu) = cx.gpu().cloned() else {
+            eprintln!("winter: misty opened the window without a GPU");
+            cx.exit();
+            return;
+        };
         let decorated = self.config.title_bar_style == TitleBarStyle::System;
-        // Stay hidden until the theme, panes, and (if restored) the saved
-        // layout are all in place: otherwise the OS shows the window with
-        // whatever was in the freshly-configured swapchain (blank or garbage)
-        // and it visibly "flashes" to the real content a moment later.
-        let min_width = MIN_COLS * APPROX_CELL_WIDTH;
-        let min_height = MIN_ROWS * APPROX_CELL_HEIGHT;
-        let base_attrs = WindowAttributes::default()
-            .with_title(self.render_window_title())
-            .with_decorations(decorated)
-            .with_transparent(want_transparency)
-            .with_window_icon(load_window_icon())
-            .with_visible(false)
-            .with_min_inner_size(winit::dpi::LogicalSize::new(min_width, min_height));
-        // An undecorated (Modern title-bar) window drops the whole native frame
-        // on Windows, including its border and drop shadow, so it renders as a
-        // flat borderless rectangle. Re-add the DWM drop shadow (which also
-        // draws the thin 1px top edge) so the window keeps a visible border
-        // while the tab strip stands in for the title bar. No effect when
-        // decorated: the System style already carries the native frame.
-        #[cfg(target_os = "windows")]
-        let base_attrs = {
-            use winit::platform::windows::WindowAttributesExtWindows;
-            base_attrs.with_undecorated_shadow(!decorated)
-        };
-        // Option is Alt only where the setting says so: by default macOS
-        // types a character with it, and no M- binding would ever arrive.
-        #[cfg(target_os = "macos")]
-        let base_attrs = {
-            use winit::platform::macos::WindowAttributesExtMacOS;
-            base_attrs.with_option_as_alt(winit_option_as_alt(self.config.option_as_alt))
-        };
-        let state = load_state();
-        let mut window_attrs = match state.window_size {
-            Some((w, h)) => base_attrs.with_inner_size(winit::dpi::PhysicalSize::new(
-                w.max(min_width),
-                h.max(min_height),
-            )),
-            None => base_attrs.with_inner_size(winit::dpi::LogicalSize::new(
-                DEFAULT_COLS * APPROX_CELL_WIDTH,
-                DEFAULT_ROWS * APPROX_CELL_HEIGHT,
-            )),
-        };
-        if let Some((x, y)) = state.window_position {
-            window_attrs = window_attrs.with_position(winit::dpi::PhysicalPosition::new(x, y));
-        }
-        let window = Arc::new(
-            event_loop
-                .create_window(window_attrs)
-                .expect("create window"),
-        );
-        enable_ime(&window);
-
-        let size = window.inner_size();
-
-        // GPU validation layers (enabled by `InstanceFlags::default()` in debug
-        // builds) cost ~100ms at startup and slow every draw call. Off by
-        // default; opt in with WINTER_GPU_DEBUG=1 when debugging the renderer.
-        let gpu_flags = if std::env::var_os("WINTER_GPU_DEBUG").is_some() {
-            wgpu::InstanceFlags::debugging()
-        } else {
-            wgpu::InstanceFlags::empty()
-        };
-        // Acquire the GPU, instance, surface, and a surface-compatible adapter.
-        // Pinning a single integrated ICD can occasionally enumerate no
-        // surface-compatible adapter (some driver/suspend states); when that
-        // happens, drop the pin and retry with the full set of GPUs so startup
-        // degrades to "slower" instead of crashing.
-        let mut gpu = acquire_gpu(&window, gpu_flags);
-        if gpu.is_none() && pinned_gpu {
-            clear_integrated_gpu_pin();
-            gpu = acquire_gpu(&window, gpu_flags);
-        }
-        // Keep the instance alive for the rest of setup (the surface depends on it).
-        let (_instance, surface, adapter) = gpu.expect("no compatible GPU adapter found");
+        let scale_factor = 1.0;
+        // The size it opened at, which the first frame corrects.
+        let opening = opening_size(load_state().window_size);
+        let size = PhysicalSize::new(opening.width, opening.height);
+        let handle = WindowHandle::new(window, size, scale_factor);
+        handle.note_color_scheme(cx.appearance().color_scheme);
+        enable_ime(&handle);
 
         let font = FontConfig {
             family: std::env::var("WINTER_FONT")
@@ -191,25 +150,27 @@ impl App {
                 .filter(|s| !s.trim().is_empty())
                 .or_else(|| self.config.font_weight_bold.clone()),
         };
-        let scale_factor = window.scale_factor();
+        // Text blends in linear light through an sRGB view of the frame's
+        // texture, where the GPU allows one; elsewhere it is written as is.
+        let probe = GpuTexture::new(&gpu, 1, 1).ok();
+        let format = match probe.and_then(|texture| texture.srgb_view()) {
+            Some(_) => GpuTexture::SRGB_FORMAT,
+            None => GpuTexture::FORMAT,
+        };
         let mut renderer = GpuRenderer::new(
-            surface,
-            adapter,
+            gpu.device().clone(),
+            gpu.queue().clone(),
+            format,
             size.width,
             size.height,
             scale_factor,
             font,
             font_load,
         );
+        self.gpu = Some(gpu);
 
         let mut initial_theme = match &self.config.theme {
-            ThemeSetting::Auto => window
-                .theme()
-                .map(|t| match t {
-                    winit::window::Theme::Dark => Theme::dark(),
-                    winit::window::Theme::Light => Theme::light(),
-                })
-                .unwrap_or_default(),
+            ThemeSetting::Auto => theme_for(handle.color_scheme()),
             ThemeSetting::Dark => Theme::dark(),
             ThemeSetting::Light => Theme::light(),
             // A user theme file; the dark preset, and a word saying why, when
@@ -255,7 +216,7 @@ impl App {
                         Ok(terminal) => terminal,
                         Err(e2) => {
                             eprintln!("winter: could not start a shell: {e2}");
-                            event_loop.exit();
+                            cx.exit();
                             return;
                         }
                     }
@@ -269,7 +230,7 @@ impl App {
             self.open_tabs.insert_terminal(focused, terminal);
         }
 
-        self.window = Some(window);
+        self.window = Some(handle);
         self.renderer = Some(renderer);
         // Now that a window exists to paint it, raise any config diagnostic
         // held from startup.
@@ -315,7 +276,7 @@ impl App {
                     cwd_override.as_deref(),
                 ) else {
                     eprintln!("winter: could not start a shell");
-                    event_loop.exit();
+                    cx.exit();
                     return;
                 };
                 if let Some(renderer) = &self.renderer {
@@ -327,10 +288,9 @@ impl App {
         }
         self.dirty = true;
 
-        // Now that the theme and initial layout are both in place, reveal the
-        // window and draw its first real frame.
+        // Now that the theme and initial layout are both in place, draw the
+        // first real frame, which misty shows the window with.
         if let Some(window) = &self.window {
-            window.set_visible(true);
             window.request_redraw();
         }
     }
@@ -356,8 +316,7 @@ const VULKAN_ICD_DIRS: [&str; 2] = ["/usr/share/vulkan/icd.d", "/etc/vulkan/icd.
 /// terminal never needs the discrete GPU, so when the user has not pinned one we
 /// restrict the loader to an integrated-GPU ICD via `VK_DRIVER_FILES`.
 ///
-/// Returns `true` when it pinned the loader, so the caller can undo it via
-/// [`clear_integrated_gpu_pin`] if the pinned GPU yields no usable adapter.
+/// Returns `true` when it pinned the loader.
 ///
 /// A no-op (returns `false`) when: not on Linux; the user set any Vulkan
 /// driver-selection variable, `WGPU_BACKEND`, or `WINTER_GPU=discrete`; or no
@@ -365,7 +324,7 @@ const VULKAN_ICD_DIRS: [&str; 2] = ["/usr/share/vulkan/icd.d", "/etc/vulkan/icd.
 /// enumeration). Must run before the wgpu instance is created and before any
 /// other thread reads the environment.
 #[cfg(target_os = "linux")]
-fn prefer_integrated_gpu() -> bool {
+pub fn prefer_integrated_gpu() -> bool {
     const OVERRIDES: [&str; 4] = [
         "VK_DRIVER_FILES",
         "VK_ICD_FILENAMES",
@@ -407,66 +366,42 @@ fn prefer_integrated_gpu() -> bool {
 }
 
 #[cfg(not(target_os = "linux"))]
-fn prefer_integrated_gpu() -> bool {
+pub fn prefer_integrated_gpu() -> bool {
     false
 }
 
-/// Undo the [`prefer_integrated_gpu`] pin so a subsequent `wgpu::Instance::new`
-/// re-enumerates every GPU. Only removes the variables this module sets.
-#[cfg(target_os = "linux")]
-fn clear_integrated_gpu_pin() {
-    std::env::remove_var("VK_DRIVER_FILES");
-    std::env::remove_var("VK_ICD_FILENAMES");
-}
-
-#[cfg(not(target_os = "linux"))]
-fn clear_integrated_gpu_pin() {}
-
-/// Create a wgpu instance, window surface, and surface-compatible low-power
-/// adapter, or `None` if no adapter is available (so the caller can retry with a
-/// different GPU pin). Returns all three so the instance outlives the surface.
-fn acquire_gpu(
-    window: &Arc<winit::window::Window>,
-    flags: wgpu::InstanceFlags,
-) -> Option<(wgpu::Instance, wgpu::Surface<'static>, wgpu::Adapter)> {
-    let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
-        backends: wgpu::Backends::from_env().unwrap_or(wgpu::Backends::PRIMARY),
-        flags,
-        backend_options: wgpu::BackendOptions::default(),
-        display: None,
-        memory_budget_thresholds: wgpu::MemoryBudgetThresholds::default(),
-    });
-    let surface = instance.create_surface(Arc::clone(window)).ok()?;
-    let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
-        power_preference: wgpu::PowerPreference::LowPower,
-        compatible_surface: Some(&surface),
-        ..Default::default()
-    }))
-    .ok()?;
-    Some((instance, surface, adapter))
-}
-
-/// Load the winter-terminal-64.png icon embedded into the binary and convert it
-/// into a winit-compatible window icon.
-fn load_window_icon() -> Option<winit::window::Icon> {
+/// The winter-terminal-64.png icon embedded into the binary, as misty shows
+/// a window's icon.
+fn load_window_icon() -> Option<misty::Image> {
     let icon_bytes = include_bytes!("../../../assets/icons/winter-terminal-64.png");
-    let img = image::load_from_memory(icon_bytes).ok()?;
-    let rgba = img.into_rgba8();
-    let (width, height) = rgba.dimensions();
-    winit::window::Icon::from_rgba(rgba.into_raw(), width, height).ok()
+    misty::Image::decode(icon_bytes).ok()
 }
 
-/// What winit calls the Option keys `setting` makes Alt.
-#[cfg(target_os = "macos")]
-pub(in crate::window) fn winit_option_as_alt(
-    setting: crate::config::OptionAsAlt,
-) -> winit::platform::macos::OptionAsAlt {
-    use crate::config::OptionAsAlt;
-    use winit::platform::macos::OptionAsAlt as Winit;
+/// The smallest size the window may be made, in logical pixels.
+fn min_size() -> Size {
+    Size::new(MIN_COLS * APPROX_CELL_WIDTH, MIN_ROWS * APPROX_CELL_HEIGHT)
+}
+
+/// The size the window opens at, in logical pixels: the `saved` size it
+/// had when it last closed, held to the smallest, or a default one.
+fn opening_size(saved: Option<(u32, u32)>) -> Size {
+    let least = min_size();
+    match saved {
+        Some((w, h)) => Size::new(w.max(least.width), h.max(least.height)),
+        None => Size::new(
+            DEFAULT_COLS * APPROX_CELL_WIDTH,
+            DEFAULT_ROWS * APPROX_CELL_HEIGHT,
+        ),
+    }
+}
+
+/// What misty calls the Option keys `setting` makes Alt.
+pub(in crate::window) fn misty_option_as_alt(setting: crate::config::OptionAsAlt) -> OptionAsAlt {
+    use crate::config::OptionAsAlt as Setting;
     match setting {
-        OptionAsAlt::Both => Winit::Both,
-        OptionAsAlt::Left => Winit::OnlyLeft,
-        OptionAsAlt::None => Winit::None,
-        OptionAsAlt::Right => Winit::OnlyRight,
+        Setting::Both => OptionAsAlt::Both,
+        Setting::Left => OptionAsAlt::Left,
+        Setting::None => OptionAsAlt::None,
+        Setting::Right => OptionAsAlt::Right,
     }
 }

@@ -143,7 +143,7 @@ impl GpuRenderer {
         self.text_buffers.clear();
         self.status_buffer = None;
         self.status_right_buffer = None;
-        self.cols = ((self.config.width as f32 / base_cell_w).floor() as usize).max(1);
+        self.cols = ((self.size.width as f32 / base_cell_w).floor() as usize).max(1);
         // Keep `cell_width` and `cell_height`/`line_height` on the measured cell
         // stride (do NOT stretch either to fill the window); see the matching
         // comment in `resize` for why a stretched stride drifts the cursor off
@@ -154,7 +154,7 @@ impl GpuRenderer {
         // remainder-padding logic absorbs the (sub-one-cell) leftover space.
         self.fonts.cell_width = base_cell_w;
         let cell_h = base_cell_h;
-        self.rows = ((self.config.height as f32 / cell_h).floor() as usize).max(1);
+        self.rows = ((self.size.height as f32 / cell_h).floor() as usize).max(1);
         self.fonts.cell_height = cell_h;
         self.fonts.line_height = cell_h;
         self.forget_glyph_rasters();

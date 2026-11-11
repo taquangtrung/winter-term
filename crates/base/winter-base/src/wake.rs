@@ -4,8 +4,6 @@
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 
-use winit::event_loop::EventLoopProxy;
-
 // ========================================================================
 // Statics
 // ========================================================================
@@ -23,18 +21,23 @@ static SHARED: OnceLock<Waker> = OnceLock::new();
 /// does nothing and the loop's own poll picks the work up.
 #[derive(Clone, Default)]
 pub struct Waker {
-    proxy: Arc<Mutex<Option<EventLoopProxy<()>>>>,
+    /// What wakes the loop, once it is connected.
+    wake: Arc<Mutex<Option<Wake>>>,
 }
+
+/// What a connected [`Waker`] calls to wake the event loop.
+type Wake = Arc<dyn Fn() + Send + Sync>;
 
 // ========================================================================
 // Waker Implementations
 // ========================================================================
 
 impl Waker {
-    /// Connect every clone of this handle to the running event loop.
-    pub fn connect(&self, proxy: EventLoopProxy<()>) {
-        if let Ok(mut slot) = self.proxy.lock() {
-            *slot = Some(proxy);
+    /// Connect every clone of this handle to the running event loop, which
+    /// `wake` wakes.
+    pub fn connect(&self, wake: impl Fn() + Send + Sync + 'static) {
+        if let Ok(mut slot) = self.wake.lock() {
+            *slot = Some(Arc::new(wake));
         }
     }
 
@@ -46,11 +49,9 @@ impl Waker {
 
     /// Wake the event loop, if it is connected and still running.
     pub fn wake(&self) {
-        if let Ok(slot) = self.proxy.lock() {
-            if let Some(proxy) = slot.as_ref() {
-                // A loop that has closed has nothing left to wake.
-                let _ = proxy.send_event(());
-            }
+        let wake = self.wake.lock().ok().and_then(|slot| slot.clone());
+        if let Some(wake) = wake {
+            wake();
         }
     }
 

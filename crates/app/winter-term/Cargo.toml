@@ -75,6 +75,7 @@ winter-vcs.workspace = true
 winter-proto.workspace = true
 
 winter-render.workspace = true
+misty.workspace = true
 winter-spell.workspace = true
 winter-lsp.workspace = true
 winter-ext-api.workspace = true

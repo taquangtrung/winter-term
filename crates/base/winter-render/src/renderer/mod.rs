@@ -11,7 +11,7 @@
 //! with a viewport rect and a grid reference. Each pane is clipped to its rect.
 
 use glyphon::{FontSystem, SwashCache, TextAtlas, TextRenderer, Viewport};
-use wgpu::{Device, Queue, RenderPipeline, Surface, SurfaceConfiguration};
+use wgpu::{Device, Queue, RenderPipeline, TextureFormat};
 
 use crate::glyph_quad::GlyphQuadPass;
 use crate::image::{ImagePass, ImagePlacement};
@@ -61,9 +61,11 @@ pub struct GpuRenderer {
     /// Where the last frame drew what the pointer can act on, for the window to test a click or a hover against what is on screen.
     hits: FrameHits,
     device: Device,
+    /// The format of the textures frames are rendered into.
+    format: TextureFormat,
     queue: Queue,
-    surface: Surface<'static>,
-    config: SurfaceConfiguration,
+    /// The size of the frames rendered.
+    size: FrameSize,
     font_system: FontSystem,
     swash_cache: SwashCache,
     text_atlas: TextAtlas,
@@ -84,9 +86,6 @@ pub struct GpuRenderer {
     /// per-cell lookups of a frame allocate nothing.
     glyph_key_scratch: String,
     theme: Theme,
-    /// Which ways the surface can combine its alpha with the desktop, as the
-    /// platform listed them; the first is the one an opaque window uses.
-    alpha_modes: Vec<wgpu::CompositeAlphaMode>,
     /// Persistent per-pane text buffers, reused across frames so cosmic-text
     /// only re-shapes lines whose content changed (one line per keystroke
     /// instead of the whole screen).
@@ -124,6 +123,13 @@ pub struct GpuRenderer {
     /// so an unchanged icon is not rasterized again every frame.
     status_icon_uploads:
         [Option<(std::sync::Arc<[u8]>, u32)>; raster::STATUS_ICON_TEXTURE_IDS.len()],
+}
+
+/// The size of the frames a renderer renders, in pixels.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+struct FrameSize {
+    height: u32,
+    width: u32,
 }
 
 /// Where the last frame drew each part the pointer acts on: written as the frame is drawn, read until the next one replaces it.

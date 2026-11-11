@@ -3,10 +3,9 @@
 //! typed into the focused tab once committed, and the input method's
 //! candidate window is kept next to the cursor.
 
-use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::Ime;
-use winit::event_loop::ActiveEventLoop;
-use winit::window::{ImePurpose, Window};
+use crate::window::runtime::handle::WindowHandle;
+use misty::AppContext;
+use misty::ImeInput;
 use winter_emulator::{Style, UnderlineStyle};
 use winter_render::CellOverlay;
 
@@ -57,18 +56,18 @@ impl ImeState {
 impl App {
     /// Handle one input-method event: track the text being composed, and
     /// type what is committed into the focused tab.
-    pub(in crate::window) fn on_ime(&mut self, ime: Ime, event_loop: &ActiveEventLoop) {
+    pub(in crate::window) fn on_ime(&mut self, ime: &ImeInput, cx: &mut AppContext<'_, ()>) {
         match ime {
-            Ime::Enabled => {}
-            Ime::Preedit(text, _) => self.input.ime.set_preedit(text),
-            Ime::Commit(text) => {
+            ImeInput::Enabled => {}
+            ImeInput::Preedit(composition) => self.input.ime.set_preedit(composition.text.clone()),
+            ImeInput::Commit(text) => {
                 self.input.ime.preedit = None;
-                if self.type_committed_text(&text) {
-                    self.quit(event_loop);
+                if self.type_committed_text(text) {
+                    self.quit(cx);
                     return;
                 }
             }
-            Ime::Disabled => self.input.ime.preedit = None,
+            ImeInput::Disabled => self.input.ime.preedit = None,
         }
         self.dirty = true;
     }
@@ -101,10 +100,12 @@ impl App {
             return;
         }
         if let Some(window) = &self.window {
-            window.set_ime_cursor_area(
-                PhysicalPosition::new(anchor.x, anchor.y),
-                PhysicalSize::new(anchor.width, anchor.height),
-            );
+            window.set_ime_cursor_area(misty::Rect::new(
+                anchor.x as f32,
+                anchor.y as f32,
+                anchor.width as f32,
+                anchor.height as f32,
+            ));
             self.input.ime.anchor = Some(anchor);
         }
     }
@@ -137,12 +138,10 @@ impl App {
 // Free functions
 // ========================================================================
 
-/// Let `window` receive input-method events, as a terminal: the input
-/// method then composes text for it rather than passing keys straight
-/// through.
-pub(in crate::window) fn enable_ime(window: &Window) {
+/// Let `window` receive input-method events: the input method then
+/// composes text for it rather than passing keys straight through.
+pub(in crate::window) fn enable_ime(window: &WindowHandle) {
     window.set_ime_allowed(true);
-    window.set_ime_purpose(ImePurpose::Terminal);
 }
 
 // ========================================================================

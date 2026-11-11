@@ -1057,7 +1057,9 @@ impl App {
         )
     }
 
-    pub(in crate::window) fn render_frame(&mut self) {
+    /// Draw the window's frame into `target`, a texture as large as the
+    /// window.
+    pub(in crate::window) fn render_frame(&mut self, target: &wgpu::TextureView) {
         // What is about to be drawn is the current state, so the pending-repaint
         // flag is spent here. Clearing it at the top rather than the bottom keeps
         // a change made while this frame is being built from being swallowed: it
@@ -1284,6 +1286,7 @@ impl App {
             window_focused: self.input.focus.window,
         });
         renderer.render(
+            target,
             &views,
             status,
             Some(&tabbar),
