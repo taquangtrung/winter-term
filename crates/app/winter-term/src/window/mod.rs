@@ -352,6 +352,11 @@ pub(in crate::window) struct Chrome {
     /// The notifier's cards and tasks, as misty draws them in the top-right
     /// corner.
     pub(in crate::window) cards: misty::Toasts,
+    /// The status bar misty draws along the window's bottom.
+    pub(in crate::window) status_bar: misty::StatusBar,
+    /// The status bar the last frame built, for misty's bar to draw and
+    /// take the pointer by.
+    pub(in crate::window) drawn_status: Option<winter_render::StatusBar>,
     /// What holds the keyboard over the panes, if anything: a palette, a
     /// question, a name being typed, the settings page (see [`Overlay`]).
     pub(in crate::window) overlay: Option<Overlay>,

@@ -1184,9 +1184,11 @@ impl App {
         let hovered_pane = self.hovered_pane(&bounds);
         let search = self.status_search();
         // Built only for a bar that shows: building it reads the disk.
-        let status = status_enabled
-            .then(|| self.build_status_bar(mode, renderer.theme(), search, notice, &focused));
-        let status = status.as_ref();
+        // Misty's status bar draws it over the frame.
+        let _ = notice;
+        self.chrome.drawn_status = status_enabled
+            .then(|| self.build_status_bar(mode, renderer.theme(), search, None, &focused));
+        let status = status_enabled;
         let find_view = self.find_popup(&rects);
         // The key menus are sized to, and centred in, the focused pane: the
         // whole of it, its gutter and breadcrumb row too, not just its text.
@@ -1300,12 +1302,6 @@ impl App {
             token_inspect_view.as_ref(),
         );
 
-        // The bar just drawn may have moved its parts under a still pointer
-        // (a quota arriving, a segment dropped for room): what it is on now.
-        if self.input.pointer.in_window {
-            let (x, y) = self.input.pointer.cursor_pos;
-            self.hover_status_bar(x, y);
-        }
         self.update_ime_anchor(focused);
     }
 

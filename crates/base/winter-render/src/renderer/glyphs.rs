@@ -141,8 +141,6 @@ impl GpuRenderer {
             self.fonts.normal_weight.as_deref(),
         );
         self.text_buffers.clear();
-        self.status_buffer = None;
-        self.status_right_buffer = None;
         self.cols = ((self.size.width as f32 / base_cell_w).floor() as usize).max(1);
         // Keep `cell_width` and `cell_height`/`line_height` on the measured cell
         // stride (do NOT stretch either to fill the window); see the matching

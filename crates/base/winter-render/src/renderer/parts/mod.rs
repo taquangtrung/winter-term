@@ -1,9 +1,8 @@
 //! The fixed regions of the window around the panes: the title bar with
 //! its tabs and menus ([`titlebar`]), each pane's own tab strip
-//! ([`pane_strip`]), and the status bar along the foot ([`status`]).
+//! ([`pane_strip`]).
 
 pub(in crate::renderer) mod pane_strip;
-pub(in crate::renderer) mod status;
 pub(in crate::renderer) mod titlebar;
 
 // ========================================================================

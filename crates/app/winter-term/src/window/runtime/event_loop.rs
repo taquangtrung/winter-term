@@ -161,6 +161,9 @@ impl App {
             return;
         }
         let scale_factor = frame.scale_factor();
+        if let Some(window) = &self.window {
+            window.note_metrics(frame.cell_metrics());
+        }
         let changed = self
             .window
             .as_ref()
@@ -176,6 +179,7 @@ impl App {
             .unwrap_or_else(|| texture.texture().create_view(&Default::default()));
         self.render_frame(&view);
         frame.draw_texture(&texture, bounds);
+        self.draw_status_bar(frame);
         self.draw_cards(frame);
         self.draw_picker(frame);
     }
@@ -222,7 +226,9 @@ impl App {
         let picked = pointer
             && window.is_some_and(|window| {
                 let mut ecx = cx.event_cx(window);
-                self.point_at_picker(input, &mut ecx) || self.point_at_cards(input, &mut ecx)
+                self.point_at_picker(input, &mut ecx)
+                    || self.point_at_cards(input, &mut ecx)
+                    || self.point_at_status_bar(input, &mut ecx)
             });
         match input {
             _ if picked => {}

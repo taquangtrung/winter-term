@@ -298,11 +298,10 @@ impl App {
         // covered the bar.
         let tooltip_anchor = match (&self.input.pointer.hovered_url, self.tabs.strip_hover) {
             (None, StripHit::Tab(_)) => self.tabs.hover_anchor,
-            (None, _) => self.chrome.status_hover.and_then(|part| {
-                self.renderer
-                    .as_ref()
-                    .and_then(|renderer| renderer.hits().status_part_region(part))
-            }),
+            (None, _) => self
+                .chrome
+                .status_hover
+                .and_then(|part| self.status_part_region(part)),
             _ => None,
         };
         TopTabbar {

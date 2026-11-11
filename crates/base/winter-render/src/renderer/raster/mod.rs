@@ -15,20 +15,6 @@ pub(super) use upload::OverlayCaches;
 // Constants
 // ========================================================================
 
-/// Texture slots for the status bar's icons, from the left: left-segment
-/// icons (project, branch), quota logos, and the editor's icon. No more icons
-/// are drawn than there are slots.
-pub(in crate::renderer) const STATUS_ICON_TEXTURE_IDS: [u64; 8] = [
-    u64::MAX - 12,
-    u64::MAX - 13,
-    u64::MAX - 14,
-    u64::MAX - 15,
-    u64::MAX - 16,
-    u64::MAX - 17,
-    u64::MAX - 18,
-    u64::MAX - 19,
-];
-
 /// Vertical padding above and below the text in each palette result row, in
 /// pixels. The row height is one line of text plus this on each side, so the
 /// inter-row gap is a small fixed amount rather than a multiple of the line.

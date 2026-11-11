@@ -8,6 +8,7 @@
 //! segments say what the extension last set them to.
 
 pub(in crate::window) mod quota;
+mod view;
 
 use std::cell::RefCell;
 use std::collections::{BTreeSet, HashMap};

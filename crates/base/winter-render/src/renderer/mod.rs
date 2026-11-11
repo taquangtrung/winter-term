@@ -14,7 +14,7 @@ use glyphon::{FontSystem, SwashCache, TextAtlas, TextRenderer, Viewport};
 use wgpu::{Device, Queue, RenderPipeline, TextureFormat};
 
 use crate::glyph_quad::GlyphQuadPass;
-use crate::image::{ImagePass, ImagePlacement};
+use crate::image::ImagePass;
 use crate::theme::Theme;
 mod frame;
 mod surface;
@@ -88,10 +88,6 @@ pub struct GpuRenderer {
     /// only re-shapes lines whose content changed (one line per keystroke
     /// instead of the whole screen).
     text_buffers: Vec<glyphon::Buffer>,
-    /// Persistent one-line buffer for the bottom status bar (left side).
-    status_buffer: Option<glyphon::Buffer>,
-    /// Persistent one-line buffer for the bottom status bar (right side).
-    status_right_buffer: Option<glyphon::Buffer>,
     /// Textured-quad pass for image blocks rendered natively (no webview).
     image_pass: ImagePass,
     /// Image pass for the rasterized top-tabbar strip. Rendered between the bg
@@ -114,13 +110,6 @@ pub struct GpuRenderer {
     /// device: `None` until the first scene, `Some(None)` once it failed to
     /// start.
     scene_renderer: Option<Option<vello::Renderer>>,
-    /// The status bar's icons as this frame places them, drawn by the image
-    /// pass over the slots the bar's text leaves blank for them.
-    status_icons: Vec<ImagePlacement>,
-    /// The artwork and pixel size last uploaded to each status icon texture,
-    /// so an unchanged icon is not rasterized again every frame.
-    status_icon_uploads:
-        [Option<(std::sync::Arc<[u8]>, u32)>; raster::STATUS_ICON_TEXTURE_IDS.len()],
 }
 
 /// The size of the frames a renderer renders, in pixels.
@@ -141,9 +130,6 @@ pub struct FrameHits {
     input_button_rects: Vec<(f32, f32, f32, f32)>,
     /// Where the input/confirmation dialog card was last drawn, as `(x, y, width, height)`.
     input_rect: Option<(f32, f32, f32, f32)>,
-    /// Where the status bar's right-hand parts were last drawn, for the
-    /// pointer to find: clicks on the bell, and hovering over any of them.
-    status_hits: Vec<parts::status::StatusHit>,
     /// Where each pane toolbar's buttons were last drawn: whose bar, the
     /// band's top and bottom edges, and each button's span across it.
     toolbar_hits: Vec<(u64, (f32, f32), Vec<widgets::toolbar::ToolbarHit>)>,

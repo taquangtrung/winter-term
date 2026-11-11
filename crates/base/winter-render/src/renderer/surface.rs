@@ -153,7 +153,6 @@ impl GpuRenderer {
                 find_rect: None,
                 input_button_rects: Vec::new(),
                 input_rect: None,
-                status_hits: Vec::new(),
                 toolbar_hits: Vec::new(),
                 transient_hits: Vec::new(),
                 transient_rect: None,
@@ -180,8 +179,6 @@ impl GpuRenderer {
             glyph_key_scratch: String::new(),
             theme: Theme::default(),
             text_buffers: Vec::new(),
-            status_buffer: None,
-            status_right_buffer: None,
             image_pass,
             tabbar_strip_pass,
             overlay_caches: Default::default(),
@@ -189,8 +186,6 @@ impl GpuRenderer {
             drew_blinking_text: false,
             svg_fontdb: None,
             scene_renderer: None,
-            status_icons: Vec::new(),
-            status_icon_uploads: Default::default(),
         }
     }
     /// A number that moves with every theme change, for a texture drawn in
@@ -329,8 +324,6 @@ impl GpuRenderer {
 
             // Clear existing buffers so they are re-allocated with updated physical metrics next frame
             self.text_buffers.clear();
-            self.status_buffer = None;
-            self.status_right_buffer = None;
             self.forget_glyph_rasters();
         }
 

@@ -276,20 +276,7 @@ impl App {
 // App: the pointer
 // ========================================================================
 
-impl App {
-    /// Act on a press at `(x, y)` if it lands on the bell, which opens the
-    /// history. Whether the press was taken.
-    pub(in crate::window) fn press_notifications(&mut self, x: f32, y: f32) -> bool {
-        let on_bell = self
-            .renderer
-            .as_ref()
-            .is_some_and(|renderer| renderer.hits().status_bell_at(x, y));
-        if on_bell && self.status_bar_visible() {
-            self.open_notifications();
-        }
-        on_bell
-    }
-}
+impl App {}
 
 // ========================================================================
 // App: the cards misty draws

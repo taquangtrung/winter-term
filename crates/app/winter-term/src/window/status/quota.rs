@@ -5,7 +5,6 @@
 use crate::quota::{secret, Monitor, Provider};
 use winter_model::input::Key;
 use winter_model::textedit::modal::EditOutcome;
-use winter_render::StatusHover;
 
 use super::{provider_of, quota_providers};
 use crate::window::input::overlay::Overlay;
@@ -57,30 +56,18 @@ impl App {
         }
     }
 
-    /// Ask the provider whose quota segment is at the surface point `(x, y)`
-    /// again now. Returns whether the press landed on one, so it goes no
-    /// further.
-    pub(in crate::window) fn press_quota_segment(&mut self, x: f32, y: f32) -> bool {
-        if !self.status_bar_visible() {
-            return false;
-        }
-        let Some(StatusHover::Segment(idx)) = self
-            .renderer
-            .as_ref()
-            .and_then(|renderer| renderer.hits().status_hover_at(x, y))
-        else {
-            return false;
-        };
+    /// Ask the provider whose quota segment is segment `idx` of the status
+    /// bar's right side again now.
+    pub(in crate::window) fn refresh_quota_segment(&mut self, idx: usize) {
         let Some(provider) = self
             .status_segment_at(idx)
             .and_then(|(kind, _)| provider_of(kind))
         else {
-            return false;
+            return;
         };
         if let Some(monitor) = &self.quota {
             monitor.refresh(provider);
         }
-        true
     }
 
     /// Route one key into the Z.ai key dialog: `Enter` keeps what was typed

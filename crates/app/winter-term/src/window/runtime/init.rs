@@ -20,6 +20,14 @@ use crate::window::{
 };
 
 // ========================================================================
+// Constants
+// ========================================================================
+
+/// How much smaller Winter's chrome text is than its terminal text: a 13.5
+/// pixel status line under a 15 pixel grid.
+const CHROME_FONT_RATIO: f32 = 13.5 / 15.0;
+
+// ========================================================================
 // App: window initialization
 // ========================================================================
 
@@ -49,7 +57,8 @@ impl App {
             .with_transparent(want_transparency)
             .with_min_size(min_size())
             .with_size(opening_size(state.window_size))
-            .with_option_as_alt(misty_option_as_alt(self.config.option_as_alt));
+            .with_option_as_alt(misty_option_as_alt(self.config.option_as_alt))
+            .with_font(self.misty_font());
         let options = match load_window_icon() {
             Some(icon) => options.with_icon(icon),
             None => options,
@@ -57,6 +66,22 @@ impl App {
         match state.window_position {
             Some((x, y)) => options.with_position(Position::new(x, y)),
             None => options,
+        }
+    }
+
+    /// The font misty's widgets (the status bar, the picker, the cards) draw
+    /// in: the terminal's family, at the size Winter's chrome text takes.
+    pub(in crate::window) fn misty_font(&self) -> misty::Font {
+        self.misty_font_at(self.config.font_size)
+    }
+
+    /// [`App::misty_font`] for a terminal font of `size` logical pixels.
+    pub(in crate::window) fn misty_font_at(&self, size: f32) -> misty::Font {
+        let size = size * CHROME_FONT_RATIO;
+        let font = misty::Font::new(size);
+        match &self.config.font_family {
+            Some(family) => font.with_family(family.clone()),
+            None => font,
         }
     }
 

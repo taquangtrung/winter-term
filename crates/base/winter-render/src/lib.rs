@@ -157,15 +157,6 @@ pub(crate) fn status_bar_top_px(surface_h: f32, cell_height: f32) -> f32 {
     (surface_h - status_bar_height_px(cell_height)).round()
 }
 
-/// The row the status bar's contents sit in (its text, icons, hover
-/// highlight, and prompt cursor), as `(top, bottom)` pixels, for the bar
-/// whose top edge is `status_top`: below its border and its top padding,
-/// one cell row tall.
-pub(crate) fn status_bar_content_px(status_top: f32, cell_height: f32) -> (f32, f32) {
-    let top = status_top + STATUS_BAR_BORDER_PX + STATUS_BAR_PAD_TOP_PX;
-    (top, top + cell_height)
-}
-
 // ========================================================================
 // Tests
 // ========================================================================
@@ -185,23 +176,5 @@ mod tests {
             let top = status_bar_top_px(surface_h, ch);
             assert_eq!((surface_h - top).round(), tall, "at surface_h={surface_h}");
         }
-    }
-
-    #[test]
-    fn test_the_status_bar_s_paddings_lie_about_its_contents() {
-        let (top, ch) = (100.0, 19.0);
-        let (contents_top, contents_bottom) = status_bar_content_px(top, ch);
-        assert_eq!(
-            contents_top - (top + STATUS_BAR_BORDER_PX),
-            STATUS_BAR_PAD_TOP_PX,
-            "under the border"
-        );
-        assert_eq!(contents_bottom - contents_top, ch, "one row");
-        let bar_bottom = top + status_bar_height_px(ch);
-        assert_eq!(
-            bar_bottom - contents_bottom,
-            STATUS_BAR_PAD_BOTTOM_PX,
-            "above the window's edge"
-        );
     }
 }

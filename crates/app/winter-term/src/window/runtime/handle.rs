@@ -7,8 +7,8 @@
 use std::cell::{Cell, RefCell};
 
 use misty::{
-    AppContext, ColorScheme, CursorIcon, ImeFocus, OptionAsAlt, Rect, ResizeEdge, WindowGeometry,
-    WindowId,
+    AppContext, CellMetrics, ColorScheme, CursorIcon, Font, ImeFocus, OptionAsAlt, Rect,
+    ResizeEdge, WindowGeometry, WindowId,
 };
 use winit::dpi::PhysicalSize;
 use winit::window::ResizeDirection;
@@ -36,6 +36,8 @@ pub(in crate::window) struct WindowHandle {
     maximized: Cell<bool>,
     /// What is asked of the window and not yet handed to misty.
     requests: RefCell<Vec<Request>>,
+    /// The cells misty's widgets draw in, as the last frame measured them.
+    metrics: Cell<Option<CellMetrics>>,
     /// Physical pixels per logical pixel, as the last frame drew.
     scale_factor: Cell<f64>,
     /// The window's inner size in physical pixels, as the last frame drew.
@@ -66,6 +68,8 @@ enum Request {
     Resize(ResizeEdge),
     /// Show this pointer shape.
     SetCursor(CursorIcon),
+    /// Draw misty's widgets in this font.
+    SetFont(Font),
     /// Name the window this.
     SetTitle(String),
     /// Let the background show the desktop through it.
@@ -89,6 +93,7 @@ impl WindowHandle {
             ime: RefCell::new(ImeWanted::default()),
             ime_focus: RefCell::new(ImeFocus::new()),
             maximized: Cell::new(false),
+            metrics: Cell::new(None),
             requests: RefCell::new(Vec::new()),
             scale_factor: Cell::new(scale_factor),
             size: Cell::new(size),
@@ -107,6 +112,21 @@ impl WindowHandle {
     /// The window's inner size in physical pixels.
     pub(in crate::window) fn inner_size(&self) -> PhysicalSize<u32> {
         self.size.get()
+    }
+
+    /// Physical pixels per logical pixel.
+    pub(in crate::window) fn scale_factor(&self) -> f64 {
+        self.scale_factor.get()
+    }
+
+    /// The cells misty's widgets draw in, once a frame has measured them.
+    pub(in crate::window) fn cell_metrics(&self) -> Option<CellMetrics> {
+        self.metrics.get()
+    }
+
+    /// Notes the cells misty's widgets draw in, as a frame measures them.
+    pub(in crate::window) fn note_metrics(&self, metrics: CellMetrics) {
+        self.metrics.set(Some(metrics));
     }
 
     /// Whether the window is maximized.
@@ -190,6 +210,11 @@ impl WindowHandle {
         }
     }
 
+    /// Draws misty's widgets in `font` from the next frame.
+    pub(in crate::window) fn set_font(&self, font: Font) {
+        self.ask(Request::SetFont(font));
+    }
+
     /// Names the window `title`.
     pub(in crate::window) fn set_title(&self, title: &str) {
         self.ask(Request::SetTitle(title.to_owned()));
@@ -228,6 +253,7 @@ impl WindowHandle {
                 Request::Redraw => cx.request_redraw(id),
                 Request::Resize(edge) => cx.event_cx(id).drag_resize_window(edge),
                 Request::SetCursor(icon) => cx.event_cx(id).set_cursor(icon),
+                Request::SetFont(font) => cx.set_font(id, font),
                 Request::SetTitle(title) => cx.set_title(id, title),
                 Request::SetTransparent(transparent) => cx.set_transparent(id, transparent),
                 Request::ToggleMaximize => cx.event_cx(id).toggle_maximize(),

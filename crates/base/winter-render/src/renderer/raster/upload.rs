@@ -883,6 +883,19 @@ impl FrameHits {
             .is_some_and(|(left, top, w, h)| x >= left && x < left + w && y >= top && y < top + h)
     }
 
+    /// The pane toolbar button at the surface point `(x, y)`, as the bars were
+    /// last drawn: whose bar it is, and what the button is told back as.
+    pub fn toolbar_button_at(&self, x: f32, y: f32) -> Option<(u64, u16)> {
+        self.toolbar_hits
+            .iter()
+            .filter(|(_, (top, bottom), _)| y >= *top && y < *bottom)
+            .find_map(|(owner, _, hits)| {
+                hits.iter()
+                    .find(|hit| x >= hit.left && x < hit.right)
+                    .map(|hit| (*owner, hit.button))
+            })
+    }
+
     /// Whether the surface point `(x, y)` is on the transient popup window card.
     pub fn transient_card_at(&self, x: f32, y: f32) -> bool {
         self.transient_rect
@@ -960,7 +973,6 @@ mod tests {
             DROP_LIST_TEXTURE_ID,
             INFO_TEXTURE_ID,
         ];
-        ids.extend(crate::renderer::raster::STATUS_ICON_TEXTURE_IDS);
         let count = ids.len();
         ids.sort_unstable();
         ids.dedup();

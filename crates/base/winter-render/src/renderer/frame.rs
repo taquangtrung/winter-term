@@ -18,14 +18,13 @@ use super::glyphs::{
     base_family, effective_bold_weight, is_braille, needs_complex_shaping, parse_weight,
     FallbackGlyphQuadFit,
 };
-use super::parts::status::status_metrics;
 use super::raster::{view::TabbarText, DIM_FACTOR};
 use super::widgets::{
     CompletionView, DropListView, FindView, InfoView, InputView, TokenInspectView, ToolbarView,
     TransientView, WhichKeyView,
 };
 use super::GpuRenderer;
-use super::{GridStrip, PaneRect, PaneView, StatusBar};
+use super::{GridStrip, PaneRect, PaneView};
 use crate::glyph_quad::GlyphQuadPlacement;
 use crate::image::ImagePlacement;
 use crate::tabbar::TopTabbar;
@@ -137,17 +136,6 @@ struct TextAreaInput<'a> {
     /// [`GpuRenderer::pane_pad`]).
     pane_pad: f32,
     panes: &'a [PaneView<'a>],
-    status_bar_fg: Rgb,
-    /// The status bar's shaped line (left side), or `None` when the bar is hidden.
-    status_buffer: Option<&'a glyphon::Buffer>,
-    /// The status bar's shaped line (right side), or `None` when the bar is hidden.
-    status_right_buffer: Option<&'a glyphon::Buffer>,
-    status_right_x: f32,
-    /// Where the left and the right side's lines are drawn from (see
-    /// [`GpuRenderer::status_text_top`]).
-    status_text_tops: (f32, f32),
-    status_top: f32,
-    surface: SurfaceSize,
     tabbar_texts: &'a [TabbarText],
     text_buffers: &'a [glyphon::Buffer],
 }
@@ -191,7 +179,7 @@ impl GpuRenderer {
         &mut self,
         target: &wgpu::TextureView,
         panes: &[PaneView],
-        status: Option<&StatusBar>,
+        status_bar: bool,
         tabbar: Option<&TopTabbar>,
         images: &[ImagePlacement],
         input: Option<&InputView>,
@@ -202,7 +190,7 @@ impl GpuRenderer {
     ) {
         self.drew_blinking_text = false;
         self.chrome.tabbar_enabled = tabbar.is_some();
-        self.chrome.status_bar_enabled = status.is_some();
+        self.chrome.status_bar_enabled = status_bar;
         if let Some(t) = tabbar {
             self.chrome.modern = t.menu_style == crate::tabbar::MenuStyle::Modern;
         }
@@ -242,59 +230,8 @@ impl GpuRenderer {
 
         self.push_separator_verts(panes, surface, &mut layers);
 
-        let status_metrics = status_metrics(self.fonts.font_size, self.fonts.line_height);
-        let mut status_buffer = self
-            .status_buffer
-            .take()
-            .unwrap_or_else(|| glyphon::Buffer::new(&mut self.font_system, status_metrics));
-        status_buffer.set_metrics(status_metrics);
-        let mut status_right_buffer = self
-            .status_right_buffer
-            .take()
-            .unwrap_or_else(|| glyphon::Buffer::new(&mut self.font_system, status_metrics));
-        status_right_buffer.set_metrics(status_metrics);
-        // Exactly one cell row, flush with the window's bottom edge.
-        let status_top = crate::status_bar_top_px(surface.height, self.fonts.cell_height);
-        self.hits.status_hits.clear();
-        self.status_icons.clear();
-        let mut status_right_x = surface.width;
-        if let Some(status) = status {
-            self.push_status_bar_quads(
-                status_top,
-                (surface.width, surface.height),
-                &mut layers.bg_verts,
-            );
-            let columns = self.shape_status_bar(
-                status,
-                style.family.as_deref(),
-                surface.width,
-                &mut status_buffer,
-                &mut status_right_buffer,
-            );
-            self.push_status_cursor_quad(
-                &columns,
-                status_top,
-                (surface.width, surface.height),
-                &mut layers.bg_verts,
-            );
-            for (slot, (x_px, svg)) in columns.icons.iter().enumerate() {
-                if let Some(placement) = self.status_icon_placement(slot, svg, *x_px, status_top) {
-                    self.status_icons.push(placement);
-                }
-            }
-            self.push_status_hover_quad(
-                status,
-                &columns,
-                status_top,
-                (surface.width, surface.height),
-                &mut layers.bg_verts,
-            );
-            status_right_x = columns.right_x;
-        }
-        let status_text_tops = (
-            self.status_text_top(&status_buffer, status_top),
-            self.status_text_top(&status_right_buffer, status_top),
-        );
+        // The status bar is misty's now: the renderer leaves its strip for it.
+        let _status_top = crate::status_bar_top_px(surface.height, self.fonts.cell_height);
 
         // Top tabbar (tabbar/menubar) bands and text. The dropdown overlay is
         // handled separately via the image pass so it sits above pane text.
@@ -345,13 +282,6 @@ impl GpuRenderer {
             foreground: self.theme.foreground,
             pane_pad: self.pane_pad(),
             panes: &drawn,
-            status_bar_fg: self.theme.status_bar_fg,
-            status_buffer: status.map(|_| &status_buffer),
-            status_right_buffer: status.map(|_| &status_right_buffer),
-            status_right_x,
-            status_text_tops,
-            status_top,
-            surface,
             tabbar_texts: &tabbar_texts,
             text_buffers: &text_buffers,
         });
@@ -373,8 +303,6 @@ impl GpuRenderer {
         // regardless of outcome, so a failed prepare doesn't also cost the
         // shape cache on top of the dropped frame.
         self.text_buffers = text_buffers;
-        self.status_buffer = Some(status_buffer);
-        self.status_right_buffer = Some(status_right_buffer);
 
         // glyphon returns `AtlasFull` when one frame's glyphs outgrow the
         // atlas (a big font size over many panes). That's reachable from
@@ -1220,7 +1148,6 @@ impl GpuRenderer {
         if let Some(view) = completion {
             all_images.extend(self.rasterize_completion(view, w, h));
         }
-        all_images.extend_from_slice(&self.status_icons);
         if let Some(c) = tabbar {
             all_images.extend(self.rasterize_dropdown(c, w, h));
             all_images.extend(self.rasterize_url_tooltip(c, w, h));
@@ -1520,44 +1447,6 @@ fn collect_text_areas<'a>(input: TextAreaInput<'a>) -> Vec<TextArea<'a>> {
             }
         })
         .collect();
-
-    if let Some(status_buffer) = input.status_buffer {
-        // Its letters centered in the bar; clipped only by the bar itself, so
-        // a tall glyph's ink is never cut by the padding.
-        text_areas.push(TextArea {
-            buffer: status_buffer,
-            left: 0.0,
-            top: input.status_text_tops.0,
-            bounds: TextBounds {
-                left: 0,
-                top: input.status_top.round() as i32,
-                right: input.surface.width as i32,
-                bottom: (input.status_top + crate::status_bar_height_px(input.cell_height)).round()
-                    as i32,
-            },
-            default_color: input.status_bar_fg.to_glyphon(),
-            scale: 1.0,
-            custom_glyphs: &[],
-        });
-    }
-
-    if let Some(right_buffer) = input.status_right_buffer {
-        text_areas.push(TextArea {
-            buffer: right_buffer,
-            left: input.status_right_x.round(),
-            top: input.status_text_tops.1,
-            bounds: TextBounds {
-                left: 0,
-                top: input.status_top.round() as i32,
-                right: input.surface.width as i32,
-                bottom: (input.status_top + crate::status_bar_height_px(input.cell_height)).round()
-                    as i32,
-            },
-            default_color: input.status_bar_fg.to_glyphon(),
-            scale: 1.0,
-            custom_glyphs: &[],
-        });
-    }
 
     for text in input.tabbar_texts {
         text_areas.push(TextArea {

@@ -209,12 +209,6 @@ impl App {
                 }
                 return;
             }
-            if self.chrome.menus.open.is_none() && self.press_notifications(x, y) {
-                return;
-            }
-            if self.chrome.menus.open.is_none() && self.press_quota_segment(x, y) {
-                return;
-            }
             // A click on the find popup is the popup's, not the pane's under it.
             if self
                 .renderer
@@ -612,23 +606,6 @@ impl App {
             _ => {}
         }
     }
-    /// Track the pointer: hover highlights, drag-selection extension, split
-    /// dragging, and the resize-edge cursor shape.
-    /// Light the part of the status bar's right side the pointer is on, and
-    /// put out the one it left.
-    pub(in crate::window) fn hover_status_bar(&mut self, x: f32, y: f32) {
-        let hover = match self.status_bar_visible() {
-            true => self
-                .renderer
-                .as_ref()
-                .and_then(|renderer| renderer.hits().status_hover_at(x, y)),
-            false => None,
-        };
-        if hover != self.chrome.status_hover {
-            self.chrome.status_hover = hover;
-            self.dirty = true;
-        }
-    }
 
     /// Tell the editor under the pointer the cell it rests on, and the one
     /// it rested on before that it has left.
@@ -677,6 +654,8 @@ impl App {
         }
     }
 
+    /// Track the pointer: hover highlights, drag-selection extension, split
+    /// dragging, and the resize-edge cursor shape.
     pub(in crate::window) fn on_cursor_moved(&mut self, position: PhysicalPosition<f64>) {
         let x = position.x as f32;
         let y = position.y as f32;
@@ -690,7 +669,6 @@ impl App {
             self.hover_dialog(x, y);
             return;
         }
-        self.hover_status_bar(x, y);
         if !self.input.pointer.mouse_down {
             self.hover_transient(x, y);
         }

@@ -105,10 +105,12 @@ impl App {
         } else {
             top_rows as f32 * ch
         };
-        let status_h = if status_enabled {
-            winter_render::status_bar_height_px(ch)
-        } else {
-            0.0
+        // As tall as misty draws it, once a frame has measured its font.
+        let status_h = match status_enabled {
+            true => self
+                .status_bar_height()
+                .unwrap_or_else(|| winter_render::status_bar_height_px(ch)),
+            false => 0.0,
         };
 
         // Every pixel between the title bar and the status bar belongs to the
