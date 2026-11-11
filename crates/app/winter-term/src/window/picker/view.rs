@@ -5,13 +5,25 @@
 use std::collections::HashMap;
 
 use misty::color::Rgb;
-use misty::picker::RowKey;
+use misty::picker::{PickerAct, RowKey};
 use misty::text::{Span, StyledText, TextColor};
 use misty::{EventCx, Frame, Input, QuickPickPlacement, Rect, Svg, Widget};
 use winter_render::{PanelView, PickerPlacement};
 
+use super::keys::KEYS;
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+/// The acts the hints line names.
+const HINTED: [PickerAct; 3] = [
+    PickerAct::ActionMenu,
+    PickerAct::Save,
+    PickerAct::TogglePanel,
+];
 
 // ========================================================================
 // App: the picker drawn by misty
@@ -24,7 +36,7 @@ impl App {
         let Some(view) = self.pickers.drawn.take() else {
             return;
         };
-        let theme = match &self.renderer {
+        let mut theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
             None => misty_theme(&winter_render::Theme::dark()),
         };
@@ -51,6 +63,29 @@ impl App {
             .map(|(key, item)| (*key, runs(&item.description_colors)))
             .collect();
         quick.set_description_colors(colors);
+        // The hints line names the keys and the words of Winter's own table.
+        for act in HINTED {
+            let Some(binding) = KEYS.bindings.iter().find(|binding| binding.action == act) else {
+                continue;
+            };
+            if let Some(key) = binding.keys.first() {
+                quick.set_hint_key(act, *key);
+            }
+            let word = match act {
+                PickerAct::ActionMenu => &mut theme.strings.picker_actions,
+                PickerAct::Save => &mut theme.strings.picker_save,
+                PickerAct::TogglePanel => &mut theme.strings.picker_preview,
+                PickerAct::Accept
+                | PickerAct::Close
+                | PickerAct::HistoryNext
+                | PickerAct::HistoryPrevious
+                | PickerAct::Next
+                | PickerAct::PageDown
+                | PickerAct::PageUp
+                | PickerAct::Previous => continue,
+            };
+            *word = binding.label.into();
+        }
         quick.set_panel(view.panel.as_ref().map(panel_lines).unwrap_or_default());
         let names = icon_names(quick);
         add_icons(quick.icons_mut(), &names);
@@ -170,6 +205,8 @@ fn add_icons(icons: &mut misty::IconSet, names: &[String]) {
         else {
             continue;
         };
-        icons.insert(name.clone(), svg);
+        // Winter's bundled icons keep their own colors, as its chrome draws
+        // them.
+        icons.insert_colored(name.clone(), svg);
     }
 }

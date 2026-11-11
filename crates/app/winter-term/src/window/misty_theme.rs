@@ -17,6 +17,9 @@ const ANSI_RED: usize = 1;
 /// The ANSI color misty's warning color takes: yellow.
 const ANSI_YELLOW: usize = 3;
 
+/// How much of the foreground muted text keeps, the rest the background's.
+const MUTED_SHARE: f32 = 0.6;
+
 /// How light a background is, out of 255, from which the theme counts as
 /// light.
 const LIGHT_BACKGROUND: u32 = 128;
@@ -48,7 +51,7 @@ pub(in crate::window) fn misty_theme(theme: &Theme) -> MistyTheme {
     misty.cursor_line = rgb(theme.cursor_line_bg);
     misty.danger = rgb(theme.ansi[ANSI_RED]);
     misty.hover = rgb(theme.menu_hover_bg);
-    misty.muted = rgb(theme.status_bar_fg);
+    misty.muted = mix(theme.foreground, theme.background, MUTED_SHARE);
     misty.raised = rgb(theme.menu_bg);
     misty.scrollbar = rgb(theme.scrollbar);
     misty.search_current = rgb(theme.search_current_bg);
@@ -64,6 +67,16 @@ fn is_light(theme: &Theme) -> bool {
     let background = theme.background;
     let sum = u32::from(background.r) + u32::from(background.g) + u32::from(background.b);
     sum / 3 >= LIGHT_BACKGROUND
+}
+
+/// `share` of `front` over the rest of `back`, in misty's colors.
+fn mix(front: ThemeRgb, back: ThemeRgb, share: f32) -> Rgb {
+    let blend = |a: u8, b: u8| (f32::from(a) * share + f32::from(b) * (1.0 - share)).round() as u8;
+    Rgb::new(
+        blend(front.r, back.r),
+        blend(front.g, back.g),
+        blend(front.b, back.b),
+    )
 }
 
 /// Misty's color for Winter's `color`, its alpha left behind.
