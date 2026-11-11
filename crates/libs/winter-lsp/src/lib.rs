@@ -23,4 +23,4 @@ pub mod protocol;
 mod rpc;
 pub mod servers;
 
-pub use client::{Event, Hub, Incoming, Port, ServerId};
+pub use client::{Busy, Event, Hub, Incoming, Port, ServerId, Work};

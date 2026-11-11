@@ -26,6 +26,9 @@ use crate::diagnostics::{self, Backend};
 /// The id `initialize` is sent under; every later request counts on from it.
 const INITIALIZE_ID: u64 = 0;
 
+/// The most a server's progress is, in percent.
+const FULL_PERCENT: u64 = 100;
+
 /// How many of the last lines a server wrote to its error stream are kept,
 /// to say why it stopped.
 const STDERR_LINES: usize = 20;
@@ -62,9 +65,29 @@ const MAX_QUEUED_MESSAGES: usize = 256;
 /// Which running server a message is from.
 pub type ServerId = u64;
 
-/// What each piece of work a server reports progress on is called, and the
-/// latest it said of it, by the token it reports under.
-type Progress = BTreeMap<String, (String, String)>;
+/// Each piece of work a server reports progress on, as it last said of it,
+/// by the token it reports under.
+type Progress = BTreeMap<String, Work>;
+
+/// A piece of work a server reports progress on, as it last said of it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Work {
+    /// What it is on now (`3/9`), if the server said.
+    pub message: Option<String>,
+    /// How far it has come, 0 to 100, if the server said.
+    pub percentage: Option<u8>,
+    /// What the work is (`Indexing`).
+    pub title: String,
+}
+
+/// What a server is busy with, and which server it is.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Busy {
+    /// The server's name (`rust-analyzer`).
+    pub server: String,
+    /// What it is doing.
+    pub work: Work,
+}
 
 /// What a server said that the window passes on to the editors.
 #[derive(Clone, Debug, PartialEq)]
@@ -87,7 +110,7 @@ pub enum Event {
     /// Something the server wants read: a failure or a warning.
     Message(String),
     /// What the server is busy with, or `None` once it is done.
-    Progress(Option<String>),
+    Progress(Option<Work>),
     /// The server has answered `initialize` and takes documents now.
     Ready,
     /// The server asked for a page to be opened in the browser: the page a
@@ -155,7 +178,7 @@ pub struct Hub {
     generation: u64,
     next_server: ServerId,
     /// What each server is busy with.
-    progress: HashMap<ServerId, String>,
+    progress: HashMap<ServerId, Work>,
     /// The servers being stopped, until each has ended.
     reapers: Vec<Reaper>,
     servers: Vec<Server>,
@@ -517,7 +540,7 @@ impl Hub {
             .map(|server| {
                 let port = &server.port;
                 let state = match (port.is_ready(), self.progress.get(&port.id())) {
-                    (_, Some(what)) => what.clone(),
+                    (_, Some(work)) => work.said(),
                     (true, None) => "ready".to_string(),
                     (false, None) => "starting".to_string(),
                 };
@@ -532,10 +555,13 @@ impl Hub {
     }
 
     /// What the busiest server is doing, for the status bar.
-    pub fn busy(&self) -> Option<String> {
+    pub fn busy(&self) -> Option<Busy> {
         self.servers.iter().find_map(|server| {
-            let what = self.progress.get(&server.port.id())?;
-            Some(format!("{}: {what}", server.port.name()))
+            let work = self.progress.get(&server.port.id())?;
+            Some(Busy {
+                server: server.port.name().to_string(),
+                work: work.clone(),
+            })
         })
     }
 
@@ -834,20 +860,26 @@ fn notification(method: &str, params: &Value, port: &Port, progress: &mut Progre
                     .get("title")
                     .and_then(Value::as_str)
                     .map(str::to_string)
-                    .or_else(|| progress.get(&token).map(|(title, _)| title.clone()))
+                    .or_else(|| progress.get(&token).map(|work| work.title.clone()))
                     .unwrap_or_default();
-                let mut said = title.clone();
-                if let Some(message) = value.get("message").and_then(Value::as_str) {
-                    said = format!("{said}: {message}");
-                }
-                if let Some(percent) = value.get("percentage").and_then(Value::as_u64) {
-                    said = format!("{said} {percent}%");
-                }
-                progress.insert(token, (title, said));
+                let message = value
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .map(str::to_string);
+                let percentage = value
+                    .get("percentage")
+                    .and_then(Value::as_u64)
+                    .map(|percent| percent.min(FULL_PERCENT) as u8);
+                progress.insert(
+                    token,
+                    Work {
+                        message,
+                        percentage,
+                        title,
+                    },
+                );
             }
-            vec![Event::Progress(
-                progress.values().next_back().map(|(_, said)| said.clone()),
-            )]
+            vec![Event::Progress(progress.values().next_back().cloned())]
         }
         _ => Vec::new(),
     }
@@ -904,6 +936,25 @@ fn shut_down(server: Server) -> Reaper {
         })
         .ok();
     Reaper { hurry, thread }
+}
+
+// ========================================================================
+// Work
+// ========================================================================
+
+impl Work {
+    /// What it says in a line: its title, then what it is on and how far,
+    /// when the server said (`Indexing: 3/9 33%`).
+    pub fn said(&self) -> String {
+        let mut said = self.title.clone();
+        if let Some(message) = &self.message {
+            said = format!("{said}: {message}");
+        }
+        if let Some(percent) = self.percentage {
+            said = format!("{said} {percent}%");
+        }
+        said
+    }
 }
 
 // ========================================================================
@@ -1112,15 +1163,21 @@ mod tests {
             read(&message, &port, &to, progress)
         };
         let begun = step(json!({"kind": "begin", "title": "Indexing"}), &mut progress);
-        assert_eq!(begun, [Event::Progress(Some("Indexing".to_string()))]);
+        let work = |message: Option<&str>, percentage: Option<u8>| Work {
+            message: message.map(str::to_string),
+            percentage,
+            title: "Indexing".to_string(),
+        };
+        assert_eq!(begun, [Event::Progress(Some(work(None, None)))]);
         let reported = step(
             json!({"kind": "report", "message": "3/9", "percentage": 33}),
             &mut progress,
         );
         assert_eq!(
             reported,
-            [Event::Progress(Some("Indexing: 3/9 33%".to_string()))]
+            [Event::Progress(Some(work(Some("3/9"), Some(33))))]
         );
+        assert_eq!(work(Some("3/9"), Some(33)).said(), "Indexing: 3/9 33%");
         assert_eq!(
             step(json!({"kind": "end"}), &mut progress),
             [Event::Progress(None)]

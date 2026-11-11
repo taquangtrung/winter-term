@@ -82,7 +82,7 @@ impl LspState {
     }
 
     /// What the busiest server is doing, for the status bar.
-    pub(in crate::window) fn busy(&self) -> Option<String> {
+    pub(in crate::window) fn busy(&self) -> Option<winter_lsp::Busy> {
         self.hub.busy()
     }
 }

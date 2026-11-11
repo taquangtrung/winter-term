@@ -17,11 +17,8 @@ use crate::window::App;
 // Constants
 // ========================================================================
 
-/// Who the language servers' task is said to come from.
-const LSP_SOURCE: &str = "LSP";
-
-/// What the language servers' task is doing.
-const LSP_TITLE: &str = "Working";
+/// How many percent a whole piece of a language server's work is.
+const FULL_PERCENT: f32 = 100.0;
 
 // ========================================================================
 // Data Structures
@@ -32,8 +29,8 @@ const LSP_TITLE: &str = "Working";
 pub(in crate::window) struct ProgressTasks {
     /// The task of each tab with a long program running, by tab.
     jobs: HashMap<TabId, ProgressId>,
-    /// The language servers' task, while one works.
-    lsp: Option<ProgressId>,
+    /// The language servers' task while one works, and the work it is.
+    lsp: Option<(ProgressId, String)>,
 }
 
 // ========================================================================
@@ -83,31 +80,63 @@ impl App {
         changed | self.sync_lsp_progress(now)
     }
 
-    /// Bring the language servers' task in step with what they say they
-    /// are doing. Whether anything changed.
+    /// Bring the language servers' task in step with what the busiest says
+    /// it is doing: its work as the title, what it is on as the step, and
+    /// how far it has come. A new piece of work is a new task. Whether
+    /// anything changed.
     fn sync_lsp_progress(&mut self, now: Instant) -> bool {
         let busy = self.host.lsp.busy();
-        match (busy, self.progress.lsp) {
-            (Some(step), Some(task)) => {
-                let changed = self.task_step(task).as_deref() != Some(step.as_str());
-                if changed {
-                    self.chrome.notifier.set_step(task, Some(step));
-                }
-                changed
-            }
-            (Some(step), None) => {
-                let progress = Progress::new(LSP_TITLE).from_source(LSP_SOURCE);
-                let task = self.chrome.notifier.start(progress, now);
-                self.chrome.notifier.set_step(task, Some(step));
-                self.progress.lsp = Some(task);
-                true
-            }
-            (None, Some(task)) => {
-                self.progress.lsp = None;
-                self.chrome.notifier.finish(task, None, now, 0)
-            }
-            (None, None) => false,
+        let running = self.progress.lsp.as_ref().and_then(|(task, title)| {
+            let same = busy.as_ref().is_some_and(|busy| busy.work.title == *title);
+            same.then_some(*task)
+        });
+        let ended = self
+            .progress
+            .lsp
+            .as_ref()
+            .filter(|_| running.is_none())
+            .map(|(task, _)| *task);
+        let mut changed = false;
+        if let Some(task) = ended {
+            self.progress.lsp = None;
+            changed |= self.chrome.notifier.finish(task, None, now, 0);
         }
+        let Some(busy) = busy else {
+            return changed;
+        };
+        let task = match running {
+            Some(task) => task,
+            None => {
+                let progress = Progress::new(busy.work.title.clone()).from_source(busy.server);
+                let task = self.chrome.notifier.start(progress, now);
+                self.progress.lsp = Some((task, busy.work.title.clone()));
+                changed = true;
+                task
+            }
+        };
+        if self.task_step(task) != busy.work.message {
+            self.chrome.notifier.set_step(task, busy.work.message);
+            changed = true;
+        }
+        let fraction = busy
+            .work
+            .percentage
+            .map(|percent| f32::from(percent) / FULL_PERCENT);
+        if self.task_fraction(task) != fraction {
+            self.chrome.notifier.set_fraction(task, fraction);
+            changed = true;
+        }
+        changed
+    }
+
+    /// How far task `task` has come, as the notifier has it.
+    fn task_fraction(&self, task: ProgressId) -> Option<f32> {
+        self.chrome
+            .notifier
+            .tasks()
+            .iter()
+            .find(|running| running.id == task)
+            .and_then(|running| running.fraction)
     }
 
     /// The step task `task` is on, as the notifier has it.
