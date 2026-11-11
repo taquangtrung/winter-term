@@ -7,4 +7,5 @@ pub(in crate::window) mod handle;
 pub(crate) mod init;
 pub(crate) mod jobs;
 pub(crate) mod lifecycle;
+pub(in crate::window) mod progress;
 pub(in crate::window) mod session_restore;

@@ -3,7 +3,7 @@
 //! names, one per listed entry, being renamed in place.
 
 use winter_keys::Key;
-use winter_notify::Notice;
+use misty_notify::Notice;
 
 use crate::buffer::TextBuffer;
 use crate::modal::{EditMode, EditOutcome, EditView, Marks, ModalEditor};

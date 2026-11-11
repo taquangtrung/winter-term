@@ -1069,6 +1069,9 @@ impl App {
         // A dialog held back while another was up opens once that one has
         // been answered, which every answer repaints after.
         self.open_held_dialog();
+        // Notices float as misty's cards in the top-right corner, or sit in
+        // the status bar after its mode; never both.
+        self.sync_notice_routing();
         let notice = self.status_notice();
         // A live `/` search forces the status bar on for its duration even if
         // it's configured hidden: it's the only place search feedback (query
@@ -1080,9 +1083,6 @@ impl App {
         let status_enabled = self.status_bar_visible();
         // Asked for only once there is a bar to show the answers on.
         self.sync_quota_monitor(status_enabled);
-        // Notices float as cards in the top-right corner, or sit in the
-        // status bar after its mode; never both (see `toast_cards`).
-        let toasts = self.toast_cards();
         // Built before the renderer is borrowed, since it reads tab/menu state.
         let tabbar = self.build_top_tabbar();
         // Built before the renderer is borrowed too: it fills the palette's
@@ -1295,7 +1295,6 @@ impl App {
             &placements,
             input_view.as_ref(),
             find_view.as_ref(),
-            &toasts,
             which_key_view.as_ref(),
             transient_view.as_ref(),
             token_inspect_view.as_ref(),

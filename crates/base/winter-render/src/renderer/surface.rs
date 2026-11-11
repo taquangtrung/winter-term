@@ -154,7 +154,6 @@ impl GpuRenderer {
                 input_button_rects: Vec::new(),
                 input_rect: None,
                 status_hits: Vec::new(),
-                toast_rects: Vec::new(),
                 toolbar_hits: Vec::new(),
                 transient_hits: Vec::new(),
                 transient_rect: None,

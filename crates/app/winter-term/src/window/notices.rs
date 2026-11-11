@@ -5,9 +5,11 @@
 
 use std::time::{Instant, SystemTime};
 
-use winter_render::{NoticeKind, StatusBell, StatusNotice, ToastCard, ToastHit};
+use winter_render::{NoticeKind, StatusBell, StatusNotice};
 
 use crate::editors::notifications::NotificationsEditor;
+use misty::notify::Routing;
+use misty::{ToastsResponse, Widget};
 use winter_model::input::Key;
 use winter_model::layout::TabId;
 use winter_model::notify::{Notice, Notification, Severity};
@@ -211,40 +213,49 @@ impl App {
 // ========================================================================
 
 impl App {
-    /// Whether a notice of `severity` is drawn as a toast card rather than in
-    /// the status bar: a warning or an error when cards are on, and any
-    /// notice while the status bar is hidden, having nowhere else to go.
-    fn is_carded(&self, severity: Severity) -> bool {
-        !self.status_bar_visible()
-            || (self.config.notifications.toasts && severity >= Severity::Warning)
+    /// Tell the notifier where each notice shows: a warning or an error as
+    /// a card when cards are on, and every notice while the status bar is
+    /// hidden, having nowhere else to go.
+    pub(in crate::window) fn sync_notice_routing(&mut self) {
+        let routing = Routing {
+            cards_from: self
+                .config
+                .notifications
+                .toasts
+                .then_some(Severity::Warning),
+            status_bar: self.status_bar_visible(),
+        };
+        self.chrome.notifier.set_routing(routing);
     }
 
-    /// The cards for the top-right corner, newest first.
-    pub(in crate::window) fn toast_cards(&self) -> Vec<ToastCard> {
-        self.chrome
-            .notifier
-            .toasts
-            .iter()
-            .filter(|toast| self.is_carded(toast.severity))
-            .map(|toast| ToastCard {
-                hovered: self.chrome.notifier.toasts.held() == Some(toast.id),
-                id: toast.id,
-                kind: notice_kind(toast.severity),
-                source: toast.source.clone(),
-                text: counted(toast.text.clone(), toast.repeats),
-            })
-            .collect()
+    /// What the status bar says of the oldest task under way: who runs it,
+    /// what it is doing and how far it has got, how many more run, and how
+    /// to stop it when it may be stopped.
+    fn progress_line(&self) -> Option<String> {
+        let tasks = self.chrome.notifier.tasks();
+        let task = tasks.first()?;
+        let mut line = attributed(task.source.as_deref(), &task.title);
+        if let Some(step) = &task.step {
+            line.push_str(&format!(" \u{00b7} {step}"));
+        }
+        if let Some(fraction) = task.fraction {
+            line.push_str(&format!(" {:.0}%", fraction * 100.0));
+        }
+        if tasks.len() > 1 {
+            line.push_str(&format!(" +{}", tasks.len() - 1));
+        }
+        if task.cancellable {
+            let stop =
+                winter_model::input::format_key(&crate::window::runtime::jobs::STOP_TASKS_KEY);
+            line.push_str(&format!(" ({stop} to stop)"));
+        }
+        Some(line)
     }
 
     /// What the status bar says after its mode: the newest notice not drawn
     /// as a card, else the progress of a program still running.
     pub(in crate::window) fn status_notice(&self) -> Option<StatusNotice> {
-        let newest = self
-            .chrome
-            .notifier
-            .toasts
-            .iter()
-            .find(|toast| !self.is_carded(toast.severity));
+        let newest = self.chrome.notifier.status_message();
         match newest {
             Some(toast) => Some(StatusNotice {
                 kind: notice_kind(toast.severity),
@@ -253,7 +264,7 @@ impl App {
                     toast.repeats,
                 ),
             }),
-            None => self.job_progress.clone().map(|text| StatusNotice {
+            None => self.progress_line().map(|text| StatusNotice {
                 kind: NoticeKind::Progress,
                 text,
             }),
@@ -266,38 +277,9 @@ impl App {
 // ========================================================================
 
 impl App {
-    /// The toast card under the pointer at `(x, y)`, as last drawn.
-    pub(in crate::window) fn toast_at(&self, x: f32, y: f32) -> Option<ToastHit> {
-        self.renderer.as_ref()?.hits().toast_at(x, y)
-    }
-
-    /// Hold the toast under the pointer on screen while it rests there.
-    pub(in crate::window) fn hover_toasts(&mut self, x: f32, y: f32) {
-        let hit = self.toast_at(x, y);
-        let held = hit.map(|h| h.id);
-        let close_hovered = hit.is_some_and(|h| h.close);
-        let mut dirty = self.chrome.notifier.toasts.hold(held, Instant::now());
-        if close_hovered != self.input.pointer.toast_close_hovered {
-            self.input.pointer.toast_close_hovered = close_hovered;
-            dirty = true;
-        }
-        self.dirty |= dirty;
-    }
-
-    /// Act on a press at `(x, y)` if it lands on a toast or on the bell: the
-    /// close button dismisses its card, the rest of a card or the bell opens
-    /// the history. Whether the press was taken.
+    /// Act on a press at `(x, y)` if it lands on the bell, which opens the
+    /// history. Whether the press was taken.
     pub(in crate::window) fn press_notifications(&mut self, x: f32, y: f32) -> bool {
-        if let Some(hit) = self.toast_at(x, y) {
-            match hit.close {
-                true => {
-                    self.chrome.notifier.toasts.dismiss(hit.id);
-                    self.dirty = true;
-                }
-                false => self.open_notifications(),
-            }
-            return true;
-        }
         let on_bell = self
             .renderer
             .as_ref()
@@ -306,6 +288,61 @@ impl App {
             self.open_notifications();
         }
         on_bell
+    }
+}
+
+// ========================================================================
+// App: the cards misty draws
+// ========================================================================
+
+impl App {
+    /// Draw the notifier's cards over `frame`, in the top-right corner below
+    /// the tabbar.
+    pub(in crate::window) fn draw_cards(&mut self, frame: &mut misty::Frame) {
+        let theme = match &self.renderer {
+            Some(renderer) => crate::window::misty_theme::misty_theme(renderer.theme()),
+            None => crate::window::misty_theme::misty_theme(&winter_render::Theme::dark()),
+        };
+        let bounds = frame.bounds();
+        let top = self.viewport_rect().y;
+        let area = misty::Rect::new(bounds.x, top, bounds.width, (bounds.height - top).max(0.0));
+        self.chrome
+            .cards
+            .lend(&mut self.chrome.notifier)
+            .draw(frame, area, &theme);
+    }
+
+    /// Hand pointer `input` to the cards; whether they took it. A click on
+    /// a card opens the history; Cancel on a task stops its work.
+    pub(in crate::window) fn point_at_cards(
+        &mut self,
+        input: &misty::Input,
+        cx: &mut misty::EventCx<'_>,
+    ) -> bool {
+        let answer = self
+            .chrome
+            .cards
+            .lend(&mut self.chrome.notifier)
+            .handle(input, cx);
+        match answer {
+            ToastsResponse::Cancelled(task) => self.cancel_task(task),
+            ToastsResponse::Dismissed(_) => self.dirty = true,
+            ToastsResponse::Handled => {}
+            ToastsResponse::Ignored => return false,
+            ToastsResponse::Opened(_) => self.open_notifications(),
+        }
+        true
+    }
+
+    /// When the cards next need a frame: a toast's time up, or a bar of a
+    /// task of unknown length moving.
+    pub(in crate::window) fn cards_deadline(
+        &mut self,
+        cx: &mut misty::EventCx<'_>,
+    ) -> Option<Instant> {
+        self.chrome
+            .cards
+            .about_to_wait(&mut self.chrome.notifier, cx)
     }
 }
 
@@ -523,7 +560,8 @@ mod tests {
         let mut app = App::new();
         app.notify(Notice::warning("slow").from_source("Git"));
         app.set_notice("copied");
-        let cards = app.toast_cards();
+        app.sync_notice_routing();
+        let cards: Vec<_> = app.chrome.notifier.cards().collect();
         assert_eq!(cards.len(), 1, "only the warning is a card");
         assert_eq!(cards[0].source.as_deref(), Some("Git"));
         assert_eq!(
@@ -533,14 +571,24 @@ mod tests {
         );
 
         app.config.notifications.toasts = false;
-        assert!(app.toast_cards().is_empty(), "cards off: all in the bar");
+        app.sync_notice_routing();
+        assert_eq!(
+            app.chrome.notifier.cards().count(),
+            0,
+            "cards off: all in the bar"
+        );
         assert_eq!(
             app.status_notice().map(|notice| notice.text),
             Some("Copied".into())
         );
 
         app.config.status_bar.enabled = false;
-        assert_eq!(app.toast_cards().len(), 2, "no bar: everything is a card");
+        app.sync_notice_routing();
+        assert_eq!(
+            app.chrome.notifier.cards().count(),
+            2,
+            "no bar: everything is a card"
+        );
         assert!(app.status_notice().is_none());
     }
 
@@ -548,9 +596,16 @@ mod tests {
     fn test_with_no_notice_the_status_bar_shows_running_work() {
         let mut app = App::new();
         app.config.notifications.toasts = false;
-        app.job_progress = Some("C-g to stop".to_string());
+        let progress = misty::notify::Progress::new("cargo build").cancellable();
+        let build = app.chrome.notifier.start(progress, Instant::now());
+        app.chrome.notifier.set_step(build, Some("3/10".into()));
         let notice = app.status_notice().expect("the progress");
         assert_eq!(notice.kind, NoticeKind::Progress);
+        assert!(
+            notice.text.starts_with("cargo build \u{00b7} 3/10 ("),
+            "{}",
+            notice.text
+        );
     }
 
     #[test]

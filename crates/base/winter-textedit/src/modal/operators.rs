@@ -1,7 +1,7 @@
 //! Operators, and the motions and text objects that say how far they reach.
 
 use winter_keys::{Key, KeyCode, Mods};
-use winter_notify::Notice;
+use misty_notify::Notice;
 
 use crate::buffer::Register;
 use crate::kill::Merge;

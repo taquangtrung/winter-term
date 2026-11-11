@@ -17,14 +17,12 @@ use crate::image::ImagePlacement;
 use crate::renderer::glyphs::FontCtx;
 use crate::renderer::parts::titlebar::tabbar_strip_rgba;
 use crate::renderer::raster::chrome::{title_bar_height, TITLE_BAR_TOP_PAD};
-use crate::renderer::view::ToastRect;
 use crate::renderer::widgets::completion::completion_rgba;
 use crate::renderer::widgets::drop_list::drop_list_rgba;
 use crate::renderer::widgets::find::find_rgba;
 use crate::renderer::widgets::info::info_rgba;
 use crate::renderer::widgets::input::{confirm_button_rects, input_rgba, resolve_confirm_buttons};
 use crate::renderer::widgets::menu::{context_menu_rgba, dropdown_rgba, submenu_rgba};
-use crate::renderer::widgets::toast;
 use crate::renderer::widgets::token_inspect::token_inspect_rgba;
 use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
 use crate::renderer::widgets::tooltip::url_tooltip_rgba;
@@ -35,7 +33,7 @@ use crate::renderer::widgets::{
     TransientView, WhichKeyView,
 };
 use crate::renderer::FrameHits;
-use crate::renderer::{GpuRenderer, ToastCard, ToastHit};
+use crate::renderer::GpuRenderer;
 use crate::tabbar::{
     layout as tabbar_layout, PaneStripDropTarget, PaneStripHit, PaneStripLayout, PaneTab, Region,
     TabbarHit, TopTabbar,
@@ -59,10 +57,6 @@ const TABBAR_STRIP_TEXTURE_ID: u64 = u64::MAX - 2;
 
 /// Reserved id for the rasterized URL hover tooltip.
 const URL_TOOLTIP_TEXTURE_ID: u64 = u64::MAX - 6;
-
-/// Reserved ids for the toast cards, one per card shown at once: no more
-/// cards are drawn than there are ids.
-const TOAST_TEXTURE_IDS: [u64; 3] = [u64::MAX - 7, u64::MAX - 10, u64::MAX - 11];
 
 /// Reserved id for the rasterized which-key hint popup.
 const WHICH_KEY_TEXTURE_ID: u64 = u64::MAX - 8;
@@ -92,10 +86,6 @@ const DROP_LIST_TEXTURE_ID: u64 = u64::MAX - 32;
 /// The texture of the info card.
 const INFO_TEXTURE_ID: u64 = u64::MAX - 31;
 
-/// Rows of cell height the Classic-style tabbar takes, which the toast is
-/// tucked below.
-const CLASSIC_TABBAR_ROWS: f32 = 2.0;
-
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -118,7 +108,6 @@ pub(in crate::renderer) struct OverlayCaches {
     /// One per pane strip texture, keyed by its texture id.
     pub(in crate::renderer) pane_strips: HashMap<u64, RasterCache<PaneStripKey>>,
     tabbar_strip: RasterCache<TopTabbar>,
-    toast: RasterCache<ToastKey>,
     token_inspect: RasterCache<TokenInspectView>,
     completion: RasterCache<CompletionView>,
     drop_list: RasterCache<DropListView>,
@@ -180,14 +169,6 @@ pub(in crate::renderer) struct PaneStripKey {
     pub(in crate::renderer) origin: (f32, f32),
     pub(in crate::renderer) tabs: Vec<PaneTab>,
     pub(in crate::renderer) width: u32,
-}
-
-/// What the toast cards are painted from: the cards and how far below the
-/// top edge the tabbar pushes them.
-#[derive(Clone, Debug, PartialEq)]
-struct ToastKey {
-    cards: Vec<ToastCard>,
-    top_inset: f32,
 }
 
 // ========================================================================
@@ -778,81 +759,6 @@ impl GpuRenderer {
         )
     }
 
-    /// Rasterize the toast cards, newest first, stacked down the top-right
-    /// corner just below the tab bar, and remember where each landed for the
-    /// pointer to find.
-    pub(in crate::renderer) fn rasterize_toasts(
-        &mut self,
-        cards: &[ToastCard],
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let cards = &cards[..cards.len().min(TOAST_TEXTURE_IDS.len())];
-        if cards.is_empty() {
-            self.hits.toast_rects.clear();
-            return Vec::new();
-        }
-        // Below the tab bar, so a card never covers the tabs: rows of tabbar
-        // chrome times the cell height, as the other overlays reckon it.
-        let top_inset = match (self.chrome.tabbar_enabled, self.chrome.modern) {
-            (false, _) => 0.0,
-            (true, true) => crate::modern_titlebar_height_px(self.fonts.cell_height),
-            (true, false) => CLASSIC_TABBAR_ROWS * self.fonts.cell_height,
-        };
-        let key = ToastKey {
-            cards: cards.to_vec(),
-            top_inset,
-        };
-        let context = self.raster_context(surface_w, surface_h);
-        let panel_w = toast::card_width(surface_w);
-        let panel_x = surface_w - toast::EDGE_GAP - panel_w;
-        let placements = self.cached_overlay(
-            |c| &mut c.toast,
-            context,
-            &key,
-            |r| {
-                let mut top = top_inset + toast::EDGE_GAP;
-                let mut placements = Vec::new();
-                for (card, id) in cards.iter().zip(TOAST_TEXTURE_IDS) {
-                    let mut panel_h = 0.0;
-                    placements.extend(r.paint_overlay(id, |p| {
-                        let (frame, height) = toast::toast_card(
-                            p.font_system,
-                            p.swash_cache,
-                            &p.ctx,
-                            p.theme,
-                            card,
-                            panel_w,
-                        );
-                        panel_h = height;
-                        Some(frame.into_image(panel_x, top))
-                    }));
-                    top += panel_h + toast::CARD_GAP;
-                }
-                placements
-            },
-        );
-        // The panel is the placed image less its shadow margin on each side.
-        self.hits.toast_rects = cards
-            .iter()
-            .zip(&placements)
-            .map(|(card, placed)| {
-                let panel = (
-                    placed.x + DROPDOWN_SHADOW,
-                    placed.y + DROPDOWN_SHADOW,
-                    placed.width - 2.0 * DROPDOWN_SHADOW,
-                    placed.height - 2.0 * DROPDOWN_SHADOW,
-                );
-                ToastRect {
-                    close: toast::close_rect(panel, self.fonts.cell_width, self.fonts.line_height),
-                    id: card.id,
-                    panel,
-                }
-            })
-            .collect();
-        placements
-    }
-
     /// Rasterize and place the open menu's overlays: the parent dropdown, the
     /// open submenu (drawn after, so it overlays the parent), and the context
     /// menu. One placement per visible panel, or empty when no menu is open.
@@ -977,21 +883,6 @@ impl FrameHits {
             .is_some_and(|(left, top, w, h)| x >= left && x < left + w && y >= top && y < top + h)
     }
 
-    /// The toast card under the surface point `(x, y)`, as last drawn, and
-    /// whether the point is on its close button.
-    pub fn toast_at(&self, x: f32, y: f32) -> Option<ToastHit> {
-        let inside = |(left, top, width, height): (f32, f32, f32, f32)| {
-            x >= left && x < left + width && y >= top && y < top + height
-        };
-        self.toast_rects
-            .iter()
-            .find(|rect| inside(rect.panel))
-            .map(|rect| ToastHit {
-                close: inside(rect.close),
-                id: rect.id,
-            })
-    }
-
     /// Whether the surface point `(x, y)` is on the transient popup window card.
     pub fn transient_card_at(&self, x: f32, y: f32) -> bool {
         self.transient_rect
@@ -1069,7 +960,6 @@ mod tests {
             DROP_LIST_TEXTURE_ID,
             INFO_TEXTURE_ID,
         ];
-        ids.extend(TOAST_TEXTURE_IDS);
         ids.extend(crate::renderer::raster::STATUS_ICON_TEXTURE_IDS);
         let count = ids.len();
         ids.sort_unstable();

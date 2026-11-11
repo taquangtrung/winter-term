@@ -1,6 +1,6 @@
 //! Searching, and moving the cursor by motions.
 
-use winter_notify::Notice;
+use misty_notify::Notice;
 
 use crate::place::Place;
 use crate::search::Search;

@@ -386,13 +386,6 @@ impl App {
             }
         }
 
-        // 5. Toast notification close button
-        if let Some(toast) = self.toast_at(cx, cy) {
-            if toast.close {
-                return Some(("Dismiss".to_string(), cx, cy));
-            }
-        }
-
         // 6. Editor toolbar buttons
         if let Some((owner, button_id)) = self.input.pointer.hovered_toolbar_button {
             if let Some(tip) = self.toolbar_button_tooltip(owner, button_id) {

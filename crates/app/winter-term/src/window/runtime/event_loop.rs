@@ -91,6 +91,11 @@ impl Application for App {
         }
         let mut wakeup = None;
         self.survive(|app| wakeup = app.prepare_wait(cx));
+        let window = self.window.as_ref().map(|window| window.id());
+        if let Some(window) = window {
+            let cards = self.cards_deadline(&mut cx.event_cx(window));
+            wakeup = [wakeup, cards].into_iter().flatten().min();
+        }
         self.flush_window(cx);
         wakeup
     }
@@ -171,6 +176,7 @@ impl App {
             .unwrap_or_else(|| texture.texture().create_view(&Default::default()));
         self.render_frame(&view);
         frame.draw_texture(&texture, bounds);
+        self.draw_cards(frame);
         self.draw_picker(frame);
     }
 
@@ -214,7 +220,10 @@ impl App {
             Input::PointerButton(_) | Input::PointerMoved(_) | Input::PointerLeft | Input::Wheel(_)
         );
         let picked = pointer
-            && window.is_some_and(|window| self.point_at_picker(input, &mut cx.event_cx(window)));
+            && window.is_some_and(|window| {
+                let mut ecx = cx.event_cx(window);
+                self.point_at_picker(input, &mut ecx) || self.point_at_cards(input, &mut ecx)
+            });
         match input {
             _ if picked => {}
             Input::Key(key) => self.on_key(*key, true, cx),
@@ -410,9 +419,7 @@ impl App {
             self.dirty = true;
         }
         let picker_tick = self.tick_picker(Instant::now());
-        let progress = self.host.job_progress_line(self.layout().focused());
-        if progress != self.job_progress {
-            self.job_progress = progress;
+        if self.sync_progress() {
             self.dirty = true;
         }
         let spinner_tick = self.update_spinners(Instant::now());

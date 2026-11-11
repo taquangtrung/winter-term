@@ -690,8 +690,6 @@ impl App {
             self.hover_dialog(x, y);
             return;
         }
-        // A toast stays up while the pointer rests on it.
-        self.hover_toasts(x, y);
         self.hover_status_bar(x, y);
         if !self.input.pointer.mouse_down {
             self.hover_transient(x, y);

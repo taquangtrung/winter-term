@@ -26,7 +26,7 @@ fn test_the_stop_key_stops_a_busy_editor_and_is_the_editor_s_own_when_idle() {
     let notice = app.chrome.notice_text();
     assert_eq!(notice, Some("stopping sleep 30"));
     assert!(
-        app.host.job_progress_line(tab).is_none(),
+        app.host.jobs.long_jobs().is_empty(),
         "too new to mention yet"
     );
 }

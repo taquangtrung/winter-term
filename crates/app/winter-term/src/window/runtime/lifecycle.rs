@@ -175,7 +175,10 @@ impl App {
 
         Self {
             config,
-            chrome: Chrome::default(),
+            chrome: Chrome {
+                cards: misty::Toasts::new().with_corner(misty::Corner::TopRight),
+                ..Chrome::default()
+            },
             host: EditorHost {
                 commit_companions: HashMap::new(),
                 compile: Default::default(),
@@ -228,7 +231,7 @@ impl App {
                 yank_flash: None,
             },
             dirty: true,
-            job_progress: None,
+            progress: Default::default(),
             textures: Textures::default(),
             quota: None,
             open_tabs: OpenTabs::default(),

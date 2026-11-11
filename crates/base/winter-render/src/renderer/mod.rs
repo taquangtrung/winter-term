@@ -21,10 +21,9 @@ mod surface;
 mod view;
 
 pub use display::CellOverlay;
-use view::ToastRect;
 pub use view::{
     GridStrip, NoticeKind, PaneRect, PaneView, StatusBar, StatusBell, StatusHover, StatusNotice,
-    StatusPrompt, StatusSearch, StatusSegment, ToastCard, ToastHit, THIN_SPACE,
+    StatusPrompt, StatusSearch, StatusSegment, THIN_SPACE,
 };
 mod background;
 mod colors;
@@ -145,8 +144,6 @@ pub struct FrameHits {
     /// Where the status bar's right-hand parts were last drawn, for the
     /// pointer to find: clicks on the bell, and hovering over any of them.
     status_hits: Vec<parts::status::StatusHit>,
-    /// Where each toast card was last drawn, newest first, for the pointer.
-    toast_rects: Vec<ToastRect>,
     /// Where each pane toolbar's buttons were last drawn: whose bar, the
     /// band's top and bottom edges, and each button's span across it.
     toolbar_hits: Vec<(u64, (f32, f32), Vec<widgets::toolbar::ToolbarHit>)>,

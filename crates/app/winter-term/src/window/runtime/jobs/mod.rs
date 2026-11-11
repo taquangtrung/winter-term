@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use winter_dir::ops;
 use winter_model::editor::{CommandOutput, FileOps, JobReply, JobRequest, SearchResult};
-use winter_model::input::{format_key, Key, KeyCode};
+use winter_model::input::{Key, KeyCode};
 use winter_model::layout::TabId;
 
 use winter_monitor::proc::collect;
@@ -150,12 +150,21 @@ impl Jobs {
             .collect()
     }
 
-    /// Whether `tab` has a program running for it long enough to be worth
-    /// mentioning.
-    pub(in crate::window) fn has_long_job_for(&self, tab: TabId) -> bool {
-        self.running.values().any(|job| {
-            job.tab == tab && job.label.is_some() && job.started.elapsed() >= PROGRESS_DELAY
-        })
+    /// Each tab with a program running for it long enough to be worth
+    /// mentioning, with that program's command line: the first such
+    /// program of each tab.
+    pub(in crate::window) fn long_jobs(&self) -> Vec<(TabId, String)> {
+        let mut long: Vec<(TabId, String)> = Vec::new();
+        for job in self.running.values() {
+            let Some(label) = &job.label else {
+                continue;
+            };
+            let is_long = job.started.elapsed() >= PROGRESS_DELAY;
+            if is_long && !long.iter().any(|(tab, _)| *tab == job.tab) {
+                long.push((job.tab, label.clone()));
+            }
+        }
+        long
     }
 
     /// The latest step of progress a program running long for `tab` has
@@ -397,23 +406,7 @@ impl Jobs {
     }
 }
 
-impl EditorHost {
-    /// What the status bar says while the focused tab has a task running:
-    /// how far it has got, where it says, and how to stop it. The strip's
-    /// spinner already shows that it runs.
-    pub(in crate::window) fn job_progress_line(&self, focused: TabId) -> Option<String> {
-        self.jobs
-            .has_long_job_for(focused)
-            .then(|| {
-                let stop = format!("{} to stop", format_key(&STOP_TASKS_KEY));
-                match self.jobs.progress_for(focused) {
-                    Some(step) => format!("{step} ({stop})"),
-                    None => stop,
-                }
-            })
-            .or_else(|| self.lsp.busy())
-    }
-}
+impl EditorHost {}
 
 // ========================================================================
 // Tests
@@ -599,18 +592,18 @@ mod tests {
         let mut jobs = Jobs::new(Waker::default());
         jobs.spawn(TabId(1), command("sleep", &["5"]));
         assert!(
-            !jobs.has_long_job_for(TabId(1)),
+            jobs.long_jobs().is_empty(),
             "a command that just started is not announced"
         );
 
         for job in jobs.running.values_mut() {
             job.started = Instant::now() - PROGRESS_DELAY;
         }
-        assert!(jobs.has_long_job_for(TabId(1)));
-        assert!(!jobs.has_long_job_for(TabId(2)), "another tab's job");
+        let tabs: Vec<TabId> = jobs.long_jobs().into_iter().map(|(tab, _)| tab).collect();
+        assert_eq!(tabs, [TabId(1)], "its own tab alone");
         jobs.cancel_for(TabId(1));
         assert!(
-            !jobs.has_long_job_for(TabId(1)),
+            jobs.long_jobs().is_empty(),
             "a cancelled job is no longer reported"
         );
     }

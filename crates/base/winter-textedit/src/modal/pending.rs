@@ -1,7 +1,7 @@
 //! The key a part-typed command was waiting on.
 
 use winter_keys::{Key, KeyCode, Mods};
-use winter_notify::Notice;
+use misty_notify::Notice;
 
 use crate::vim::grammar::MacroStep;
 use crate::vim::grammar::{

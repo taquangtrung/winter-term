@@ -22,9 +22,9 @@ pub use renderer::{
     CompletionView, DropListRow, DropListView, FindView, FontConfig, FontLoad, GridStrip, InfoSpan,
     InfoView, InputView, NoticeKind, PaneRect, PaneView, PanelLine, PanelSpan, PanelView,
     PickerItem, PickerPlacement, PickerView, StatusBar, StatusBell, StatusHover, StatusNotice,
-    StatusPrompt, StatusSearch, StatusSegment, SwitchKind, ToastCard, ToastHit, TokenInspectView,
-    ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView, TransientCommand, TransientHit,
-    TransientSwitch, TransientView, WhichKeyHit, WhichKeyView, THIN_SPACE,
+    StatusPrompt, StatusSearch, StatusSegment, SwitchKind, TokenInspectView, ToolbarColumn,
+    ToolbarItem, ToolbarTone, ToolbarView, TransientCommand, TransientHit, TransientSwitch,
+    TransientView, WhichKeyHit, WhichKeyView, THIN_SPACE,
 };
 pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};
 pub use tabbar::{

@@ -200,9 +200,8 @@ pub struct App {
     pub(in crate::window) chrome: Chrome,
     pub(in crate::window) config: Config,
     pub(in crate::window) dirty: bool,
-    /// How to stop the focused tab's running program, shown in the status
-    /// bar until it finishes; see [`EditorHost::job_progress_line`].
-    pub(in crate::window) job_progress: Option<String>,
+    /// The notifier's tasks standing for the long work under way.
+    pub(in crate::window) progress: runtime::progress::ProgressTasks,
     /// Every open tab, terminal or editor, by id.
     pub(in crate::window) open_tabs: OpenTabs,
     /// The AI providers' quotas the status bar shows: started with the
@@ -350,6 +349,9 @@ pub(in crate::window) struct Chrome {
     /// What has been said to the user: the toasts on screen and the
     /// session's history behind the bell.
     pub(in crate::window) notifier: Notifier,
+    /// The notifier's cards and tasks, as misty draws them in the top-right
+    /// corner.
+    pub(in crate::window) cards: misty::Toasts,
     /// What holds the keyboard over the panes, if anything: a palette, a
     /// question, a name being typed, the settings page (see [`Overlay`]).
     pub(in crate::window) overlay: Option<Overlay>,

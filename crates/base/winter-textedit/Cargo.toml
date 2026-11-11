@@ -20,4 +20,4 @@ test-support = []
 unicode-segmentation.workspace = true
 unicode-width.workspace = true
 winter-keys.workspace = true
-winter-notify.workspace = true
+misty-notify.workspace = true

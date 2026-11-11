@@ -300,39 +300,6 @@ impl NoticeKind {
     }
 }
 
-/// One toast card in the window's top-right corner.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ToastCard {
-    /// Whether the pointer is on the card, which shows its close button.
-    pub hovered: bool,
-    /// Names the toast across frames, so a click finds the card it was on.
-    pub id: u64,
-    /// How much it matters, which colors its icon and its edge.
-    pub kind: NoticeKind,
-    /// Who said it, shown under the text; `None` for the window itself.
-    pub source: Option<String>,
-    /// What was said, wrapped to the card's width.
-    pub text: String,
-}
-
-/// What the pointer is on when it is on a toast card.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct ToastHit {
-    /// Whether it is on the card's close button rather than its body.
-    pub close: bool,
-    /// The card's [`ToastCard::id`].
-    pub id: u64,
-}
-
-/// Where a toast card was drawn: its panel and its close button, as
-/// `(x, y, width, height)` in surface pixels.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct ToastRect {
-    pub(crate) close: (f32, f32, f32, f32),
-    pub(crate) id: u64,
-    pub(crate) panel: (f32, f32, f32, f32),
-}
-
 /// The notifications glyph at the status bar's right edge: `text` is the
 /// glyph and any unread count, drawn in the color of `kind`, the most
 /// pressing unread notification, or muted when there is none.

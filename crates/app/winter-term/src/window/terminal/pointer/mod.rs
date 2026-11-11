@@ -82,8 +82,6 @@ pub(in crate::window) struct PointerState {
     /// wheel turns, so the view being read stands out wherever the pointer
     /// rests.
     pub(in crate::window) scrollbar_keyed: Option<TabId>,
-    /// Whether the pointer is currently resting on a toast notification's close button.
-    pub(in crate::window) toast_close_hovered: bool,
 }
 
 impl PointerState {
@@ -134,7 +132,6 @@ impl Default for PointerState {
             scrollbar_drag: None,
             scrollbar_hover: None,
             scrollbar_keyed: None,
-            toast_close_hovered: false,
         }
     }
 }

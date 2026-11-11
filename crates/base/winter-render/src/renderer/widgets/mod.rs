@@ -5,7 +5,7 @@
 //! the fixes ([`popup`]) and the completions ([`completion`]); the tooltips,
 //! a link's address ([`tooltip`]), what a name is ([`info`]), and the
 //! scopes under the cursor ([`token_inspect`]); and the menus ([`menu`]),
-//! the find card ([`find`]), and notification toasts ([`toast`]).
+//! the find card ([`find`]).
 
 pub(in crate::renderer) mod button;
 pub(in crate::renderer) mod completion;
@@ -14,7 +14,6 @@ pub(in crate::renderer) mod find;
 pub(in crate::renderer) mod info;
 pub(in crate::renderer) mod input;
 pub(in crate::renderer) mod menu;
-pub(in crate::renderer) mod toast;
 pub(in crate::renderer) mod token_inspect;
 pub(in crate::renderer) mod toolbar;
 pub(in crate::renderer) mod tooltip;

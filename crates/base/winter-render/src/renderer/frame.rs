@@ -25,7 +25,7 @@ use super::widgets::{
     TransientView, WhichKeyView,
 };
 use super::GpuRenderer;
-use super::{GridStrip, PaneRect, PaneView, StatusBar, ToastCard};
+use super::{GridStrip, PaneRect, PaneView, StatusBar};
 use crate::glyph_quad::GlyphQuadPlacement;
 use crate::image::ImagePlacement;
 use crate::tabbar::TopTabbar;
@@ -196,7 +196,6 @@ impl GpuRenderer {
         images: &[ImagePlacement],
         input: Option<&InputView>,
         find: Option<&FindView>,
-        toasts: &[ToastCard],
         which_key: Option<&WhichKeyView>,
         transient: Option<&TransientView>,
         token_inspect: Option<&TokenInspectView>,
@@ -327,7 +326,6 @@ impl GpuRenderer {
             tabbar,
             input,
             find,
-            toasts,
             which_key,
             transient,
             token_inspect,
@@ -1199,7 +1197,6 @@ impl GpuRenderer {
         tabbar: Option<&TopTabbar>,
         input: Option<&InputView>,
         find: Option<&FindView>,
-        toasts: &[ToastCard],
         which_key: Option<&WhichKeyView>,
         transient: Option<&TransientView>,
         token_inspect: Option<&TokenInspectView>,
@@ -1239,7 +1236,6 @@ impl GpuRenderer {
             Some(f) => all_images.extend(self.rasterize_find(f, w, h)),
             None => self.hits.find_rect = None,
         }
-        all_images.extend(self.rasterize_toasts(toasts, w, h));
         if let Some(wk) = which_key {
             all_images.extend(self.rasterize_which_key(wk, w, h));
         } else {

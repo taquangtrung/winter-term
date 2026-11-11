@@ -3195,6 +3195,7 @@ dependencies = [
  "glyphon",
  "image",
  "lyon_tessellation",
+ "misty-notify",
  "pollster",
  "regex",
  "resvg",
@@ -3207,6 +3208,10 @@ dependencies = [
  "winit",
  "zbus",
 ]
+
+[[package]]
+name = "misty-notify"
+version = "0.1.0"
 
 [[package]]
 name = "moxcms"
@@ -7296,6 +7301,7 @@ name = "winter-model"
 version = "0.1.0"
 dependencies = [
  "kdl",
+ "misty-notify",
  "regex",
  "unicode-segmentation",
  "unicode-width 0.1.14",
@@ -7304,7 +7310,6 @@ dependencies = [
  "winter-emulator",
  "winter-ext-api",
  "winter-keys",
- "winter-notify",
  "winter-render",
  "winter-textedit",
 ]
@@ -7329,10 +7334,6 @@ dependencies = [
  "uds_windows",
  "winter-base",
 ]
-
-[[package]]
-name = "winter-notify"
-version = "0.1.0"
 
 [[package]]
 name = "winter-pdf"
@@ -7518,10 +7519,10 @@ dependencies = [
 name = "winter-textedit"
 version = "0.1.0"
 dependencies = [
+ "misty-notify",
  "unicode-segmentation",
  "unicode-width 0.1.14",
  "winter-keys",
- "winter-notify",
 ]
 
 [[package]]
