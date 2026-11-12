@@ -8,7 +8,6 @@ use super::background::{
     separators, BgParams, BgVertex, DotVertex, LineFlash, SeparatorStyle,
     CURSOR_HOLLOW_STROKE_WIDTH,
 };
-use super::widgets::InputView;
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView};
 use crate::image::ImagePlacement;
@@ -55,24 +54,13 @@ pub(super) struct SurfaceSize {
 // ========================================================================
 
 impl GpuRenderer {
-    /// Get one frame ready for a host drawing it with misty: the popups and
-    /// pane toolbars rasterized and uploaded, and where they and `images`
-    /// go recorded in [`Self::hits`]. The panes themselves the host draws
-    /// from [`Self::paint_pane`].
-    pub fn prepare(
-        &mut self,
-        status_bar: bool,
-        images: &[ImagePlacement],
-        input: Option<&InputView>,
-    ) {
+    /// Get one frame ready for a host drawing it with misty: whether the
+    /// status bar shows, and `images`, the pictures it draws from
+    /// [`Self::image_texture`], recorded in [`Self::hits`]. The panes
+    /// themselves the host draws from [`Self::paint_pane`].
+    pub fn prepare(&mut self, status_bar: bool, images: &[ImagePlacement]) {
         self.chrome.status_bar_enabled = status_bar;
-        let surface = SurfaceSize {
-            height: self.size.height as f32,
-            width: self.size.width as f32,
-        };
-        // One of each popup is drawn, so the focused pane's, the one the keys
-        // reach: the first pane's in tree order took the slot from it.
-        self.prepare_overlay_images(images, input, surface);
+        self.hits.pictures = images.to_vec();
     }
 
     // --------------------------------------------------------------------
@@ -262,32 +250,6 @@ impl GpuRenderer {
     // --------------------------------------------------------------------
     // Overlay passes
     // --------------------------------------------------------------------
-
-    /// Prepare the image pass with the caller's block images plus every
-    /// rasterized overlay that must sit above the pane text.
-    #[allow(clippy::too_many_arguments)]
-    fn prepare_overlay_images(
-        &mut self,
-        images: &[ImagePlacement],
-        input: Option<&InputView>,
-        surface: SurfaceSize,
-    ) {
-        // The popups are rasterized to textures and drawn by the image pass (after the text pass) so they overlay content.
-        let (w, h) = (surface.width, surface.height);
-        let mut all_images: Vec<ImagePlacement> = images.to_vec();
-        // Everything from here floats over the content, over the lines drawn
-        // on the strips too (see `FrameLayers::over_image_verts`).
-        let base = all_images.len();
-        match input {
-            Some(i) => all_images.extend(self.rasterize_input(i, w, h)),
-            None => {
-                self.hits.input_rect = None;
-                self.hits.input_button_rects.clear();
-            }
-        }
-        self.hits.pictures = all_images[..base].to_vec();
-        self.hits.popups = all_images[base..].to_vec();
-    }
 }
 
 // ========================================================================

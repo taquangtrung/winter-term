@@ -188,6 +188,7 @@ impl App {
         self.draw_transient(frame);
         self.draw_cards(frame);
         self.draw_picker(frame);
+        self.draw_dialog(frame);
         self.draw_menus(frame);
         self.draw_tooltip(frame);
     }

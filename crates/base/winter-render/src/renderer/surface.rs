@@ -117,12 +117,7 @@ impl GpuRenderer {
                 normal_weight,
                 scale_factor,
             },
-            hits: FrameHits {
-                input_button_rects: Vec::new(),
-                input_rect: None,
-                pictures: Vec::new(),
-                popups: Vec::new(),
-            },
+            hits: FrameHits::default(),
             device,
             gpu,
             queue,
@@ -133,7 +128,6 @@ impl GpuRenderer {
             rows: rows.max(1),
             theme: Theme::default(),
             image_pass,
-            overlay_caches: Default::default(),
             theme_generation: 0,
             svg_fontdb: None,
             scene_renderer: None,
@@ -174,15 +168,6 @@ impl GpuRenderer {
     pub fn set_popup_input_height(&mut self, rows: f32) {
         let (least, most) = crate::POPUP_INPUT_HEIGHT_RANGE;
         self.chrome.popup_input_height = rows.clamp(least, most);
-    }
-
-    /// The field height in pixels at the current font, for the popups.
-    pub(super) fn popup_field_height(&self) -> f32 {
-        super::raster::chrome::field_height(
-            self.fonts.cell_height,
-            self.fonts.line_height,
-            self.chrome.popup_input_height,
-        )
     }
 
     /// Record whether the OS window manager draws its own frame. Undecorated

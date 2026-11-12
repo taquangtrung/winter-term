@@ -74,10 +74,6 @@ struct ImageTexture {
 // ========================================================================
 
 impl ImagePass {
-    /// Whether a texture is already cached for `id`.
-    pub fn has(&self, id: u64) -> bool {
-        self.textures.contains_key(&id)
-    }
     /// Drop the texture cached under `id`, releasing its GPU memory. The
     /// bind group owns the texture view, which owns the texture, so removing
     /// it is what actually frees the memory; without this the cache only

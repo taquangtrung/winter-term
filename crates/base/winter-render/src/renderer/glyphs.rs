@@ -42,25 +42,6 @@ const BRAILLE_DOT_RATIO: f32 = 0.9;
 // Implementation
 // ========================================================================
 
-/// Scalar font metrics needed to shape and lay out tabbar text offscreen,
-/// independent of the GPU. Bundled so the dropdown rasterizer (and its tests)
-/// can run without a `Renderer`.
-pub(super) struct FontCtx<'a> {
-    pub(super) cell_h: f32,
-    pub(super) cell_w: f32,
-    /// How tall the field typed into is in a popup, in pixels: the same in
-    /// every popup (see [`crate::DEFAULT_POPUP_INPUT_HEIGHT`]).
-    pub(super) field_h: f32,
-    pub(super) family: Option<&'a str>,
-    /// See [`FontState::font_has_bold`](crate::renderer::FontState::font_has_bold): whether `bold_weight` actually
-    /// resolves to a face in `family` rather than an unrelated fallback font.
-    pub(super) font_has_bold: bool,
-    pub(super) font_size: f32,
-    pub(super) line_height: f32,
-    pub(super) normal_weight: Option<&'a str>,
-    pub(super) bold_weight: Option<&'a str>,
-}
-
 /// Font selection for the renderer. `family` is the primary family name (e.g.
 /// "JetBrains Mono"); `None` falls back to the system monospace font.
 /// Glyphs missing from the primary font are filled in from the system font

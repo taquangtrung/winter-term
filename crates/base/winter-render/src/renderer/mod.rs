@@ -31,12 +31,10 @@ mod colors;
 mod display;
 mod glyphs;
 mod images;
-mod raster;
 mod svg;
 mod widgets;
 
 pub use glyphs::{clamp_font_size, start_font_load, FontConfig, FontLoad};
-pub use raster::POPUP_EDGE_ROOM;
 pub use widgets::{
     ButtonView, ColumnAlign, CompletionRow, CompletionView, DropListRow, DropListView, FindView,
     InfoSpan, InfoView, InputView, PanelLine, PanelSpan, PanelView, PickerItem, PickerPlacement,
@@ -73,7 +71,7 @@ pub struct GpuRenderer {
     image_pass: ImagePass,
     /// Each popup's and toolbar's last raster, so a frame that changes
     /// nothing about one reuses the texture already uploaded for it.
-    overlay_caches: raster::OverlayCaches,
+
     /// Bumped by every theme change, so cached rasters repaint in the new
     /// colors without comparing whole themes.
     theme_generation: u64,
@@ -96,15 +94,16 @@ struct FrameSize {
 /// Where the last frame drew each part the pointer acts on: written as the frame is drawn, read until the next one replaces it.
 #[derive(Default)]
 pub struct FrameHits {
-    /// Where the confirmation buttons were last drawn on the surface,
-    /// in button group index order.
-    input_button_rects: Vec<(f32, f32, f32, f32)>,
-    /// Where the input/confirmation dialog card was last drawn, as `(x, y, width, height)`.
-    input_rect: Option<(f32, f32, f32, f32)>,
     /// The pictures the last frame drew in the content.
     pictures: Vec<crate::image::ImagePlacement>,
-    /// The popups the last frame drew floating over the content.
-    popups: Vec<crate::image::ImagePlacement>,
+}
+
+impl FrameHits {
+    /// The pictures the last frame drew in the content, for a host drawing
+    /// them itself (see [`GpuRenderer::image_texture`]).
+    pub fn pictures(&self) -> &[crate::image::ImagePlacement] {
+        &self.pictures
+    }
 }
 
 /// The font in force and the cell it makes, with what it can draw itself and the glyphs drawn from a fallback.
@@ -160,26 +159,3 @@ struct ChromeLayout {
 // ========================================================================
 // Tests
 // ========================================================================
-
-#[cfg(test)]
-pub(crate) mod test_support {
-    use super::glyphs::FontCtx;
-
-    pub(super) fn sample_font_ctx() -> FontCtx<'static> {
-        FontCtx {
-            cell_h: 18.0,
-            cell_w: 9.0,
-            family: None,
-            field_h: crate::renderer::raster::chrome::field_height(
-                18.0,
-                18.0,
-                crate::DEFAULT_POPUP_INPUT_HEIGHT,
-            ),
-            font_has_bold: true,
-            font_size: 14.0,
-            line_height: 18.0,
-            normal_weight: None,
-            bold_weight: None,
-        }
-    }
-}

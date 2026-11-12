@@ -1250,7 +1250,8 @@ impl App {
         });
         // Misty's quick pick draws the picker over the frame.
         self.pickers.drawn = palette_view.take();
-        renderer.prepare(status, &placements, input_view.as_ref());
+        renderer.prepare(status, &placements);
+        self.chrome.drawn_dialog = input_view.take();
         // Misty draws the toolbars and the panes from what the renderer
         // resolved of them.
         self.chrome.drawn_toolbars = views

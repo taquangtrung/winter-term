@@ -2,8 +2,8 @@
 //! gutter, as the renderer resolved them (glyphs and their colors, the
 //! backgrounds and highlights, the cursor, lines, the scrollbar), in the
 //! terminal's font, and the separators between the panes; then the
-//! pictures the renderer keeps textures of (images, icons, the toolbars)
-//! where they lie, and its popups over everything.
+//! pictures the renderer keeps textures of (images, icons, pages) where
+//! they lie.
 
 use misty::cell::{Attributes, Cell, CellSource, CellWidth, Color, Cursor, Style, UnderlineStyle};
 use misty::color::{Rgb, Rgba};
@@ -69,7 +69,7 @@ impl CellSource for PaneCells {
 
 impl App {
     /// Draw the panes the last frame worked out over `frame`, then the
-    /// renderer's pictures over them and its popups over everything.
+    /// renderer's pictures over them.
     pub(in crate::window) fn draw_panes(&mut self, frame: &mut Frame) {
         let Some(renderer) = &self.renderer else {
             return;
@@ -100,11 +100,6 @@ impl App {
         for placement in hits.pictures() {
             draw_placement(frame, placement, renderer.image_texture(placement.id));
         }
-        frame.overlay(|frame| {
-            for placement in hits.popups() {
-                draw_placement(frame, placement, renderer.image_texture(placement.id));
-            }
-        });
     }
 }
 

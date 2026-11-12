@@ -15,9 +15,9 @@ use super::frame::{
     pane_cell_extent, strip_panes, window_border_verts, FrameLayers, SurfaceSize, CURRENT_MATCH_FG,
     SEARCH_MATCH_FG,
 };
-use super::raster::DIM_FACTOR;
 use super::{GpuRenderer, PaneView};
 use crate::theme::{Rgb, Theme};
+use crate::DIM_FACTOR;
 use crate::INDENT_GUIDE;
 use winter_emulator::{Cell, CellWidth, Color as GridColor, UnderlineStyle};
 

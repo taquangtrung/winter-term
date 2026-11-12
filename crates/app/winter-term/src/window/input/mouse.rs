@@ -214,19 +214,13 @@ impl App {
                 return;
             }
             // Confirmation dialog buttons or input dialog clicks
-            if let Some(btn_idx) = self
-                .renderer
-                .as_ref()
-                .and_then(|r| r.hits().confirm_button_at(x, y))
+            if let Some(btn_idx) = self.dialog_button_at(x, y)
             {
                 self.click_dialog_button(btn_idx);
                 self.dirty = true;
                 return;
             }
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().input_at(x, y))
+            if self.dialog_at(x, y)
             {
                 return;
             }
@@ -715,10 +709,7 @@ impl App {
         // Update hovered hyperlink and cursor icon (divider resize, tab drag, or pointer).
         let new_url = self.hovered_link_at(x, y);
         self.input.pointer.hovered_url = new_url;
-        let on_dialog_button = self
-            .renderer
-            .as_ref()
-            .and_then(|r| r.hits().confirm_button_at(x, y));
+        let on_dialog_button = self.dialog_button_at(x, y);
         if let Some(btn_idx) = on_dialog_button {
             if self.chrome.hover_dialog_button(btn_idx) {
                 self.dirty = true;
@@ -752,10 +743,7 @@ impl App {
         if self.manage_window_at(x, y) {
             return;
         }
-        if let Some(btn_idx) = self
-            .renderer
-            .as_ref()
-            .and_then(|r| r.hits().confirm_button_at(x, y))
+        if let Some(btn_idx) = self.dialog_button_at(x, y)
         {
             self.click_dialog_button(btn_idx);
             self.dirty = true;
@@ -763,10 +751,7 @@ impl App {
         }
         // A press off the dialog turns it down, as a press off a picker or a
         // transient puts that away.
-        let on_dialog = self
-            .renderer
-            .as_ref()
-            .is_some_and(|r| r.hits().input_at(x, y));
+        let on_dialog = self.dialog_at(x, y);
         if !on_dialog {
             self.cancel_dialog();
             self.dirty = true;
@@ -792,10 +777,7 @@ impl App {
     /// and the window behind sees nothing (no hover, drag, or report to a
     /// program).
     fn hover_dialog(&mut self, x: f32, y: f32) {
-        let on_button = self
-            .renderer
-            .as_ref()
-            .and_then(|r| r.hits().confirm_button_at(x, y));
+        let on_button = self.dialog_button_at(x, y);
         if let Some(btn_idx) = on_button {
             if self.chrome.hover_dialog_button(btn_idx) {
                 self.dirty = true;
@@ -815,10 +797,7 @@ impl App {
             if let Some(direction) = self.edge_resize_direction(x, y) {
                 return CursorIcon::from(direction);
             }
-            return match self
-                .renderer
-                .as_ref()
-                .and_then(|r| r.hits().confirm_button_at(x, y))
+            return match self.dialog_button_at(x, y)
             {
                 Some(_) => CursorIcon::Pointer,
                 None => CursorIcon::Default,
@@ -826,10 +805,7 @@ impl App {
         }
 
         let is_tab_dragging = self.chrome.tab_drag.is_some();
-        let on_dialog_button = self
-            .renderer
-            .as_ref()
-            .and_then(|r| r.hits().confirm_button_at(x, y));
+        let on_dialog_button = self.dialog_button_at(x, y);
 
         if self.input.pointer.scrollbar_drag.is_some()
             || self.input.pointer.scrollbar_hover.is_some()

@@ -15,7 +15,6 @@ mod theme;
 mod theme_file;
 
 pub use image::ImagePlacement;
-pub use renderer::POPUP_EDGE_ROOM;
 pub use renderer::{
     clamp_font_size, start_font_load, ButtonView, CellOverlay, ColumnAlign, CompletionRow,
     CompletionView, DropListRow, DropListView, FindView, FontConfig, FontLoad, GridStrip, InfoSpan,

@@ -3,8 +3,8 @@
 //! sentence bands.
 
 use super::super::colors::{grid_color_to_rgb, resolve_fg_linear};
-use super::super::raster::DIM_FACTOR;
 use crate::theme::Theme;
+use crate::DIM_FACTOR;
 use winter_emulator::Color as GridColor;
 
 // ========================================================================
