@@ -23,6 +23,7 @@ winter-base.workspace = true
 winter-lsp.workspace = true
 winter-model.workspace = true
 winter-ext-api.workspace = true
+winter-spell.workspace = true
 winter-syntax.workspace = true
 winter-vcs.workspace = true
 

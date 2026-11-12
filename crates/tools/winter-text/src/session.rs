@@ -22,6 +22,7 @@ use super::completing::Asks;
 use super::git_changes::GitBase;
 use super::language::grammar_of;
 use super::servers::{Servers, Synced};
+use super::spelling::Spelling;
 
 // ========================================================================
 // Constants
@@ -50,6 +51,8 @@ pub(crate) struct Session {
     /// The completion tickets of the asks sent to servers, by server and
     /// request id.
     pub(crate) completions: HashMap<(ServerId, u64), CompletionTicket>,
+    /// Where checking each prose document's spelling stands.
+    pub(crate) spelling: HashMap<DocumentId, Spelling>,
 }
 
 /// The file a document came from.
@@ -92,6 +95,7 @@ impl Session {
             files: HashMap::new(),
             servers: Servers::default(),
             completions: HashMap::new(),
+            spelling: HashMap::new(),
         }
     }
 
@@ -137,6 +141,7 @@ impl Session {
             return;
         }
         self.tell_closed(document);
+        self.stop_spelling(document);
         if self.editor.close_document(document) {
             self.files.remove(&document);
         }
@@ -240,6 +245,7 @@ impl Session {
                 views: Vec::new(),
             },
         );
+        self.spell_from_the_start(document, path);
         Ok(document)
     }
 }

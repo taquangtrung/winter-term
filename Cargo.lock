@@ -7543,6 +7543,7 @@ dependencies = [
  "winter-ext-api",
  "winter-lsp",
  "winter-model",
+ "winter-spell",
  "winter-syntax",
  "winter-vcs",
 ]

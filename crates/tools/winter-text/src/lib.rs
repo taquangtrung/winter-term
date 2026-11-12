@@ -49,6 +49,7 @@ mod requests;
 mod servers;
 mod session;
 pub mod settings;
+mod spelling;
 
 pub use keys::KEY_TABLES;
 pub use language::known_languages;
@@ -346,6 +347,7 @@ impl TextEditor {
         session::with(|session| {
             session.git_shown(self.document);
             session.conceal_markup(self.document);
+            session.check_spelling(self.document);
         });
         let generation = diagnostics::generation();
         if self.problems_seen != Some(generation) {
@@ -582,12 +584,18 @@ impl Page for TextEditor {
             )
         });
         let flush = unsynced.then(|| Instant::now() + FLUSH_DELAY);
-        let git = session::with(|session| session.git_due(self.document));
+        let (git, spelling) = session::with(|session| {
+            (
+                session.git_due(self.document),
+                session.spelling_due(self.document),
+            )
+        });
         [
             deadline.map(clock::instant),
             flush,
             self.lsp_next_tick(),
             git,
+            spelling,
         ]
         .into_iter()
         .flatten()
@@ -605,6 +613,7 @@ impl Page for TextEditor {
         let requests = session::with(|session| {
             session.editor.tick(clock::stamp(now));
             session.sync(self.document, &language);
+            session.check_spelling(self.document);
             session.editor.take_requests()
         });
         self.carry_out(requests)
