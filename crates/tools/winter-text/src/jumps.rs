@@ -57,15 +57,20 @@ pub(super) fn styles(
     }
     let mut styles = Vec::new();
     let mut pending = false;
+    // The budget is for the lines between the ones shown, which only say
+    // where the next begins; each call walks a line at least, so one that
+    // spends its time loading the grammars still gets on.
+    let mut walked_one = false;
     for &index in wanted {
         while walked.len() <= index && walked.len() <= lines.len() {
-            if started.elapsed() >= budget {
+            let at = walked.len() - 1;
+            if walked_one && !wanted.contains(&at) && started.elapsed() >= budget {
                 pending = true;
                 break;
             }
-            let at = walked.len() - 1;
             let next = winter_syntax::next_state(&lines[at], &walked[at]);
             walked.push(next);
+            walked_one = true;
         }
         let (Some(line), Some(state)) = (lines.get(index), walked.get(index)) else {
             continue;
@@ -135,6 +140,7 @@ mod tests {
         let path = Path::new("a.rs");
         let first = styles(path, &lines, &[199], Duration::ZERO, &mut walked);
         assert!(first.pending && first.styles.is_empty(), "no time at all");
+        assert_eq!(walked.len(), 2, "but a line walked all the same");
         let mut rounds = 0;
         while styles(
             path,

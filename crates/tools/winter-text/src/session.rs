@@ -12,11 +12,13 @@ use std::path::{Path, PathBuf};
 
 use misty::SystemClipboard;
 use misty_viento::EditorClipboard;
-use viento::{DocumentId, Editor, EditorOptions, Position, ViewId};
+use viento::{CompletionTicket, DocumentId, Editor, EditorOptions, Position, ViewId};
 use winter_lsp::protocol::Diagnostic;
+use winter_lsp::ServerId;
 use winter_model::text_file::{self, FileShape, FileStamp};
 use winter_syntax::SyntaxHighlighter;
 
+use super::completing::Asks;
 use super::language::grammar_of;
 use super::servers::{Servers, Synced};
 
@@ -44,11 +46,18 @@ pub(crate) struct Session {
     pub(crate) files: HashMap<DocumentId, OpenFile>,
     /// The language servers running.
     pub(crate) servers: Servers,
+    /// The completion tickets of the asks sent to servers, by server and
+    /// request id.
+    pub(crate) completions: HashMap<(ServerId, u64), CompletionTicket>,
 }
 
 /// The file a document came from.
 #[derive(Clone, Debug)]
 pub(crate) struct OpenFile {
+    /// The asks its completion provider noted, for its tab to send.
+    pub(crate) asks: Asks,
+    /// The server completing it, once one is.
+    pub(crate) completing: Option<ServerId>,
     /// Where it is.
     pub(crate) path: PathBuf,
     /// What its checkers last found wrong in it, as laid on its text.
@@ -77,6 +86,7 @@ impl Session {
             editor,
             files: HashMap::new(),
             servers: Servers::default(),
+            completions: HashMap::new(),
         }
     }
 
@@ -213,6 +223,8 @@ impl Session {
         self.files.insert(
             document,
             OpenFile {
+                asks: Asks::default(),
+                completing: None,
                 path: path.to_path_buf(),
                 problems: Vec::new(),
                 shape,

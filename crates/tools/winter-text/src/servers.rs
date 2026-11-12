@@ -103,6 +103,7 @@ impl Session {
         let Some(port) = self.serving(document, language).cloned() else {
             return;
         };
+        self.complete_with(document, &port);
         let Some(at) = self.editor.document_version(document) else {
             return;
         };

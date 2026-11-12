@@ -37,6 +37,7 @@ use winter_model::input::Key;
 use winter_model::paint::{Frame as PaintFrame, IconKind, Row};
 use winter_model::textedit::modal::EditMode;
 
+mod completing;
 pub mod diff;
 mod jumps;
 mod keys;
@@ -186,6 +187,15 @@ impl TextEditor {
                     false => EditorOutcome::Ignored,
                 }
             }
+            Event::Answer {
+                id,
+                result: Ok(answer),
+            } if session::with(|session| {
+                session.answer_completion(incoming.server, *id, answer)
+            }) =>
+            {
+                EditorOutcome::Consumed
+            }
             Event::Answer { id, result } => self
                 .on_lsp_answer(incoming.server, *id, result)
                 .unwrap_or(EditorOutcome::Ignored),
@@ -202,6 +212,25 @@ impl TextEditor {
             }
             _ => EditorOutcome::Ignored,
         }
+    }
+
+    /// Sends the completion asks Viento noted while a key was handled, the
+    /// text handed over first.
+    fn send_asks(&mut self) {
+        let language = self.language();
+        session::with(|session| {
+            let pending = session
+                .files
+                .get(&self.document)
+                .is_some_and(|file| !file.asks.lock().map_or(true, |asks| asks.is_empty()));
+            if !pending {
+                return;
+            }
+            session.sync(self.document, &language);
+            if let Some(port) = session.serving(self.document, &language).cloned() {
+                session.send_asks(self.document, &port);
+            }
+        });
     }
 
     /// The language the file is written in, as settings name it.
@@ -234,9 +263,11 @@ impl TextEditor {
     pub fn configure(&mut self, settings: &settings::EditorSettings) {
         session::with(|session| {
             let options = session.editor.options();
-            if options.indent_guides != settings.indent_guides {
+            let (guides, auto) = (settings.indent_guides, settings.completion.auto);
+            if (options.indent_guides, options.auto_complete) != (guides, auto) {
                 let options = viento::EditorOptions {
-                    indent_guides: settings.indent_guides,
+                    auto_complete: auto,
+                    indent_guides: guides,
                     ..*options
                 };
                 session.editor.set_options(session::options(&options));
@@ -333,6 +364,7 @@ impl TextEditor {
                 view.lend(&mut session.editor).handle(input, cx)
             })
         });
+        self.send_asks();
         match response {
             EditorResponse::Handled => EditorOutcome::Consumed,
             EditorResponse::Ignored => EditorOutcome::Ignored,
@@ -494,6 +526,7 @@ impl Page for TextEditor {
                 .handle_key(view, keys::to_viento(key), clock::now());
             (handled, session.editor.take_requests())
         });
+        self.send_asks();
         match (handled, requests.is_empty()) {
             (Handled::Ignored, true) => EditorOutcome::Ignored,
             (_, true) => EditorOutcome::Consumed,
