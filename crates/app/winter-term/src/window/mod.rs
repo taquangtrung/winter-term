@@ -216,8 +216,6 @@ pub struct App {
     /// The GPU misty draws with, which the renderer draws on; `None` until
     /// the window is open.
     pub(in crate::window) gpu: Option<misty::Gpu>,
-    /// The texture the renderer draws each frame into, laid over the window.
-    pub(in crate::window) frame_texture: Option<misty::GpuTexture>,
     /// Configurable split/close/focus key bindings (the `window` keybindings
     /// block), resolved against in Normal mode.
     pub(in crate::window) keymap: Keymap,

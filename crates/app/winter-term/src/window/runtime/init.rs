@@ -1,8 +1,6 @@
 //! GPU/window/PTY bootstrap: the heavy init that runs once on `resumed`.
 
-use misty::{
-    AppContext, Decorations, GpuTexture, OptionAsAlt, Position, Size, WindowId, WindowOptions,
-};
+use misty::{AppContext, Decorations, OptionAsAlt, Position, Size, WindowId, WindowOptions};
 use winit::dpi::PhysicalSize;
 
 use crate::config::{load_state, ThemeSetting, TitleBarStyle};
@@ -175,16 +173,8 @@ impl App {
                 .filter(|s| !s.trim().is_empty())
                 .or_else(|| self.config.font_weight_bold.clone()),
         };
-        // Text blends in linear light through an sRGB view of the frame's
-        // texture, where the GPU allows one; elsewhere it is written as is.
-        let probe = GpuTexture::new(&gpu, 1, 1).ok();
-        let format = match probe.and_then(|texture| texture.srgb_view()) {
-            Some(_) => GpuTexture::SRGB_FORMAT,
-            None => GpuTexture::FORMAT,
-        };
         let mut renderer = GpuRenderer::new(
             gpu.clone(),
-            format,
             size.width,
             size.height,
             scale_factor,

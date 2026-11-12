@@ -6,7 +6,6 @@
 #![forbid(unsafe_code)]
 #![deny(missing_docs)]
 
-mod glyph_quad;
 mod image;
 mod markdown;
 pub mod renderer;

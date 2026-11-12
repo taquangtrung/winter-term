@@ -85,6 +85,9 @@ pub enum PaintWidth {
 /// One pane, or one strip of its gutter, as plain shapes.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PanePaint {
+    /// Whether any cell blinks (SGR 5), which the host needs a blink timer
+    /// running for.
+    pub blinks: bool,
     /// Every cell, row by row, `cols` to a row.
     pub cells: Vec<PaintCell>,
     /// How many columns.
@@ -135,7 +138,15 @@ impl GpuRenderer {
         let surface = self.surface_size();
         let mut layers = FrameLayers::default();
         self.push_pane_background(pane, surface, &mut layers);
+        let blinks = (0..pane.grid.rows().min(extent.rows)).any(|row| {
+            (0..pane.grid.cols().min(extent.cols)).any(|col| {
+                pane.grid
+                    .visible_cell(row, col)
+                    .is_some_and(|cell| cell.style.blink)
+            })
+        });
         PanePaint {
+            blinks,
             cells: self.paint_cells(pane, (extent.cols, extent.rows)),
             cols: extent.cols,
             fills: fills_of(&layers.bg_verts, surface),

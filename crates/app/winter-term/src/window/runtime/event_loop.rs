@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
-use misty::{AppContext, Application, Frame, GpuTexture, Input, WindowId};
+use misty::{AppContext, Application, Frame, Input, WindowId};
 use winit::dpi::PhysicalSize;
 
 use winter_model::guard::{describe_panic, install_panic_hook};
@@ -173,13 +173,7 @@ impl App {
         if changed {
             self.resize_window(size, scale_factor);
         }
-        let Some(texture) = self.frame_target(size) else {
-            return;
-        };
-        let view = texture
-            .srgb_view()
-            .unwrap_or_else(|| texture.texture().create_view(&Default::default()));
-        self.render_frame(&view);
+        self.render_frame();
         self.sync_strips();
         self.draw_panes(frame);
         self.draw_strips(frame);
@@ -193,19 +187,6 @@ impl App {
         self.draw_picker(frame);
         self.draw_menus(frame);
         self.draw_tooltip(frame);
-    }
-
-    /// The texture frames of `size` are rendered into: last frame's while
-    /// the size holds, a new one otherwise.
-    fn frame_target(&mut self, size: PhysicalSize<u32>) -> Option<GpuTexture> {
-        let fits = self.frame_texture.as_ref().is_some_and(|texture| {
-            (texture.width(), texture.height()) == (size.width, size.height)
-        });
-        if !fits {
-            let gpu = self.gpu.as_ref()?;
-            self.frame_texture = GpuTexture::new(gpu, size.width, size.height).ok();
-        }
-        self.frame_texture.clone()
     }
 
     /// Resize the renderer and the panes to a window of `size` at

@@ -38,30 +38,6 @@ pub(super) fn mix_rgb(a: Rgb, b: Rgb, t: f32) -> Rgb {
     Rgb::new(lerp(a.r, b.r), lerp(a.g, b.g), lerp(a.b, b.b))
 }
 
-/// Decode one sRGB channel, `0.0..=1.0`, to a linear value. Used for the
-/// surface clear, which an sRGB target interprets as linear.
-fn srgb_to_linear_f64(c: f64) -> f64 {
-    if c <= 0.04045 {
-        c / 12.92
-    } else {
-        ((c + 0.055) / 1.055).powf(2.4)
-    }
-}
-
-/// What to clear a frame to so the background shows as `color` at
-/// `opacity`. The target is sRGB, which encodes what is written, so the clear
-/// value is the decoded color; its alpha is straight, as the window that
-/// composites the frame expects, the color kept whole beside it.
-pub(super) fn clear_color(color: Rgb, opacity: f32) -> wgpu::Color {
-    let channel = |c: u8| srgb_to_linear_f64(c as f64 / 255.0);
-    wgpu::Color {
-        r: channel(color.r),
-        g: channel(color.g),
-        b: channel(color.b),
-        a: opacity.clamp(0.0, 1.0) as f64,
-    }
-}
-
 /// Whether `fg` on `bg` is dark-on-light enough to need the synthetic-bold
 /// compensation described at `DARK_ON_LIGHT_BOLD_MARGIN`.
 pub(super) fn needs_dark_on_light_bold(fg: (u8, u8, u8), bg: (u8, u8, u8)) -> bool {
@@ -357,16 +333,5 @@ mod tests {
             block_cursor_cell(CursorShape::Block, true, None, true, (0, 0), 0),
             None
         );
-    }
-
-    #[test]
-    fn test_clear_color_decodes_the_srgb_color_and_keeps_its_alpha_straight() {
-        let white = Rgb::new(255, 255, 255);
-        let solid = clear_color(white, 1.0);
-        assert_eq!((solid.r, solid.a), (1.0, 1.0));
-        let half = clear_color(white, 0.5);
-        assert_eq!((half.r, half.a), (1.0, 0.5));
-        let grey = clear_color(Rgb::new(128, 128, 128), 1.0);
-        assert!((grey.r - 0.216).abs() < 0.001, "{}", grey.r);
     }
 }

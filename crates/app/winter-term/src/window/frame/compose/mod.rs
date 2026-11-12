@@ -1019,7 +1019,7 @@ impl App {
 
     /// Draw the window's frame into `target`, a texture as large as the
     /// window.
-    pub(in crate::window) fn render_frame(&mut self, target: &wgpu::TextureView) {
+    pub(in crate::window) fn render_frame(&mut self) {
         // What is about to be drawn is the current state, so the pending-repaint
         // flag is spent here. Clearing it at the top rather than the bottom keeps
         // a change made while this frame is being built from being swallowed: it
@@ -1250,8 +1250,7 @@ impl App {
         });
         // Misty's quick pick draws the picker over the frame.
         self.pickers.drawn = palette_view.take();
-        renderer.render(
-            target,
+        renderer.prepare(
             &views,
             status,
             &placements,

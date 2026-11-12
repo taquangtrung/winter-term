@@ -10,10 +10,9 @@
 //! Multi-pane rendering is supported: pass a slice of [`PaneView`] items, each
 //! with a viewport rect and a grid reference. Each pane is clipped to its rect.
 
-use glyphon::{FontSystem, SwashCache, TextAtlas, TextRenderer, Viewport};
-use wgpu::{Device, Queue, RenderPipeline, TextureFormat};
+use glyphon::{FontSystem, SwashCache};
+use wgpu::{Device, Queue};
 
-use crate::glyph_quad::GlyphQuadPass;
 use crate::image::ImagePass;
 use crate::theme::Theme;
 mod frame;
@@ -36,7 +35,6 @@ mod raster;
 mod svg;
 mod widgets;
 
-use glyphs::FallbackGlyphFit;
 pub use glyphs::{clamp_font_size, start_font_load, FontConfig, FontLoad};
 pub use raster::POPUP_EDGE_ROOM;
 pub use widgets::{
@@ -63,49 +61,22 @@ pub struct GpuRenderer {
     /// Misty's GPU, which the images' textures are made on, so a host
     /// drawing with misty draws them too.
     gpu: misty::Gpu,
-    /// The format of the textures frames are rendered into.
-    format: TextureFormat,
     queue: Queue,
     /// The size of the frames rendered.
     size: FrameSize,
     font_system: FontSystem,
     swash_cache: SwashCache,
-    text_atlas: TextAtlas,
-    text_renderer: TextRenderer,
-    viewport: Viewport,
-    bg_pipeline: RenderPipeline,
-    bg_buffer: wgpu::Buffer,
-    dot_pipeline: RenderPipeline,
-    dot_buffer: wgpu::Buffer,
     cols: usize,
     rows: usize,
-    /// Textured-quad pass for the glyphs `fallback_glyph_cache` corrects: each
-    /// is rasterized once at the unmodified font size and drawn as its own
-    /// scaled quad, so fitting its width to the cell never perturbs another
-    /// glyph's line layout (see [`GpuRenderer::ensure_fallback_glyph_quad`]).
-    glyph_quad_pass: GlyphQuadPass,
-    /// Reused buffer for building glyph atlas keys during lookups, so the
-    /// per-cell lookups of a frame allocate nothing.
-    glyph_key_scratch: String,
     theme: Theme,
-    /// Persistent per-pane text buffers, reused across frames so cosmic-text
-    /// only re-shapes lines whose content changed (one line per keystroke
-    /// instead of the whole screen).
-    text_buffers: Vec<glyphon::Buffer>,
-    /// Textured-quad pass for image blocks rendered natively (no webview).
+    /// The textures of the pictures, the popups, and the toolbars, by id.
     image_pass: ImagePass,
-    /// Image pass for the rasterized top-tabbar strip. Rendered between the bg
-    /// quads and the text so the rounded tab cards sit under the tab titles.
-    /// The strip's last paint, so a frame that changes nothing about the
-    /// tabbar reuses the texture already uploaded for it. Repainting it was
-    /// the most expensive thing an otherwise idle frame did.
+    /// Each popup's and toolbar's last raster, so a frame that changes
+    /// nothing about one reuses the texture already uploaded for it.
     overlay_caches: raster::OverlayCaches,
     /// Bumped by every theme change, so cached rasters repaint in the new
     /// colors without comparing whole themes.
     theme_generation: u64,
-    /// Whether the last frame drew any blinking text (SGR 5), which is what
-    /// the host needs a blink timer running for.
-    drew_blinking_text: bool,
     /// System fonts for SVG text, loaded lazily on first SVG with text and then
     /// reused (the scan costs ~150ms, so it is deferred off the startup path).
     svg_fontdb: Option<std::sync::Arc<resvg::usvg::fontdb::Database>>,
@@ -147,19 +118,6 @@ struct FontState {
     bold_weight: Option<String>,
     cell_height: f32,
     cell_width: f32,
-    /// Per-`(character, is_wide)` cell-width fit for glyphs that need
-    /// [`Shaping::Advanced`](glyphon::Shaping::Advanced) (fallback fonts). A proportional fallback font's
-    /// glyph advance rarely lands exactly on a cell width (see
-    /// [`needs_complex_shaping`](glyphs::needs_complex_shaping)), so this caches the `(font_size, cell_width)`
-    /// it was measured at, the uniform scale that fits its rasterized texture
-    /// (drawn via [`GlyphQuadPass`], not reshaped through cosmic-text) to one
-    /// cell width or two (`is_wide`: a double-width glyph like most emoji
-    /// fits two, so the same character can need a different scale in each
-    /// role, e.g. a regional indicator alone versus paired into a flag), and
-    /// whether it's a genuine color glyph (COLR/CBDT color emoji) rather than
-    /// a monochrome mask tinted by the cell's foreground color. Recomputed
-    /// lazily when the cached font size or cell width goes stale.
-    fallback_glyph_cache: std::collections::HashMap<(char, bool), FallbackGlyphFit>,
     font_family: Option<String>,
     /// Whether requesting [`Weight::BOLD`](glyphon::cosmic_text::Weight::BOLD)
     /// for `font_family` actually resolves to a face in that same family. Some

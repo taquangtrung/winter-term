@@ -1,30 +1,13 @@
-//! Textured-quad pass: draws decoded raster images on the GPU, so image blocks
-//! render natively without a webview. Textures are uploaded once and cached by
-//! block id; each frame the caller supplies pixel placements and the pass draws
-//! the visible ones.
+//! The textures of the pictures a window shows: decoded images, rasterized
+//! popups and toolbars, and scenes Vello renders, each cached by id on
+//! misty's GPU for the host to draw.
 
 use std::collections::HashMap;
 
 use wgpu::{
-    BindGroup, BindGroupDescriptor, BindGroupEntry, BindGroupLayout, BindGroupLayoutDescriptor,
-    BindGroupLayoutEntry, BindingResource, BindingType, BlendState, Buffer, BufferDescriptor,
-    BufferUsages, ColorTargetState, ColorWrites, Device, Extent3d, FilterMode, FragmentState,
-    FrontFace, MultisampleState, Origin3d, PipelineLayoutDescriptor, PrimitiveState,
-    PrimitiveTopology, Queue, RenderPass, RenderPipeline, RenderPipelineDescriptor,
-    SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages,
-    TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureFormat,
-    TextureSampleType, TextureView, TextureViewDescriptor, TextureViewDimension, VertexAttribute,
-    VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
+    Extent3d, Origin3d, Queue, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect,
+    TextureView, TextureViewDescriptor,
 };
-
-// ========================================================================
-// Constants
-// ========================================================================
-
-const IMAGE_SHADER: &str = include_str!("image.wgsl");
-const MAX_QUADS: usize = 1024;
-const VERTEX_BYTES: usize = 20;
-const VERTS_PER_QUAD: u32 = 6;
 
 // ========================================================================
 // Data Structures
@@ -71,58 +54,19 @@ pub struct ImagePlacement {
     pub y: f32,
 }
 
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct ImageVertex {
-    alpha: f32,
-    u: f32,
-    v: f32,
-    x: f32,
-    y: f32,
-}
-
-/// GPU pipeline plus a per-image texture/bind-group cache.
+/// The textures cached by id.
+#[derive(Default)]
 pub(crate) struct ImagePass {
-    /// How many of `draws` are the base layer, under what overlays the
-    /// content (see [`ImagePass::render_base`]).
-    base: usize,
-    bind_group_layout: BindGroupLayout,
-    draws: Vec<(u64, u32)>,
-    pipeline: RenderPipeline,
-    sampler: wgpu::Sampler,
     textures: HashMap<u64, ImageTexture>,
-    vertex_buffer: Buffer,
 }
 
-/// One cached image: the texture holding its pixels, the bind group that
-/// draws it, and its size, so a same-sized upload can rewrite the pixels in
-/// place rather than allocate a fresh texture.
+/// One cached image: its texture and size, so a same-sized upload can
+/// rewrite the pixels in place rather than allocate a fresh texture.
 struct ImageTexture {
-    bind_group: BindGroup,
     height: u32,
-    /// The texture, misty's so a host drawing with misty draws it too.
+    /// The texture, misty's so a host drawing with misty draws it.
     texture: misty::GpuTexture,
     width: u32,
-}
-
-// ========================================================================
-// ImageVertex
-// ========================================================================
-
-impl ImageVertex {
-    fn new(x: f32, y: f32, u: f32, v: f32, alpha: f32) -> Self {
-        Self { alpha, u, v, x, y }
-    }
-
-    fn to_bytes(self) -> [u8; VERTEX_BYTES] {
-        let mut out = [0u8; VERTEX_BYTES];
-        out[0..4].copy_from_slice(&self.x.to_le_bytes());
-        out[4..8].copy_from_slice(&self.y.to_le_bytes());
-        out[8..12].copy_from_slice(&self.u.to_le_bytes());
-        out[12..16].copy_from_slice(&self.v.to_le_bytes());
-        out[16..20].copy_from_slice(&self.alpha.to_le_bytes());
-        out
-    }
 }
 
 // ========================================================================
@@ -130,124 +74,10 @@ impl ImageVertex {
 // ========================================================================
 
 impl ImagePass {
-    pub fn new(device: &Device, format: TextureFormat) -> Self {
-        let shader = device.create_shader_module(ShaderModuleDescriptor {
-            label: Some("winter image shader"),
-            source: ShaderSource::Wgsl(IMAGE_SHADER.into()),
-        });
-
-        let bind_group_layout = device.create_bind_group_layout(&BindGroupLayoutDescriptor {
-            label: Some("winter image bind group layout"),
-            entries: &[
-                BindGroupLayoutEntry {
-                    binding: 0,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Texture {
-                        sample_type: TextureSampleType::Float { filterable: true },
-                        view_dimension: TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                },
-                BindGroupLayoutEntry {
-                    binding: 1,
-                    visibility: ShaderStages::FRAGMENT,
-                    ty: BindingType::Sampler(SamplerBindingType::Filtering),
-                    count: None,
-                },
-            ],
-        });
-
-        let layout = device.create_pipeline_layout(&PipelineLayoutDescriptor {
-            label: Some("winter image layout"),
-            bind_group_layouts: &[Some(&bind_group_layout)],
-            immediate_size: 0,
-        });
-
-        let pipeline = device.create_render_pipeline(&RenderPipelineDescriptor {
-            label: Some("winter image pipeline"),
-            layout: Some(&layout),
-            vertex: VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                compilation_options: Default::default(),
-                buffers: &[Some(VertexBufferLayout {
-                    array_stride: VERTEX_BYTES as u64,
-                    step_mode: VertexStepMode::Vertex,
-                    attributes: &[
-                        VertexAttribute {
-                            offset: 0,
-                            format: VertexFormat::Float32x2,
-                            shader_location: 0,
-                        },
-                        VertexAttribute {
-                            offset: 8,
-                            format: VertexFormat::Float32x2,
-                            shader_location: 1,
-                        },
-                        VertexAttribute {
-                            offset: 16,
-                            format: VertexFormat::Float32,
-                            shader_location: 2,
-                        },
-                    ],
-                })],
-            },
-            fragment: Some(FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                compilation_options: Default::default(),
-                targets: &[Some(ColorTargetState {
-                    format,
-                    blend: Some(BlendState::ALPHA_BLENDING),
-                    write_mask: ColorWrites::ALL,
-                })],
-            }),
-            primitive: PrimitiveState {
-                topology: PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: FrontFace::Ccw,
-                cull_mode: None,
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: MultisampleState::default(),
-            cache: None,
-            multiview_mask: None,
-        });
-
-        let sampler = device.create_sampler(&SamplerDescriptor {
-            label: Some("winter image sampler"),
-            mag_filter: FilterMode::Linear,
-            min_filter: FilterMode::Linear,
-            ..Default::default()
-        });
-
-        let vertex_buffer = device.create_buffer(&BufferDescriptor {
-            label: Some("winter image vertices"),
-            size: (MAX_QUADS * VERTS_PER_QUAD as usize * VERTEX_BYTES) as u64,
-            usage: BufferUsages::VERTEX | BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        Self {
-            base: 0,
-            bind_group_layout,
-            draws: Vec::new(),
-            pipeline,
-            sampler,
-            textures: HashMap::new(),
-            vertex_buffer,
-        }
-    }
-
     /// Whether a texture is already cached for `id`.
     pub fn has(&self, id: u64) -> bool {
         self.textures.contains_key(&id)
     }
-
     /// Drop the texture cached under `id`, releasing its GPU memory. The
     /// bind group owns the texture view, which owns the texture, so removing
     /// it is what actually frees the memory; without this the cache only
@@ -256,7 +86,6 @@ impl ImagePass {
     pub fn remove(&mut self, id: u64) {
         self.textures.remove(&id);
     }
-
     /// Upload `rgba` (tightly packed, `width * height * 4` bytes) as a texture
     /// cached under `id`, replacing any previous one. A replacement of the
     /// same size is written into the texture already there: an overlay
@@ -288,12 +117,10 @@ impl ImagePass {
         write_rgba(gpu.queue(), cached.texture.texture(), rgba, width, height);
         true
     }
-
     /// The texture cached under `id`, for a host drawing it itself.
     pub fn texture(&self, id: u64) -> Option<&misty::GpuTexture> {
         self.textures.get(&id).map(|cached| &cached.texture)
     }
-
     /// A view of the `width` x `height` texture cached under `id`, for a
     /// compute pass to draw into (a scene rendered by Vello), made or
     /// reused as [`Self::upload`] does.
@@ -312,7 +139,6 @@ impl ImagePass {
                 .create_view(&TextureViewDescriptor::default()),
         )
     }
-
     /// The texture cached under `id`, made anew unless the one there is
     /// already `width` x `height`.
     fn ensure_texture(
@@ -327,122 +153,21 @@ impl ImagePass {
             .get(&id)
             .is_some_and(|cached| (cached.width, cached.height) == (width, height));
         if !reusable {
-            let image = self.create_texture(gpu, width, height)?;
+            let image = Self::create_texture(gpu, width, height)?;
             self.textures.insert(id, image);
         }
         self.textures.get(&id)
     }
 
-    /// A `width` x `height` texture and the bind group that samples it, or
-    /// `None` for a size the GPU cannot hold.
-    fn create_texture(&self, gpu: &misty::Gpu, width: u32, height: u32) -> Option<ImageTexture> {
-        // Holds sRGB-encoded bytes; the image shader decodes them to linear
-        // before the (sRGB) surface re-encodes them. Vello writes the same
-        // encoding, as a storage texture.
+    /// A `width` x `height` texture, or `None` for a size the GPU cannot
+    /// hold. It holds sRGB-encoded bytes, as Vello writes them too.
+    fn create_texture(gpu: &misty::Gpu, width: u32, height: u32) -> Option<ImageTexture> {
         let texture = misty::GpuTexture::new(gpu, width, height).ok()?;
-        let device = gpu.device();
-        let view = texture
-            .texture()
-            .create_view(&TextureViewDescriptor::default());
-        let bind_group = device.create_bind_group(&BindGroupDescriptor {
-            label: Some("winter image bind group"),
-            layout: &self.bind_group_layout,
-            entries: &[
-                BindGroupEntry {
-                    binding: 0,
-                    resource: BindingResource::TextureView(&view),
-                },
-                BindGroupEntry {
-                    binding: 1,
-                    resource: BindingResource::Sampler(&self.sampler),
-                },
-            ],
-        });
         Some(ImageTexture {
-            bind_group,
             height,
             texture,
             width,
         })
-    }
-
-    /// Build the vertex buffer for this frame's `placements`, the first
-    /// `base` of them the layer under what overlays the content (see
-    /// [`Self::render_base`]). Placements with no cached texture, or beyond
-    /// [`MAX_QUADS`], are skipped.
-    pub fn prepare(
-        &mut self,
-        queue: &Queue,
-        placements: &[ImagePlacement],
-        base: usize,
-        surface_w: f32,
-        surface_h: f32,
-    ) {
-        self.draws.clear();
-        self.base = 0;
-        let mut verts: Vec<ImageVertex> = Vec::new();
-        for (index, placement) in placements.iter().enumerate() {
-            if index == base {
-                self.base = self.draws.len();
-            }
-            if !self.textures.contains_key(&placement.id) || self.draws.len() >= MAX_QUADS {
-                continue;
-            }
-            let x0 = placement.x / surface_w * 2.0 - 1.0;
-            let x1 = (placement.x + placement.width) / surface_w * 2.0 - 1.0;
-            let y0 = 1.0 - placement.y / surface_h * 2.0;
-            let y1 = 1.0 - (placement.y + placement.height) / surface_h * 2.0;
-            let (u0, u1) = (placement.u_min, placement.u_max);
-            let v0 = placement.v_min;
-            let v1 = placement.v_max;
-            let a = placement.alpha;
-            let first = verts.len() as u32;
-            verts.extend_from_slice(&[
-                ImageVertex::new(x0, y0, u0, v0, a),
-                ImageVertex::new(x1, y0, u1, v0, a),
-                ImageVertex::new(x0, y1, u0, v1, a),
-                ImageVertex::new(x0, y1, u0, v1, a),
-                ImageVertex::new(x1, y0, u1, v0, a),
-                ImageVertex::new(x1, y1, u1, v1, a),
-            ]);
-            self.draws.push((placement.id, first));
-        }
-        if placements.len() <= base {
-            self.base = self.draws.len();
-        }
-        if !verts.is_empty() {
-            let bytes: Vec<u8> = verts.iter().flat_map(|v| v.to_bytes()).collect();
-            queue.write_buffer(&self.vertex_buffer, 0, &bytes);
-        }
-    }
-
-    /// Draw the base layer prepared this frame: what sits in the content (a
-    /// pane's strip of tabs, an image block, a toolbar). Call inside an active
-    /// pass after the background and text have been drawn.
-    pub fn render_base<'pass>(&'pass self, pass: &mut RenderPass<'pass>) {
-        self.render_draws(pass, &self.draws[..self.base]);
-    }
-
-    /// Draw the overlay layer prepared this frame: what floats over the content
-    /// (a tooltip, a menu, a popup, a toast), over anything drawn on the base
-    /// layer since.
-    pub fn render_overlays<'pass>(&'pass self, pass: &mut RenderPass<'pass>) {
-        self.render_draws(pass, &self.draws[self.base..]);
-    }
-
-    /// Draw `draws`, in order.
-    fn render_draws<'pass>(&'pass self, pass: &mut RenderPass<'pass>, draws: &[(u64, u32)]) {
-        if draws.is_empty() {
-            return;
-        }
-        pass.set_pipeline(&self.pipeline);
-        pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
-        for (id, first) in draws {
-            if let Some(image) = self.textures.get(id) {
-                pass.set_bind_group(0, &image.bind_group, &[]);
-                pass.draw(*first..*first + VERTS_PER_QUAD, 0..1);
-            }
-        }
     }
 }
 
@@ -499,21 +224,5 @@ mod tests {
             "taller than a texture"
         );
         assert!(!fits_texture(4, 2, 31, 8192), "bytes not matching the size");
-    }
-
-    #[test]
-    fn test_vertex_to_bytes_matches_the_declared_stride_and_field_order() {
-        // Regression risk: VERTEX_BYTES and the pipeline's VertexBufferLayout
-        // must agree with this layout byte-for-byte, or wgpu either
-        // validation-panics at pipeline creation or silently reads the wrong
-        // field per attribute.
-        let v = ImageVertex::new(1.0, 2.0, 3.0, 4.0, 0.5);
-        let bytes = v.to_bytes();
-        assert_eq!(bytes.len(), VERTEX_BYTES);
-        assert_eq!(f32::from_le_bytes(bytes[0..4].try_into().unwrap()), 1.0);
-        assert_eq!(f32::from_le_bytes(bytes[4..8].try_into().unwrap()), 2.0);
-        assert_eq!(f32::from_le_bytes(bytes[8..12].try_into().unwrap()), 3.0);
-        assert_eq!(f32::from_le_bytes(bytes[12..16].try_into().unwrap()), 4.0);
-        assert_eq!(f32::from_le_bytes(bytes[16..20].try_into().unwrap()), 0.5);
     }
 }

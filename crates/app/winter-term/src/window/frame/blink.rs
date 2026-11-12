@@ -108,11 +108,7 @@ impl App {
     /// the window has focus (a background window holds it shown, as it does
     /// the cursor).
     pub(in crate::window) fn is_text_blink_active(&self) -> bool {
-        self.input.focus.window
-            && self
-                .renderer
-                .as_ref()
-                .is_some_and(|renderer| renderer.drew_blinking_text())
+        self.input.focus.window && self.chrome.drawn_panes.iter().any(|pane| pane.blinks)
     }
 }
 

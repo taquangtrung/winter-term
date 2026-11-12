@@ -241,7 +241,6 @@ impl App {
             next_tab_id: 1,
             window: None,
             gpu: None,
-            frame_texture: None,
             keymap,
             when_keys,
             window_title: String::new(),

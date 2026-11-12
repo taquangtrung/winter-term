@@ -1,5 +1,5 @@
-//! Background pass: cell, cursor, selection, and scrollbar quads, plus
-//! the wgpu pipelines that draw them.
+//! Background pass: cell, cursor, selection, and scrollbar quads, which the
+//! paint path reads back as rectangles.
 //!
 //! A pane's quads are built in layers: cell backgrounds first, merged into
 //! one quad per run of equally colored cells on a row, then what draws over
@@ -10,15 +10,10 @@ mod cell_color;
 mod cursor;
 mod decoration;
 mod divider;
-mod pipeline;
 mod scrollbar;
 
 pub(super) use cursor::{cursor_outline_quads, cursor_quad, CURSOR_HOLLOW_STROKE_WIDTH};
 pub(super) use divider::{separator_vertices, separators, SeparatorStyle, DIVIDER_THICKNESS};
-pub(super) use pipeline::{
-    create_bg_pipeline, create_dot_pipeline, create_vertex_buffer, ensure_vertex_capacity,
-    BG_BUFFER_LABEL, DOT_BUFFER_LABEL,
-};
 
 use std::collections::HashSet;
 
@@ -34,14 +29,6 @@ use winter_emulator::{Cell, Color as GridColor, CursorShape, Grid};
 // ========================================================================
 // Constants
 // ========================================================================
-
-/// Size the background vertex buffer starts at; it grows when a frame needs
-/// more.
-pub(super) const BG_BUFFER_SIZE: u64 = 4 * 1024 * 1024;
-
-/// Size the braille dot vertex buffer starts at; it grows when a frame
-/// needs more.
-pub(super) const DOT_BUFFER_SIZE: u64 = 8 * 1024 * 1024;
 
 /// How thick an outlined run's border is, in pixels.
 const OUTLINE_STROKE_WIDTH: f32 = 1.0;
@@ -241,36 +228,6 @@ impl BgRuns {
     fn finish(mut self) -> Vec<BgVertex> {
         self.flush();
         self.verts
-    }
-}
-
-// ========================================================================
-// BgVertex and DotVertex
-// ========================================================================
-
-impl BgVertex {
-    pub(super) fn to_bytes(self) -> [u8; 20] {
-        let mut out = [0u8; 20];
-        out[0..4].copy_from_slice(&self.x.to_le_bytes());
-        out[4..8].copy_from_slice(&self.y.to_le_bytes());
-        out[8..12].copy_from_slice(&self.r.to_le_bytes());
-        out[12..16].copy_from_slice(&self.g.to_le_bytes());
-        out[16..20].copy_from_slice(&self.b.to_le_bytes());
-        out
-    }
-}
-
-impl DotVertex {
-    pub(super) fn to_bytes(self) -> [u8; 28] {
-        let mut out = [0u8; 28];
-        out[0..4].copy_from_slice(&self.x.to_le_bytes());
-        out[4..8].copy_from_slice(&self.y.to_le_bytes());
-        out[8..12].copy_from_slice(&self.u.to_le_bytes());
-        out[12..16].copy_from_slice(&self.v.to_le_bytes());
-        out[16..20].copy_from_slice(&self.r.to_le_bytes());
-        out[20..24].copy_from_slice(&self.g.to_le_bytes());
-        out[24..28].copy_from_slice(&self.b.to_le_bytes());
-        out
     }
 }
 

@@ -1,20 +1,15 @@
 //! GPU surface and device setup, resizing, and renderer configuration.
 
-use super::background::{
-    create_bg_pipeline, create_dot_pipeline, create_vertex_buffer, BG_BUFFER_LABEL, BG_BUFFER_SIZE,
-    DIVIDER_THICKNESS, DOT_BUFFER_LABEL, DOT_BUFFER_SIZE,
-};
+use super::background::DIVIDER_THICKNESS;
 use super::glyphs::{
     clamp_font_size, font_covers_bold_weight, font_covers_braille, measure_cell, FontConfig,
     FontLoad, DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT,
 };
 use super::PaneRect;
 use super::{ChromeLayout, FontState, FrameHits, FrameSize, GpuRenderer};
-use crate::glyph_quad::GlyphQuadPass;
 use crate::image::ImagePass;
 use crate::theme::Theme;
-use glyphon::{Cache, ColorMode, SwashCache, TextAtlas, TextRenderer, Viewport};
-use wgpu::{MultisampleState, TextureFormat};
+use glyphon::SwashCache;
 
 // ========================================================================
 // GpuRenderer: surface and configuration
@@ -33,7 +28,6 @@ impl GpuRenderer {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         gpu: misty::Gpu,
-        format: TextureFormat,
         width: u32,
         height: u32,
         scale_factor: f64,
@@ -62,22 +56,6 @@ impl GpuRenderer {
         let normal_weight = font.normal_weight;
         let bold_weight = font.bold_weight;
         let swash_cache = SwashCache::new();
-        let cache = Cache::new(&device);
-        // ColorMode::Accurate makes glyphon convert text colors to linear and
-        // blend glyph coverage in linear space, which the sRGB surface encodes
-        // back on write: gamma-correct antialiasing, so text stays crisp rather
-        // than thin and fuzzy on dark backgrounds.
-        let color_mode = if format.is_srgb() {
-            ColorMode::Accurate
-        } else {
-            ColorMode::Web
-        };
-        let mut text_atlas =
-            TextAtlas::with_color_mode(&device, &queue, &cache, format, color_mode);
-        let text_renderer =
-            TextRenderer::new(&mut text_atlas, &device, MultisampleState::default(), None);
-        let viewport = Viewport::new(&device, &cache);
-
         let mut font_system = font_load.join();
         let (cell_width, cell_height) = measure_cell(
             &mut font_system,
@@ -86,12 +64,6 @@ impl GpuRenderer {
             font_family.as_deref(),
             normal_weight.as_deref(),
         );
-
-        let bg_pipeline = create_bg_pipeline(&device, format);
-        let bg_buffer = create_vertex_buffer(&device, BG_BUFFER_LABEL, BG_BUFFER_SIZE);
-
-        let dot_pipeline = create_dot_pipeline(&device, format);
-        let dot_buffer = create_vertex_buffer(&device, DOT_BUFFER_LABEL, DOT_BUFFER_SIZE);
 
         let cols = ((width as f32 / cell_width).floor() as usize).max(1);
         let rows = ((height as f32 / cell_height).floor() as usize).max(1);
@@ -106,8 +78,7 @@ impl GpuRenderer {
         // These values are recomputed by the first `resize()` before rendering.
         let line_height = cell_height;
 
-        let image_pass = ImagePass::new(&device, format);
-        let glyph_quad_pass = GlyphQuadPass::new(&device, format);
+        let image_pass = ImagePass::default();
 
         let font_has_braille = font_covers_braille(
             &mut font_system,
@@ -136,7 +107,6 @@ impl GpuRenderer {
                 bold_weight,
                 cell_height,
                 cell_width,
-                fallback_glyph_cache: std::collections::HashMap::new(),
                 font_family,
                 font_has_bold,
                 font_has_braille,
@@ -157,28 +127,16 @@ impl GpuRenderer {
             },
             device,
             gpu,
-            format,
             queue,
             size,
             font_system,
             swash_cache,
-            text_atlas,
-            text_renderer,
-            viewport,
-            bg_pipeline,
-            bg_buffer,
-            dot_pipeline,
-            dot_buffer,
             cols: cols.max(1),
             rows: rows.max(1),
-            glyph_quad_pass,
-            glyph_key_scratch: String::new(),
             theme: Theme::default(),
-            text_buffers: Vec::new(),
             image_pass,
             overlay_caches: Default::default(),
             theme_generation: 0,
-            drew_blinking_text: false,
             svg_fontdb: None,
             scene_renderer: None,
         }
@@ -252,11 +210,6 @@ impl GpuRenderer {
         let rows = (rect.height / self.fonts.cell_height).floor() as usize;
         (cols.max(1), rows.max(1))
     }
-    /// Whether the last frame drew any blinking text, so the host knows
-    /// whether a text-blink timer has anything to flip.
-    pub fn drew_blinking_text(&self) -> bool {
-        self.drew_blinking_text
-    }
     /// Where the last frame drew what the pointer can act on, to test a
     /// click or a hover against.
     pub fn hits(&self) -> &FrameHits {
@@ -285,11 +238,6 @@ impl GpuRenderer {
     pub fn pane_pad(&self) -> f32 {
         crate::pane_h_pad(self.fonts.scale_factor)
     }
-    /// The format of the textures frames are rendered into.
-    pub fn format(&self) -> TextureFormat {
-        self.format
-    }
-
     /// The size of the frames rendered, `(width, height)` in pixels.
     pub fn size(&self) -> (u32, u32) {
         (self.size.width, self.size.height)
@@ -310,8 +258,6 @@ impl GpuRenderer {
 
         self.size = FrameSize { height, width };
         self.fonts.scale_factor = scale_factor;
-        self.viewport
-            .update(&self.queue, glyphon::Resolution { width, height });
 
         if scale_changed {
             // Recompute physical font size and line height
@@ -329,10 +275,6 @@ impl GpuRenderer {
             );
             self.fonts.cell_width = cell_width;
             self.fonts.cell_height = cell_height;
-
-            // Clear existing buffers so they are re-allocated with updated physical metrics next frame
-            self.text_buffers.clear();
-            self.forget_glyph_rasters();
         }
 
         let base_line_h =
