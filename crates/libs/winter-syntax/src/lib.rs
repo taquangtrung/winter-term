@@ -33,6 +33,9 @@ use winter_model::paint::{Style, SyntaxStyle};
 
 use self::words::{scope_words, Language, Run, Word};
 
+pub use self::highlighter::{highlight_styles, SyntaxHighlighter};
+
+mod highlighter;
 mod words;
 
 // ========================================================================

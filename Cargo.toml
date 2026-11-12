@@ -68,6 +68,10 @@ winter-textedit = { version = "0.1.0", path = "crates/base/winter-textedit" }
 # The GUI toolkit Winter is moving onto (local branch only: misty is not
 # published yet).
 misty = { version = "0.1.0", path = "../misty/crates/misty" }
+misty-viento = { version = "0.1.0", path = "../misty/crates/misty-viento" }
+# The editor Winter's text editing runs on (local branch only, as misty).
+viento = { version = "0.1.0", path = "../viento/crates/viento" }
+viento-keys = { version = "0.1.0", path = "../viento/crates/viento-keys" }
 winter-dir = { version = "0.1.0", path = "crates/tools/winter-dir" }
 winter-docker = { version = "0.1.0", path = "crates/tools/winter-docker" }
 winter-git = { version = "0.1.0", path = "crates/tools/winter-git" }
@@ -122,6 +126,12 @@ winresource = "0.1"
 # searching PATH for the sideloaded DLL.
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
+
+# misty-viento pins Viento to a commit of its local repository; Winter takes
+# the same checkout by path, so the three share one `viento`.
+[patch."file:///home/trung/Workspace/apps/viento"]
+viento = { path = "../viento/crates/viento" }
+viento-keys = { path = "../viento/crates/viento-keys" }
 
 # Dependencies built optimized even in a debug build: text shaping and the GPU
 # layer run every frame, and unoptimized they make `make dev` lag on every
