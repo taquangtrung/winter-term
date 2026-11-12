@@ -36,9 +36,15 @@ fn test_an_editor_s_command_chosen_in_the_palette_reaches_the_editor_in_front() 
     let mut app = App::new();
     let editor = winter_text::TextEditor::new(file, None).expect("opens");
     let tab = app.show_editor(EditorKind::Text, Box::new(editor));
-    assert!(app.chrome.overlay.is_none());
-    app.run_command("query_replace", tab);
-    assert!(app.chrome.overlay.is_some(), "it asks what to replace");
+    app.run_command("upcase_word", tab);
+    let editor = app
+        .open_tabs
+        .page(&tab)
+        .and_then(|slot| slot.page.as_editor());
+    let text = editor
+        .and_then(|editor| editor.document())
+        .map(|(_, text)| text);
+    assert_eq!(text.as_deref(), Some("TEXT"), "Viento's upcase-word ran");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -56,15 +62,17 @@ fn test_repeat_last_command_replays_previous_action() {
     app.run_command("repeat_last_command", tab);
 
     // Record a command into palette history and repeat it
-    app.recent.last_palette_command = Some("uppercase_word".to_string());
+    app.recent.last_palette_command = Some("upcase_word".to_string());
     app.run_command("repeat_last_command", tab);
 
-    let editor = app.open_tabs.page(&tab).unwrap();
-    let text_editor = editor
-        .page
-        .downcast_ref::<winter_text::TextEditor>()
-        .unwrap();
-    assert_eq!(text_editor.buffer().lines()[0], "FOO bar");
+    let editor = app
+        .open_tabs
+        .page(&tab)
+        .and_then(|slot| slot.page.as_editor());
+    let text = editor
+        .and_then(|editor| editor.document())
+        .map(|(_, text)| text);
+    assert_eq!(text.as_deref(), Some("FOO bar"));
 
     let _ = std::fs::remove_dir_all(&dir);
 }

@@ -12,22 +12,16 @@ categories = ["text-editors"]
 rust-version.workspace = true
 
 [dependencies]
-flate2 = "1"
-pulldown-cmark.workspace = true
-regex.workspace = true
-serde_json.workspace = true
+misty.workspace = true
+misty-viento.workspace = true
+viento.workspace = true
+viento-keys.workspace = true
 unicode-width.workspace = true
 winter-base.workspace = true
-winter-emulator.workspace = true
 winter-lsp.workspace = true
 winter-model.workspace = true
-winter-theme.workspace = true
 winter-ext-api.workspace = true
-winter-spell.workspace = true
-winter-synctex.workspace = true
 winter-syntax.workspace = true
-winter-vcs.workspace = true
 
 [dev-dependencies]
-winter-lsp = { workspace = true, features = ["test-support"] }
 winter-model = { workspace = true, features = ["test-support"] }

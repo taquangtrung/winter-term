@@ -1,2598 +1,579 @@
-//! Editor: one file as editable text in a tab, opened from whichever editor
-//! was pointing at it.
+//! The text editor tab: a view of a file open in Viento, the editor every
+//! text tab shares ([`session`]), drawn by misty-viento's `EditorView` in
+//! its pane. Viento owns the text, the cursor, the modes, and every editing
+//! key; the tab reads the file in, writes it out, and carries what the
+//! editor asks of the window (a save, a close, a notice, a file to open)
+//! to the window as an [`EditorOutcome`].
 //!
-//! - `comment`: commenting lines out and back in.
-//! - `commit`: recalling earlier commit messages into one being written.
-//! - `compare`: comparing a buffer with the file on disk, the clipboard, or
-//!   another buffer, in a diff beside it.
-//! - `conflict`: the merge conflicts a file holds, and resolving them.
-//! - `rebase`: the actions and checks of an interactive rebase's plan.
-//! - [`text_file`], shared with the editors that write files too: reading a file in and writing it back.
-//! - `outline`: the headings, sections, or definitions a file holds.
-//! - `swatch`: the colors a file writes, drawn on the color each names.
-//! - `context`: typing by context: comments and list items carried on
-//!   to the next line, headings and bullets indented by `TAB`.
-//! - `occur`: the word under the cursor, lit wherever it occurs and
-//!   changed everywhere at once.
-//! - `structure`: the definition the cursor is in, and the blocks the
-//!   indentation makes, for moving by them.
-//! - `lsp`: the file's language server, once one is running: its
-//!   problems drawn under the text, and what the keys ask of it.
-//! - `latex` and `markdown`: reading and changing prose in either, and
-//!   `writing`: the editor's commands over them.
-//! - `highlight`: which scopes of the file's grammar each run of characters
-//!   sits in, and so what color it takes.
-//! - [`keys`]: what every key does to either.
-//! - `remote`: reading and writing a file as root, in a container, or over
-//!   SSH, as its path says.
+//! Keys come through the window's dispatch, so the window's own sequences
+//! run first; the pointer and an input method's text come to the view
+//! straight from misty ([`TextEditor::handle_input`]).
 
-mod bibtex;
-mod branches;
-mod buffers;
-mod comment;
-mod commit;
-mod compare;
-mod complete;
-pub use complete::set_extension_registry;
-mod completing;
-pub use completing::known_languages;
-mod conceal;
-mod conflict;
-mod context;
-mod cursors;
-pub mod dictionary;
-pub mod diff;
-mod diffing;
-mod document;
-mod ex;
-mod expand;
-mod fixes;
-mod git_changes;
-mod guides;
-mod highlights;
-mod hints;
-mod history;
-pub use history::history_dir;
-mod hippie;
-mod hover_docs;
-mod inline;
-mod lens;
-pub use inline::{InlineAsk, InlineCall, InlineTold};
-pub mod keys;
-mod latex;
-mod lookup;
-mod lsp;
-mod markdown;
-mod occur;
-mod outline;
-mod painting;
-mod peek;
-mod point;
-mod problems;
-mod query_replace;
-mod rebase;
-mod reflow;
-mod remote;
-mod send;
-pub mod settings;
-mod sexp;
-mod spelling;
-mod spelling_scan;
-mod sticky;
-mod structure;
-mod swatch;
-mod symbols;
-mod view;
-mod wrap;
-mod writing;
+#![deny(unsafe_code)]
+#![deny(missing_docs)]
 
-pub use buffers::save_through;
-pub use keys::KEY_TABLES;
+use std::any::Any;
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use misty::theme::Theme;
+use misty::{EventCx, Font, Frame, Input, Rect};
+use misty_viento::{clock, EditorResponse, EditorView};
+use viento::{CommandError, DocumentId, Handled, HostRequest, Mode, NoticeLevel, ViewId};
 use winter_base::edit_wait::EditWaiter;
 use winter_model::editor::{
-    self as editor, CommandOutput, Editor, EditorCommand, EditorHint, EditorMenuItem,
-    EditorOutcome, EditorRequest, EditorStatus, GitViewRequest, JobReply, JobRequest, JumpStep,
-    JumpTarget, Notice, OpenTarget, Page, Popups, PromptMode, PromptReply, PromptRequest,
-    ScrollPosition, SearchReport, TargetStyles, COPY_RICH, DIFF_BUFFER, DIFF_CLIPBOARD, DIFF_DISK,
-    LSP_COMMANDS, MERGE_NEXT, MERGE_PREV, MERGE_RESOLVE, PROBLEM_COMMANDS, SAVE_ALL,
-    SYNCTEX_FORWARD, TOGGLE_SWATCHES,
+    menu_groups, Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorStatus, FileEdit,
+    JumpStep, JumpTarget, Notice, OpenTarget, Page, SharedText, TargetStyles, SAVE_ALL,
 };
-use winter_model::input::table::KeyHelp;
-use winter_model::input::{Key, KeyCode};
-use winter_model::paint::{
-    place_view, scroll_position_rows, top_at_screen_row, wheel_scroll_rows, Caret, CursorRows,
-    DiagnosticLevel, Frame, GutterLane, GutterMark, IconKind, Place, Point, Row, RowWindow, Span,
-    Style, ViewAim, TAB_WIDTH,
-};
-use winter_model::path::{crumb_label, crumb_paths};
-use winter_model::text_file;
-use winter_model::textedit::buffer::TextBuffer;
-use winter_model::textedit::graphemes::char_width;
-use winter_model::textedit::modal::{EditMode, EditView, Marks, ModalEditor, Selection};
-use winter_vcs::exec;
+use winter_model::input::Key;
+use winter_model::paint::{Frame as PaintFrame, IconKind, Row};
+use winter_model::textedit::modal::EditMode;
 
-use commit::MessageRecall;
-use remote::{ASK_AS_ROOT, ASK_PASSWORD_OPEN, ASK_PASSWORD_SAVE};
-use winter_model::text_file::{FileStamp, LoadedFile};
-use winter_syntax::{Grammar, LineState};
+pub mod diff;
+mod jumps;
+mod keys;
+mod language;
+mod session;
+pub mod settings;
+
+pub use keys::KEY_TABLES;
+pub use language::known_languages;
+pub use misty_viento::HighlightStyle;
+pub use session::save_through;
+pub use settings::history_dir;
 
 // ========================================================================
 // Constants
 // ========================================================================
 
-const ASK_COMPARE_BUFFER: &str = "compare-buffer";
+/// The text editor's commands the palette runs by name: none of Winter's
+/// own, as Viento runs every editing command.
+pub const COMMANDS: &[EditorCommand] = &[];
 
-/// What a failed `synctex` is reported as, its output under it.
-const SYNCTEX_FAILED: &str = "SyncTeX failed";
-const ASK_CONFLICT: &str = "conflict";
-const ASK_ENV_NEW: &str = "environment-new";
-const ASK_ENV_RENAME: &str = "environment-rename";
-const ASK_OVERWRITE: &str = "overwrite";
-const ASK_SEARCH: &str = "search";
-const ASK_SEARCH_BACK: &str = "search-back";
-const ASK_CHAR_JUMP: &str = "char-jump";
-
-/// The commands the `editor` block of `keybindings.kdl` can bind: moving
-/// by the code and its occurrences, and the language server's.
-pub const COMMANDS: &[EditorCommand] = &[
-    EditorCommand {
-        label: "Sort Selected Lines (Ascending)",
-        name: editor::EDITOR_SORT_LINES_ASC,
-    },
-    EditorCommand {
-        label: "Sort Selected Lines (Descending)",
-        name: editor::EDITOR_SORT_LINES_DESC,
-    },
-    EditorCommand {
-        label: "Deduplicate Lines (Keep First)",
-        name: editor::EDITOR_UNIQ_LINES,
-    },
-    EditorCommand {
-        label: "Reverse Selected Lines",
-        name: editor::EDITOR_REVERSE_LINES,
-    },
-    EditorCommand {
-        label: "Open in Hex Editor",
-        name: editor::EDITOR_OPEN_HEX,
-    },
-    EditorCommand {
-        label: "Git: Blame Current File",
-        name: editor::EDITOR_GIT_BLAME,
-    },
-    EditorCommand {
-        label: "Jump to Char / 2-Char Pattern (Hop / Avy)",
-        name: editor::EDITOR_JUMP_CHAR,
-    },
-    EditorCommand {
-        label: "Delete Whole Line",
-        name: editor::EDITOR_DELETE_LINE,
-    },
-    EditorCommand {
-        label: "Recenter Top Bottom",
-        name: editor::EDITOR_RECENTER,
-    },
-    EditorCommand {
-        label: "File: Local History",
-        name: editor::FILE_HISTORY,
-    },
-    EditorCommand {
-        label: "Cursors: Add at the Next Occurrence",
-        name: editor::CURSOR_ADD_NEXT,
-    },
-    EditorCommand {
-        label: "Cursors: Add at Every Occurrence",
-        name: editor::CURSOR_ADD_ALL,
-    },
-    EditorCommand {
-        label: "Cursors: Add on the Line Below",
-        name: editor::CURSOR_ADD_BELOW,
-    },
-    EditorCommand {
-        label: "Cursors: Add on the Line Above",
-        name: editor::CURSOR_ADD_ABOVE,
-    },
-    EditorCommand {
-        label: "Cursors: Skip to the Next Occurrence",
-        name: editor::CURSOR_SKIP,
-    },
-    EditorCommand {
-        label: "Cursors: Remove the One Added Last",
-        name: editor::CURSOR_REMOVE_LAST,
-    },
-    EditorCommand {
-        label: "Cursors: Keep Only the Main One",
-        name: editor::CURSOR_CLEAR,
-    },
-    EditorCommand {
-        label: "Flash Current Line",
-        name: editor::EDITOR_FLASH_LINE,
-    },
-    EditorCommand {
-        label: "Go to Offset",
-        name: editor::EDITOR_GOTO_OFFSET,
-    },
-    EditorCommand {
-        label: "Display Current Offset",
-        name: editor::EDITOR_SHOW_OFFSET,
-    },
-    EditorCommand {
-        label: "Run Cargo Fix",
-        name: editor::RUST_CARGO_FIX,
-    },
-    EditorCommand {
-        label: "Insert Math or Greek Symbol…",
-        name: editor::WRITING_INSERT_SYMBOL,
-    },
-    EditorCommand {
-        label: "Look Up Word",
-        name: editor::DICTIONARY_LOOKUP,
-    },
-    EditorCommand {
-        label: "Sort Entries by Key (A-Z)",
-        name: editor::BIBTEX_SORT_KEY_ASC,
-    },
-    EditorCommand {
-        label: "Sort Entries by Key (Z-A)",
-        name: editor::BIBTEX_SORT_KEY_DESC,
-    },
-    EditorCommand {
-        label: "Sort Entries by Year (Earliest First)",
-        name: editor::BIBTEX_SORT_YEAR_ASC,
-    },
-    EditorCommand {
-        label: "Sort Entries by Year (Latest First)",
-        name: editor::BIBTEX_SORT_YEAR_DESC,
-    },
-    EditorCommand {
-        label: "Compare Buffer with File",
-        name: editor::DIFF_FILE,
-    },
-    EditorCommand {
-        label: "Compare Buffer with Revision",
-        name: editor::DIFF_REVISION,
-    },
-    EditorCommand {
-        label: "Compare Buffer with Two Files",
-        name: editor::DIFF_FILES,
-    },
-    EditorCommand {
-        label: "Merge Another File into This One",
-        name: editor::MERGE_FILE,
-    },
-    EditorCommand {
-        label: "Resolve Merge Conflicts in 3-Way Merge",
-        name: editor::MERGE_CONFLICTS_3WAY,
-    },
-    EditorCommand {
-        label: "Change All Occurrences",
-        name: editor::EDITOR_CHANGE_OCCURRENCES,
-    },
-    EditorCommand {
-        label: "Hippie Expand: Expand Word Before Cursor",
-        name: editor::EDITOR_EXPAND_WORD,
-    },
-    EditorCommand {
-        label: "Toggle Occurrence Highlights",
-        name: editor::EDITOR_TOGGLE_OCCURRENCES,
-    },
-    EditorCommand {
-        label: "Next Occurrence",
-        name: editor::EDITOR_NEXT_OCCURRENCE,
-    },
-    EditorCommand {
-        label: "Highlight Text",
-        name: editor::EDITOR_HIGHLIGHT_TEXT,
-    },
-    EditorCommand {
-        label: "Delete Current Highlight",
-        name: editor::EDITOR_HIGHLIGHT_DELETE,
-    },
-    EditorCommand {
-        label: "Delete All Highlights",
-        name: editor::EDITOR_HIGHLIGHT_DELETE_ALL,
-    },
-    EditorCommand {
-        label: "Previous Occurrence",
-        name: editor::EDITOR_PREV_OCCURRENCE,
-    },
-    EditorCommand {
-        label: "Go to Start of Function/Module",
-        name: editor::EDITOR_DEFINITION_START,
-    },
-    EditorCommand {
-        label: "Go to End of Function/Module",
-        name: editor::EDITOR_DEFINITION_END,
-    },
-    EditorCommand {
-        label: "Select Current Function/Module",
-        name: editor::EDITOR_SELECT_DEFINITION,
-    },
-    EditorCommand {
-        label: "Go to Next Fold",
-        name: editor::EDITOR_NEXT_BLOCK,
-    },
-    EditorCommand {
-        label: "Go to Previous Fold",
-        name: editor::EDITOR_PREV_BLOCK,
-    },
-    EditorCommand {
-        label: "Go to Definition",
-        name: editor::LSP_DEFINITION,
-    },
-    EditorCommand {
-        label: "Go to Declaration",
-        name: editor::LSP_DECLARATION,
-    },
-    EditorCommand {
-        label: "Go to Type Definition",
-        name: editor::LSP_TYPE_DEFINITION,
-    },
-    EditorCommand {
-        label: "Go to Implementation",
-        name: editor::LSP_IMPLEMENTATION,
-    },
-    EditorCommand {
-        label: "Find References",
-        name: editor::LSP_REFERENCES,
-    },
-    EditorCommand {
-        label: "Show Hover",
-        name: editor::LSP_HOVER,
-    },
-    EditorCommand {
-        label: "Show Signature",
-        name: editor::LSP_SIGNATURE,
-    },
-    EditorCommand {
-        label: "Rename Symbol",
-        name: editor::LSP_RENAME,
-    },
-    EditorCommand {
-        label: "Quick Fix and Refactor",
-        name: editor::LSP_CODE_ACTION,
-    },
-    EditorCommand {
-        label: "Format Document",
-        name: editor::LSP_FORMAT,
-    },
-    EditorCommand {
-        label: "Next Problem in File",
-        name: editor::PROBLEM_NEXT_IN_FILE,
-    },
-    EditorCommand {
-        label: "Previous Problem in File",
-        name: editor::PROBLEM_PREV_IN_FILE,
-    },
-    EditorCommand {
-        label: "First Problem in Project",
-        name: editor::PROBLEM_FIRST,
-    },
-    EditorCommand {
-        label: "Next Problem in Project",
-        name: editor::PROBLEM_NEXT,
-    },
-    EditorCommand {
-        label: "Previous Problem in Project",
-        name: editor::PROBLEM_PREV,
-    },
-    EditorCommand {
-        label: "First Error in Project",
-        name: editor::PROBLEM_FIRST_ERROR,
-    },
-    EditorCommand {
-        label: "Next Error in Project",
-        name: editor::PROBLEM_NEXT_ERROR,
-    },
-    EditorCommand {
-        label: "Previous Error in Project",
-        name: editor::PROBLEM_PREV_ERROR,
-    },
-    EditorCommand {
-        label: "First Writing Issue in Project",
-        name: editor::PROBLEM_FIRST_WRITING,
-    },
-    EditorCommand {
-        label: "Next Writing Issue in Project",
-        name: editor::PROBLEM_NEXT_WRITING,
-    },
-    EditorCommand {
-        label: "Previous Writing Issue in Project",
-        name: editor::PROBLEM_PREV_WRITING,
-    },
-    EditorCommand {
-        label: "Problems in Project",
-        name: editor::PROBLEM_LIST,
-    },
-    EditorCommand {
-        label: "Navigate Back",
-        name: editor::NAVIGATE_BACK,
-    },
-    EditorCommand {
-        label: "Navigate Forward",
-        name: editor::NAVIGATE_FORWARD,
-    },
-];
-
-/// What marks a buffer holding edits that are not on disk, in the header
-/// and in the list of open buffers.
+/// What a tab's title ends with while its file has edits not written.
 pub const DIRTY_MARK: &str = " [+]";
 
-/// How long one paint may spend working out what the lines above the window
-/// leave open, and one tick spend catching up on what a paint did not reach.
-/// A file far longer than these allow is colored over a few frames, from the
-/// top down, rather than holding the window still while it is read.
-const LEARN_PAINT_BUDGET: Duration = Duration::from_millis(8);
-const LEARN_TICK_BUDGET: Duration = Duration::from_millis(25);
+/// The right-click menu's entries, as the keys Viento binds them to and
+/// their labels: over a selection, and elsewhere.
+const SELECTION_MENU: [(&str, &str); 2] = [("y", "Copy"), ("d", "Cut")];
+const TEXT_MENU: [(&str, &str); 3] = [("p", "Paste"), ("u", "Undo"), ("C-r", "Redo")];
 
-/// How soon to come back to coloring that is still catching up.
-const LEARN_TICK: Duration = Duration::from_millis(10);
-
-/// How often the file being edited is looked at on disk, so a change made to
-/// it elsewhere (another editor, a formatter, a `git checkout`) is read in.
-const DISK_CHECK: Duration = Duration::from_secs(1);
-
-/// The command that says what the grammar makes of the character under the
-/// cursor, for the palette and a `keybindings.kdl` `editor` block.
-pub(crate) const SHOW_SCOPES: &str = winter_model::editor::SHOW_SCOPES;
-
-/// The grammar a commit message is read with.
-const COMMIT_GRAMMAR: &str = "Git Commit";
-
-/// The grammar a rebase plan is read with.
-const REBASE_GRAMMAR: &str = "Git Rebase Todo";
+/// What is said when a close would drop edits not written.
+const UNSAVED: &str = "No write since last change (add ! to override)";
 
 // ========================================================================
 // Data Structures
 // ========================================================================
 
-/// The files open for editing, the keys that act on them, and everything the
-/// two share: one yank reaches every buffer, as it does in Vim.
+/// A text tab: one view of a file open in the shared editor.
 #[derive(Debug)]
 pub struct TextEditor {
-    /// Which of the open files the keys act on.
-    at: usize,
-    /// Every file open in this editor, in the order they were opened.
-    docs: Vec<Document>,
-    /// Where the cursor and the view's top were before jump previewing
-    /// started: (row, col, (scroll, scroll_skip)).
-    jump_origin: Option<(usize, usize, (usize, usize))>,
-    /// The modal keys, and what outlives one buffer: the registers, the last
-    /// search, the last change, and what the last command reported.
-    modal: ModalEditor,
-    /// The lines the last paint laid out, and which of them show on the
-    /// pane's top, middle, and bottom screen rows, for `H`, `M`, and `L`.
-    laid_out: RowWindow,
-    /// What each screen row of the last painted frame holds, so a click lands
-    /// on the character under the pointer.
-    painted: Vec<Painted>,
-    /// The first key of a commit message's or a rebase plan's sequence
-    /// (`C-c`), while it waits for the key that completes it.
-    chord_start: Option<Key>,
-    /// Where `M-p`/`M-n` have got to through earlier commit messages, for
-    /// a buffer that is one.
-    recall: MessageRecall,
-    /// How many rows of text the pane last had room for, so the paging keys
-    /// can move by what is actually on screen.
-    /// What this editor has asked of the window since it last asked: places
-    /// and edits in other files.
-    requests: Vec<EditorRequest>,
-    viewport: usize,
-    /// Whether the wheel, not the cursor, last placed the view: the view then
-    /// stays where it was put until a key brings the cursor back into it.
-    wheel: bool,
-    /// A program blocked until this editor is done, such as `git commit` waiting
-    /// on its message. Answered when the editor is dropped.
-    waiter: Option<EditWaiter>,
-    /// Whether the TextMate token & scope inspect popup is active under the cursor.
-    inspect_scopes: bool,
-    /// The PDF a SyncTeX forward search is asking about, while it runs.
-    synctex_pdf: Option<(PathBuf, bool)>,
-    /// Whether the clipboard the host is asked for is to be compared with
-    /// the buffer rather than pasted into it.
-    compare_clipboard: bool,
-    /// Whether a color the file writes (`#51afef`) is drawn on that color.
-    swatches: bool,
-    /// Whether a faint line marks each level of a line's indentation.
-    indent_guides: bool,
-    /// Whether a save has the file formatted first.
-    format_on_save: bool,
-    /// When a save waiting on the server's formatting writes the file
-    /// anyway, should the answer not have come.
-    format_save_due: Option<Instant>,
-    /// Where each save keeps a copy of the file, as the host says.
-    history_dir: Option<PathBuf>,
-    /// The language each file extension settings add is written in.
+    /// The document shown, the file's.
+    document: DocumentId,
+    /// Where the cursor was before Scout's preview moved it, to go back to
+    /// should the jump be called off.
+    jump_origin: Option<usize>,
+    /// Where each line Scout's colors have walked to begins, and the text's
+    /// version it was walked in.
+    jump_walk: (Option<u64>, Vec<winter_syntax::LineState>),
+    /// The language each extension settings add is written in.
     languages: BTreeMap<String, String>,
-    /// When the file being edited is next looked at on disk.
-    disk_check_at: Instant,
-    /// The completion popup, while it is open.
-    completion: Option<completing::Completion>,
-    /// The popup waiting for typing to pause before it opens by itself.
-    completion_due: Option<completing::CompletionDue>,
-    /// The problems store's generation the documents' problems were last
-    /// taken at (see [`winter_lsp::diagnostics::generation`]).
-    diagnostics_seen: u64,
-    /// The earliest deadline of such a popup called off since the host last
-    /// asked, for it to stop waiting on.
-    cancelled_tick: Option<Instant>,
-    /// The settings completion follows.
-    completion_config: settings::CompletionConfig,
-    /// What the file read as on disk when it was last found changed under
-    /// edits not yet saved, so that is said once rather than every second.
-    stale_said: Option<FileStamp>,
-    /// The language servers this editor's documents are open with.
-    link: lsp::Link,
-    /// The fixes last offered at the cursor, from every source.
-    fixes: fixes::Fixes,
-    /// Whether the word under the cursor is lit wherever it occurs.
-    occurrences: bool,
-    /// Every occurrence of a word, while they are changed together.
-    occur: Option<occur::Occur>,
-    /// The revision a diff session asked git for, while it reads it.
-    diff_revision: Option<String>,
-    /// When the project's prose files were last checked for spelling.
-    prose_scan: spelling_scan::ProseScan,
-    /// Where a run of `C-l` presses has got to.
-    recenter: Option<view::Recenter>,
-    /// Until when the cursor's line is lit, after a jump.
-    flash_until: Option<Instant>,
-    /// How many cells of text each screen row holds while lines are folded
-    /// to the pane, as the last paint folded them; `None` with wrapping off.
-    fold: Option<usize>,
-    /// The column within its screen row a run of vertical moves keeps to.
-    wrap_goal: Option<usize>,
-    /// How far the rows a wrapped line continues on are indented.
-    wrap_indent: winter_model::paint::WrapIndent,
-    /// How many screen rows the view keeps above and below the cursor's.
-    scroll_margin: usize,
-    /// Whether the key before was a yank (`C-y`, `M-y`), after which `M-y`
-    /// steps back through what was yanked.
-    yanked: bool,
-    /// Inline suggestions (an AI's ghost text and next edits): where they
-    /// come from, and what is on screen.
-    inline: inline::Inline,
-    /// When markup's markers hide.
-    markup_markers: winter_model::paint::MarkupMarkers,
-    /// The markup spans found in the document in front, kept while its
-    /// text stands.
-    conceal_cache: std::cell::RefCell<conceal::Cache>,
-    /// In-progress interactive query-replace session.
-    query_replace: Option<query_replace::QueryReplaceState>,
-    /// In-progress hippie expansion session cycling words at cursor.
-    hippie: Option<hippie::HippieSession>,
-    /// The pieces of code the selection is growing through.
-    expansion: expand::Expansion,
-    /// Whether what the top of the view is inside is pinned over it.
-    sticky_on: bool,
-    /// The places a card is showing, without going there.
-    peek: Option<peek::Peek>,
-    /// What the list of actions at the cursor last offered.
-    offered_points: Vec<point::PointAction>,
-}
-
-/// One open file: its text, where the cursor and the window sit in it, and
-/// what it looked like on disk when it was read.
-#[derive(Debug)]
-struct Document {
-    buffer: TextBuffer,
-    /// The conflicts in the text and the revision they were found at: the
-    /// paint and the status line both ask on every frame, and reading every
-    /// line for markers each time lagged a long file.
-    conflicts: std::cell::RefCell<Option<(usize, Vec<conflict::Conflict>)>>,
-    /// The cursors editing beside the buffer's own.
-    cursors: cursors::Cursors,
-    /// The first column painted, for lines wider than the pane.
-    hscroll: usize,
-    /// The line to land on once a file not yet read is read.
-    land_on: Option<usize>,
-    /// The marks `m` has set in this file, and where `''` goes back to.
-    marks: Marks,
-    /// Where the file is: a local path, or a remote one's URI (`ssh://host/x`,
-    /// see [`winter_base::remote`]) that says how it is reached.
+    /// A notice for the window, not yet taken.
+    notice: Option<Notice>,
+    /// Where the file is.
     path: PathBuf,
-    scroll: usize,
-    /// How many screen rows of the first line in view are scrolled past, so
-    /// the view moves by screen rows over wrapped lines, whether the wheel,
-    /// the cursor, or a placement moves it. Nought with wrapping off.
-    scroll_skip: usize,
-    /// What the tabs showing the file hold in common beside its text: where
-    /// it stood on disk, its shape, and what the servers have of it.
-    file: Rc<buffers::BufferState>,
-    /// Whether this tab counts as one open with the servers.
-    attached: bool,
-    /// The last line the window wants colored, which the states are worked
-    /// out as far as, over a few ticks for a long file.
-    color_upto: usize,
-    /// The style of each character of each line painted so far, so a paint
-    /// reads a line through its grammar once rather than every frame. Kept,
-    /// as the states are, until an edit makes it untrue.
-    colors: Vec<Option<Vec<Style>>>,
-    /// The grammar the file is read with, or `None` for a file whose
-    /// language this does not know.
-    grammar: Option<Grammar>,
-    /// What each line begins inside, one entry per line worked out so far.
-    /// Kept because a comment opened on one line colors every line until it
-    /// closes, so a line cannot be colored without knowing what precedes it.
-    states: Vec<LineState>,
-    /// Whether the file has yet to be read: one only root can read, waiting
-    /// on the password, or a remote one restored with a session, read when
-    /// first shown. The buffer stands empty and takes no edit meanwhile.
-    unread: bool,
-    /// What the language server serving the file last said is wrong in it.
-    diagnostics: Vec<winter_lsp::protocol::Diagnostic>,
-    /// The words spelled wrong in it, while they are checked.
-    spelling: Option<spelling::Spelling>,
-    /// The phrases lit in it, and whether its sentences are washed.
-    highlights: highlights::Highlights,
-    /// What the language server says of the code that the text does not.
-    hints: hints::Hints,
-    /// What the language server offers to do with pieces of the code.
-    lenses: lens::Lenses,
-    /// What the language server says the code defines.
-    symbols: outline::Symbols,
-    /// The lines last pinned over the top of the view.
-    sticky: sticky::Sticky,
-    /// What it has changed since its last commit.
-    git: git_changes::GitChanges,
+    /// The view the tab in front shows, drawn in its pane; `None` while a
+    /// tab on this buffer is between keeping its view and handing the
+    /// next one in (see [`Editor::save_view`]).
+    view: RefCell<Option<EditorView>>,
+    /// A program blocked on this edit (`git commit` waiting on its
+    /// message), answered when the tab goes.
+    waiter: Option<EditWaiter>,
 }
 
-/// One painted cell of a line: its character, its color, the wavy line
-/// under it where a language server found a problem, and whether it is lit
-/// as an occurrence of the word under the cursor.
-type Cell = (char, Style, Option<DiagnosticLevel>, bool);
-
-/// What one tab's view of the file keeps while another tab on the same file
-/// is the one acted on: where the cursor and the window are, and what was
-/// painted there last, which clicks and paging measure against.
-#[derive(Clone, Debug)]
-struct TextView {
-    /// Which of the editor's files the view is on.
-    at: usize,
-    col: usize,
-    fold: Option<usize>,
-    hscroll: usize,
-    jump_origin: Option<(usize, usize, (usize, usize))>,
-    laid_out: RowWindow,
-    painted: Vec<Painted>,
-    recenter: Option<view::Recenter>,
-    row: usize,
-    scroll: usize,
-    scroll_skip: usize,
-    viewport: usize,
-    wheel: bool,
-    wrap_goal: Option<usize>,
-}
-
-/// What one screen row of a painted frame holds: which line of the file, and
-/// the display column its text begins at, which is the fold a wrapped line
-/// picks up from or the scroll a wide one is read through.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-struct Painted {
-    /// The cells before the row's text: the indent of a row a wrapped line
-    /// continues on.
-    lead: usize,
-    line: usize,
-    offset: usize,
+/// The view of a tab gone behind another on the same buffer, kept in the
+/// window until the tab comes in front again; closed in the editor when
+/// the tab goes for good.
+#[derive(Debug)]
+struct KeptView {
+    /// The document it shows.
+    document: DocumentId,
+    /// The view, until it is shown again.
+    view: Option<EditorView>,
 }
 
 // ========================================================================
-// TextEditor: state
+// TextEditor Implementations
 // ========================================================================
 
 impl TextEditor {
-    /// Open `path`'s contents for editing, landing on `line` when whatever
-    /// asked for the file knew which one mattered.
+    /// A tab on `path`'s contents, on the document another tab has it open
+    /// in if one has, landing on `line` (from 1) when whatever asked for the
+    /// file knew which one mattered.
     pub fn new(path: PathBuf, line: Option<usize>) -> io::Result<Self> {
-        // A commit message is for typing into, so it opens ready to type.
-        let mode = match commit::is_message_file(&path) {
-            true => EditMode::Insert,
-            false => EditMode::Normal,
+        let (document, view) = session::with(|session| session.open_view(&path))?;
+        let mut editor = Self {
+            document,
+            jump_origin: None,
+            jump_walk: (None, Vec::new()),
+            languages: BTreeMap::new(),
+            notice: None,
+            path,
+            view: RefCell::new(Some(EditorView::new(view))),
+            waiter: None,
         };
-        Ok(Self::with_doc(Document::open(path, line)?, mode))
-    }
-
-    /// Open `target`'s file for editing at its line and column.
-    pub fn at(target: OpenTarget) -> io::Result<Self> {
-        let mut editor = Self::new(target.path, target.line)?;
-        if let Some(column) = target.column {
-            editor.move_to_column(column);
+        if let Some(line) = line {
+            editor.move_to(line.saturating_sub(1), 0);
         }
         Ok(editor)
     }
 
-    /// An editor holding `doc` alone, its keys starting in `mode`.
-    fn with_doc(doc: Document, mode: EditMode) -> Self {
-        Self {
-            at: 0,
-            docs: vec![doc],
-            jump_origin: None,
-            chord_start: None,
-            modal: ModalEditor::new().with_mode(mode).with_clipboard(),
-            laid_out: RowWindow::default(),
-            painted: Vec::new(),
-            recall: MessageRecall::default(),
-            requests: Vec::new(),
-            viewport: 0,
-            wheel: false,
-            waiter: None,
-            inspect_scopes: false,
-            synctex_pdf: None,
-            compare_clipboard: false,
-            swatches: true,
-            indent_guides: true,
-            format_on_save: false,
-            format_save_due: None,
-            history_dir: None,
-            languages: BTreeMap::new(),
-            disk_check_at: Instant::now() + DISK_CHECK,
-            completion: None,
-            completion_due: None,
-            diagnostics_seen: u64::MAX,
-            cancelled_tick: None,
-            completion_config: settings::CompletionConfig::default(),
-            stale_said: None,
-            link: lsp::Link::default(),
-            fixes: fixes::Fixes::default(),
-            occurrences: true,
-            occur: None,
-            diff_revision: None,
-            prose_scan: spelling_scan::ProseScan::default(),
-            yanked: false,
-            inline: inline::Inline::default(),
-            markup_markers: winter_model::paint::MarkupMarkers::default(),
-            conceal_cache: std::cell::RefCell::default(),
-            recenter: None,
-            flash_until: None,
-            fold: None,
-            wrap_goal: None,
-            wrap_indent: winter_model::paint::WrapIndent::default(),
-            scroll_margin: 0,
-            query_replace: None,
-            hippie: None,
-            expansion: expand::Expansion::default(),
-            sticky_on: true,
-            peek: None,
-            offered_points: Vec::new(),
+    /// A tab on `target`'s file at its line and column (both from 1).
+    pub fn at(target: OpenTarget) -> io::Result<Self> {
+        let column = target.column;
+        let mut editor = Self::new(target.path, target.line)?;
+        if let (Some(line), Some(column)) = (target.line, column) {
+            editor.move_to(line.saturating_sub(1), column.saturating_sub(1));
         }
+        Ok(editor)
     }
 
-    /// [`Self::new`] for a saved session coming back: a remote file is not
-    /// read until it is first shown, so a restart does not wait on every
-    /// host and container a session had open, or ask for a password before
-    /// the window is up.
+    /// [`Self::new`] for a saved session coming back.
     pub fn restored(path: PathBuf, line: Option<usize>) -> io::Result<Self> {
-        if winter_base::remote::remote_of(&path).is_none() {
-            return Self::new(path, line);
-        }
-        Ok(Self::with_doc(
-            Document::unread(path, line),
-            EditMode::Normal,
-        ))
+        Self::new(path, line)
     }
 
-    /// Whether this editor is editing the message of a commit about to be made,
-    /// which is the one message worth showing the staged changes beside.
-    pub fn edits_commit(&self) -> bool {
-        commit::is_commit_message(&self.doc().path)
-    }
-
-    /// Have `waiter` answered when this editor ends, which is what lets a
+    /// Has `waiter` answered when this tab goes, which is what lets a
     /// program that launched the editor and blocked on it carry on.
     pub fn with_waiter(mut self, waiter: EditWaiter) -> Self {
         self.waiter = Some(waiter);
         self
     }
 
-    /// Tell whoever is waiting on this editor that its edit was thrown away,
-    /// when closing the buffer closes the editor.
-    fn reject_waiter_if_closing(&mut self) {
-        if self.docs.len() > 1 {
-            return;
-        }
-        if let Some(waiter) = self.waiter.as_mut() {
-            waiter.reject();
-        }
+    /// Whether this tab edits the message of a commit about to be made,
+    /// the one message worth showing the staged changes beside.
+    pub fn edits_commit(&self) -> bool {
+        language::is_commit_message(&self.path)
     }
 
-    /// Throw a commit message away the way git understands: empty the file and
-    /// save it, so git stops on its own at an empty message. `None` where the
-    /// buffer is not a message, or closing it would not end the editor.
-    pub(crate) fn cancel_message(&mut self) -> Option<EditorOutcome> {
-        if self.docs.len() > 1 || !commit::is_message_file(&self.doc().path) {
+    /// The language the file is written in, as settings name it, and where
+    /// it is: what a language server is started for.
+    pub fn lsp_subject(&self) -> Option<(String, PathBuf)> {
+        let grammar = language::grammar_of(&self.path);
+        let language = language::language_of(&self.path, grammar, &self.languages);
+        Some((language, self.path.clone()))
+    }
+
+    /// Follows `settings`: the editor's options, and the languages settings
+    /// add.
+    pub fn configure(&mut self, settings: &settings::EditorSettings) {
+        session::with(|session| {
+            let options = session.editor.options();
+            if options.indent_guides != settings.indent_guides {
+                let options = viento::EditorOptions {
+                    indent_guides: settings.indent_guides,
+                    ..*options
+                };
+                session.editor.set_options(session::options(&options));
+            }
+        });
+        self.languages.clone_from(&settings.languages);
+    }
+
+    /// Makes `edits` (a language server's, in its UTF-16 columns) to the
+    /// file, as one change. Whether the tab took them.
+    pub fn apply_text_edits(&mut self, edits: &[FileEdit]) -> bool {
+        let view = self.view_id();
+        session::with(|session| {
+            let Some(text) = session.editor.document(self.document) else {
+                return false;
+            };
+            let offset = |point: winter_model::editor::EditPoint| {
+                let position = viento::Utf16Position {
+                    column: point.column as usize,
+                    line: point.line as usize,
+                };
+                text.utf16_position_to_char(position)
+                    .unwrap_or_else(|| text.len_chars())
+            };
+            let mut changes: Vec<viento::Edit> = edits
+                .iter()
+                .map(|edit| viento::Edit::new(offset(edit.start)..offset(edit.end), &edit.new_text))
+                .collect();
+            changes.sort_by_key(|edit| edit.range.start);
+            session.editor.apply_edits(view, changes);
+            true
+        })
+    }
+
+    /// The file's text for a view following it (a Markdown preview) when
+    /// this tab holds `path`: the lines left out where the asker knows the
+    /// revision already.
+    pub fn shared_text(&self, path: &Path, known: Option<usize>) -> Option<SharedText> {
+        if !self.holds_file(path) {
             return None;
         }
-        let rows = self.buffer().lines().len();
-        self.buffer_mut().replace_rows(0, rows, vec![String::new()]);
-        self.write_file();
-        Some(EditorOutcome::Close)
-    }
-
-    /// `C-M-p`/`C-M-n` in a commit message: swap the message above git's
-    /// comment footer for an earlier one (`back`) or the one after it. The
-    /// first step back asks git for the history and is taken when it comes
-    /// back (see [`Editor::on_job`]).
-    pub(crate) fn recall_message(&mut self, back: bool) -> EditorOutcome {
-        if !commit::is_message_file(&self.doc().path) {
-            return EditorOutcome::Consumed;
-        }
-        if back {
-            let path = self.doc().path.clone();
-            if let Some(request) = self.recall.history_request(&path) {
-                return EditorOutcome::Job(request);
-            }
-        }
-        let rows = commit::message_rows(self.buffer().lines());
-        let typed = self.buffer().lines()[..rows].join("\n");
-        let recalled = match back {
-            true => self.recall.previous(typed),
-            false => self.recall.next(),
-        };
-        if let Some(message) = recalled {
-            let lines = message.split('\n').map(str::to_string).collect();
-            self.buffer_mut().replace_rows(0, rows, lines);
-        }
-        EditorOutcome::Consumed
-    }
-
-    /// The file the keys are acting on.
-    fn doc(&self) -> &Document {
-        &self.docs[self.at.min(self.docs.len() - 1)]
-    }
-
-    /// The same file, to change.
-    fn doc_mut(&mut self) -> &mut Document {
-        let at = self.at.min(self.docs.len() - 1);
-        &mut self.docs[at]
-    }
-
-    /// Go to `line` of `path` where it is this editor's file; another file
-    /// is the window's to show, in that file's own buffer.
-    pub fn open(&mut self, path: PathBuf, line: Option<usize>) {
-        let real = path.canonicalize().ok();
-        let ours = self.docs.iter().any(|doc| {
-            doc.path == path
-                || real.as_deref() == Some(&doc.path)
-                || doc.path.canonicalize().ok().as_deref() == real.as_deref()
-        });
-        if ours {
-            if let Some(line) = line {
-                self.buffer_mut().move_to_line(line.saturating_sub(1));
-            }
-            return;
-        }
-        self.requests.push(EditorRequest::Open(OpenTarget {
-            column: None,
-            line,
-            path,
-        }));
-    }
-
-    /// The text under the cursor.
-    pub fn buffer(&self) -> &TextBuffer {
-        &self.doc().buffer
-    }
-
-    /// The same text, to change.
-    pub fn buffer_mut(&mut self) -> &mut TextBuffer {
-        &mut self.doc_mut().buffer
-    }
-
-    /// What a Visual selection covers in the buffer being read.
-    fn selection(&self) -> Option<Selection> {
-        self.modal.selection(self.buffer())
-    }
-
-    /// Lend the modal keys the buffer being read, with its marks and the
-    /// window it is read through.
-    fn with_modal<R>(&mut self, f: impl FnOnce(&mut ModalEditor, EditView<'_>) -> R) -> R {
-        let (viewport, shown) = (self.viewport, self.shown());
-        let at = self.at.min(self.docs.len() - 1);
-        // The other buffers are lent read-only beside the one being edited,
-        // for completion to draw words from.
-        let (before, rest) = self.docs.split_at_mut(at);
-        let Some((doc, after)) = rest.split_first_mut() else {
-            unreachable!("`at` is clamped inside the open buffers");
-        };
-        let others: Vec<&[String]> = before
-            .iter()
-            .chain(after.iter())
-            .map(|other| other.buffer.lines())
-            .collect();
-        let view = EditView {
-            buffer: &mut doc.buffer,
-            marks: &mut doc.marks,
-            others: &others,
-            shown,
-            viewport,
-        };
-        f(&mut self.modal, view)
-    }
-
-    /// Delete the line under the cursor, or the selection.
-    pub fn delete_line(&mut self) -> EditorOutcome {
-        if self.modal.is_read_only() {
-            return EditorOutcome::Consumed;
-        }
-        let outcome = self.with_modal(|modal, view| modal.delete_line(view));
-        self.carry_out(outcome)
-    }
-
-    /// Return the row range of lines covered by the selection, or the entire buffer.
-    fn selected_row_range(&self) -> (usize, usize) {
-        if self.modal.mode() == EditMode::Visual {
-            if let Some(selection) = self.selection() {
-                let start = selection.start.0.min(selection.end.0);
-                let end = selection.start.0.max(selection.end.0);
-                return (start, end);
-            }
-        }
-        (0, self.buffer().lines().len().saturating_sub(1))
-    }
-
-    /// Sort the selected lines (or whole buffer) alphabetically.
-    pub fn sort_lines(&mut self, ascending: bool) -> EditorOutcome {
-        if self.modal.is_read_only() || self.buffer().lines().is_empty() {
-            return EditorOutcome::Consumed;
-        }
-        let (start, end) = self.selected_row_range();
-        let count = end - start + 1;
-        let mut slice = self.buffer().lines()[start..=end].to_vec();
-        if ascending {
-            slice.sort();
-        } else {
-            slice.sort_by(|a, b| b.cmp(a));
-        }
-        self.buffer_mut().replace_rows(start, count, slice);
-        self.modal.clear_selection();
-        let dir = if ascending { "A-Z" } else { "Z-A" };
-        self.modal
-            .report(Notice::info(format!("sorted {count} lines ({dir})")).unlogged());
-        EditorOutcome::Consumed
-    }
-
-    /// Deduplicate the selected lines (or whole buffer), keeping the first occurrence.
-    pub fn uniq_lines(&mut self) -> EditorOutcome {
-        if self.modal.is_read_only() || self.buffer().lines().is_empty() {
-            return EditorOutcome::Consumed;
-        }
-        let (start, end) = self.selected_row_range();
-        let count = end - start + 1;
-        let mut slice = self.buffer().lines()[start..=end].to_vec();
-        let before_count = slice.len();
-        let mut seen = std::collections::HashSet::new();
-        slice.retain(|line| seen.insert(line.clone()));
-        let removed = before_count.saturating_sub(slice.len());
-        self.buffer_mut().replace_rows(start, count, slice);
-        self.modal.clear_selection();
-        self.modal
-            .report(Notice::info(format!("removed {removed} duplicate line(s)")).unlogged());
-        EditorOutcome::Consumed
-    }
-
-    /// Reverse the selected lines (or whole buffer).
-    pub fn reverse_lines(&mut self) -> EditorOutcome {
-        if self.modal.is_read_only() || self.buffer().lines().is_empty() {
-            return EditorOutcome::Consumed;
-        }
-        let (start, end) = self.selected_row_range();
-        let count = end - start + 1;
-        let mut slice = self.buffer().lines()[start..=end].to_vec();
-        slice.reverse();
-        self.buffer_mut().replace_rows(start, count, slice);
-        self.modal.clear_selection();
-        self.modal
-            .report(Notice::info(format!("reversed {count} lines")).unlogged());
-        EditorOutcome::Consumed
-    }
-
-    /// Open git blame for the current file in a git view.
-    pub fn git_blame(&mut self) -> EditorOutcome {
-        let path = &self.doc().path;
-        let Some(root) = winter_base::project::marked_root(path) else {
-            self.modal
-                .report(Notice::refusal("not in a git repository"));
-            return EditorOutcome::Consumed;
-        };
-        if !root.join(".git").exists() {
-            self.modal
-                .report(Notice::refusal("not in a git repository"));
-            return EditorOutcome::Consumed;
-        }
-        let rel = path.strip_prefix(&root).unwrap_or(path);
-        let job = winter_vcs::exec::blame(
-            &root,
-            &winter_vcs::exec::Pathspec::new(rel.to_string_lossy().to_string()),
-        );
-        EditorOutcome::GitView(GitViewRequest {
-            git_dir: None,
-            request: job,
-            root,
+        session::with(|session| {
+            let revision = session.editor.document_version(self.document)? as usize;
+            let cursor = session.editor.view(self.view_id())?.cursor();
+            let line = session
+                .editor
+                .document(self.document)?
+                .char_to_position(cursor)
+                .map_or(0, |at| at.line);
+            Some(SharedText {
+                cursor: line,
+                lines: (known != Some(revision)).then(|| session.lines(self.document)),
+                revision,
+            })
         })
     }
 
-    /// Step to the previous recorded text modification location (`g;`).
-    pub fn change_older(&mut self) {
-        let live = (self.buffer().row(), self.buffer().col());
-        if let Some((row, col)) = self.doc_mut().marks.change_list.older(live) {
-            self.buffer_mut().move_to(row, col);
-        }
-    }
-
-    /// Step forward to the next recorded text modification location (`g,`).
-    pub fn change_newer(&mut self) {
-        if let Some((row, col)) = self.doc_mut().marks.change_list.newer() {
-            self.buffer_mut().move_to(row, col);
-        }
-    }
-
-    /// Transpose the words around or before the cursor (`M-t` / `C-M-t`).
-    pub fn transpose_words(&mut self) -> EditorOutcome {
-        if self.modal.is_read_only() {
-            return EditorOutcome::Consumed;
-        }
-        self.buffer_mut().transpose_words();
-        EditorOutcome::Consumed
-    }
-
-    /// Transpose the current line with the line above it (`C-x C-t`).
-    pub fn transpose_lines(&mut self) -> EditorOutcome {
-        if self.modal.is_read_only() {
-            return EditorOutcome::Consumed;
-        }
-        self.buffer_mut().transpose_lines();
-        EditorOutcome::Consumed
-    }
-
-    /// Collapse whitespace around cursor to single space or delete if already 1 space.
-    pub fn one_space_or_empty(&mut self) -> EditorOutcome {
-        if self.modal.is_read_only() {
-            return EditorOutcome::Consumed;
-        }
-        self.buffer_mut().one_space_or_empty();
-        EditorOutcome::Consumed
-    }
-
-    /// Delete the word forward from the cursor (`M-d`), or delete the selection.
-    pub fn delete_word_forward(&mut self) -> EditorOutcome {
-        if self.modal.is_read_only() {
-            return EditorOutcome::Consumed;
-        }
-        if self.selection().is_some() {
-            let outcome = self.with_modal(|modal, view| {
-                modal.on_key(
-                    view,
-                    &winter_model::input::Key::plain(winter_model::input::KeyCode::Char('d')),
-                )
-            });
-            self.carry_out(outcome)
-        } else if self.modal.mode() == winter_model::textedit::modal::EditMode::Insert {
-            let outcome = self.with_modal(|modal, view| {
-                modal.on_key(
-                    view,
-                    &winter_model::input::Key {
-                        alt: true,
-                        ..winter_model::input::Key::plain(winter_model::input::KeyCode::Char('d'))
-                    },
-                )
-            });
-            self.carry_out(outcome)
-        } else {
-            self.buffer_mut().kill_emacs_word(true);
-            EditorOutcome::Consumed
-        }
-    }
-
-    /// Change the casing of the word at cursor (or visual selection) and advance to next word.
-    pub fn change_word_case(
+    /// Draws the view in `area` of `frame` in `font`, the highlighter's
+    /// styles drawn as `styles` gives them, by number.
+    pub fn draw(
         &mut self,
-        case: winter_model::textedit::buffer::WordCase,
-    ) -> EditorOutcome {
-        if self.modal.is_read_only() {
-            return EditorOutcome::Consumed;
-        }
-        if let Some(selection) = self.selection() {
-            self.buffer_mut().snapshot();
-            for row in selection.start.0..=selection.end.0 {
-                let line_len = self
-                    .buffer()
-                    .lines()
-                    .get(row)
-                    .map(|l| l.chars().count())
-                    .unwrap_or(0);
-                let from = if row == selection.start.0 && !selection.linewise {
-                    selection.start.1
-                } else {
-                    0
-                };
-                let to = if row == selection.end.0 && !selection.linewise {
-                    (selection.end.1 + 1).min(line_len)
-                } else {
-                    line_len
-                };
-                if from < to {
-                    self.buffer_mut().move_to(row, from);
-                    self.buffer_mut().change_case_range(to - from, case);
-                }
-            }
-            self.modal.clear_selection();
-        } else {
-            self.buffer_mut().snapshot();
-            self.buffer_mut().change_word_case(case);
-        }
-        EditorOutcome::Consumed
-    }
-
-    /// Toggle paragraph between hard-wrapped at 80 cols and joined into a single line (`C-M-w`).
-    pub fn toggle_wrap_paragraph(&mut self) -> EditorOutcome {
-        if self.modal.is_read_only() {
-            return EditorOutcome::Consumed;
-        }
-        reflow::toggle_wrap(self.buffer_mut(), reflow::DEFAULT_WRAP_WIDTH);
-        EditorOutcome::Consumed
-    }
-
-    /// Select the paragraph under the cursor (`M-i`).
-    pub fn smart_select_paragraph(&mut self) -> EditorOutcome {
-        let row = self.buffer().row();
-        let Some((first, last)) =
-            winter_model::vim::objects::paragraph_object(self.buffer(), row, false)
-        else {
-            return EditorOutcome::Consumed;
-        };
-        self.modal.clear_selection();
-        self.buffer_mut().move_to_line(first);
-        let at = self.at.min(self.docs.len() - 1);
-        self.modal.start_visual(&self.docs[at].buffer, true);
-        self.buffer_mut().move_to_line(last);
-        EditorOutcome::Consumed
-    }
-
-    /// Execute a balanced delimiter / S-expression structural command.
-    pub fn sexp_command(&mut self, cmd: &str) -> EditorOutcome {
-        let read_only = self.modal.is_read_only();
-        match cmd {
-            editor::SEXP_NEXT => {
-                sexp::move_next_sexp(self.buffer_mut());
-            }
-            editor::SEXP_PREV => {
-                sexp::move_prev_sexp(self.buffer_mut());
-            }
-            editor::SEXP_UP_BACKWARD => {
-                sexp::move_up_sexp(self.buffer_mut(), false);
-            }
-            editor::SEXP_UP_FORWARD => {
-                sexp::move_up_sexp(self.buffer_mut(), true);
-            }
-            editor::SEXP_DOWN_FORWARD => {
-                sexp::move_down_sexp(self.buffer_mut(), true);
-            }
-            editor::SEXP_SLURP_FORWARD if !read_only => {
-                sexp::slurp_forward(self.buffer_mut());
-            }
-            editor::SEXP_SLURP_BACKWARD if !read_only => {
-                sexp::slurp_backward(self.buffer_mut());
-            }
-            editor::SEXP_BARF_FORWARD if !read_only => {
-                sexp::barf_forward(self.buffer_mut());
-            }
-            editor::SEXP_BARF_BACKWARD if !read_only => {
-                sexp::barf_backward(self.buffer_mut());
-            }
-            editor::SEXP_SPLICE if !read_only => {
-                sexp::splice(self.buffer_mut());
-            }
-            editor::SEXP_RAISE if !read_only => {
-                sexp::raise(self.buffer_mut());
-            }
-            _ => {}
-        }
-        EditorOutcome::Consumed
-    }
-
-    /// Prompt to jump to a 1 or 2 character sequence.
-    pub fn ask_char_jump(&mut self) -> EditorOutcome {
-        self.jump_origin = Some((self.buffer().row(), self.buffer().col(), self.view_top()));
-        EditorOutcome::Prompt(PromptRequest {
-            initial: String::new(),
-            label: "Jump to char: ".to_string(),
-            mode: PromptMode::Text,
-            tag: ASK_CHAR_JUMP,
-            title: None,
-        })
-    }
-
-    /// Jump directly to the next occurrence of `pattern` in the buffer.
-    pub fn jump_to_char_pattern(&mut self, pattern: &str) {
-        if pattern.is_empty() {
-            return;
-        }
-        let lines = self.buffer().lines();
-        let cur_row = self.buffer().row();
-        let cur_col = self.buffer().col();
-        let mut target = None;
-        for (r, line) in lines.iter().enumerate().skip(cur_row) {
-            let start_col = if r == cur_row { cur_col + 1 } else { 0 };
-            if start_col < line.len() {
-                if let Some(idx) = line[start_col..]
-                    .to_lowercase()
-                    .find(&pattern.to_lowercase())
-                {
-                    target = Some((r, start_col + idx));
-                    break;
-                }
-            }
-        }
-        if target.is_none() {
-            for (r, line) in lines.iter().enumerate().take(cur_row + 1) {
-                let max_col = if r == cur_row { cur_col } else { line.len() };
-                if let Some(idx) = line.to_lowercase().find(&pattern.to_lowercase()) {
-                    if r < cur_row || idx < max_col {
-                        target = Some((r, idx));
-                        break;
-                    }
-                }
-            }
-        }
-        if let Some((r, c)) = target {
-            self.buffer_mut().move_to(r, c);
-            self.place_cursor_row(Place::Middle);
-            self.flash_line();
-        }
-    }
-
-    /// Write the text back, unless something else has written to the file
-    /// since it was opened, which is worth a question rather than a save.
-    fn save(&mut self) -> EditorOutcome {
-        if remote::is_stale(&self.doc().path, &self.doc().stamp()) {
-            let question = format!(
-                "The file {} changed on disk since it was opened. Saving overwrites those changes.",
-                name_of(&self.doc().path)
-            );
-            let request = PromptRequest::confirm(ASK_OVERWRITE, &question)
-                .titled("Overwrite Changed File?", "Overwrite")
-                .destructive();
-            return EditorOutcome::Prompt(request);
-        }
-        if let Some(waiting) = self.format_before_save() {
-            return waiting;
-        }
-        self.write_file()
-    }
-
-    /// Write every buffer with edits to its file, as a build asks before it
-    /// starts. A buffer whose file changed on disk since it was read, or
-    /// that is not on this machine, is left for its own save to ask about.
-    fn save_all(&mut self) -> EditorOutcome {
-        let showing = self.at;
-        let mut written = 0;
-        let mut left = 0;
-        for at in 0..self.docs.len() {
-            let doc = &self.docs[at];
-            if !doc.buffer.is_dirty() || doc.unread {
-                continue;
-            }
-            if !doc.writes_unasked() {
-                left += 1;
-                continue;
-            }
-            self.at = at;
-            // A write that needs a question (root's, a password) is one the
-            // build cannot wait on.
-            match self.write_file() {
-                EditorOutcome::Prompt(_) => left += 1,
-                _ => written += 1,
-            }
-        }
-        self.at = showing;
-        let notice = match left {
-            0 => Notice::info(format!("saved {written} before the build")),
-            _ => Notice::error(format!(
-                "saved {written} before the build; {left} left unsaved"
-            )),
-        };
-        self.modal.report(notice);
-        EditorOutcome::Consumed
-    }
-
-    /// Write every buffer with edits that can be written without a
-    /// question: read in, on this machine, not changed on disk since it was
-    /// read, and writable without root. The rest wait for their own save,
-    /// which asks. The mode stays as it is and nothing is said, since the
-    /// keyboard has gone elsewhere; only a write that failed is reported.
-    /// Returns the files written.
-    fn save_quietly(&mut self) -> Vec<PathBuf> {
-        let showing = self.at;
-        let mut written = Vec::new();
-        for at in 0..self.docs.len() {
-            let doc = &self.docs[at];
-            if !doc.buffer.is_dirty() || doc.unread || !doc.writes_unasked() {
-                continue;
-            }
-            match text_file::save(&doc.path, doc.buffer.lines(), doc.shape()) {
-                Ok(stamp) => {
-                    self.at = at;
-                    self.record_written(stamp);
-                    written.push(self.doc().path.clone());
-                }
-                Err(e) if remote::is_denied(&e) => {}
-                Err(e) => {
-                    let said = format!("could not save {}: {e}", name_of(&doc.path));
-                    self.modal.report(Notice::error(said));
-                }
-            }
-        }
-        self.at = showing;
-        written
-    }
-
-    /// Put the cursor on `column` of its line, counting from one.
-    fn move_to_column(&mut self, column: usize) {
-        let row = self.buffer().row();
-        self.buffer_mut().move_to(row, column.saturating_sub(1));
-    }
-
-    /// Open `target` as another buffer, or go to it, landing on its line
-    /// and column.
-    pub fn open_target(&mut self, target: OpenTarget) {
-        let column = target.column;
-        self.open(target.path, target.line);
-        if let Some(column) = column {
-            self.move_to_column(column);
-        }
-    }
-
-    /// Take the file as written, now reading as `stamp`, and go back to
-    /// Normal mode: a save ends a stretch of typing.
-    fn mark_written(&mut self, stamp: FileStamp) {
-        self.record_written(stamp);
-        self.leave_to_normal();
-        let wrote = lines_written(self.buffer());
-        self.modal.report(Notice::info(format!("wrote {wrote}")));
-    }
-
-    /// Take the buffer in front as written to its file, now reading as
-    /// `stamp`: nothing left to save, and the servers told.
-    fn record_written(&mut self, stamp: FileStamp) {
-        self.doc().set_stamp(stamp);
-        self.buffer_mut().mark_saved();
-        self.remember_written();
-        self.tell_saved();
-    }
-
-    /// Back to Normal mode from whichever has the keyboard, the way `Esc`
-    /// leaves each: a typing cursor steps back onto the character it was
-    /// past, and a selection is let go.
-    fn leave_to_normal(&mut self) {
-        if self.modal.mode() == EditMode::Normal {
-            return;
-        }
-        let escape = Key {
-            alt: false,
-            code: KeyCode::Escape,
-            ctrl: false,
-            shift: false,
-            sup: false,
-        };
-        self.with_modal(|modal, view| modal.on_key(view, &escape));
-    }
-
-    /// Hand the file to `$EDITOR` in a tab of its own, at the line under the
-    /// cursor, for the work this editor deliberately cannot do. Unsaved edits
-    /// would not be there, so they go to disk first.
-    fn escalate(&mut self) -> EditorOutcome {
-        if let Some(at) = winter_base::remote::remote_of(&self.doc().path) {
-            self.modal.report(Notice::refusal(format!(
-                "$EDITOR cannot reach a file on {}",
-                at.label()
-            )));
-            return EditorOutcome::Consumed;
-        }
-        if self.buffer().is_dirty() {
-            self.write_file();
-        }
-        EditorOutcome::SpawnEditor(OpenTarget::at_line(
-            self.doc().path.clone(),
-            self.buffer().row() + 1,
-        ))
-    }
-}
-
-// ========================================================================
-// Document
-// ========================================================================
-
-impl Document {}
-
-// ========================================================================
-// TextEditor: painting
-// ========================================================================
-
-impl TextEditor {
-    /// Show where the cursor's line was set in the PDF built from this
-    /// document (`F6`): `synctex view` names the box, and the viewer shows
-    /// it, in a tab of this pane or, `beside`, of the other. In a `.bib` file the line
-    /// is a `\cite` of the entry under the cursor, and outside any entry the
-    /// PDF is only opened. A PDF with no SyncTeX data, or a line SyncTeX does
-    /// not find, opens the PDF as it is.
-    fn synctex_forward(&mut self, beside: bool) -> EditorOutcome {
-        let path = self.doc().path.clone();
-        let local = winter_base::remote::parse(&path).is_none();
-        if !local || !(winter_synctex::is_tex(&path) || winter_synctex::is_bib(&path)) {
-            self.modal.report(Notice::refusal(
-                "SyncTeX: not a LaTeX or BibTeX file on this machine",
-            ));
-            return EditorOutcome::Consumed;
-        }
-        let (row, col) = (self.buffer().row(), self.buffer().col());
-        let mut source = (path.clone(), row + 1, col + 1);
-        let mut sync = true;
-        if winter_synctex::is_bib(&path) {
-            match winter_synctex::bib_key_at(self.buffer().lines(), row) {
-                Some(key) => match winter_synctex::cite_of(&path, &key) {
-                    Some(cited) => source = cited,
-                    None => {
-                        self.modal.report(Notice::refusal(format!(
-                            "SyncTeX: \"{key}\" is not cited in any .tex file"
-                        )));
-                        return EditorOutcome::Consumed;
-                    }
-                },
-                None => sync = false,
-            }
-        }
-        let Some(pdf) = winter_synctex::pdf_for(&source.0) else {
-            self.modal.report(Notice::refusal(
-                "SyncTeX: no PDF built from this document yet (C-S-b builds it)",
-            ));
-            return EditorOutcome::Consumed;
-        };
-        // A PDF built without `-synctex=1` (by another tool, or a command
-        // typed over the build) has nothing to search: it opens as it is.
-        if sync && !winter_synctex::has_data(&pdf) {
-            let name = pdf
-                .file_name()
-                .map_or_else(String::new, |name| name.to_string_lossy().to_string());
-            self.modal.report(
-                Notice::warning(format!(
-                    "SyncTeX: {name} was built without SyncTeX data; C-S-b rebuilds it with it"
-                ))
-                .unlogged(),
-            );
-            sync = false;
-        }
-        if !sync {
-            return EditorOutcome::ShowInPdf {
-                beside,
-                mark: None,
-                path: pdf,
-            };
-        }
-        let (file, line, column) = source;
-        let request = winter_synctex::view_request(&file, line, column, &pdf);
-        self.synctex_pdf = Some((pdf, beside));
-        EditorOutcome::Job(JobRequest::Command(request))
-    }
-
-    /// `synctex view` answered: show the first box it named, or the PDF as
-    /// it is where it named none.
-    fn synctex_shown(&mut self, output: CommandOutput) -> EditorOutcome {
-        let Some((path, beside)) = self.synctex_pdf.take() else {
-            return EditorOutcome::Consumed;
-        };
-        if !output.succeeded() {
-            self.modal.report(output.failed(SYNCTEX_FAILED));
-            return EditorOutcome::Consumed;
-        }
-        let mark = winter_synctex::parse_view(&output.stdout)
-            .into_iter()
-            .next();
-        if mark.is_none() {
-            self.modal.report(
-                Notice::info(
-                    "SyncTeX: this line was not found in the PDF (rebuild it?); showing the PDF",
-                )
-                .unlogged(),
-            );
-        }
-        EditorOutcome::ShowInPdf { beside, mark, path }
-    }
-}
-
-// ========================================================================
-// TextEditor: the pane it is read through
-// ========================================================================
-
-impl TextEditor {
-    /// Keep what was painted where, so a click can be answered with the
-    /// character that was under the pointer.
-    fn remember_layout(&mut self, lines: &[usize]) {
-        let mut painted = Vec::new();
-        for line in lines {
-            for (at, start) in self.segments(*line).into_iter().enumerate() {
-                painted.push(Painted {
-                    lead: self.row_hang(*line, at),
-                    line: *line,
-                    offset: match self.fold {
-                        Some(_) => self.display_of(*line, start),
-                        None => self.doc().hscroll,
-                    },
-                });
-            }
-            // A click on a row of ghost text under the line lands at its end.
-            let end = self.display_of(*line, self.buffer().line_len_of(*line));
-            for _ in self.ghost_lines(*line) {
-                painted.push(Painted {
-                    lead: 0,
-                    line: *line,
-                    offset: end,
-                });
-            }
-        }
-        self.painted = painted;
-    }
-
-    /// Put the cursor where the pointer is, and select from where it was
-    /// pressed while it is dragged.
-    fn point_at(&mut self, at: Point) -> EditorOutcome {
-        let Some(spot) = self.painted.get(at.row).copied() else {
-            return EditorOutcome::Ignored;
-        };
-        let display = spot.offset + at.col.saturating_sub(spot.lead);
-        let col = self.char_at_display(spot.line, display);
-        self.close_card();
-        if at.drag {
-            if !self.modal.is_selecting() {
-                let at = self.at;
-                self.modal.start_visual(&self.docs[at].buffer, false);
-            }
-        } else {
-            self.modal.clear_selection();
-        }
-        self.buffer_mut().move_to(spot.line, col);
-        EditorOutcome::Consumed
-    }
-
-    /// The line and the character painted at content cell `at`; `None` past
-    /// a line's end, or under the last line.
-    fn char_at_cell(&self, at: Point) -> Option<(usize, usize)> {
-        let spot = self.painted.get(at.row).copied()?;
-        let display = spot.offset + at.col.checked_sub(spot.lead)?;
-        let col = self.char_at_display(spot.line, display);
-        (col < self.buffer().line_len_of(spot.line)).then_some((spot.line, col))
-    }
-
-    /// Read the file again where it has changed underneath an editor with
-    /// nothing unsaved in it: what is on screen would otherwise be a copy of
-    /// something that is no longer there.
-    ///
-    /// A file not yet read is read now, asking for the password where sudo
-    /// wants one.
-    fn reread(&mut self) -> EditorOutcome {
-        if self.doc().unread {
-            return self.read_in();
-        }
-        if self.buffer().is_dirty() || !remote::is_stale(&self.doc().path, &self.doc().stamp()) {
-            return EditorOutcome::Consumed;
-        }
-        let Ok(loaded) = remote::load(&self.doc().path) else {
-            return EditorOutcome::Consumed;
-        };
-        self.replace_text(loaded);
-        self.modal.report(Notice::info("changed on disk, re-read"));
-        EditorOutcome::Consumed
-    }
-
-    /// Whether the file being edited is looked at on disk for changes made
-    /// elsewhere: a file on this machine that has been read. A remote one
-    /// would cost a round trip a second, and is read again on `C-r`.
-    fn watches_disk(&self) -> bool {
-        let doc = self.doc();
-        !doc.unread && winter_base::remote::parse(&doc.path).is_none()
-    }
-
-    /// Read the file in again if something else has changed it, keeping the
-    /// cursor; with edits here not yet saved, keep them and say once that
-    /// the file changed, since reading it would throw them away.
-    fn check_disk(&mut self) -> EditorOutcome {
-        let path = self.doc().path.clone();
-        if !text_file::is_stale(&path, &self.doc().stamp()) {
-            return EditorOutcome::Consumed;
-        }
-        if !self.buffer().is_dirty() {
-            self.stale_said = None;
-            return self.reread();
-        }
-        let Ok(now) = text_file::stamp_of(&path) else {
-            return EditorOutcome::Consumed;
-        };
-        if self.stale_said.as_ref() != Some(&now) {
-            self.stale_said = Some(now);
-            self.modal.report(Notice::warning(
-                "changed on disk, but edited here too: saving asks before writing over it",
-            ));
-        }
-        EditorOutcome::Consumed
-    }
-
-    /// Put `loaded` in place of the buffer's text, keeping the cursor where
-    /// it was as far as the new text reaches.
-    fn replace_text(&mut self, loaded: LoadedFile) {
-        let (row, col) = (self.buffer().row(), self.buffer().col());
-        // In place, for every tab showing the file: read again, it reads
-        // again for all of them.
-        self.buffer_mut().replace_all(loaded.lines);
-        self.buffer_mut().move_to(row, col);
-        self.doc().set_shape(loaded.shape);
-        self.doc().set_stamp(loaded.stamp);
-        let doc = self.doc();
-        buffers::keep_buffer(&doc.path, &doc.file);
-        self.doc_mut().forget_colors();
-        self.resend_text();
-        let at = self.at.min(self.docs.len() - 1);
-        self.modal.reset(&self.docs[at].buffer);
-    }
-}
-
-// ========================================================================
-// TextEditor: what only the window asks of it
-// ========================================================================
-
-impl TextEditor {
-    /// Whether this editor is editing a commit message.
-    /// Take the language servers running, which `generation` names: an
-    /// editor of documents hands them to the servers that serve them, and
-    /// asks those what it needs. Called with the same generation again
-    /// when nothing has changed, which costs nothing.
-    pub fn connect_lsp(&mut self, generation: u64, ports: &[winter_lsp::Port]) {
-        self.connect(generation, ports);
-    }
-
-    /// Hear what a language server said: an answer to something this asked,
-    /// new problems in a document, or edits to make. `Ignored` where it was
-    /// nothing of this editor's.
-    pub fn on_lsp(&mut self, incoming: &winter_lsp::Incoming) -> EditorOutcome {
-        if let Some(outcome) = self.inline_hear(incoming) {
-            return outcome;
-        }
-        self.on_lsp_message(incoming)
-    }
-
-    /// The language and the file a language server would be started for,
-    /// from the document in front.
-    pub fn lsp_subject(&self) -> Option<(String, PathBuf)> {
-        let doc = self.doc();
-        let local = winter_base::remote::parse(&doc.path).is_none();
-        (local && !doc.unread).then(|| (self.language(), doc.path.clone()))
-    }
-
-    /// Take the settings that bear on the editor (how wrapped lines indent,
-    /// how completion behaves), before each paint.
-    pub fn configure(&mut self, settings: &settings::EditorSettings) {
-        self.indent_guides = settings.indent_guides;
-        self.format_on_save = settings.format_on_save;
-        if self.history_dir != settings.history_dir {
-            self.history_dir = settings.history_dir.clone();
-        }
-        if self.languages != settings.languages {
-            self.languages = settings.languages.clone();
-        }
-        self.set_wrap_indent(settings.wrap_indent);
-        self.set_markup_markers(settings.markup_markers);
-        self.set_completion_config(&settings.completion);
-        self.configure_inline(settings);
-    }
-
-    /// Make `edits` to the file this editor holds, as another editor's
-    /// server asked. Returns whether this editor took them.
-    pub fn apply_text_edits(&mut self, edits: &[editor::FileEdit]) -> bool {
-        let at = self.at.min(self.docs.len() - 1);
-        let edits: Vec<_> = edits.iter().map(lsp::server_edit).collect();
-        self.apply_to_buffer(at, &edits);
-        self.sync_documents();
-        true
-    }
-
-    /// Take the settings completion follows.
-    pub(crate) fn set_completion_config(&mut self, config: &settings::CompletionConfig) {
-        self.take_completion_config(config);
-    }
-
-    /// Take how far the rows a wrapped line continues on are indented.
-    pub(crate) fn set_wrap_indent(&mut self, indent: winter_model::paint::WrapIndent) {
-        self.wrap_indent = indent;
-    }
-
-    /// Take when markup's markers hide.
-    pub(crate) fn set_markup_markers(&mut self, markers: winter_model::paint::MarkupMarkers) {
-        self.take_markup_markers(markers);
-    }
-
-    /// The text of `path` as this editor holds it, the lines left out where
-    /// they are still at revision `known`.
-    pub fn shared_text(&self, path: &Path, known: Option<usize>) -> Option<editor::SharedText> {
-        let doc = self
-            .docs
-            .iter()
-            .find(|doc| doc.path == path && !doc.unread)?;
-        // Text read in afresh counts its revisions from nought again; the
-        // line count keeps that from reading as unchanged.
-        let revision = doc.buffer.revision().wrapping_mul(1 << 20) ^ doc.buffer.lines().len();
-        Some(editor::SharedText {
-            cursor: doc.buffer.row(),
-            lines: (known != Some(revision)).then(|| doc.buffer.lines().to_vec()),
-            revision,
-        })
-    }
-
-    /// Expand the word before the cursor (Hippie Expand / dabbrev-expand),
-    /// cycling through words found in the buffer and other open documents.
-    pub fn expand_word(&mut self) -> EditorOutcome {
-        let (row, col) = (self.buffer().row(), self.buffer().col());
-        if let Some(mut session) = self.hippie.take() {
-            if session.row == row && col == session.start_col + session.current_len {
-                session.advance();
-                let text = session.current_text().to_string();
-                let start_col = session.start_col;
-                let old_len = session.current_len;
-                let new_len = text.chars().count();
-                session.current_len = new_len;
-
-                let line = self.buffer().lines().get(row).cloned().unwrap_or_default();
-                let chars: Vec<char> = line.chars().collect();
-                let head: String = chars.iter().take(start_col).collect();
-                let tail: String = chars.iter().skip(start_col + old_len).collect();
-                let new_line = format!("{head}{text}{tail}");
-                self.buffer_mut().replace_line(row, new_line, false);
-                self.buffer_mut().move_to_typing(row, start_col + new_len);
-                self.hippie = Some(session);
-                return EditorOutcome::Consumed;
-            }
-        }
-
-        let line = self.buffer().lines().get(row).cloned().unwrap_or_default();
-        let chars: Vec<char> = line.chars().collect();
-        let head: String = chars.iter().take(col).collect();
-        let Some((start_col, prefix)) = hippie::find_word_prefix(&head) else {
-            return EditorOutcome::Consumed;
-        };
-
-        let active_candidates =
-            hippie::find_expansion_candidates(self.buffer().lines(), row, col, &prefix);
-
-        let mut other_lists = Vec::new();
-        for (i, doc) in self.docs.iter().enumerate() {
-            if i != self.at {
-                other_lists.push(hippie::find_other_document_candidates(
-                    doc.buffer.lines(),
-                    &prefix,
-                ));
-            }
-        }
-
-        let candidates = hippie::merge_candidate_lists(
-            std::iter::once(active_candidates)
-                .chain(other_lists)
-                .collect(),
-        );
-
-        if candidates.is_empty() {
-            self.modal
-                .report(Notice::info("Hippie Expand: no matches found").unlogged());
-            return EditorOutcome::Consumed;
-        }
-
-        let first = candidates[0].clone();
-        let new_len = first.chars().count();
-
-        let tail: String = chars.iter().skip(col).collect();
-        let head_before: String = chars.iter().take(start_col).collect();
-        let new_line = format!("{head_before}{first}{tail}");
-
-        self.buffer_mut().replace_line(row, new_line, true);
-        self.buffer_mut().move_to_typing(row, start_col + new_len);
-
-        self.hippie = Some(hippie::HippieSession {
-            row,
-            start_col,
-            current_len: new_len,
-            original_prefix: prefix,
-            candidates,
-            index: 0,
+        frame: &mut Frame,
+        area: Rect,
+        theme: &Theme,
+        font: &Font,
+        styles: Vec<HighlightStyle>,
+    ) {
+        self.with_view(|view| {
+            view.set_font(Some(font.clone()));
+            view.set_highlight_styles(styles);
+            session::with(|session| {
+                use misty::Widget;
+                view.lend(&mut session.editor).draw(frame, area, theme);
+            });
         });
+    }
 
-        EditorOutcome::Consumed
+    /// Hands the view `input` from the pointer or an input method: a press
+    /// moves the cursor, a drag selects, the wheel scrolls, composed text is
+    /// typed. What it asks of the window.
+    pub fn handle_input(&mut self, input: &Input, cx: &mut EventCx<'_>) -> EditorOutcome {
+        let response = self.with_view(|view| {
+            session::with(|session| {
+                use misty::Widget;
+                view.lend(&mut session.editor).handle(input, cx)
+            })
+        });
+        match response {
+            EditorResponse::Handled => EditorOutcome::Consumed,
+            EditorResponse::Ignored => EditorOutcome::Ignored,
+            EditorResponse::Requests(requests) => self.carry_out(requests),
+        }
+    }
+
+    /// The input method's area: the cursor's cell while keys type text.
+    pub fn ime_area(&self) -> Option<Rect> {
+        self.with_view(|view| session::with(|session| view.ime_area(&session.editor)))
+    }
+
+    /// `act` on the view the tab in front shows, a new view of the file
+    /// for a tab that has none of its own yet.
+    fn with_view<R>(&self, act: impl FnOnce(&mut EditorView) -> R) -> R {
+        let mut slot = self.view.borrow_mut();
+        let view = slot.get_or_insert_with(|| {
+            EditorView::new(session::with(|session| session.add_view(self.document)))
+        });
+        act(view)
+    }
+
+    /// The Viento view the tab in front shows.
+    fn view_id(&self) -> ViewId {
+        self.with_view(|view| view.view())
+    }
+
+    /// Puts the cursor on `line` and `column` (both from 0, the column in
+    /// chars), each clamped to the text.
+    fn move_to(&mut self, line: usize, column: usize) {
+        let view = self.view_id();
+        session::with(|session| {
+            let offset = session.offset_of(self.document, line, column);
+            session.editor.set_cursor(view, offset);
+        });
+    }
+
+    /// Carries out what the editor asked, oldest first: what the window is
+    /// to do, the last request's that asks anything of it.
+    fn carry_out(&mut self, requests: Vec<HostRequest>) -> EditorOutcome {
+        let mut outcome = EditorOutcome::Consumed;
+        for request in requests {
+            match request {
+                HostRequest::Notice(notice) => {
+                    self.notice = Some(match notice.level {
+                        NoticeLevel::Error => Notice::error(notice.message),
+                        NoticeLevel::Warning => Notice::warning(notice.message),
+                        _ => Notice::info(notice.message),
+                    });
+                }
+                HostRequest::Open(open) => {
+                    if let Some(path) = open.path {
+                        let target = OpenTarget {
+                            column: None,
+                            line: None,
+                            path: self.relative(&path),
+                        };
+                        outcome = EditorOutcome::OpenPath(target);
+                    }
+                }
+                HostRequest::Quit(quit) => {
+                    if quit.force || !self.is_dirty() {
+                        outcome = EditorOutcome::Close;
+                    } else {
+                        self.notice = Some(Notice::error(UNSAVED));
+                    }
+                }
+                HostRequest::ReadInto(read) => self.read_into(read.line, read.path),
+                HostRequest::Save(save) => {
+                    match session::with(|session| session.save(save.document)) {
+                        Ok(path) => outcome = EditorOutcome::Wrote(path),
+                        Err(error) => self.notice = Some(Notice::error(error.to_string())),
+                    }
+                }
+                _ => {}
+            }
+        }
+        outcome
+    }
+
+    /// Puts the lines of the file at `path` (this tab's own when `None`)
+    /// below line `line` (from 1; 0 above the first), as `:r` asks.
+    fn read_into(&mut self, line: usize, path: Option<String>) {
+        let path = path.map_or_else(|| self.path.clone(), |path| self.relative(&path));
+        match winter_model::text_file::load(&path) {
+            Ok(loaded) => {
+                let view = self.view_id();
+                let text = loaded.lines.join("\n");
+                session::with(|session| session.editor.insert_lines(view, line, &text));
+            }
+            Err(error) => self.notice = Some(Notice::error(format!("{}: {error}", path.display()))),
+        }
+    }
+
+    /// `typed` as a path, from the file's folder when it is not absolute.
+    fn relative(&self, typed: &str) -> PathBuf {
+        let typed = Path::new(typed);
+        match (typed.is_absolute(), self.path.parent()) {
+            (false, Some(folder)) => folder.join(typed),
+            _ => typed.to_path_buf(),
+        }
+    }
+
+    /// The view's mode, as the status bar names it.
+    fn mode(&self) -> Option<EditMode> {
+        session::with(|session| {
+            let mode = session.editor.view(self.view_id())?.mode();
+            Some(match mode {
+                Mode::Insert | Mode::CommandLine => EditMode::Insert,
+                Mode::Replace => EditMode::Replace,
+                Mode::Visual | Mode::VisualBlock | Mode::VisualLine => EditMode::Visual,
+                _ => EditMode::Normal,
+            })
+        })
+    }
+}
+
+impl Drop for KeptView {
+    fn drop(&mut self) {
+        if let Some(view) = self.view.take() {
+            session::with(|session| session.close_view(self.document, view.view()));
+        }
     }
 }
 
 impl Page for TextEditor {
     fn title(&self) -> String {
-        name_of(&self.doc().path)
-    }
-
-    /// The path to the file, one crumb to each folder above it, the file's
-    /// name last.
-    fn crumbs(&self) -> Vec<String> {
-        let path = &self.doc().path;
-        if path.as_os_str().is_empty() {
-            return Vec::new();
-        }
-        crumb_paths(path)
-            .iter()
-            .map(|path| crumb_label(path))
-            .collect()
-    }
-
-    /// A folder of the path opens in Dir; the file's own crumb is where the
-    /// editor already is.
-    fn on_crumb(&mut self, index: usize) -> EditorOutcome {
-        let paths = crumb_paths(&self.doc().path);
-        match paths.get(index) {
-            Some(dir) if index + 1 < paths.len() => {
-                EditorOutcome::OpenPath(OpenTarget::file(dir.clone()))
-            }
-            _ => EditorOutcome::Ignored,
-        }
+        name_of(&self.path)
     }
 
     fn icon(&self) -> Option<IconKind> {
         Some(IconKind::File {
-            name: name_of(&self.doc().path),
+            name: name_of(&self.path),
         })
     }
 
-    fn gutter_lanes(&self) -> Vec<GutterLane> {
-        // The change lane is kept whatever git says of the file, so the text
-        // starts in the same column in every file.
-        vec![git_changes::CHANGE_LANE, self.number_lane()]
-    }
-
-    fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> Frame {
-        self.catch_up_buffers();
-        // Any back-end may have published since: a server, the spelling, an
-        // extension. The problems are taken again only when one has.
-        let seen = winter_lsp::diagnostics::generation();
-        if self.diagnostics_seen != seen {
-            self.diagnostics_seen = seen;
-            self.refresh_diagnostics(None);
-        }
-        let text_cols = cols;
-        self.viewport = rows;
-        self.follow_cursor(text_cols, wrap);
-        let total = self.buffer().lines().len();
-        // Folded, the editor cuts each line into its screen rows itself, so
-        // the caret and a click fall where the text is painted.
-        self.fold = wrap.then_some(text_cols.max(1));
-        let (row, col) = (self.buffer().row(), self.buffer().col());
-        let (within, _, _) = self.segment_at(row, col);
-        let height = |index: usize| self.rows_of(index);
-        // The view's top is a screen row: a line and how many of its rows
-        // are scrolled past. The wheel holds the view where it put it (its
-        // turns already taken, in `on_scroll`); anything else brings the
-        // cursor's screen row into it, a screen row at a time, the margin
-        // round it.
-        let aim = match self.wheel {
-            true => ViewAim::Held,
-            false => ViewAim::Follow,
-        };
-        // Ghost text drawn under the cursor's line is brought into view
-        // with it.
-        let cursor = CursorRows {
-            first: (row, within),
-            last: match self.ghost_lines(row).len() {
-                0 => (row, within),
-                below => (row, self.segments(row).len() - 1 + below),
-            },
-        };
-        let top = (self.doc().scroll, self.doc().scroll_skip);
-        let window = place_view(
-            top,
-            0,
-            aim,
-            cursor,
-            total,
-            self.viewport,
-            self.scroll_margin,
-            height,
-        );
-        let (scroll, skip) = (window.start, window.skip);
-        let end = scroll + window.count;
-        self.laid_out = window;
-        self.doc_mut().scroll = scroll;
-        self.doc_mut().scroll_skip = skip;
-        self.doc_mut().color_upto = end;
-        self.doc_mut().learn_states(LEARN_PAINT_BUDGET);
-        self.doc_mut().color_lines(scroll, end);
-        self.check_spelling();
-        let lines: Vec<usize> = (scroll..end).collect();
-        let conflicts = self.doc().conflicts();
-        // Each line's number, and what it changed since the last commit,
-        // go in the gutter beside its first row.
-        self.git_changes_shown();
-        let (mut frame_rows, mut gutter): (Vec<Row>, Vec<Vec<Option<GutterMark>>>) = lines
-            .iter()
-            .flat_map(|index| {
-                let marker = conflicts.iter().any(|found| found.is_marker(*index));
-                let lanes = self.line_marks(*index, self.number_mark(*index));
-                self.text_rows(*index, text_cols, marker)
-                    .into_iter()
-                    .enumerate()
-                    .map(move |(at, row)| {
-                        let marks = match at {
-                            0 => lanes.clone(),
-                            _ => Vec::new(),
-                        };
-                        (row, marks)
-                    })
-            })
-            .skip(skip)
-            .take(self.viewport)
-            .unzip();
-        self.remember_layout(&lines);
-        self.painted.drain(..skip.min(self.painted.len()));
-        self.painted.truncate(self.viewport);
-        // The cursor's screen row: the rows of the lines above it in the
-        // window, and its own row within its line.
-        let above: usize = lines
-            .iter()
-            .take_while(|index| **index < row)
-            .map(|index| self.rows_of(*index))
-            .sum();
-        // What the top of the view is inside, pinned over it, never over
-        // the cursor's row.
-        let cursor_row = (above + within)
-            .checked_sub(skip)
-            .filter(|_| lines.contains(&row));
-        let mut pinned = self.sticky_lines(scroll, self.viewport);
-        pinned.truncate(cursor_row.unwrap_or(usize::MAX));
-        self.pin_rows(&mut frame_rows, &mut gutter, &pinned, text_cols);
-        let hscroll = self.doc().hscroll;
-        for (at, line) in pinned.iter().enumerate() {
-            if let Some(spot) = self.painted.get_mut(at) {
-                *spot = Painted {
-                    lead: 0,
-                    line: *line,
-                    offset: hscroll,
-                };
-            }
-        }
-        // Every row fits the content's width now: the editor folds its own.
-        let content = Frame::new(frame_rows).with_gutter(gutter);
-        // A cursor in the rows scrolled past, or below them, is not on screen.
-        match (above + within).checked_sub(skip) {
-            Some(line) if lines.contains(&row) && line < self.viewport => {
-                if self.jump_origin.is_some() {
-                    content.with_jump_target(line)
-                } else {
-                    content.with_cursor_line(line)
-                }
-            }
-            Some(_) | None => content,
-        }
-    }
-
-    fn on_job(&mut self, reply: JobReply) -> EditorOutcome {
-        // The jobs an editor asks for: a SyncTeX forward search, and the
-        // commit messages a recall steps back through.
-        let JobReply::Command(output) = reply else {
-            return EditorOutcome::Consumed;
-        };
-        if output.tag == winter_synctex::TAG_VIEW {
-            return self.synctex_shown(output);
-        }
-        if output.tag == diffing::TAG_DIFF_REVISION {
-            return self.revision_read(&output);
-        }
-        if output.tag == writing::TAG_TEXCOUNT {
-            return self.latex_words_counted(&output);
-        }
-        if output.tag == git_changes::TAG_GIT_BASE {
-            return self.git_base_read(&output);
-        }
-        if output.tag != exec::TAG_MESSAGES {
-            return EditorOutcome::Consumed;
-        }
-        let log = exec::succeeded(&output).then_some(output.stdout.as_str());
-        match self.recall.take_history(log) {
-            true => self.recall_message(true),
-            false => EditorOutcome::Consumed,
-        }
-    }
-
-    /// Coloring that a paint did not reach in time, in a long file, catches
-    /// up a tick at a time.
-    fn next_tick(&self) -> Option<Instant> {
-        let learning = self.doc().learning().then(|| Instant::now() + LEARN_TICK);
-        let disk = self.watches_disk().then_some(self.disk_check_at);
-        let flash = self.flash_until.filter(|until| *until > Instant::now());
-        let inline = self.inline_next_tick();
-        let completion = self.completion_next_tick();
-        let spelling = spelling::spelling_due(self.doc());
-        let landed = self.spelling_landed_tick();
-        let scan = self.prose_scan_next_tick();
-        let git = self.git_changes_next_tick();
-        [
-            git,
-            self.format_save_due,
-            learning,
-            disk,
-            self.lsp_next_tick(),
-            flash,
-            inline,
-            completion,
-            spelling,
-            landed,
-            scan,
-        ]
-        .into_iter()
-        .flatten()
-        .min()
-    }
-
-    fn take_cancelled_tick(&mut self) -> Option<Instant> {
-        self.take_cancelled_completion()
-    }
-
-    fn on_tick(&mut self, now: Instant) -> EditorOutcome {
-        self.catch_up_buffers();
-        self.doc_mut().learn_states(LEARN_TICK_BUDGET);
-        if let Some(saved) = self.format_save_tick(now) {
-            return saved;
-        }
-        self.lsp_tick(now);
-        self.inline_tick(now);
-        self.completion_tick(now);
-        if spelling::spelling_due(self.doc()).is_some_and(|due| now >= due) {
-            self.check_spelling();
-        }
-        self.take_landed_spelling();
-        self.take_prose_scan();
-        if self.watches_disk() && now >= self.disk_check_at {
-            self.disk_check_at = now + DISK_CHECK;
-            return self.check_disk();
-        }
-        self.git_changes_tick(now)
-            .unwrap_or(EditorOutcome::Consumed)
-    }
-
-    fn run_command(&mut self, name: &str) -> Option<EditorOutcome> {
-        self.catch_up_buffers();
-        match name {
-            SHOW_SCOPES => Some(self.show_scopes()),
-            editor::HIDE_SCOPES => {
-                self.inspect_scopes = false;
-                Some(EditorOutcome::Consumed)
-            }
-            SYNCTEX_FORWARD => Some(self.synctex_forward(false)),
-            editor::SYNCTEX_FORWARD_BESIDE => Some(self.synctex_forward(true)),
-            SAVE_ALL => Some(self.save_all()),
-            MERGE_NEXT => Some(self.step_conflict(true)),
-            MERGE_PREV => Some(self.step_conflict(false)),
-            MERGE_RESOLVE => Some(self.conflict_menu()),
-            COPY_RICH => Some(self.copy_rich()),
-            editor::QUERY_REPLACE => Some(self.start_query_replace()),
-            editor::SEND_TO_TERMINAL => Some(self.send_to_terminal()),
-            editor::TOGGLE_INLAY_HINTS => Some(self.toggle_hints()),
-            editor::UNDO_BRANCHES => Some(self.ask_branch()),
-            editor::ACT_AT_POINT => Some(self.ask_point()),
-            editor::EXPAND_SELECTION => Some(self.expand_selection()),
-            editor::TOGGLE_STICKY_SCROLL => {
-                self.toggle_sticky();
-                Some(EditorOutcome::Consumed)
-            }
-            editor::SHRINK_SELECTION => Some(self.shrink_selection()),
-            editor::EDITOR_EXPAND_WORD => Some(self.expand_word()),
-            TOGGLE_SWATCHES => {
-                self.swatches = !self.swatches;
-                let state = if self.swatches { "on" } else { "off" };
-                self.modal
-                    .report(Notice::info(format!("color swatches {state}")).unlogged());
-                Some(EditorOutcome::Consumed)
-            }
-            DIFF_DISK => Some(self.compare_with_disk()),
-            DIFF_CLIPBOARD => Some(self.ask_to_compare_with_clipboard()),
-            DIFF_BUFFER => Some(self.ask_buffer_to_compare()),
-            name if LSP_COMMANDS.contains(&name) => Some(self.run_lsp_command(name)),
-            name if PROBLEM_COMMANDS.contains(&name) => Some(self.run_problem_command(name)),
-            editor::DIFF_FILE
-            | editor::DIFF_REVISION
-            | editor::DIFF_FILES
-            | editor::MERGE_FILE
-            | editor::MERGE_CONFLICTS_3WAY => self.diff_command(name),
-            editor::WRITING_INSERT_SYMBOL => Some(self.ask_symbol()),
-            editor::EDITOR_DELETE_LINE => Some(self.delete_line()),
-            editor::EDITOR_RECENTER => Some(self.recenter()),
-            editor::EDITOR_FLASH_LINE => Some(self.flash_line()),
-            editor::EDITOR_GOTO_OFFSET => Some(self.ask_offset()),
-            editor::EDITOR_SHOW_OFFSET => Some(self.show_offset()),
-            editor::CURSOR_ADD_NEXT => Some(self.add_cursor_at_next()),
-            editor::CURSOR_ADD_ALL => Some(self.add_cursor_at_every()),
-            editor::CURSOR_ADD_BELOW => Some(self.add_cursor_vertically(true)),
-            editor::CURSOR_ADD_ABOVE => Some(self.add_cursor_vertically(false)),
-            editor::CURSOR_SKIP => Some(self.skip_cursor()),
-            editor::CURSOR_REMOVE_LAST => Some(self.remove_last_cursor()),
-            editor::FILE_HISTORY => Some(self.ask_history()),
-            editor::CURSOR_CLEAR => {
-                self.clear_cursors();
-                Some(EditorOutcome::Consumed)
-            }
-            editor::RUST_CARGO_FIX => Some(match self.language().as_str() {
-                "rust" => EditorOutcome::RunActionHere("cargo_fix".to_string()),
-                _ => {
-                    self.modal
-                        .report(Notice::info("cargo fix: not a Rust file"));
-                    EditorOutcome::Consumed
-                }
-            }),
-            editor::DICTIONARY_LOOKUP => Some(self.look_up_word()),
-            editor::BIBTEX_SORT_KEY_ASC => Some(self.sort_bibtex(bibtex::SortBy::Key, true)),
-            editor::BIBTEX_SORT_KEY_DESC => Some(self.sort_bibtex(bibtex::SortBy::Key, false)),
-            editor::BIBTEX_SORT_YEAR_ASC => Some(self.sort_bibtex(bibtex::SortBy::Year, true)),
-            editor::BIBTEX_SORT_YEAR_DESC => Some(self.sort_bibtex(bibtex::SortBy::Year, false)),
-            editor::EDITOR_CHANGE_OCCURRENCES => Some(self.start_occur()),
-            editor::EDITOR_TOGGLE_OCCURRENCES => Some(self.toggle_occurrences()),
-            editor::EDITOR_NEXT_OCCURRENCE => Some(self.step_occurrence(true)),
-            editor::EDITOR_PREV_OCCURRENCE => Some(self.step_occurrence(false)),
-            editor::EDITOR_HIGHLIGHT_TEXT => Some(self.highlight_text()),
-            editor::EDITOR_HIGHLIGHT_DELETE => Some(self.delete_highlight()),
-            editor::EDITOR_HIGHLIGHT_DELETE_ALL => Some(self.delete_all_highlights()),
-            editor::EDITOR_DEFINITION_START => Some(self.goto_definition_edge(false)),
-            editor::EDITOR_DEFINITION_END => Some(self.goto_definition_edge(true)),
-            editor::EDITOR_SELECT_DEFINITION => Some(self.select_definition()),
-            editor::EDITOR_NEXT_BLOCK => Some(self.step_block(true)),
-            editor::EDITOR_PREV_BLOCK => Some(self.step_block(false)),
-            editor::EDITOR_SORT_LINES_ASC => Some(self.sort_lines(true)),
-            editor::EDITOR_SORT_LINES_DESC => Some(self.sort_lines(false)),
-            editor::EDITOR_UNIQ_LINES => Some(self.uniq_lines()),
-            editor::EDITOR_REVERSE_LINES => Some(self.reverse_lines()),
-            editor::EDITOR_OPEN_HEX => Some(EditorOutcome::OpenHex(self.doc().path.clone())),
-            editor::EDITOR_GIT_BLAME => Some(self.git_blame()),
-            editor::EDITOR_JUMP_CHAR => Some(self.ask_char_jump()),
-            editor::CHANGE_LIST_OLDER => {
-                self.change_older();
-                Some(EditorOutcome::Consumed)
-            }
-            editor::CHANGE_LIST_NEWER => {
-                self.change_newer();
-                Some(EditorOutcome::Consumed)
-            }
-            editor::TRANSPOSE_WORDS => Some(self.transpose_words()),
-            editor::TRANSPOSE_LINES => Some(self.transpose_lines()),
-            editor::ONE_SPACE_OR_EMPTY => Some(self.one_space_or_empty()),
-            editor::DELETE_WORD_FORWARD => Some(self.delete_word_forward()),
-            editor::UPPERCASE_WORD => {
-                Some(self.change_word_case(winter_model::textedit::buffer::WordCase::Upper))
-            }
-            editor::LOWERCASE_WORD => {
-                Some(self.change_word_case(winter_model::textedit::buffer::WordCase::Lower))
-            }
-            editor::CAPITALIZE_WORD => {
-                Some(self.change_word_case(winter_model::textedit::buffer::WordCase::Capitalize))
-            }
-            editor::TOGGLE_WRAP_PARAGRAPH => Some(self.toggle_wrap_paragraph()),
-            editor::SELECT_PARAGRAPH => Some(self.smart_select_paragraph()),
-            editor::SEXP_NEXT
-            | editor::SEXP_PREV
-            | editor::SEXP_UP_BACKWARD
-            | editor::SEXP_UP_FORWARD
-            | editor::SEXP_DOWN_FORWARD
-            | editor::SEXP_SLURP_FORWARD
-            | editor::SEXP_SLURP_BACKWARD
-            | editor::SEXP_BARF_FORWARD
-            | editor::SEXP_BARF_BACKWARD
-            | editor::SEXP_SPLICE
-            | editor::SEXP_RAISE => Some(self.sexp_command(name)),
-            name => self.run_writing_command(name),
-        }
-    }
-
-    fn word_at_cursor(&self) -> Option<String> {
-        self.buffer().keyword_at_cursor()
-    }
-
-    fn take_notice(&mut self) -> Option<Notice> {
-        self.modal.take_notice()
-    }
-
-    fn take_search(&mut self) -> Option<SearchReport> {
-        let doc = &self.docs[self.at.min(self.docs.len() - 1)];
-        self.modal.take_search(&doc.buffer)
-    }
-
-    /// Where the cursor is and what is part-typed, led by what the tab does
-    /// not say: the host a remote file is on, and which of the open files
-    /// this is when there are several. Leading, they are the first the bar
-    /// drops when short of room.
-    fn status(&self) -> EditorStatus {
-        let total = format!("{} lines", self.buffer().lines().len());
-        let mut status = self.modal.editor_status(self.buffer(), total);
-        let host =
-            winter_base::remote::remote_of(&self.doc().path).map(|at| format!("[{}]", at.label()));
-        let count =
-            (self.docs.len() > 1).then(|| format!("{} of {}", self.at + 1, self.docs.len()));
-        let conflicts = self.doc().conflicts();
-        let conflicted = (!conflicts.is_empty()).then(|| match conflicts.len() {
-            1 => "1 conflict".to_string(),
-            n => format!("{n} conflicts"),
-        });
-        let problems = self.problem_counts();
-        status.segments.splice(
-            0..0,
-            host.into_iter()
-                .chain(count)
-                .chain(self.cursors_status())
-                .chain(conflicted)
-                .chain(problems)
-                .chain(self.occur_status())
-                .chain(self.inline_status()),
-        );
-        status
+    /// Nothing: the view is drawn in the pane by [`TextEditor::draw`].
+    fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> PaintFrame {
+        PaintFrame::new(vec![Row::new()])
     }
 
     fn on_key(&mut self, key: &Key) -> EditorOutcome {
-        self.catch_up_buffers();
-        self.wheel = false;
-        if let Some(outcome) = self.peek_key(key) {
-            return outcome;
+        let view = self.view_id();
+        let (handled, requests) = session::with(|session| {
+            let handled = session
+                .editor
+                .handle_key(view, keys::to_viento(key), clock::now());
+            (handled, session.editor.take_requests())
+        });
+        match (handled, requests.is_empty()) {
+            (Handled::Ignored, true) => EditorOutcome::Ignored,
+            (_, true) => EditorOutcome::Consumed,
+            (_, false) => self.carry_out(requests),
         }
-        self.close_card();
-        // The keys of an inline suggestion go first while one shows, the
-        // completion popup being in front of it when open.
-        let revision = self.buffer().revision();
-        if self.completion.is_none() && !self.doc().unread {
-            if let Some(outcome) = self.inline_key(key) {
-                self.inline_after_key(revision);
-                return outcome;
+    }
+
+    /// Writes the file for the window's [`SAVE_ALL`] (a build about to
+    /// start); runs Viento's command of any other name, its words joined by
+    /// hyphens rather than underscores (`upcase_word` runs `upcase-word`).
+    /// `None` for a command Viento does not have.
+    fn run_command(&mut self, name: &str) -> Option<EditorOutcome> {
+        if name == SAVE_ALL {
+            return Some(match session::with(|session| session.save(self.document)) {
+                Ok(path) => EditorOutcome::Wrote(path),
+                Err(error) => {
+                    self.notice = Some(Notice::error(error.to_string()));
+                    EditorOutcome::Consumed
+                }
+            });
+        }
+        let id = name.replace('_', "-");
+        let view = self.view_id();
+        let (ran, requests) = session::with(|session| {
+            let ran = session.editor.run_command(view, &id, None);
+            (ran, session.editor.take_requests())
+        });
+        match ran {
+            Ok(()) => Some(self.carry_out(requests)),
+            Err(CommandError::UnknownId(_)) => None,
+            Err(error) => {
+                self.notice = Some(Notice::error(error.to_string()));
+                Some(EditorOutcome::Consumed)
             }
         }
-        // The space bar is typed text here, in insert mode and after `f`, `r`
-        // and the like, all of which match characters.
-        let outcome = self.dispatch(&key.typed());
-        if self.buffer().revision() != revision {
-            let pos = (self.buffer().row(), self.buffer().col());
-            self.doc_mut().marks.change_list.push(pos);
-        }
-        self.inline_after_key(revision);
-        outcome
     }
 
-    fn context_items(&self) -> Vec<EditorMenuItem> {
-        self.menu_items()
+    fn next_tick(&self) -> Option<Instant> {
+        session::with(|session| session.editor.deadline()).map(clock::instant)
     }
 
-    /// A right-click while something is selected keeps it, for the menu's
-    /// Copy and Cut to act on; with nothing selected it moves the cursor
-    /// there, as a click does, for Paste to land where it was asked.
-    fn on_context_mouse(&mut self, at: Point) -> EditorOutcome {
-        if self.modal.is_selecting() {
-            return EditorOutcome::Consumed;
-        }
-        self.on_mouse(at)
-    }
-
-    fn on_mouse(&mut self, at: Point) -> EditorOutcome {
-        self.catch_up_buffers();
-        self.wheel = false;
-        // A click puts the one cursor somewhere, as in any editor.
-        self.clear_cursors();
-        self.point_at(at)
-    }
-
-    fn set_scroll_margin(&mut self, rows: usize) {
-        self.scroll_margin = rows;
-    }
-
-    fn on_scroll(&mut self, lines: isize) -> EditorOutcome {
-        self.catch_up_buffers();
-        // The view moves and the cursor stays where it was, so the text can be
-        // read without losing the place being edited; the next key brings the
-        // view back to it.
-        let total = self.buffer().lines().len();
-        let top = (self.doc().scroll, self.doc().scroll_skip);
-        let (scroll, skip) = wheel_scroll_rows(top, lines, total, self.viewport, |index| {
-            self.rows_of(index)
+    fn on_tick(&mut self, now: Instant) -> EditorOutcome {
+        let requests = session::with(|session| {
+            session.editor.tick(clock::stamp(now));
+            session.editor.take_requests()
         });
-        self.doc_mut().scroll = scroll;
-        self.doc_mut().scroll_skip = skip;
-        self.wheel = true;
-        EditorOutcome::Consumed
+        self.carry_out(requests)
     }
 
-    fn scroll_position(&self) -> Option<ScrollPosition> {
-        let total = self.buffer().lines().len();
-        let top = (self.doc().scroll, self.doc().scroll_skip);
-        // Unfolded, with no ghost text under the cursor, every line is one
-        // screen row, and nothing needs measuring.
-        if self.fold.is_none() && self.ghost_lines(self.buffer().row()).is_empty() {
-            return scroll_position_rows(top, total, self.viewport, |_| 1);
-        }
-        scroll_position_rows(top, total, self.viewport, |index| {
-            self.scrollbar_rows_of(index)
-        })
-    }
-
-    fn scroll_to(&mut self, offset: usize) -> EditorOutcome {
-        self.catch_up_buffers();
-        let total = self.buffer().lines().len();
-        let top = top_at_screen_row(offset, total, self.viewport, |index| {
-            self.scrollbar_rows_of(index)
-        });
-        (self.doc_mut().scroll, self.doc_mut().scroll_skip) = top;
-        self.wheel = true;
-        EditorOutcome::Consumed
-    }
-
+    /// Pastes `text` at the cursor, as typed.
     fn on_paste(&mut self, text: String) -> EditorOutcome {
-        self.catch_up_buffers();
-        self.wheel = false;
-        if self.doc().unread {
-            return self.read_in();
-        }
-        if std::mem::take(&mut self.compare_clipboard) {
-            return self.compare_with_clipboard(&text);
-        }
-        let revision = self.buffer().revision();
-        // What the clipboard holds goes in at every cursor.
-        let outcome = self.paste_at_every_cursor(text);
-        if self.buffer().revision() != revision {
-            let pos = (self.buffer().row(), self.buffer().col());
-            self.doc_mut().marks.change_list.push(pos);
-        }
-        outcome
-    }
-
-    fn take_requests(&mut self) -> Vec<EditorRequest> {
-        std::mem::take(&mut self.requests)
-    }
-
-    fn on_resume(&mut self) -> EditorOutcome {
-        self.catch_up_buffers();
-        self.reread()
-    }
-
-    fn caret(&self) -> Option<Caret> {
-        Some(Caret {
-            col: self.caret_col(),
-            insert: self.modal.is_typing(),
-        })
-    }
-
-    fn hint(&self) -> Option<EditorHint> {
-        Some(EditorHint {
-            items: self.modal.hint()?,
-            menu: false,
-            title: "editor".to_string(),
-        })
-    }
-
-    fn keys(&self) -> Vec<KeyHelp> {
-        self.key_help()
-    }
-
-    fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
-        self.catch_up_buffers();
-        self.wheel = false;
-        if let Some(outcome) = self.on_lsp_prompt(&reply) {
-            return outcome;
-        }
-        if let Some(outcome) = self.on_diff_prompt(reply.tag, reply.answer.clone()) {
-            return outcome;
-        }
-        if reply.tag == view::ASK_OFFSET {
-            return match reply.answer {
-                Some(answer) => self.goto_offset(&answer),
-                None => EditorOutcome::Consumed,
+        let view = self.view_id();
+        session::with(|session| {
+            let Some(cursor) = session.editor.view(view).map(viento::View::cursor) else {
+                return;
             };
-        }
-        if reply.tag == symbols::ASK_SYMBOL {
-            return match reply.answer {
-                Some(chosen) => self.symbol_chosen(&chosen),
-                None => EditorOutcome::Consumed,
-            };
-        }
-        let said_yes = reply.answer.is_some();
-        match reply.tag {
-            fixes::ASK_FIX => match reply.answer {
-                Some(chosen) => self.fix_chosen(&chosen),
-                None => EditorOutcome::Consumed,
-            },
-            point::ASK_POINT => match reply.answer {
-                Some(chosen) => self.point_chosen(&chosen),
-                None => EditorOutcome::Consumed,
-            },
-            ex::ASK_EX => match reply.answer {
-                Some(line) => self.run_ex(&line),
-                None => EditorOutcome::Consumed,
-            },
-            branches::ASK_BRANCH => match reply.answer {
-                Some(chosen) => self.branch_chosen(&chosen),
-                None => EditorOutcome::Consumed,
-            },
-            history::ASK_HISTORY => match reply.answer {
-                Some(chosen) => self.history_chosen(&chosen),
-                None => EditorOutcome::Consumed,
-            },
-            ASK_COMPARE_BUFFER => match reply.answer {
-                Some(chosen) => self.compare_with_buffer(&chosen),
-                None => EditorOutcome::Consumed,
-            },
-            ASK_ENV_NEW => match reply.answer {
-                Some(name) => self.new_environment(&name),
-                None => EditorOutcome::Consumed,
-            },
-            ASK_ENV_RENAME => match reply.answer {
-                Some(name) => self.rename_environment(&name),
-                None => EditorOutcome::Consumed,
-            },
-            writing::ASK_LINK => match reply.answer {
-                Some(url) => self.insert_link(&url),
-                None => EditorOutcome::Consumed,
-            },
-            writing::ASK_NEWCOMMAND => match reply.answer {
-                Some(name) => self.extract_newcommand(&name),
-                None => EditorOutcome::Consumed,
-            },
-            ASK_CONFLICT => match reply.answer {
-                Some(choice) => self.conflict_chosen(&choice),
-                None => EditorOutcome::Consumed,
-            },
-            ASK_OVERWRITE if said_yes => self.write_file(),
-            ASK_AS_ROOT | ASK_PASSWORD_OPEN | ASK_PASSWORD_SAVE => self.answer_elsewhere(reply),
-            ASK_SEARCH | ASK_SEARCH_BACK => match reply.answer {
-                Some(pattern) => {
-                    self.jump_origin = None;
-                    self.start_search(pattern, reply.tag == ASK_SEARCH)
-                }
-                None => {
-                    if let Some((row, col, top)) = self.jump_origin.take() {
-                        self.buffer_mut().move_to(row, col);
-                        (self.doc_mut().scroll, self.doc_mut().scroll_skip) = top;
-                    }
-                    EditorOutcome::Consumed
-                }
-            },
-            query_replace::ASK_QUERY_REPLACE_SEARCH => self.on_query_replace_search(reply.answer),
-            query_replace::ASK_QUERY_REPLACE_TARGET => self.on_query_replace_target(reply.answer),
-            query_replace::ASK_QUERY_REPLACE_ACTION => self.on_query_replace_action(reply.answer),
-            ASK_CHAR_JUMP => match reply.answer {
-                Some(pattern) if !pattern.is_empty() => {
-                    self.jump_origin = None;
-                    self.jump_to_char_pattern(&pattern);
-                    EditorOutcome::Consumed
-                }
-                _ => {
-                    if let Some((row, col, top)) = self.jump_origin.take() {
-                        self.buffer_mut().move_to(row, col);
-                        (self.doc_mut().scroll, self.doc_mut().scroll_skip) = top;
-                    }
-                    EditorOutcome::Consumed
-                }
-            },
-            _ => EditorOutcome::Consumed,
-        }
-    }
-
-    fn on_prompt_input(&mut self, query: &str, tag: &'static str) -> EditorOutcome {
-        if tag == ASK_CHAR_JUMP && !query.is_empty() {
-            if self.jump_origin.is_none() {
-                self.jump_origin =
-                    Some((self.buffer().row(), self.buffer().col(), self.view_top()));
-            }
-            self.jump_to_char_pattern(query);
-            EditorOutcome::Consumed
-        } else if (tag == ASK_SEARCH || tag == ASK_SEARCH_BACK) && !query.is_empty() {
-            if self.jump_origin.is_none() {
-                self.jump_origin =
-                    Some((self.buffer().row(), self.buffer().col(), self.view_top()));
-            }
-            self.start_search(query.to_string(), tag == ASK_SEARCH)
-        } else {
-            EditorOutcome::Consumed
-        }
-    }
-
-    fn popups(&self) -> Popups {
-        Popups {
-            card: self.card().or_else(|| self.inline_card()),
-            completion: self.popup(),
-            drop_list: None,
-        }
-    }
-
-    fn on_hover(&mut self, at: Option<Point>) -> EditorOutcome {
-        self.hover_at(at)
-    }
-
-    fn outline_targets(&mut self) -> Option<Vec<JumpTarget>> {
-        Some(self.outline())
+            let edit = viento::Edit::new(cursor..cursor, text);
+            session.editor.apply_edits(view, vec![edit]);
+        });
+        EditorOutcome::Consumed
     }
 
     fn jump_targets(&self) -> Option<Vec<JumpTarget>> {
-        let lines = self.buffer().lines();
-        let mut targets: Vec<JumpTarget> = lines
-            .iter()
-            .enumerate()
-            .filter(|(_, line)| !line.trim().is_empty())
-            .map(|(idx, line)| JumpTarget::new(idx, format!("{:>5}  {}", idx + 1, line.trim())))
-            .collect();
-        if targets.is_empty() && !lines.is_empty() {
-            targets = lines
-                .iter()
-                .enumerate()
-                .map(|(idx, line)| JumpTarget::new(idx, format!("{:>5}  {}", idx + 1, line)))
-                .collect();
-        }
-        Some(targets)
+        Some(jumps::targets(&session::with(|session| {
+            session.lines(self.document)
+        })))
     }
 
     fn jump_styles(&mut self, targets: &[usize], budget: Duration) -> TargetStyles {
-        self.target_styles(targets, budget)
+        let (lines, version) = session::with(|session| {
+            let version = session.editor.document_version(self.document);
+            (session.lines(self.document), version)
+        });
+        if self.jump_walk.0 != version {
+            self.jump_walk = (version, Vec::new());
+        }
+        jumps::styles(&self.path, &lines, targets, budget, &mut self.jump_walk.1)
     }
 
     fn jump_cursor(&self) -> Option<usize> {
-        Some(self.buffer().row())
+        self.snapshot()
+            .and_then(|target| target.line)
+            .map(|line| line - 1)
     }
 
+    /// A preview moves the cursor to the target's line, remembering where
+    /// it was; calling the jump off goes back there.
     fn on_jump(&mut self, step: JumpStep) {
-        let (target, place) = match step {
+        let view = self.view_id();
+        let line = match step {
             JumpStep::Cancel => {
-                if let Some((row, col, top)) = self.jump_origin.take() {
-                    self.buffer_mut().move_to(row, col);
-                    (self.doc_mut().scroll, self.doc_mut().scroll_skip) = top;
+                if let Some(origin) = self.jump_origin.take() {
+                    session::with(|session| session.editor.set_cursor(view, origin));
                 }
                 return;
             }
-            JumpStep::Confirm(target) => {
-                if let Some((row, col, _)) = self.jump_origin.take() {
-                    self.doc_mut().marks.jump = Some((row, col));
-                }
-                (target, Place::Middle)
+            JumpStep::Confirm(line) => {
+                self.jump_origin = None;
+                line
             }
-            JumpStep::Preview(target) => {
+            JumpStep::Preview(line) => {
                 if self.jump_origin.is_none() {
-                    self.jump_origin =
-                        Some((self.buffer().row(), self.buffer().col(), self.view_top()));
+                    self.jump_origin = session::with(|session| {
+                        session.editor.view(view).map(viento::View::cursor)
+                    });
                 }
-                (target, Place::CenterInUncovered)
+                line
             }
         };
-        self.buffer_mut().move_to_line(target);
-        self.place_cursor_row(place);
+        self.move_to(line, 0);
     }
 
-    fn token_inspect(&mut self) -> Option<winter_model::editor::TokenInspectData> {
-        if !self.inspect_scopes {
-            return None;
+    /// Copy and cut over a selection; paste, undo, and redo elsewhere, each
+    /// as the keys that do it, which the menu teaches.
+    fn context_items(&self) -> Vec<EditorMenuItem> {
+        let mode = self.mode();
+        let entries = match mode {
+            Some(EditMode::Visual) => &SELECTION_MENU[..],
+            _ => &TEXT_MENU[..],
+        };
+        let items = entries
+            .iter()
+            .filter_map(|(spec, label)| {
+                let keys = winter_model::input::table::keys(spec)?;
+                Some(EditorMenuItem::typed(keys, *label))
+            })
+            .collect();
+        menu_groups([items])
+    }
+
+    fn take_notice(&mut self) -> Option<Notice> {
+        self.notice.take()
+    }
+
+    /// The mode, the cursor's line and column (from 1), and the file's
+    /// length.
+    fn status(&self) -> EditorStatus {
+        let place = session::with(|session| {
+            let cursor = session.editor.view(self.view_id())?.cursor();
+            let text = session.editor.document(self.document)?;
+            let at = text.char_to_position(cursor)?;
+            let total = match text.len_lines() {
+                1 => "1 line".to_owned(),
+                n => format!("{n} lines"),
+            };
+            Some(vec![format!("{}:{}", at.line + 1, at.column + 1), total])
+        });
+        EditorStatus {
+            mode: self.mode(),
+            segments: place.unwrap_or_default(),
         }
-        let (row, col) = (self.buffer().row(), self.buffer().col());
-        let line = self.line_of(row);
-        let doc = self.doc_mut();
-        doc.color_upto = doc.color_upto.max(row);
-        doc.learn_states(Duration::MAX);
-        let grammar_name = doc.grammar.map_or("Plain Text", |g| g.name());
-        let state = doc.states.get(row)?;
-        Some(winter_syntax::inspect_token(
-            &line,
-            state,
-            col,
-            row,
-            grammar_name,
-        ))
     }
 
     fn cwd(&self) -> Option<PathBuf> {
-        // The buffer being edited, not the one the editor opened with, so
-        // stepping through buffers takes the answer with it. A remote file's
-        // directory is nowhere a local shell can start in.
-        if winter_base::remote::remote_of(&self.doc().path).is_some() {
-            return None;
-        }
-        self.doc().path.parent().map(PathBuf::from)
+        self.path.parent().map(Path::to_path_buf)
+    }
+
+    fn as_editor(&self) -> Option<&dyn Editor> {
+        Some(self)
+    }
+
+    fn as_editor_mut(&mut self) -> Option<&mut dyn Editor> {
+        Some(self)
     }
 }
 
@@ -2607,116 +588,92 @@ impl Editor for TextEditor {
         !self.is_waited_on() && !self.edits_commit()
     }
 
-    /// Any buffer with unwritten edits, not just the one being read: closing
-    /// the editor takes every buffer it holds with it.
-    fn is_dirty(&self) -> bool {
-        self.docs.iter().any(|doc| doc.buffer.is_dirty())
-    }
-
+    /// The file written as the keyboard leaves the window, when it has edits.
     fn focus_lost(&mut self) -> Vec<PathBuf> {
-        self.save_quietly()
+        let unasked = session::with(|session| session.writes_unasked(self.document));
+        if !self.is_dirty() || !unasked {
+            return Vec::new();
+        }
+        match session::with(|session| session.save(self.document)) {
+            Ok(path) => vec![path],
+            Err(error) => {
+                self.notice = Some(Notice::error(error.to_string()));
+                Vec::new()
+            }
+        }
     }
 
-    fn document(&self) -> Option<(PathBuf, String)> {
-        Some((self.doc().path.clone(), self.buffer().lines().join("\n")))
-    }
-
-    fn document_path(&self) -> Option<PathBuf> {
-        Some(self.doc().path.clone())
-    }
-
-    fn text_revision(&self) -> Option<usize> {
-        Some(self.buffer().revision())
-    }
-
-    /// A program blocked on this edit, such as `git commit` waiting on its
-    /// message, hears that it is over, and the servers that the file is closed.
+    /// A program blocked on this edit hears that it is over.
     fn on_closed(&mut self) {
         self.waiter = None;
-        self.tell_closed();
+        if let Some(view) = self.view.get_mut().take() {
+            session::with(|session| session.close_view(self.document, view.view()));
+        }
     }
 
-    /// Edits a server has still to hear of, such as a rename's into a buried
-    /// buffer, are handed over buried or not, so the server's view of the
-    /// project stays whole.
-    fn has_work_in_flight(&self) -> bool {
-        self.has_unsynced_edits()
-    }
-
-    fn save_view(&self) -> Option<Box<dyn std::any::Any>> {
-        let doc = self.doc();
-        Some(Box::new(TextView {
-            at: self.at,
-            col: doc.buffer.col(),
-            fold: self.fold,
-            hscroll: doc.hscroll,
-            jump_origin: self.jump_origin,
-            laid_out: self.laid_out,
-            painted: self.painted.clone(),
-            recenter: self.recenter,
-            row: doc.buffer.row(),
-            scroll: doc.scroll,
-            scroll_skip: doc.scroll_skip,
-            viewport: self.viewport,
-            wheel: self.wheel,
-            wrap_goal: self.wrap_goal,
+    /// The view of the tab going behind, kept for it: its own cursor,
+    /// scroll, and mode, which the next tab on this buffer does not share.
+    fn save_view(&self) -> Option<Box<dyn Any>> {
+        let view = self.view.borrow_mut().take()?;
+        Some(Box::new(KeptView {
+            document: self.document,
+            view: Some(view),
         }))
     }
 
-    fn restore_view(&mut self, state: Box<dyn std::any::Any>) {
-        let Ok(view) = state.downcast::<TextView>() else {
+    /// Shows the view `state` kept for the tab coming in front.
+    fn restore_view(&mut self, state: Box<dyn Any>) {
+        let Ok(mut kept) = state.downcast::<KeptView>() else {
             return;
         };
-        self.fold = view.fold;
-        self.jump_origin = view.jump_origin;
-        self.laid_out = view.laid_out;
-        self.painted = view.painted;
-        self.recenter = view.recenter;
-        self.viewport = view.viewport;
-        self.wheel = view.wheel;
-        self.wrap_goal = view.wrap_goal;
-        self.at = view.at.min(self.docs.len().saturating_sub(1));
-        let doc = self.doc_mut();
-        doc.hscroll = view.hscroll;
-        doc.scroll = view.scroll;
-        doc.scroll_skip = view.scroll_skip;
-        // The text may have changed under this view since it was kept.
-        doc.buffer.move_to(view.row, view.col);
-        doc.buffer.clamp(false);
-    }
-
-    fn open_file(&mut self, target: OpenTarget) -> bool {
-        // A file opened while an editor is up joins it as another buffer,
-        // rather than covering it with an editor of its own.
-        self.open_target(target);
-        true
-    }
-
-    /// The buffer being read, at its cursor's line. A commit message or a
-    /// rebase plan is git's to reopen, not a restart's.
-    fn snapshot(&self) -> Option<OpenTarget> {
-        let path = &self.doc().path;
-        if commit::is_message_file(path) || rebase::is_rebase_todo(path) {
-            return None;
+        let Some(view) = kept.view.take() else {
+            return;
+        };
+        if let Some(before) = self.view.get_mut().replace(view) {
+            session::with(|session| session.close_view(self.document, before.view()));
         }
-        Some(OpenTarget::at_line(path.clone(), self.buffer().row() + 1))
+    }
+
+    fn is_dirty(&self) -> bool {
+        session::with(|session| session.editor.is_modified(self.document))
+    }
+
+    fn document(&self) -> Option<(PathBuf, String)> {
+        let text = session::with(|session| session.lines(self.document)).join("\n");
+        Some((self.path.clone(), text))
+    }
+
+    fn document_path(&self) -> Option<PathBuf> {
+        Some(self.path.clone())
+    }
+
+    fn text_revision(&self) -> Option<usize> {
+        session::with(|session| session.editor.document_version(self.document)).map(|v| v as usize)
     }
 
     fn holds_file(&self, path: &Path) -> bool {
-        let real = path.canonicalize().ok();
-        self.docs.iter().any(|doc| {
-            doc.path == path
-                || real.as_deref() == Some(&doc.path)
-                || doc.path.canonicalize().ok().as_deref() == real.as_deref()
-        })
+        self.path == path
+            || matches!((self.path.canonicalize(), path.canonicalize()), (Ok(a), Ok(b)) if a == b)
     }
 
+    /// Lands on `target`'s line and column when it is this tab's file.
+    fn open_file(&mut self, target: OpenTarget) -> bool {
+        if !self.holds_file(&target.path) {
+            return false;
+        }
+        let line = target.line.unwrap_or(1).saturating_sub(1);
+        self.move_to(line, target.column.unwrap_or(1).saturating_sub(1));
+        true
+    }
+
+    /// A commit message's tab goes back to the work tree it was written
+    /// for, the view of which reads it again.
     fn returns_to_git(&self) -> Option<PathBuf> {
         if !self.edits_commit() {
             return None;
         }
-        // The message is written in the repository's git directory; the view
-        // is of the work tree around it.
+        // The message is written in the repository's git directory; the
+        // view is of the work tree around it.
         let dir = self.cwd()?;
         Some(match dir.file_name().is_some_and(|name| name == ".git") {
             true => dir.parent().map_or_else(|| dir.clone(), PathBuf::from),
@@ -2725,114 +682,51 @@ impl Editor for TextEditor {
     }
 
     fn address(&self) -> Option<String> {
-        Some(winter_model::path::abbreviate_home(&self.doc().path))
+        Some(winter_model::path::abbreviate_home(&self.path))
     }
 
+    /// The file, and the lines a visual selection covers: the cursor's
+    /// line alone is where it happens to rest, not a place picked.
     fn file_reference(&self) -> Option<String> {
-        // Lines only for a selection: the cursor's line is where it happens to
-        // rest, not a place the reader picked.
-        let base = winter_model::path::abbreviate_home(&self.doc().path);
-        let selection = match self.modal.mode() {
-            EditMode::Visual => self.selection(),
-            _ => None,
-        };
-        let Some(selection) = selection else {
-            return Some(base);
-        };
-        let start = selection.start.0 + 1;
-        let end = selection.end.0 + 1;
-        let suffix = if start == end {
-            format!(":{start}")
-        } else {
-            format!(":{start}-{end}")
-        };
-        Some(format!("{base}{suffix}"))
+        let base = winter_model::path::abbreviate_home(&self.path);
+        let lines = session::with(|session| {
+            let view = session.editor.view(self.view_id())?;
+            let anchor = view.visual_anchor()?;
+            let text = session.editor.document(self.document)?;
+            let line = |offset| text.char_to_position(offset).map_or(0, |at| at.line + 1);
+            let (a, b) = (line(anchor), line(view.cursor()));
+            Some((a.min(b), a.max(b)))
+        });
+        Some(match lines {
+            None => base,
+            Some((start, end)) if start == end => format!("{base}:{start}"),
+            Some((start, end)) => format!("{base}:{start}-{end}"),
+        })
+    }
+
+    fn snapshot(&self) -> Option<OpenTarget> {
+        let line = session::with(|session| {
+            let cursor = session.editor.view(self.view_id())?.cursor();
+            session
+                .editor
+                .document(self.document)?
+                .char_to_position(cursor)
+        });
+        Some(OpenTarget {
+            column: None,
+            line: line.map(|at| at.line + 1),
+            path: self.path.clone(),
+        })
     }
 }
 
 // ========================================================================
-// Helpers
+// Functions
 // ========================================================================
 
-/// The file's own name, which is what identifies it in a tab or a header; the
-/// directory it sits in is the pane's, and already on screen.
+/// The name a tab on the file at `path` goes by: the file's.
 fn name_of(path: &Path) -> String {
     path.file_name()
         .map(|name| name.to_string_lossy().to_string())
         .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
-
-/// How many cells `c` paints in: a tab opened out, or what the character
-/// itself takes (see [`char_width`]).
-fn cell_width(c: char) -> usize {
-    match c {
-        '\t' => TAB_WIDTH,
-        _ => char_width(c),
-    }
-}
-
-/// The painted spans for a row's cells: one span per run of cells sharing a
-/// color, cut to what the pane has room for. One span per character would be
-/// correct and would cost the renderer a shaping run for every letter.
-///
-/// A selected run keeps its syntax color and takes the selection's
-/// background, the way a terminal selection does. `marked` holds a range
-/// for each cursor's selection on the row.
-fn runs(cells: &[Cell], cols: usize, marked: &[(usize, usize)]) -> Row {
-    let mut spans: Vec<Span> = Vec::new();
-    for (at, (c, style, squiggle, lit)) in cells.iter().take(cols).enumerate() {
-        let selected = marked.iter().any(|(start, end)| at >= *start && at < *end);
-        match spans.last_mut() {
-            Some(last)
-                if last.style == *style
-                    && last.selected == selected
-                    && last.squiggle == *squiggle
-                    && last.lit == *lit =>
-            {
-                last.text.push(*c)
-            }
-            _ => {
-                let span = Span::new(*style, c.to_string())
-                    .squiggled(*squiggle)
-                    .lit(*lit);
-                spans.push(if selected { span.selected() } else { span });
-            }
-        }
-    }
-    // A selection that reaches past the line's last character shows as one
-    // marked cell there, so an empty line in a linewise selection is visible.
-    let past_end = marked
-        .iter()
-        .any(|(start, end)| cells.len() < *end && cells.len() >= *start);
-    if past_end && cells.len() < cols {
-        spans.push(Span::plain(" ").selected());
-    }
-    spans
-}
-
-/// The grammar `path` is read with: git's own for the files git hands over,
-/// else whatever the file's name or extension names.
-fn grammar_of(path: &Path) -> Option<Grammar> {
-    if commit::is_message_file(path) {
-        return winter_syntax::named(COMMIT_GRAMMAR);
-    }
-    if rebase::is_rebase_todo(path) {
-        return winter_syntax::named(REBASE_GRAMMAR);
-    }
-    winter_syntax::of_path(path)
-}
-
-/// `n lines`, singular where it should be.
-fn lines_written(buffer: &TextBuffer) -> String {
-    match buffer.lines().len() {
-        1 => "1 line".to_string(),
-        n => format!("{n} lines"),
-    }
-}
-
-// ========================================================================
-// Tests
-// ========================================================================
-
-#[cfg(test)]
-mod tests;

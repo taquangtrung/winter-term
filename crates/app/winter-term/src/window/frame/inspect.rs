@@ -301,60 +301,6 @@ mod tests {
     }
 
     #[test]
-    fn test_the_token_card_follows_the_cursor_and_sits_on_its_cell() {
-        let dir = std::env::temp_dir().join(format!("winter-inspect-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
-        let file = dir.join("main.rs");
-        std::fs::write(&file, "fn main() {}\n").expect("file");
-        let mut app = App::new();
-        let editor = winter_text::TextEditor::new(file, None).expect("opens");
-        let tab = app.show_editor(crate::window::editor::EditorKind::Text, Box::new(editor));
-        app.toggle_token_inspect(tab);
-        let rect = Rect {
-            height: 190.0,
-            width: 400.0,
-            x: 0.0,
-            y: 30.0,
-        };
-        let cell = (9.0, 20.0);
-        let card = |app: &mut App| {
-            app.open_tabs
-                .page_mut(&tab)
-                .expect("editor")
-                .page
-                .content(9, 40, false);
-            token_inspect_popup(
-                &mut app.open_tabs,
-                None,
-                app.host.token_inspect,
-                (tab, App::layout_rect_to_pane(rect)),
-                (cell, PANE_H_PAD),
-                &Theme::dark(),
-            )
-            .expect("the card is open")
-        };
-        let first = card(&mut app);
-        assert!(first.character.starts_with("'f'"), "{}", first.character);
-        let pane = App::layout_rect_to_pane(rect);
-        assert_eq!(
-            first.anchor.1,
-            pane.grid_area(cell.1).y,
-            "on the cursor's row, where it is drawn"
-        );
-        app.open_tabs.page_mut(&tab).expect("editor").page.on_key(
-            &winter_model::input::Key::plain(winter_model::input::KeyCode::Char('w')),
-        );
-        let moved = card(&mut app);
-        assert!(
-            moved.character.starts_with("'m'"),
-            "the character under the cursor now: {}",
-            moved.character
-        );
-        assert!(moved.anchor.0 > first.anchor.0, "and hung from its cell");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
     fn test_token_card_follows_cursor_in_git_editor_and_updates_character() {
         use crate::window::editor::EditorKind;
         use std::path::PathBuf;

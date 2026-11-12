@@ -69,8 +69,6 @@ fn paint_editors(
             .with_kind_mut(|text: &mut TextEditor| text.configure(settings));
         // One sentence highlight for every pane, the window's.
         slot.page
-            .with_kind_mut(|text: &mut TextEditor| text.set_sentence_wash(sentences));
-        slot.page
             .with_kind_mut(|pdf: &mut PdfEditor| pdf.set_sentence_wash(sentences));
         slot.page.set_scroll_margin(config.scroll_margin);
         let wrap = slot.view.wrap;

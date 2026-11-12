@@ -20,6 +20,9 @@ use winter_model::paint::{MarkupMarkers, WrapIndent};
 const COMPLETION_DELAY: Duration = Duration::from_millis(300);
 const COMPLETION_MIN_CHARS: usize = 3;
 
+/// The folder in Winter's state the local history keeps its copies in.
+const HISTORY_DIR: &str = "history";
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -56,6 +59,7 @@ pub struct EditorSettings {
 pub struct InlineOffered {
     /// Its full id.
     pub id: String,
+    /// What it offers now.
     pub offer: InlineOffer,
     /// Its extension's servers running.
     pub servers: Vec<ServerId>,
@@ -94,4 +98,13 @@ impl Default for CompletionConfig {
             min_chars: COMPLETION_MIN_CHARS,
         }
     }
+}
+
+// ========================================================================
+// Functions
+// ========================================================================
+
+/// Where the local history keeps its copies unless settings say otherwise.
+pub fn history_dir() -> Option<std::path::PathBuf> {
+    winter_base::paths::state_file(HISTORY_DIR)
 }

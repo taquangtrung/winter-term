@@ -398,6 +398,7 @@ mod tests {
         "base/winter-textedit/src/vim/grammar.rs",
         "base/winter-textedit/src/vim/motion.rs",
         "base/winter-textedit/src/vim/nav.rs",
+        "tools/winter-text/src/keys.rs",
     ];
 
     /// The editors' keys still written out rather than declared in a key table,
@@ -414,14 +415,6 @@ mod tests {
         ("tools/winter-pdf/src/editor.rs", 4),
         ("tools/winter-pdf/src/keys.rs", 1),
         ("tools/winter-pdf/src/navigate.rs", 2),
-        ("tools/winter-text/src/completing.rs", 7),
-        ("tools/winter-text/src/context.rs", 4),
-        ("tools/winter-text/src/inline/ghost.rs", 7),
-        ("tools/winter-text/src/inline/mod.rs", 1),
-        ("tools/winter-text/src/inline/next_edit.rs", 3),
-        ("tools/winter-text/src/keys.rs", 11),
-        ("tools/winter-text/src/occur.rs", 14),
-        ("tools/winter-text/src/spelling.rs", 3),
     ];
 
     /// The tables declared but not listed, each holding no key: the Docker

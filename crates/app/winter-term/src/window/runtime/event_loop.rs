@@ -176,6 +176,7 @@ impl App {
         self.render_frame();
         self.sync_strips();
         self.draw_panes(frame);
+        self.draw_text_editors(frame);
         self.draw_toolbars(frame);
         self.draw_strips(frame);
         self.draw_settings(frame);
@@ -240,6 +241,7 @@ impl App {
                         || self.point_at_status_bar(input, &mut ecx)
                         || self.offer_to_strips(input, &mut ecx))
                 || self.offer_to_settings(input, &mut ecx)
+                || self.offer_to_text_editors(input, &mut ecx)
         });
         if picked {
             self.quit_if_requested(cx);
@@ -433,11 +435,6 @@ impl App {
         // Editors that keep themselves current (the process monitor) ask for
         // their next refresh here, and the loop wakes for the earliest.
         let editor_tick = self.tick_editors(Instant::now());
-        // What the editors asked of the extensions' inline sources, as typing
-        // paused or a key asked.
-        if self.call_extension_inlines() {
-            self.dirty = true;
-        }
         let picker_tick = self.tick_picker(Instant::now());
         if self.sync_progress() {
             self.dirty = true;

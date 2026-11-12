@@ -483,9 +483,8 @@ impl Host for ExtensionHost<'_> {
         self.app.offer_extension_inline(self.extension, name, offer);
     }
 
-    fn answer_inline(&mut self, ticket: u64, answer: InlineAnswer) {
-        self.app.answer_extension_inline(ticket, &answer);
-    }
+    /// No text tab asks an inline source yet, so no answer has a taker.
+    fn answer_inline(&mut self, _ticket: u64, _answer: InlineAnswer) {}
 
     fn copy_text(&mut self, text: &str) {
         self.app.copy_quietly(text);
@@ -619,39 +618,6 @@ mod tests {
         let focused = app.layout().focused();
         app.run_command("probe.ping", focused);
         assert_eq!(app.chrome.notice_text(), Some(PONG));
-    }
-
-    #[test]
-    fn test_what_an_extension_publishes_is_underlined_in_the_file() {
-        let dir = std::env::temp_dir().join(format!("winter-ext-host-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).expect("dir");
-        let file = dir.join("notes.txt");
-        std::fs::write(&file, "flag me\n").expect("file");
-        let mut app = App::new();
-        let editor = winter_text::TextEditor::new(file.clone(), None).expect("opens");
-        let tab = app.show_editor(EditorKind::Text, Box::new(editor));
-        app.run_command("probe.flag", tab);
-        let found = diagnostics::in_file(&file);
-        assert_eq!(found.len(), 1);
-        assert_eq!(found[0].backend, Backend::Extension("probe"));
-        assert_eq!(found[0].diagnostic.source.as_deref(), Some("probe"));
-        // The editor takes what was published the next time it paints.
-        let frame = app
-            .open_tabs
-            .page_mut(&tab)
-            .expect("editor")
-            .page
-            .content(5, 40, false);
-        let underlined: String = frame.rows[0]
-            .iter()
-            .filter(|span| span.squiggle.is_some())
-            .map(|span| span.text.as_str())
-            .collect();
-        assert_eq!(
-            underlined, "f",
-            "the first character, as the probe flagged it"
-        );
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// A text editor tab on a file holding "text", in a directory named

@@ -150,9 +150,6 @@ impl ConfigWatch {
 impl App {
     /// An app holding its first tab and pane, before any window or GPU exists.
     pub fn new() -> Self {
-        // Completion finds the extensions' back-ends in the registry the
-        // window loads, rather than knowing how it is loaded.
-        winter_text::set_extension_registry(crate::extensions::registry);
         let (config, config_error) = Config::load_checked();
         let (keymap, keymap_error) = keymap_from_blocks(&config.keybindings);
         let settings_rejected = config_error.is_some();

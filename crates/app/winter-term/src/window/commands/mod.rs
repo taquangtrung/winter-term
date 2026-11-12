@@ -913,7 +913,9 @@ impl App {
     }
 
     /// Run the command `id` names that the palette does not list: one the
-    /// focused editor knows, a key binding's action, or an extension's.
+    /// focused editor knows, a key binding's action, an extension's, or else
+    /// whatever the page in front runs by that name (a text tab, Viento's
+    /// commands).
     fn run_unlisted(&mut self, id: &str, focused: TabId) {
         if is_editor_command(id) {
             self.run_editor_command(focused, id);
@@ -921,6 +923,8 @@ impl App {
             self.handle_action(action, focused);
         } else if let Some(command) = crate::extensions::command(id) {
             self.run_extension_command(command, focused);
+        } else {
+            self.run_editor_command(focused, id);
         }
     }
 

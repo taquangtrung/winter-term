@@ -3214,6 +3214,15 @@ name = "misty-notify"
 version = "0.1.0"
 
 [[package]]
+name = "misty-viento"
+version = "0.1.0"
+dependencies = [
+ "misty",
+ "viento",
+ "viento-keys",
+]
+
+[[package]]
 name = "moxcms"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7516,21 +7525,16 @@ dependencies = [
 name = "winter-text"
 version = "0.1.0"
 dependencies = [
- "flate2",
- "pulldown-cmark",
- "regex",
- "serde_json",
+ "misty",
+ "misty-viento",
  "unicode-width 0.1.14",
+ "viento",
+ "viento-keys",
  "winter-base",
- "winter-emulator",
  "winter-ext-api",
  "winter-lsp",
  "winter-model",
- "winter-spell",
- "winter-synctex",
  "winter-syntax",
- "winter-theme",
- "winter-vcs",
 ]
 
 [[package]]
