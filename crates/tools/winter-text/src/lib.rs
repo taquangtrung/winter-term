@@ -43,6 +43,7 @@ mod git_changes;
 mod jumps;
 mod keys;
 mod language;
+mod markup;
 mod requests;
 mod servers;
 mod session;
@@ -264,13 +265,14 @@ impl TextEditor {
     pub fn configure(&mut self, settings: &settings::EditorSettings) {
         session::with(|session| {
             let options = session.editor.options();
-            let (guides, auto) = (settings.indent_guides, settings.completion.auto);
-            if (options.indent_guides, options.auto_complete) != (guides, auto) {
-                let options = viento::EditorOptions {
-                    auto_complete: auto,
-                    indent_guides: guides,
-                    ..*options
-                };
+            let wanted = viento::EditorOptions {
+                auto_complete: settings.completion.auto,
+                conceal: markup::conceal_mode(settings.markup_markers),
+                indent_guides: settings.indent_guides,
+                ..*options
+            };
+            if wanted != *options {
+                let options = wanted;
                 session.editor.set_options(session::options(&options));
             }
         });
@@ -337,7 +339,10 @@ impl TextEditor {
         font: &Font,
         styles: Vec<HighlightStyle>,
     ) {
-        session::with(|session| session.git_shown(self.document));
+        session::with(|session| {
+            session.git_shown(self.document);
+            session.conceal_markup(self.document);
+        });
         let generation = diagnostics::generation();
         if self.problems_seen != Some(generation) {
             self.problems_seen = Some(generation);

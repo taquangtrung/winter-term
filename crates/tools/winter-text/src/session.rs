@@ -59,6 +59,8 @@ pub(crate) struct OpenFile {
     pub(crate) asks: Asks,
     /// The server completing it, once one is.
     pub(crate) completing: Option<ServerId>,
+    /// The document's version its markup's markers were found in.
+    pub(crate) concealed: Option<u64>,
     /// Its text as last committed, and the marks of what changed since.
     pub(crate) git: GitBase,
     /// Where it is.
@@ -228,6 +230,7 @@ impl Session {
             OpenFile {
                 asks: Asks::default(),
                 completing: None,
+                concealed: None,
                 git: GitBase::default(),
                 path: path.to_path_buf(),
                 problems: Vec::new(),

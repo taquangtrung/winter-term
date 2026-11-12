@@ -72,6 +72,7 @@ misty-viento = { version = "0.1.0", path = "../misty/crates/misty-viento" }
 # The editor Winter's text editing runs on (local branch only, as misty).
 viento = { version = "0.1.0", path = "../viento/crates/viento" }
 viento-keys = { version = "0.1.0", path = "../viento/crates/viento-keys" }
+viento-markup = { version = "0.1.0", path = "../viento/crates/viento-markup" }
 winter-dir = { version = "0.1.0", path = "crates/tools/winter-dir" }
 winter-docker = { version = "0.1.0", path = "crates/tools/winter-docker" }
 winter-git = { version = "0.1.0", path = "crates/tools/winter-git" }

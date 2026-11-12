@@ -17,6 +17,7 @@ misty.workspace = true
 misty-viento.workspace = true
 viento.workspace = true
 viento-keys.workspace = true
+viento-markup.workspace = true
 unicode-width.workspace = true
 winter-base.workspace = true
 winter-lsp.workspace = true

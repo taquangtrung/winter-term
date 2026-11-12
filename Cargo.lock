@@ -6060,6 +6060,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "viento-markup"
+version = "0.1.0"
+dependencies = [
+ "viento",
+]
+
+[[package]]
 name = "void"
 version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7531,6 +7538,7 @@ dependencies = [
  "unicode-width 0.1.14",
  "viento",
  "viento-keys",
+ "viento-markup",
  "winter-base",
  "winter-ext-api",
  "winter-lsp",
