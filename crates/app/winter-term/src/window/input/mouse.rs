@@ -210,11 +210,7 @@ impl App {
                 return;
             }
             // A click on the find popup is the popup's, not the pane's under it.
-            if self
-                .renderer
-                .as_ref()
-                .is_some_and(|r| r.hits().find_at(x, y))
-            {
+            if self.find_card_at(x, y) {
                 return;
             }
             // Confirmation dialog buttons or input dialog clicks

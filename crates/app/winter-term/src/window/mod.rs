@@ -355,6 +355,10 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) title_bar: Option<(frame::title_bar::TitleBarShape, misty::TitleBar)>,
     /// The tooltip misty hangs under what the pointer rests on.
     pub(in crate::window) tooltip: misty::Tooltip,
+    /// The find card the last frame worked out, for misty to draw.
+    pub(in crate::window) drawn_find: Option<winter_render::FindView>,
+    /// Where misty drew the find card, for the pointer.
+    pub(in crate::window) find_rect: Option<misty::Rect>,
     /// Each pane's cells as the last frame resolved them, for misty to draw.
     pub(in crate::window) drawn_panes: Vec<winter_render::PanePaint>,
     /// The separators between the panes the last frame drew.

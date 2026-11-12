@@ -118,7 +118,6 @@ impl GpuRenderer {
                 scale_factor,
             },
             hits: FrameHits {
-                find_rect: None,
                 input_button_rects: Vec::new(),
                 input_rect: None,
                 pictures: Vec::new(),

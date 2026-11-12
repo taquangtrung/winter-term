@@ -178,6 +178,7 @@ impl App {
         self.draw_panes(frame);
         self.draw_strips(frame);
         self.draw_settings(frame);
+        self.draw_find(frame);
         self.draw_title_bar(frame);
         self.draw_status_bar(frame);
         self.draw_pane_popups(frame);

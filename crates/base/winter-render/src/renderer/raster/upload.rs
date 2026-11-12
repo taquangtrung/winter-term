@@ -15,11 +15,10 @@ use super::view::DropdownImage;
 use super::DROPDOWN_SHADOW;
 use crate::image::ImagePlacement;
 use crate::renderer::glyphs::FontCtx;
-use crate::renderer::widgets::find::find_rgba;
 use crate::renderer::widgets::input::{confirm_button_rects, input_rgba, resolve_confirm_buttons};
 use crate::renderer::widgets::token_inspect::token_inspect_rgba;
 use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
-use crate::renderer::widgets::{FindView, InputView, TokenInspectView, ToolbarView};
+use crate::renderer::widgets::{InputView, TokenInspectView, ToolbarView};
 use crate::renderer::FrameHits;
 use crate::renderer::GpuRenderer;
 use crate::theme::Theme;
@@ -32,9 +31,6 @@ use crate::theme::Theme;
 /// reserved ids sit at the top of the id space so they never collide with
 /// block image ids.
 const TOKEN_INSPECT_TEXTURE_ID: u64 = u64::MAX - 20;
-
-/// Reserved id for the rasterized find popup.
-const FIND_TEXTURE_ID: u64 = u64::MAX - 4;
 
 /// Reserved id for the rasterized input dialog.
 const INPUT_TEXTURE_ID: u64 = u64::MAX - 9;
@@ -59,7 +55,6 @@ pub(in crate::renderer) struct ChromePainter<'a> {
 /// The last raster of every overlay, beside what it was painted from.
 #[derive(Default)]
 pub(in crate::renderer) struct OverlayCaches {
-    find: RasterCache<FindView>,
     input: RasterCache<InputView>,
     token_inspect: RasterCache<TokenInspectView>,
     /// One per pane toolbar texture, keyed by its texture id, with where its
@@ -366,43 +361,6 @@ impl GpuRenderer {
         placed
     }
 
-    /// Rasterize the find popup and upload it to the GPU, noting where it
-    /// landed for [`FrameHits::find_at`].
-    pub(in crate::renderer) fn rasterize_find(
-        &mut self,
-        find: &FindView,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        let placed = self.cached_overlay(
-            |c| &mut c.find,
-            context,
-            find,
-            |r| {
-                r.paint_overlay(FIND_TEXTURE_ID, |p| {
-                    Some(find_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        find,
-                    ))
-                })
-            },
-        );
-        // The card's own box, inside the shadow its texture carries.
-        self.hits.find_rect = placed.first().map(|image| {
-            (
-                image.x + DROPDOWN_SHADOW,
-                image.y + DROPDOWN_SHADOW,
-                image.width - 2.0 * DROPDOWN_SHADOW,
-                image.height - 2.0 * DROPDOWN_SHADOW,
-            )
-        });
-        placed
-    }
-
     /// Rasterize the token inspect overlay and upload it to the GPU.
     pub(in crate::renderer) fn rasterize_token_inspect(
         &mut self,
@@ -461,13 +419,6 @@ impl FrameHits {
             .position(|&(bx, by, bw, bh)| x >= bx && x < bx + bw && y >= by && y < by + bh)
     }
 
-    /// Whether the surface point `(x, y)` is on the find popup, as it was
-    /// last drawn: a click there is the popup's, not the pane's under it.
-    pub fn find_at(&self, x: f32, y: f32) -> bool {
-        self.find_rect
-            .is_some_and(|(left, top, w, h)| x >= left && x < left + w && y >= top && y < top + h)
-    }
-
     /// The pane toolbar button at the surface point `(x, y)`, as the bars were
     /// last drawn: whose bar it is, and what the button is told back as.
     pub fn toolbar_button_at(&self, x: f32, y: f32) -> Option<(u64, u16)> {
@@ -499,7 +450,7 @@ mod tests {
         // The token inspector and the first status icon shared an ID: one
         // drew over the other's texture, and the icon stayed wrong after the
         // inspector closed.
-        let mut ids = vec![TOKEN_INSPECT_TEXTURE_ID, FIND_TEXTURE_ID, INPUT_TEXTURE_ID];
+        let mut ids = vec![TOKEN_INSPECT_TEXTURE_ID, INPUT_TEXTURE_ID];
         let count = ids.len();
         ids.sort_unstable();
         ids.dedup();

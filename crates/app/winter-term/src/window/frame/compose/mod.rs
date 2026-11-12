@@ -1146,7 +1146,7 @@ impl App {
         self.chrome.drawn_status = status_enabled
             .then(|| self.build_status_bar(mode, renderer.theme(), search, None, &focused));
         let status = status_enabled;
-        let find_view = self.find_popup(&rects);
+        self.chrome.drawn_find = self.find_popup(&rects);
         // The key menus are sized to, and centred in, the focused pane: the
         // whole of it, its gutter and breadcrumb row too, not just its text.
         let focused_pane = pane_rect_of(&bounds, focused);
@@ -1255,7 +1255,6 @@ impl App {
             status,
             &placements,
             input_view.as_ref(),
-            find_view.as_ref(),
             token_inspect_view.as_ref(),
         );
         // Misty draws the panes from what the renderer resolved of them.

@@ -8,7 +8,7 @@ use super::background::{
     separators, BgParams, BgVertex, DotVertex, LineFlash, SeparatorStyle,
     CURSOR_HOLLOW_STROKE_WIDTH,
 };
-use super::widgets::{FindView, InputView, TokenInspectView, ToolbarView};
+use super::widgets::{InputView, TokenInspectView, ToolbarView};
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView};
 use crate::image::ImagePlacement;
@@ -65,7 +65,6 @@ impl GpuRenderer {
         status_bar: bool,
         images: &[ImagePlacement],
         input: Option<&InputView>,
-        find: Option<&FindView>,
         token_inspect: Option<&TokenInspectView>,
     ) {
         self.chrome.status_bar_enabled = status_bar;
@@ -76,7 +75,7 @@ impl GpuRenderer {
         let toolbars: Vec<&ToolbarView> = panes.iter().filter_map(|pane| pane.toolbar).collect();
         // One of each popup is drawn, so the focused pane's, the one the keys
         // reach: the first pane's in tree order took the slot from it.
-        self.prepare_overlay_images(images, &toolbars, input, find, token_inspect, surface);
+        self.prepare_overlay_images(images, &toolbars, input, token_inspect, surface);
     }
 
     // --------------------------------------------------------------------
@@ -275,7 +274,6 @@ impl GpuRenderer {
         images: &[ImagePlacement],
         toolbars: &[&ToolbarView],
         input: Option<&InputView>,
-        find: Option<&FindView>,
         token_inspect: Option<&TokenInspectView>,
         surface: SurfaceSize,
     ) {
@@ -293,10 +291,6 @@ impl GpuRenderer {
                 self.hits.input_rect = None;
                 self.hits.input_button_rects.clear();
             }
-        }
-        match find {
-            Some(f) => all_images.extend(self.rasterize_find(f, w, h)),
-            None => self.hits.find_rect = None,
         }
         if let Some(ti) = token_inspect {
             all_images.extend(self.rasterize_token_inspect(ti, w, h));

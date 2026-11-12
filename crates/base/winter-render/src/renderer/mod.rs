@@ -96,9 +96,6 @@ struct FrameSize {
 /// Where the last frame drew each part the pointer acts on: written as the frame is drawn, read until the next one replaces it.
 #[derive(Default)]
 pub struct FrameHits {
-    /// Where the find popup was last drawn, as `(x, y, width, height)`, while
-    /// it is up.
-    find_rect: Option<(f32, f32, f32, f32)>,
     /// Where the confirmation buttons were last drawn on the surface,
     /// in button group index order.
     input_button_rects: Vec<(f32, f32, f32, f32)>,
