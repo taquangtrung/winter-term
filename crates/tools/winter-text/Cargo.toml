@@ -23,6 +23,7 @@ winter-lsp.workspace = true
 winter-model.workspace = true
 winter-ext-api.workspace = true
 winter-syntax.workspace = true
+winter-vcs.workspace = true
 
 [dev-dependencies]
 winter-lsp = { workspace = true, features = ["test-support"] }

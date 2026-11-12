@@ -201,8 +201,10 @@ pub fn highlight_styles() -> Vec<Style> {
         .clone()
 }
 
-/// The number of `style`, numbering it if it has none yet.
-fn number_of(style: Style) -> HighlightId {
+/// The number `style` is drawn by, numbering it if it has none yet: a
+/// run's, or any other text a view shows in one of the window's styles (a
+/// gutter's marks, a diff's lines).
+pub fn highlight_id(style: Style) -> HighlightId {
     let mut numbered = NUMBERED.lock().unwrap_or_else(PoisonError::into_inner);
     let index = match numbered.iter().position(|known| *known == style) {
         Some(index) => index,
@@ -226,7 +228,7 @@ fn runs_of(styles: &[Style]) -> LineRuns {
             .position(|next| *next != style)
             .map_or(styles.len(), |length| start + length);
         if style != Style::Normal {
-            runs.push((start..end, number_of(style)));
+            runs.push((start..end, highlight_id(style)));
         }
         start = end;
     }

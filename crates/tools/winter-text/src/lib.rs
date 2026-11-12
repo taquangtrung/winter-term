@@ -30,7 +30,7 @@ use winter_lsp::{Event, Incoming, Port};
 use winter_model::editor::EditPoint;
 use winter_model::editor::{
     menu_groups, Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus,
-    FileEdit, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptReply, SharedText,
+    FileEdit, JobReply, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptReply, SharedText,
     TargetStyles, SAVE_ALL,
 };
 use winter_model::input::Key;
@@ -39,6 +39,7 @@ use winter_model::textedit::modal::EditMode;
 
 mod completing;
 pub mod diff;
+mod git_changes;
 mod jumps;
 mod keys;
 mod language;
@@ -336,6 +337,7 @@ impl TextEditor {
         font: &Font,
         styles: Vec<HighlightStyle>,
     ) {
+        session::with(|session| session.git_shown(self.document));
         let generation = diagnostics::generation();
         if self.problems_seen != Some(generation) {
             self.problems_seen = Some(generation);
@@ -571,15 +573,24 @@ impl Page for TextEditor {
             )
         });
         let flush = unsynced.then(|| Instant::now() + FLUSH_DELAY);
-        [deadline.map(clock::instant), flush, self.lsp_next_tick()]
-            .into_iter()
-            .flatten()
-            .min()
+        let git = session::with(|session| session.git_due(self.document));
+        [
+            deadline.map(clock::instant),
+            flush,
+            self.lsp_next_tick(),
+            git,
+        ]
+        .into_iter()
+        .flatten()
+        .min()
     }
 
     fn on_tick(&mut self, now: Instant) -> EditorOutcome {
         if let Some(outcome) = self.lsp_tick(now) {
             return outcome;
+        }
+        if let Some(read) = session::with(|session| session.git_read(self.document, now)) {
+            return read;
         }
         let language = self.language();
         let requests = session::with(|session| {
@@ -669,6 +680,16 @@ impl Page for TextEditor {
             })
             .collect();
         menu_groups([items])
+    }
+
+    /// Git's answer to the read of the file as last committed.
+    fn on_job(&mut self, reply: JobReply) -> EditorOutcome {
+        if let JobReply::Command(output) = reply {
+            if output.tag == git_changes::TAG_GIT_BASE {
+                session::with(|session| session.git_answered(self.document, &output));
+            }
+        }
+        EditorOutcome::Consumed
     }
 
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {

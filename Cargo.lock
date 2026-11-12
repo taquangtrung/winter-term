@@ -7536,6 +7536,7 @@ dependencies = [
  "winter-lsp",
  "winter-model",
  "winter-syntax",
+ "winter-vcs",
 ]
 
 [[package]]

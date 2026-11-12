@@ -19,6 +19,7 @@ use winter_model::text_file::{self, FileShape, FileStamp};
 use winter_syntax::SyntaxHighlighter;
 
 use super::completing::Asks;
+use super::git_changes::GitBase;
 use super::language::grammar_of;
 use super::servers::{Servers, Synced};
 
@@ -58,6 +59,8 @@ pub(crate) struct OpenFile {
     pub(crate) asks: Asks,
     /// The server completing it, once one is.
     pub(crate) completing: Option<ServerId>,
+    /// Its text as last committed, and the marks of what changed since.
+    pub(crate) git: GitBase,
     /// Where it is.
     pub(crate) path: PathBuf,
     /// What its checkers last found wrong in it, as laid on its text.
@@ -225,6 +228,7 @@ impl Session {
             OpenFile {
                 asks: Asks::default(),
                 completing: None,
+                git: GitBase::default(),
                 path: path.to_path_buf(),
                 problems: Vec::new(),
                 shape,
