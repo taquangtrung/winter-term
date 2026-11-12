@@ -24,6 +24,10 @@ use misty::{EventCx, Font, Frame, Input, Rect};
 use misty_viento::{clock, EditorResponse, EditorView};
 use viento::{CommandError, DocumentId, Handled, HostRequest, Mode, NoticeLevel, ViewId};
 use winter_base::edit_wait::EditWaiter;
+use winter_lsp::diagnostics;
+use winter_lsp::protocol::TextEdit;
+use winter_lsp::{Event, Incoming, Port};
+use winter_model::editor::EditPoint;
 use winter_model::editor::{
     menu_groups, Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorStatus, FileEdit,
     JumpStep, JumpTarget, Notice, OpenTarget, Page, SharedText, TargetStyles, SAVE_ALL,
@@ -36,6 +40,7 @@ pub mod diff;
 mod jumps;
 mod keys;
 mod language;
+mod servers;
 mod session;
 pub mod settings;
 
@@ -61,6 +66,9 @@ pub const DIRTY_MARK: &str = " [+]";
 const SELECTION_MENU: [(&str, &str); 2] = [("y", "Copy"), ("d", "Cut")];
 const TEXT_MENU: [(&str, &str); 3] = [("p", "Paste"), ("u", "Undo"), ("C-r", "Redo")];
 
+/// How long typing pauses before a language server is handed the text.
+const FLUSH_DELAY: Duration = Duration::from_millis(150);
+
 /// What is said when a close would drop edits not written.
 const UNSAVED: &str = "No write since last change (add ! to override)";
 
@@ -79,6 +87,9 @@ pub struct TextEditor {
     /// Where each line Scout's colors have walked to begins, and the text's
     /// version it was walked in.
     jump_walk: (Option<u64>, Vec<winter_syntax::LineState>),
+    /// The checkers' publications last laid on the text, by their store's
+    /// generation.
+    problems_seen: Option<u64>,
     /// The language each extension settings add is written in.
     languages: BTreeMap<String, String>,
     /// A notice for the window, not yet taken.
@@ -120,6 +131,7 @@ impl TextEditor {
             jump_origin: None,
             jump_walk: (None, Vec::new()),
             languages: BTreeMap::new(),
+            problems_seen: None,
             notice: None,
             path,
             view: RefCell::new(Some(EditorView::new(view))),
@@ -146,6 +158,47 @@ impl TextEditor {
         Self::new(path, line)
     }
 
+    /// Takes the language servers running as of `generation`, handing the
+    /// file to the one serving it.
+    pub fn connect_lsp(&mut self, generation: u64, ports: &[Port]) {
+        let language = self.language();
+        session::with(|session| {
+            session.connect(generation, ports);
+            session.sync(self.document, &language);
+        });
+    }
+
+    /// Acts on what a language server said: new problems in this tab's
+    /// file, or edits to make to it.
+    pub fn on_lsp(&mut self, incoming: &Incoming) -> EditorOutcome {
+        match &incoming.event {
+            Event::Diagnostics(path) if self.holds_file(path) => {
+                match session::with(|session| session.refresh_problems(self.document)) {
+                    true => EditorOutcome::Consumed,
+                    false => EditorOutcome::Ignored,
+                }
+            }
+            Event::ApplyEdit(edits) => {
+                let ours: Vec<FileEdit> = edits
+                    .iter()
+                    .filter(|(path, _)| self.holds_file(path))
+                    .flat_map(|(_, edits)| edits.iter().map(file_edit))
+                    .collect();
+                match !ours.is_empty() && self.apply_text_edits(&ours) {
+                    true => EditorOutcome::Consumed,
+                    false => EditorOutcome::Ignored,
+                }
+            }
+            _ => EditorOutcome::Ignored,
+        }
+    }
+
+    /// The language the file is written in, as settings name it.
+    fn language(&self) -> String {
+        let grammar = language::grammar_of(&self.path);
+        language::language_of(&self.path, grammar, &self.languages)
+    }
+
     /// Has `waiter` answered when this tab goes, which is what lets a
     /// program that launched the editor and blocked on it carry on.
     pub fn with_waiter(mut self, waiter: EditWaiter) -> Self {
@@ -162,9 +215,7 @@ impl TextEditor {
     /// The language the file is written in, as settings name it, and where
     /// it is: what a language server is started for.
     pub fn lsp_subject(&self) -> Option<(String, PathBuf)> {
-        let grammar = language::grammar_of(&self.path);
-        let language = language::language_of(&self.path, grammar, &self.languages);
-        Some((language, self.path.clone()))
+        Some((self.language(), self.path.clone()))
     }
 
     /// Follows `settings`: the editor's options, and the languages settings
@@ -191,7 +242,7 @@ impl TextEditor {
             let Some(text) = session.editor.document(self.document) else {
                 return false;
             };
-            let offset = |point: winter_model::editor::EditPoint| {
+            let offset = |point: EditPoint| {
                 let position = viento::Utf16Position {
                     column: point.column as usize,
                     line: point.line as usize,
@@ -242,6 +293,11 @@ impl TextEditor {
         font: &Font,
         styles: Vec<HighlightStyle>,
     ) {
+        let generation = diagnostics::generation();
+        if self.problems_seen != Some(generation) {
+            self.problems_seen = Some(generation);
+            session::with(|session| session.refresh_problems(self.document));
+        }
         self.with_view(|view| {
             view.set_font(Some(font.clone()));
             view.set_highlight_styles(styles);
@@ -448,13 +504,27 @@ impl Page for TextEditor {
         }
     }
 
+    /// When a half-typed key times out, or the text edited since its
+    /// server last had it is handed over.
     fn next_tick(&self) -> Option<Instant> {
-        session::with(|session| session.editor.deadline()).map(clock::instant)
+        let (deadline, unsynced) = session::with(|session| {
+            (
+                session.editor.deadline(),
+                session.is_unsynced(self.document),
+            )
+        });
+        let flush = unsynced.then(|| Instant::now() + FLUSH_DELAY);
+        [deadline.map(clock::instant), flush]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     fn on_tick(&mut self, now: Instant) -> EditorOutcome {
+        let language = self.language();
         let requests = session::with(|session| {
             session.editor.tick(clock::stamp(now));
+            session.sync(self.document, &language);
             session.editor.take_requests()
         });
         self.carry_out(requests)
@@ -556,7 +626,9 @@ impl Page for TextEditor {
                 1 => "1 line".to_owned(),
                 n => format!("{n} lines"),
             };
-            Some(vec![format!("{}:{}", at.line + 1, at.column + 1), total])
+            let problems = session.problem_counts(self.document);
+            let place = format!("{}:{}", at.line + 1, at.column + 1);
+            Some(problems.into_iter().chain([place, total]).collect())
         });
         EditorStatus {
             mode: self.mode(),
@@ -723,6 +795,19 @@ impl Editor for TextEditor {
 // ========================================================================
 // Functions
 // ========================================================================
+
+/// A server's `edit`, as the window passes edits on.
+fn file_edit(edit: &TextEdit) -> FileEdit {
+    let point = |at: winter_lsp::protocol::Position| EditPoint {
+        column: at.character,
+        line: at.line,
+    };
+    FileEdit {
+        end: point(edit.range.end),
+        new_text: edit.new_text.clone(),
+        start: point(edit.range.start),
+    }
+}
 
 /// The name a tab on the file at `path` goes by: the file's.
 fn name_of(path: &Path) -> String {

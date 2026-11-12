@@ -13,7 +13,8 @@ use misty::picker::{Resume, Row, RowKey};
 use winter_base::wake::Waker;
 use winter_lsp::servers::{self, Server, INSTALL_COMMAND_TITLE};
 use winter_lsp::{Event, Hub, Incoming, ServerId};
-use winter_model::editor::Notice;
+use winter_model::editor::{EditorOutcome, Notice};
+use winter_model::layout::TabId;
 use winter_text::TextEditor;
 
 use crate::window::picker::sources::{Entry, Listing};
@@ -34,6 +35,9 @@ const RUSTUP_TOOLCHAIN: &str = "RUSTUP_TOOLCHAIN";
 
 /// The servers running, and what the window has done with them.
 pub(in crate::window) struct LspState {
+    /// The servers' generation and the count of editors they were last
+    /// handed to, so they are handed over again only when either moves.
+    handed: (u64, usize),
     pub(super) hub: Hub,
     /// The servers extensions run, through the same hub.
     pub(super) extension_servers: ExtensionServers,
@@ -60,6 +64,7 @@ impl LspState {
     pub(in crate::window) fn new(waker: &Waker) -> Self {
         let (to, from) = mpsc::channel();
         Self {
+            handed: (0, 0),
             hub: Hub::new(to, waker.relay(from)),
             extension_servers: ExtensionServers::default(),
             inline_offers: InlineOffers::default(),
@@ -138,6 +143,7 @@ impl App {
                 self.set_notice("LSP: stopped every language server");
             }
         }
+        self.hand_servers_over();
     }
 
     /// Stop the server serving the file in front and start it again.
@@ -279,6 +285,7 @@ impl App {
             }
         }
         self.tell_extension_servers();
+        self.hand_servers_over();
         self.auto_start_servers();
         any
     }
@@ -307,6 +314,22 @@ impl App {
                 ));
             }
             Err(why) => self.set_error(format!("LSP: {why}")),
+        }
+    }
+
+    /// Hand every editor the servers running, where they or the editors
+    /// have changed since last time.
+    fn hand_servers_over(&mut self) {
+        let generation = self.host.lsp.hub.generation();
+        let editors = self.open_tabs.pages().count();
+        if self.host.lsp.handed == (generation, editors) {
+            return;
+        }
+        self.host.lsp.handed = (generation, editors);
+        let ports = self.host.lsp.hub.ports();
+        for slot in self.open_tabs.buffers_mut() {
+            slot.editor
+                .with_kind_mut(|text: &mut TextEditor| text.connect_lsp(generation, &ports));
         }
     }
 
@@ -373,9 +396,28 @@ impl App {
             },
             Event::Message(text) => self.notify(Notice::warning(text.clone())),
             Event::Progress(_) | Event::OpenUrl(_) | Event::Status { .. } => self.dirty = true,
-            // What a server answers a text tab, the tabs hear of again
-            // once they speak to servers.
-            Event::Answer { .. } | Event::ApplyEdit(_) | Event::Diagnostics(_) => {}
+            Event::Answer { .. } | Event::ApplyEdit(_) | Event::Diagnostics(_) => {
+                let once = !matches!(incoming.event, Event::Diagnostics(_));
+                let focused = self.layout().focused();
+                let mut tabs: Vec<TabId> = self.open_tabs.pages().map(|(tab, _)| *tab).collect();
+                tabs.sort_by_key(|tab| *tab != focused);
+                for tab in tabs {
+                    let Some(outcome) = self.open_tabs.page_mut(&tab).and_then(|slot| {
+                        slot.page
+                            .with_kind_mut(|text: &mut TextEditor| text.on_lsp(&incoming))
+                    }) else {
+                        continue;
+                    };
+                    if outcome == EditorOutcome::Ignored {
+                        continue;
+                    }
+                    self.act_on_editor_outcome(tab, outcome);
+                    self.dirty = true;
+                    if once {
+                        break;
+                    }
+                }
+            }
         }
     }
 }

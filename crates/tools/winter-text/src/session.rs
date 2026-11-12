@@ -13,10 +13,12 @@ use std::path::{Path, PathBuf};
 use misty::SystemClipboard;
 use misty_viento::EditorClipboard;
 use viento::{DocumentId, Editor, EditorOptions, Position, ViewId};
+use winter_lsp::protocol::Diagnostic;
 use winter_model::text_file::{self, FileShape, FileStamp};
 use winter_syntax::SyntaxHighlighter;
 
 use super::language::grammar_of;
+use super::servers::{Servers, Synced};
 
 // ========================================================================
 // Constants
@@ -39,18 +41,24 @@ pub(crate) struct Session {
     /// The editor.
     pub(crate) editor: Editor,
     /// The file each document came from, by document.
-    files: HashMap<DocumentId, OpenFile>,
+    pub(crate) files: HashMap<DocumentId, OpenFile>,
+    /// The language servers running.
+    pub(crate) servers: Servers,
 }
 
 /// The file a document came from.
 #[derive(Clone, Debug)]
-struct OpenFile {
+pub(crate) struct OpenFile {
     /// Where it is.
-    path: PathBuf,
+    pub(crate) path: PathBuf,
+    /// What its checkers last found wrong in it, as laid on its text.
+    pub(crate) problems: Vec<Diagnostic>,
     /// The layout a write keeps.
     shape: FileShape,
     /// What the file was when last read or written.
     stamp: FileStamp,
+    /// What the server serving it last had of it.
+    pub(crate) synced: Option<Synced>,
     /// The views showing the document, oldest first.
     views: Vec<ViewId>,
 }
@@ -68,6 +76,7 @@ impl Session {
         Self {
             editor,
             files: HashMap::new(),
+            servers: Servers::default(),
         }
     }
 
@@ -101,12 +110,18 @@ impl Session {
         view
     }
 
-    /// Drops `view`, and its document with it when no other view shows it.
+    /// Drops `view`, and its document with it when no other view shows it,
+    /// its server told.
     pub(crate) fn close_view(&mut self, document: DocumentId, view: ViewId) {
         self.editor.close_view(view);
-        if let Some(file) = self.files.get_mut(&document) {
-            file.views.retain(|shown| *shown != view);
+        let Some(file) = self.files.get_mut(&document) else {
+            return;
+        };
+        file.views.retain(|shown| *shown != view);
+        if !file.views.is_empty() {
+            return;
         }
+        self.tell_closed(document);
         if self.editor.close_document(document) {
             self.files.remove(&document);
         }
@@ -125,6 +140,7 @@ impl Session {
             .entry(document)
             .and_modify(|open| open.stamp = stamp);
         self.editor.mark_saved(document);
+        self.tell_saved(document);
         Ok(file.path)
     }
 
@@ -198,8 +214,10 @@ impl Session {
             document,
             OpenFile {
                 path: path.to_path_buf(),
+                problems: Vec::new(),
                 shape,
                 stamp,
+                synced: None,
                 views: Vec::new(),
             },
         );
