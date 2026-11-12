@@ -15,34 +15,23 @@ use super::view::DropdownImage;
 use super::DROPDOWN_SHADOW;
 use crate::image::ImagePlacement;
 use crate::renderer::glyphs::FontCtx;
-use crate::renderer::parts::titlebar::tabbar_strip_rgba;
 use crate::renderer::widgets::find::find_rgba;
 use crate::renderer::widgets::input::{confirm_button_rects, input_rgba, resolve_confirm_buttons};
 use crate::renderer::widgets::token_inspect::token_inspect_rgba;
 use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
-use crate::renderer::widgets::tooltip::url_tooltip_rgba;
 use crate::renderer::widgets::{FindView, InputView, TokenInspectView, ToolbarView};
 use crate::renderer::FrameHits;
 use crate::renderer::GpuRenderer;
-use crate::tabbar::{
-    layout as tabbar_layout, PaneStripDropTarget, PaneStripHit, PaneStripLayout, PaneTab, Region,
-    TabbarHit, TopTabbar,
-};
+use crate::tabbar::{PaneStripDropTarget, PaneStripHit, PaneStripLayout, PaneTab};
 use crate::theme::Theme;
 
 // ========================================================================
 // Constants
 // ========================================================================
 
-/// Reserved image-pass texture id for the rasterized top-tabbar strip (band +
-/// rounded tab pills). The reserved ids sit at the top of the id space so they
-/// never collide with block image ids.
-const TABBAR_STRIP_TEXTURE_ID: u64 = u64::MAX - 2;
-
-/// Reserved id for the rasterized URL hover tooltip.
-const URL_TOOLTIP_TEXTURE_ID: u64 = u64::MAX - 6;
-
-/// Reserved id for the rasterized token inspect popup.
+/// Reserved image-pass texture id for the rasterized token inspect popup. The
+/// reserved ids sit at the top of the id space so they never collide with
+/// block image ids.
 const TOKEN_INSPECT_TEXTURE_ID: u64 = u64::MAX - 20;
 
 /// Reserved id for the rasterized find popup.
@@ -75,12 +64,10 @@ pub(in crate::renderer) struct OverlayCaches {
     input: RasterCache<InputView>,
     /// One per pane strip texture, keyed by its texture id.
     pub(in crate::renderer) pane_strips: HashMap<u64, RasterCache<PaneStripKey>>,
-    tabbar_strip: RasterCache<TopTabbar>,
     token_inspect: RasterCache<TokenInspectView>,
     /// One per pane toolbar texture, keyed by its texture id, with where its
     /// buttons were drawn.
     toolbars: HashMap<u64, ToolbarCache>,
-    url_tooltip: RasterCache<TopTabbar>,
 }
 
 /// A pane toolbar as last rasterized: what it was painted from, the image
@@ -464,103 +451,6 @@ impl GpuRenderer {
             },
         )
     }
-
-    /// Rasterize a URL tooltip bubble near the cursor when a link is hovered.
-    /// Empty when no URL tooltip is set.
-    pub(in crate::renderer) fn rasterize_url_tooltip(
-        &mut self,
-        tabbar: &TopTabbar,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let Some((url, cx, cy)) = tabbar.url_tooltip.as_ref() else {
-            return Vec::new();
-        };
-        let context = self.raster_context(surface_w, surface_h);
-        let (cw, ch) = (self.fonts.cell_width, self.fonts.cell_height);
-        self.cached_overlay(
-            |c| &mut c.url_tooltip,
-            context,
-            tabbar,
-            |r| {
-                // Under what it is about: the element named, a title-bar
-                // tab, or else the pointer's cell.
-                let pointer = Region {
-                    x: *cx,
-                    y: *cy,
-                    w: 1.0,
-                    h: ch,
-                };
-                let anchor = tabbar
-                    .tooltip_anchor
-                    .unwrap_or_else(|| match tabbar.tabbar_hover {
-                        TabbarHit::Tab(idx) => tabbar_layout(tabbar, surface_w, cw, ch)
-                            .tabs
-                            .get(idx)
-                            .copied()
-                            .unwrap_or(pointer),
-                        _ => pointer,
-                    });
-                r.paint_overlay(URL_TOOLTIP_TEXTURE_ID, |p| {
-                    Some(url_tooltip_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        url,
-                        &anchor,
-                        surface_w,
-                        surface_h,
-                    ))
-                })
-            },
-        )
-    }
-
-    /// Where to draw the tabbar strip, repainting it only when what it is drawn
-    /// from has moved since the last frame.
-    pub(in crate::renderer) fn tabbar_strip_placement(
-        &mut self,
-        tabbar: &TopTabbar,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        self.cached_overlay(
-            |c| &mut c.tabbar_strip,
-            context,
-            tabbar,
-            |r| {
-                let strip = tabbar_strip_rgba(
-                    tabbar,
-                    surface_w,
-                    r.fonts.cell_width,
-                    r.fonts.cell_height,
-                    &r.theme,
-                );
-                r.tabbar_strip_pass.upload(
-                    &r.device,
-                    &r.queue,
-                    TABBAR_STRIP_TEXTURE_ID,
-                    &strip.rgba,
-                    strip.width,
-                    strip.height,
-                );
-                vec![ImagePlacement {
-                    alpha: 1.0,
-                    height: strip.height as f32,
-                    id: TABBAR_STRIP_TEXTURE_ID,
-                    u_max: 1.0,
-                    u_min: 0.0,
-                    v_max: 1.0,
-                    v_min: 0.0,
-                    width: strip.width as f32,
-                    x: 0.0,
-                    y: 0.0,
-                }]
-            },
-        )
-    }
 }
 
 // ========================================================================
@@ -613,20 +503,13 @@ impl FrameHits {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::renderer::test_support::sample_menu_chrome;
 
     #[test]
     fn test_every_reserved_texture_id_is_its_own() {
         // The token inspector and the first status icon shared an ID: one
         // drew over the other's texture, and the icon stayed wrong after the
         // inspector closed.
-        let mut ids = vec![
-            TABBAR_STRIP_TEXTURE_ID,
-            URL_TOOLTIP_TEXTURE_ID,
-            TOKEN_INSPECT_TEXTURE_ID,
-            FIND_TEXTURE_ID,
-            INPUT_TEXTURE_ID,
-        ];
+        let mut ids = vec![TOKEN_INSPECT_TEXTURE_ID, FIND_TEXTURE_ID, INPUT_TEXTURE_ID];
         let count = ids.len();
         ids.sort_unstable();
         ids.dedup();
@@ -668,31 +551,24 @@ mod tests {
 
     #[test]
     fn test_an_unchanged_overlay_reuses_the_raster_it_already_painted() {
-        let tabbar = sample_menu_chrome();
+        let view = String::from("Terminal 1");
         let mut cache = RasterCache::default();
-        assert!(cache.hit(&context(), |v| *v == tabbar).is_none(), "cold");
-        cache.store(context(), tabbar.clone(), vec![placement()]);
-        let hit = cache.hit(&context(), |v| *v == tabbar).expect("a hit");
+        assert!(cache.hit(&context(), |v| *v == view).is_none(), "cold");
+        cache.store(context(), view.clone(), vec![placement()]);
+        let hit = cache.hit(&context(), |v| *v == view).expect("a hit");
         assert_eq!(hit.len(), 1);
         assert_eq!(hit[0].id, 7);
     }
 
     #[test]
     fn test_an_overlay_is_repainted_when_anything_it_is_drawn_from_moves() {
-        let tabbar = sample_menu_chrome();
+        let view = String::from("Terminal 1");
         let mut cache = RasterCache::default();
-        cache.store(context(), tabbar.clone(), vec![placement()]);
+        cache.store(context(), view.clone(), vec![placement()]);
 
         // A renamed tab is the case that would show a stale title forever.
-        let mut renamed = tabbar.clone();
-        renamed.tabs[0].title = "renamed".into();
+        let renamed = String::from("renamed");
         assert!(cache.hit(&context(), |v| *v == renamed).is_none(), "title");
-        let mut switched = tabbar.clone();
-        switched.active_tab += 1;
-        assert!(
-            cache.hit(&context(), |v| *v == switched).is_none(),
-            "active"
-        );
 
         let moved = [
             RasterContext {
@@ -713,7 +589,7 @@ mod tests {
             },
         ];
         for moved in moved {
-            assert!(cache.hit(&moved, |v| *v == tabbar).is_none(), "{moved:?}");
+            assert!(cache.hit(&moved, |v| *v == view).is_none(), "{moved:?}");
         }
     }
 }

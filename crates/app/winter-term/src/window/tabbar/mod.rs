@@ -1,21 +1,21 @@
-//! Top-tabbar glue: build the [`TopTabbar`] the renderer draws from the app's
-//! tab/menu state, and dispatch clicks the renderer's [`hit_test`](winter_render::hit_test) resolves.
-//! The menus themselves live in [`crate::window::menus`], the right-click menu in
+//! What the window's chrome says of its tabs: their names, the tooltip for
+//! what the pointer rests on, and the tab commands. The title bar itself is
+//! misty's (see [`crate::window::frame::title_bar`]); the menus live in
+//! [`crate::window::menus`], the right-click menu in
 //! [`crate::window::menus::context`]; the window title in [`title`].
 
 mod title;
 
 use std::path::Path;
 
-use winter_render::{Menu, StatusHover, TabbarHit, TopTabbar};
+use misty::{TitleBarHit, WindowButton};
+use winter_render::{Region, StatusHover};
 
-use crate::config::TitleBarStyle;
 use winter_model::layout::TabId;
 use winter_model::path::abbreviate_home;
 use winter_terminal::session::TitleFacts;
 
 use crate::window::editor::buffers::shown_path;
-use crate::window::menus::menu_defs;
 use crate::window::status::mode_label_and_name;
 use crate::window::strip::StripHit;
 use crate::window::App;
@@ -23,10 +23,6 @@ use crate::window::App;
 // ========================================================================
 // Constants
 // ========================================================================
-
-/// What the title bar reads: the app's name, whatever the focused pane
-/// shows, which its breadcrumb row names.
-const TITLE_BAR_LABEL: &str = "Winter Term";
 
 /// What a terminal is called where nothing better names it: no program, no
 /// directory, no title of its own.
@@ -267,42 +263,17 @@ pub(in crate::window) fn clean_title(title: &str, remote: Option<&str>) -> Strin
 }
 
 impl App {
-    /// Build the tabbar model for this frame from the current tab/menu state.
-    pub(in crate::window) fn build_top_tabbar(&self) -> TopTabbar {
-        let menus = menu_defs(self.config.menu_style)
-            .iter()
-            .map(|menu| Menu {
-                title: menu.title.to_string(),
-            })
-            .collect();
-        let url_tooltip = self.hover_tooltip();
-        // A strip tab's title hangs under the tab, and a status bar part's
-        // over the bar, not the pointer: hung off the pointer's cell, it
-        // covered the bar.
-        let tooltip_anchor = match (&self.input.pointer.hovered_url, self.tabs.strip_hover) {
+    /// Where the tooltip hangs: a strip tab's title under the tab, and a
+    /// status bar part's over the bar, not the pointer: hung off the
+    /// pointer's cell, it covered the bar. `None` hangs it off the pointer.
+    pub(in crate::window) fn tooltip_anchor(&self) -> Option<Region> {
+        match (&self.input.pointer.hovered_url, self.tabs.strip_hover) {
             (None, StripHit::Tab(_)) => self.tabs.hover_anchor,
             (None, _) => self
                 .chrome
                 .status_hover
                 .and_then(|part| self.status_part_region(part)),
             _ => None,
-        };
-        TopTabbar {
-            active_tab: 0,
-            tabbar_hover: self.tabs.hover,
-            controls_side: self.config.window_controls_side,
-            menu_style: self.config.menu_style,
-            menus,
-            open_menu: self.chrome.menus.open,
-            // Tabs live on each pane's own strip; the title bar keeps the
-            // menus, the window controls, and a button opening a tab in the
-            // focused pane. What a pane shows is named on its own breadcrumb
-            // row, so the bar names the app.
-            path: TITLE_BAR_LABEL.to_string(),
-            tabs: Vec::new(),
-            tooltip_anchor,
-            url_tooltip,
-            window_controls: self.config.title_bar_style == TitleBarStyle::Modern,
         }
     }
 
@@ -325,19 +296,20 @@ impl App {
         }
 
         // 3. Titlebar and window control buttons
-        match self.tabs.hover {
-            TabbarHit::Hamburger => return Some(("Menu".to_string(), cx, cy)),
-            TabbarHit::Minimize => return Some(("Minimize".to_string(), cx, cy)),
-            TabbarHit::Maximize => {
+        let label = match self.title_bar_hit(cx, cy) {
+            Some(TitleBarHit::MenuButton) => Some("Menu"),
+            Some(TitleBarHit::Button(WindowButton::Minimize)) => Some("Minimize"),
+            Some(TitleBarHit::Button(WindowButton::Maximize)) => {
                 let is_max = self.window.as_ref().is_some_and(|w| w.is_maximized());
-                let label = if is_max { "Restore" } else { "Maximize" };
-                return Some((label.to_string(), cx, cy));
+                Some(if is_max { "Restore" } else { "Maximize" })
             }
-            TabbarHit::Close => return Some(("Close".to_string(), cx, cy)),
-            TabbarHit::CloseTab(_) => return Some(("Close Tab".to_string(), cx, cy)),
-            TabbarHit::ScrollTabsLeft => return Some(("Scroll Tabs Left".to_string(), cx, cy)),
-            TabbarHit::ScrollTabsRight => return Some(("Scroll Tabs Right".to_string(), cx, cy)),
-            _ => {}
+            Some(TitleBarHit::Button(WindowButton::Close)) => Some("Close"),
+            Some(TitleBarHit::Drag | TitleBarHit::MenuTitle(_) | TitleBarHit::Resize(_)) | None => {
+                None
+            }
+        };
+        if let Some(label) = label {
+            return Some((label.to_string(), cx, cy));
         }
 
         // 4. Status bar buttons and indicators
@@ -390,14 +362,9 @@ impl App {
         Some(name.to_string())
     }
 
-    /// Pixel height of the reserved top-tabbar band.
+    /// Pixel height of the title bar's band along the window's top.
     pub(in crate::window) fn top_chrome_height(&self) -> f32 {
-        let ch = self
-            .renderer
-            .as_ref()
-            .map(|r| r.cell_size().1)
-            .unwrap_or(0.0);
-        ch * self.top_chrome_rows() as f32
+        self.title_bar_height()
     }
 
     /// A left-click at `(x, y)` on the title bar while a dialog is up: only
@@ -406,86 +373,20 @@ impl App {
     /// title-bar space moves the window; its close button, menus, and the
     /// rest wait for the dialog's answer. Returns whether the click did one.
     pub(in crate::window) fn manage_window_at(&mut self, x: f32, y: f32) -> bool {
-        let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) else {
-            return false;
-        };
-        let surface_w = self.viewport_rect().width;
-        let tabbar = self.build_top_tabbar();
-        let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
-        let in_title_bar = y < self.top_chrome_height();
-        let movable = self.config.title_bar_style == TitleBarStyle::Modern;
+        let hit = self.title_bar_hit(x, y);
         let Some(window) = &self.window else {
             return false;
         };
         match hit {
-            TabbarHit::Minimize => window.set_minimized(true),
-            TabbarHit::Maximize => window.set_maximized(!window.is_maximized()),
-            TabbarHit::None if in_title_bar && movable => {
+            Some(TitleBarHit::Button(WindowButton::Minimize)) => window.set_minimized(true),
+            Some(TitleBarHit::Button(WindowButton::Maximize)) => {
+                window.set_maximized(!window.is_maximized())
+            }
+            Some(TitleBarHit::Drag) => {
                 let _ = window.drag_window();
             }
             _ => return false,
         }
-        true
-    }
-
-    /// The title bar's element at `(x, y)`, or `None` before the renderer
-    /// knows its cell size.
-    pub(in crate::window) fn tabbar_hit(&self, x: f32, y: f32) -> Option<TabbarHit> {
-        let (cw, ch) = self.renderer.as_ref()?.cell_size();
-        let surface_w = self.viewport_rect().width;
-        let tabbar = self.build_top_tabbar();
-        Some(winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y))
-    }
-
-    /// Handle a left-click at `(x, y)` against the tabbar. Returns `true` when the
-    /// click was consumed (a tabbar element, or the bar's empty space) and the
-    /// caller should not treat it as a pane click. An open menu takes every
-    /// press itself (see [`crate::window::frame::menus`]).
-    pub(in crate::window) fn handle_tabbar_click(&mut self, x: f32, y: f32) -> bool {
-        let Some(hit) = self.tabbar_hit(x, y) else {
-            return false;
-        };
-        match hit {
-            TabbarHit::Tab(_)
-            | TabbarHit::CloseTab(_)
-            | TabbarHit::ScrollTabsLeft
-            | TabbarHit::ScrollTabsRight => {
-                // The title bar draws no tabs, so nothing lands here.
-            }
-            TabbarHit::Hamburger => self.toggle_menu(0),
-            TabbarHit::Minimize => {
-                self.close_menu();
-                if let Some(window) = &self.window {
-                    window.set_minimized(true);
-                }
-            }
-            TabbarHit::Maximize => {
-                self.close_menu();
-                if let Some(window) = &self.window {
-                    window.set_maximized(!window.is_maximized());
-                }
-            }
-            TabbarHit::Close => {
-                // Drained by the mouse handler into the shared quit path.
-                self.runtime.exit.requested = true;
-            }
-            TabbarHit::MenuTitle(i) => self.toggle_menu(i),
-            TabbarHit::None => {
-                if y >= self.top_chrome_height() {
-                    return false;
-                }
-                // Empty title-bar space. In the borderless modern style this is
-                // the drag handle to move the window; either way, swallow the
-                // click so it does not select pane text.
-                if self.config.title_bar_style == TitleBarStyle::Modern {
-                    if let Some(window) = &self.window {
-                        let _ = window.drag_window();
-                    }
-                }
-                return true;
-            }
-        }
-        self.dirty = true;
         true
     }
 }
@@ -496,8 +397,6 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use winter_render::MenuStyle;
-
     use super::*;
     use crate::editors::keys::KeysEditor;
     use crate::window::editor::EditorKind;
@@ -769,16 +668,6 @@ mod tests {
     }
 
     #[test]
-    fn test_build_top_tabbar_carries_menus_and_no_tabs() {
-        let mut app = App::new();
-        app.chrome.menus.open = Some(0);
-        let tabbar = app.build_top_tabbar();
-        assert!(tabbar.tabs.is_empty(), "tabs live on each pane's strip");
-        assert_eq!(tabbar.open_menu, Some(0));
-        assert_eq!(tabbar.menu_style, MenuStyle::Modern);
-    }
-
-    #[test]
     fn test_clean_title_and_cwd() {
         assert_eq!(clean_title("user@host: /home/user", None), "/home/user");
         assert_eq!(clean_title("user@host:~/workspace", None), "~/workspace");
@@ -798,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn test_top_tabbar_shows_mode_tooltip_when_mode_is_hovered() {
+    fn test_the_mode_s_tooltip_shows_when_the_mode_is_hovered() {
         let mut app = App::new();
         struct NormalEditor;
         impl Page for NormalEditor {
@@ -826,9 +715,8 @@ mod tests {
         app.show_editor(EditorKind::Text, Box::new(NormalEditor));
         app.chrome.status_hover = Some(StatusHover::Mode);
         app.input.pointer.cursor_pos = (12.0, 500.0);
-        let tabbar = app.build_top_tabbar();
         assert_eq!(
-            tabbar.url_tooltip,
+            app.hover_tooltip(),
             Some(("Normal".to_string(), 12.0, 500.0))
         );
     }
@@ -848,11 +736,10 @@ mod tests {
         app.input.pointer.cursor_pos = (x, y);
         app.tabs.strip_hover = StripHit::Tab(tab);
         app.tabs.hover_anchor = Some(region);
-        let tabbar = app.build_top_tabbar();
-        assert_eq!(tabbar.tooltip_anchor, Some(region));
+        assert_eq!(app.tooltip_anchor(), Some(region));
         app.tabs.strip_hover = StripHit::NewTab(tab);
         assert_eq!(
-            app.build_top_tabbar().tooltip_anchor,
+            app.tooltip_anchor(),
             None,
             "a button's hangs under the pointer"
         );
@@ -876,28 +763,9 @@ mod tests {
             Some(("Close Tab".to_string(), 50.0, 10.0))
         );
 
-        // Window control buttons
         app.tabs.strip_hover = StripHit::None;
-        app.tabs.hover = TabbarHit::Hamburger;
-        assert_eq!(app.hover_tooltip(), Some(("Menu".to_string(), 50.0, 10.0)));
-
-        app.tabs.hover = TabbarHit::Minimize;
-        assert_eq!(
-            app.hover_tooltip(),
-            Some(("Minimize".to_string(), 50.0, 10.0))
-        );
-
-        app.tabs.hover = TabbarHit::Maximize;
-        assert_eq!(
-            app.hover_tooltip(),
-            Some(("Maximize".to_string(), 50.0, 10.0))
-        );
-
-        app.tabs.hover = TabbarHit::Close;
-        assert_eq!(app.hover_tooltip(), Some(("Close".to_string(), 50.0, 10.0)));
 
         // Status bar bell
-        app.tabs.hover = TabbarHit::None;
         app.chrome.status_hover = Some(StatusHover::Bell);
         assert_eq!(
             app.hover_tooltip(),

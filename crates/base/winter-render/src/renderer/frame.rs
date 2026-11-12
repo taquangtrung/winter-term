@@ -18,13 +18,12 @@ use super::glyphs::{
     base_family, effective_bold_weight, is_braille, needs_complex_shaping, parse_weight,
     FallbackGlyphQuadFit,
 };
-use super::raster::{view::TabbarText, DIM_FACTOR};
+use super::raster::DIM_FACTOR;
 use super::widgets::{FindView, InputView, TokenInspectView, ToolbarView};
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView};
 use crate::glyph_quad::GlyphQuadPlacement;
 use crate::image::ImagePlacement;
-use crate::tabbar::TopTabbar;
 use crate::theme::Rgb;
 use crate::INDENT_GUIDE;
 use glyphon::{Attrs, BufferLine, Color, Shaping, TextArea, TextBounds};
@@ -133,7 +132,6 @@ struct TextAreaInput<'a> {
     /// [`GpuRenderer::pane_pad`]).
     pane_pad: f32,
     panes: &'a [PaneView<'a>],
-    tabbar_texts: &'a [TabbarText],
     text_buffers: &'a [glyphon::Buffer],
 }
 
@@ -165,9 +163,7 @@ impl GpuRenderer {
     /// and its viewport rect. Pane dividers are drawn between adjacent panes.
     /// When `status` is set, a status bar is drawn across the bottom cell row;
     /// callers must leave that row free of panes (see [`Self::cell_size`]).
-    /// When `tabbar` is set, the tabbar/menubar is drawn across the top cell
-    /// row(s) (likewise reserved by the caller) and any open dropdown is
-    /// composited over the content via the image pass.
+    /// The title bar is misty's: the caller leaves its band free of panes.
     ///
     /// Composition order: per-pane geometry and text, then the chrome around
     /// them, then the GPU uploads, then one encoded frame.
@@ -177,18 +173,13 @@ impl GpuRenderer {
         target: &wgpu::TextureView,
         panes: &[PaneView],
         status_bar: bool,
-        tabbar: Option<&TopTabbar>,
         images: &[ImagePlacement],
         input: Option<&InputView>,
         find: Option<&FindView>,
         token_inspect: Option<&TokenInspectView>,
     ) {
         self.drew_blinking_text = false;
-        self.chrome.tabbar_enabled = tabbar.is_some();
         self.chrome.status_bar_enabled = status_bar;
-        if let Some(t) = tabbar {
-            self.chrome.modern = t.menu_style == crate::tabbar::MenuStyle::Modern;
-        }
         let surface = SurfaceSize {
             height: self.size.height as f32,
             width: self.size.width as f32,
@@ -228,27 +219,11 @@ impl GpuRenderer {
         // The status bar is misty's now: the renderer leaves its strip for it.
         let _status_top = crate::status_bar_top_px(surface.height, self.fonts.cell_height);
 
-        // Top tabbar (tabbar/menubar) bands and text. The dropdown overlay is
-        // handled separately via the image pass so it sits above pane text.
-        let tabbar_texts = match tabbar {
-            Some(c) => self.draw_tabbar(c, surface.width),
-            None => Vec::new(),
-        };
-
         let ranges = self.upload_vertex_buffers(&mut layers, surface);
-        self.prepare_tabbar_strip(tabbar, surface);
         let toolbars: Vec<&ToolbarView> = panes.iter().filter_map(|pane| pane.toolbar).collect();
         // One of each popup is drawn, so the focused pane's, the one the keys
         // reach: the first pane's in tree order took the slot from it.
-        self.prepare_overlay_images(
-            images,
-            &toolbars,
-            tabbar,
-            input,
-            find,
-            token_inspect,
-            surface,
-        );
+        self.prepare_overlay_images(images, &toolbars, input, find, token_inspect, surface);
         self.glyph_quad_pass.prepare(
             &self.device,
             &self.queue,
@@ -263,7 +238,6 @@ impl GpuRenderer {
             foreground: self.theme.foreground,
             pane_pad: self.pane_pad(),
             panes: &drawn,
-            tabbar_texts: &tabbar_texts,
             text_buffers: &text_buffers,
         });
 
@@ -1075,24 +1049,6 @@ impl GpuRenderer {
     // Overlay passes
     // --------------------------------------------------------------------
 
-    /// Rasterize and prepare the top-tabbar strip.
-    fn prepare_tabbar_strip(&mut self, tabbar: Option<&TopTabbar>, surface: SurfaceSize) {
-        // The top-tabbar strip (band + rounded tab pills) is composited before the
-        // text pass so the tab cards sit under the tab titles.
-        let tabbar_strip = match tabbar {
-            Some(c) => self.tabbar_strip_placement(c, surface.width, surface.height),
-            None => Vec::new(),
-        };
-        // One layer: nothing of it floats over anything else.
-        self.tabbar_strip_pass.prepare(
-            &self.queue,
-            &tabbar_strip,
-            tabbar_strip.len(),
-            surface.width,
-            surface.height,
-        );
-    }
-
     /// Prepare the image pass with the caller's block images plus every
     /// rasterized overlay that must sit above the pane text.
     #[allow(clippy::too_many_arguments)]
@@ -1100,7 +1056,6 @@ impl GpuRenderer {
         &mut self,
         images: &[ImagePlacement],
         toolbars: &[&ToolbarView],
-        tabbar: Option<&TopTabbar>,
         input: Option<&InputView>,
         find: Option<&FindView>,
         token_inspect: Option<&TokenInspectView>,
@@ -1114,9 +1069,6 @@ impl GpuRenderer {
         // Everything from here floats over the content, over the lines drawn
         // on the strips too (see `FrameLayers::over_image_verts`).
         let base = all_images.len();
-        if let Some(c) = tabbar {
-            all_images.extend(self.rasterize_url_tooltip(c, w, h));
-        }
         match input {
             Some(i) => all_images.extend(self.rasterize_input(i, w, h)),
             None => {
@@ -1182,10 +1134,6 @@ impl GpuRenderer {
                 pass.set_vertex_buffer(0, self.dot_buffer.slice(..));
                 pass.draw(0..ranges.dot_count, 0..1);
             }
-
-            // Tabbar strip sits above the bg quads but below the text so the
-            // rounded tab cards back the tab titles.
-            self.tabbar_strip_pass.render_base(&mut pass);
 
             // Reachable only if `prepare` and this call disagree about the
             // atlas/viewport passed in, not from ordinary content; skip the
@@ -1372,7 +1320,7 @@ fn strip_pane<'a>(pane: &PaneView<'a>, strip: GridStrip<'a>) -> PaneView<'a> {
 /// Lay out every text area this frame draws: one per pane, then the status
 /// bar, then the tabbar labels.
 fn collect_text_areas<'a>(input: TextAreaInput<'a>) -> Vec<TextArea<'a>> {
-    let mut text_areas: Vec<TextArea> = input
+    let text_areas: Vec<TextArea> = input
         .text_buffers
         .iter()
         .zip(input.panes.iter())
@@ -1396,23 +1344,6 @@ fn collect_text_areas<'a>(input: TextAreaInput<'a>) -> Vec<TextArea<'a>> {
             }
         })
         .collect();
-
-    for text in input.tabbar_texts {
-        text_areas.push(TextArea {
-            buffer: &text.buffer,
-            left: text.left.round(),
-            top: text.top.round(),
-            bounds: TextBounds {
-                left: text.bounds.left,
-                top: text.bounds.top,
-                right: text.bounds.right,
-                bottom: text.bounds.bottom,
-            },
-            default_color: text.color,
-            scale: 1.0,
-            custom_glyphs: &[],
-        });
-    }
 
     text_areas
 }

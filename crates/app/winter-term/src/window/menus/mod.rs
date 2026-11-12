@@ -6,7 +6,7 @@
 
 pub(in crate::window) mod context;
 
-use misty::{Menu, MenuEntry, MenuItem, PopupSide, Rect};
+use misty::{Menu, MenuEntry, MenuItem, PopupSide};
 use winter_render::MenuStyle;
 
 use winter_model::input::format_key;
@@ -231,12 +231,7 @@ impl App {
         };
         self.close_context_menu();
         self.chrome.menus.open = Some(index);
-        let anchor = self.renderer.as_ref().and_then(|renderer| {
-            let (cell_w, cell_h) = renderer.cell_size();
-            let surface_w = self.viewport_rect().width;
-            winter_render::menu_anchor(&self.build_top_tabbar(), surface_w, cell_w, cell_h)
-        });
-        let anchor = anchor.map_or_else(Rect::default, |at| Rect::new(at.x, at.y, at.w, at.h));
+        let anchor = self.menu_anchor(index).unwrap_or_default();
         let mut menu = Menu::new(entries_of(def.items));
         menu.open(anchor, PopupSide::Below);
         self.chrome.menus.dropdown = Some(menu);

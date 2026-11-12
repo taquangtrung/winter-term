@@ -234,8 +234,9 @@ impl App {
             {
                 return;
             }
-            if y < self.top_chrome_height() && self.handle_tabbar_click(x, y) {
-                self.dirty = true;
+            // The title bar is misty's; what of it misty leaves (the empty
+            // bar under a system frame) selects no pane text.
+            if y < self.top_chrome_height() {
                 return;
             }
         }
@@ -638,17 +639,6 @@ impl App {
                     }
                 }
                 return;
-            }
-        }
-
-        // Update tabbar hover state so the renderer can show hover highlights.
-        if let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) {
-            let surface_w = self.viewport_rect().width;
-            let tabbar = self.build_top_tabbar();
-            let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
-            if hit != self.tabs.hover {
-                self.tabs.hover = hit;
-                self.dirty = true;
             }
         }
 

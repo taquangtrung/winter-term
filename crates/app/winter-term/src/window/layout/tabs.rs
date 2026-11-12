@@ -9,7 +9,7 @@ use winter_terminal::session::Terminal;
 use crate::window::editor::{Closing, EditorKind};
 use crate::window::strip::StripHit;
 use crate::window::{App, DEFAULT_COLS, DEFAULT_ROWS};
-use winter_render::{Region, TabbarHit};
+use winter_render::Region;
 
 // ========================================================================
 // Constants
@@ -35,8 +35,6 @@ pub(in crate::window) struct TabsState {
     /// the drag began. `None` when no drag is in progress. Cleared on mouse
     /// release.
     pub(in crate::window) drag_start: Option<(TabId, f32, f32)>,
-    /// Title-bar element currently under the cursor; drives hover highlights.
-    pub(in crate::window) hover: TabbarHit,
     /// Where the strip tab under the pointer is, for its tooltip to hang
     /// under.
     pub(in crate::window) hover_anchor: Option<Region>,
@@ -85,7 +83,6 @@ impl Default for TabsState {
         Self {
             closed: Vec::new(),
             drag_start: None,
-            hover: TabbarHit::None,
             hover_anchor: None,
             layout: Layout::new(),
             labels: HashMap::new(),

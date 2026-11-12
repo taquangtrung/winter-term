@@ -1,15 +1,13 @@
-//! The fixed regions of the window around the panes: the title bar with
-//! its tabs and menus ([`titlebar`]), each pane's own tab strip
-//! ([`pane_strip`]).
+//! The fixed regions of the window around the panes: each pane's own tab
+//! strip ([`pane_strip`]). The title bar is misty's, drawn by the app.
 
 pub(in crate::renderer) mod pane_strip;
-pub(in crate::renderer) mod titlebar;
 
 // ========================================================================
 // Constants
 // ========================================================================
 
-/// Corner radius of every pill on the tabbar, title bar and pane strips: none,
+/// Corner radius of every pill on the pane strips: none,
 /// so their tabs and button highlights are square.
 const SQUARE_CORNER: f32 = 0.0;
 

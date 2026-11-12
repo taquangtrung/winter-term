@@ -10,7 +10,6 @@ pub(in crate::renderer) mod find;
 pub(in crate::renderer) mod input;
 pub(in crate::renderer) mod token_inspect;
 pub(in crate::renderer) mod toolbar;
-pub(in crate::renderer) mod tooltip;
 mod view;
 
 pub use view::{

@@ -92,7 +92,6 @@ pub struct GpuRenderer {
     image_pass: ImagePass,
     /// Image pass for the rasterized top-tabbar strip. Rendered between the bg
     /// quads and the text so the rounded tab cards sit under the tab titles.
-    tabbar_strip_pass: ImagePass,
     /// The strip's last paint, so a frame that changes nothing about the
     /// tabbar reuses the texture already uploaded for it. Repainting it was
     /// the most expensive thing an otherwise idle frame did.
@@ -190,11 +189,9 @@ struct ChromeLayout {
     decorated: bool,
     /// Thickness of the 1-D line drawn between adjacent panes (in logical pixels).
     divider_width: f32,
-    modern: bool,
     /// How tall the field typed into is in every popup, in rows of the font.
     popup_input_height: f32,
     status_bar_enabled: bool,
-    tabbar_enabled: bool,
     /// The window's opacity from the config, 0.0 to 1.0, which the theme's own
     /// [`Theme::background_alpha`] multiplies.
     window_opacity: f32,
@@ -208,27 +205,6 @@ struct ChromeLayout {
 pub(crate) mod test_support {
     use super::glyphs::FontCtx;
 
-    pub(super) fn sample_menu_chrome() -> crate::tabbar::TopTabbar {
-        use crate::tabbar::{ControlsSide, Menu, MenuStyle, TabLabel, TopTabbar};
-        TopTabbar {
-            active_tab: 0,
-            controls_side: ControlsSide::Right,
-            menu_style: MenuStyle::Modern,
-            menus: vec![Menu {
-                title: "Menu".into(),
-            }],
-            open_menu: Some(0),
-            path: String::new(),
-            tabs: vec![TabLabel {
-                title: "Terminal 1".into(),
-                zoomed: false,
-            }],
-            tabbar_hover: crate::tabbar::TabbarHit::None,
-            url_tooltip: None,
-            tooltip_anchor: None,
-            window_controls: false,
-        }
-    }
     pub(super) fn sample_font_ctx() -> FontCtx<'static> {
         FontCtx {
             cell_h: 18.0,

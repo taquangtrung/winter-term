@@ -64,7 +64,6 @@ impl App {
         // Panes sit below the top tabbar (tabbar/menubar) and, when enabled,
         // above the status bar; the grid is centered in whatever space remains
         // below the tabbar, whether or not the status bar eats into it.
-        let top_rows = winter_render::tabbar_rows(self.config.menu_style);
         let window_size = self.window.as_ref().map(|w| w.inner_size());
         let h = window_size
             .map(|s| s.height as f32)
@@ -73,15 +72,12 @@ impl App {
             .map(|s| s.width as f32)
             .unwrap_or(full_cols as f32 * cw);
 
-        let top_h_on_screen = if self.config.menu_style == winter_render::MenuStyle::Modern {
-            winter_render::modern_titlebar_height_px(ch)
-        } else {
-            top_rows as f32 * ch
-        };
-        let status_h = if status_enabled {
-            winter_render::status_bar_height_px(ch)
-        } else {
-            0.0
+        let top_h_on_screen = self.top_chrome_height();
+        let status_h = match status_enabled {
+            true => self
+                .status_bar_height()
+                .unwrap_or_else(|| winter_render::status_bar_height_px(ch)),
+            false => 0.0,
         };
 
         // Every pixel between the title bar and the status bar belongs to the

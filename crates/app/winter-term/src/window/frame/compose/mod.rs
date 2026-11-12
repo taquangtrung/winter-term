@@ -1073,8 +1073,6 @@ impl App {
         let status_enabled = self.status_bar_visible();
         // Asked for only once there is a bar to show the answers on.
         self.sync_quota_monitor(status_enabled);
-        // Built before the renderer is borrowed, since it reads tab/menu state.
-        let tabbar = self.build_top_tabbar();
         // Built before the renderer is borrowed too: it fills the palette's
         // icon cache, which needs the app mutably.
         let mut palette_view = self.palette_popup();
@@ -1288,7 +1286,6 @@ impl App {
             target,
             &views,
             status,
-            Some(&tabbar),
             &placements,
             input_view.as_ref(),
             find_view.as_ref(),

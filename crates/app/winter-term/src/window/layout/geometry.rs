@@ -7,7 +7,7 @@ use winit::window::ResizeDirection;
 use crate::config::TitleBarStyle;
 use winter_model::layout::Rect;
 use winter_render::renderer::PaneRect;
-use winter_render::{MenuStyle, PANE_H_PAD};
+use winter_render::PANE_H_PAD;
 
 use crate::window::{
     App, AUTO_SCROLL_EDGE_MARGIN, AUTO_SCROLL_INTERVAL, AUTO_SCROLL_MAX_LINES_PER_TICK,
@@ -19,10 +19,6 @@ use crate::window::{
 // ========================================================================
 
 impl App {
-    /// Number of top cell rows reserved for the tabbar/menubar.
-    pub(in crate::window) fn top_chrome_rows(&self) -> usize {
-        winter_render::tabbar_rows(self.config.menu_style)
-    }
     /// The outer-edge/corner this point should resize when pressed, or `None`
     /// away from the border. Only the Modern title bar needs this: the System
     /// style keeps the OS decorations, which already carry a resize border.
@@ -88,23 +84,17 @@ impl App {
 
     pub(in crate::window) fn viewport_rect(&self) -> PaneRect {
         let (w, h) = self.surface_px();
-        // Reserve the status bar row at the bottom (when enabled) and the
-        // tabbar/menubar rows at the top, so pane hit-testing and focus geometry
-        // match the area actually drawn to panes; the grid is centered in
-        // whatever space remains below the tabbar (must match `render_frame`).
+        // Reserve the status bar at the bottom (when enabled) and the title
+        // bar at the top, so pane hit-testing and focus geometry match the
+        // area actually drawn to panes; the grid is centered in whatever
+        // space remains below the title bar (must match `render_frame`).
         let ch = self
             .renderer
             .as_ref()
             .map(|r| r.cell_size().1)
             .unwrap_or(0.0);
-        let top_rows = self.top_chrome_rows();
         let status_enabled = self.status_bar_visible();
-
-        let top_h_on_screen = if self.config.menu_style == MenuStyle::Modern {
-            winter_render::modern_titlebar_height_px(ch)
-        } else {
-            top_rows as f32 * ch
-        };
+        let top_h_on_screen = self.top_chrome_height();
         // As tall as misty draws it, once a frame has measured its font.
         let status_h = match status_enabled {
             true => self

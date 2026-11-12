@@ -106,7 +106,6 @@ impl GpuRenderer {
         let line_height = cell_height;
 
         let image_pass = ImagePass::new(&device, format);
-        let tabbar_strip_pass = ImagePass::new(&device, format);
         let glyph_quad_pass = GlyphQuadPass::new(&device, format);
 
         let font_has_braille = font_covers_braille(
@@ -128,10 +127,8 @@ impl GpuRenderer {
             chrome: ChromeLayout {
                 decorated: true,
                 divider_width: DIVIDER_THICKNESS,
-                modern: true,
                 popup_input_height: crate::DEFAULT_POPUP_INPUT_HEIGHT,
                 status_bar_enabled: true,
-                tabbar_enabled: true,
                 window_opacity: 1.0,
             },
             fonts: FontState {
@@ -175,7 +172,6 @@ impl GpuRenderer {
             theme: Theme::default(),
             text_buffers: Vec::new(),
             image_pass,
-            tabbar_strip_pass,
             overlay_caches: Default::default(),
             theme_generation: 0,
             drew_blinking_text: false,

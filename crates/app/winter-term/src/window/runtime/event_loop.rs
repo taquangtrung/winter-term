@@ -94,7 +94,8 @@ impl Application for App {
         let window = self.window.as_ref().map(|window| window.id());
         if let Some(window) = window {
             let cards = self.cards_deadline(&mut cx.event_cx(window));
-            wakeup = [wakeup, cards].into_iter().flatten().min();
+            let tooltip = self.chrome.tooltip.about_to_wait(&mut cx.event_cx(window));
+            wakeup = [wakeup, cards, tooltip].into_iter().flatten().min();
         }
         self.flush_window(cx);
         wakeup
@@ -178,7 +179,12 @@ impl App {
             .srgb_view()
             .unwrap_or_else(|| texture.texture().create_view(&Default::default()));
         self.render_frame(&view);
-        frame.draw_texture(&texture, bounds);
+        // Only the pane band: misty paints pictures over its fills, so the
+        // frame over the bars would hide their backgrounds and hovers.
+        let band = self.viewport_rect();
+        let band = misty::Rect::new(band.x, band.y, band.width, band.height);
+        frame.clipped(band, |frame| frame.draw_texture(&texture, bounds));
+        self.draw_title_bar(frame);
         self.draw_status_bar(frame);
         self.draw_pane_popups(frame);
         self.draw_which_key(frame);
@@ -186,6 +192,7 @@ impl App {
         self.draw_cards(frame);
         self.draw_picker(frame);
         self.draw_menus(frame);
+        self.draw_tooltip(frame);
     }
 
     /// The texture frames of `size` are rendered into: last frame's while
@@ -227,16 +234,24 @@ impl App {
             input,
             Input::PointerButton(_) | Input::PointerMoved(_) | Input::PointerLeft | Input::Wheel(_)
         );
+        // The bar lights its buttons, and switches the open menu, before
+        // an open menu takes the pointer moving.
+        let moved = matches!(input, Input::PointerMoved(_));
         let picked = window.is_some_and(|window| {
             let mut ecx = cx.event_cx(window);
-            self.offer_to_menus(input, &mut ecx)
+            moved && self.offer_to_title_bar(input, &mut ecx)
+                || self.offer_to_menus(input, &mut ecx)
                 || pointer
-                    && (self.point_at_picker(input, &mut ecx)
+                    && (!moved && self.offer_to_title_bar(input, &mut ecx)
+                        || self.point_at_picker(input, &mut ecx)
                         || self.point_at_transient(input, &mut ecx)
                         || self.point_at_which_key(input, &mut ecx)
                         || self.point_at_cards(input, &mut ecx)
                         || self.point_at_status_bar(input, &mut ecx))
         });
+        if picked {
+            self.quit_if_requested(cx);
+        }
         match input {
             _ if picked => {}
             Input::Key(key) => self.on_key(*key, true, cx),

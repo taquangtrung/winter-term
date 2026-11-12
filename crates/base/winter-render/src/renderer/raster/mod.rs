@@ -106,21 +106,8 @@ pub(in crate::renderer) use crate::DIM_FACTOR;
 /// Helpers the parts' and widgets' tests share.
 #[cfg(test)]
 pub(in crate::renderer) mod test_support {
-    use super::view::StripImage;
-
     pub(in crate::renderer) const CELL_W: f32 = 9.0;
     pub(in crate::renderer) const CELL_H: f32 = 18.0;
-
-    /// The RGBA pixel at `(x, y)`.
-    pub(in crate::renderer) fn pixel(image: &StripImage, x: u32, y: u32) -> (u8, u8, u8, u8) {
-        let i = ((y * image.width + x) * 4) as usize;
-        (
-            image.rgba[i],
-            image.rgba[i + 1],
-            image.rgba[i + 2],
-            image.rgba[i + 3],
-        )
-    }
 
     /// The `(x, y, width, height)` box around every pixel where `after`
     /// differs from `before`, over a `width`-wide RGBA image.

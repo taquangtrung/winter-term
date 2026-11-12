@@ -354,6 +354,11 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) cards: misty::Toasts,
     /// The status bar misty draws along the window's bottom.
     pub(in crate::window) status_bar: misty::StatusBar,
+    /// The title bar misty draws along the window's top, and the shape the
+    /// settings gave it; `None` before the first frame.
+    pub(in crate::window) title_bar: Option<(frame::title_bar::TitleBarShape, misty::TitleBar)>,
+    /// The tooltip misty hangs under what the pointer rests on.
+    pub(in crate::window) tooltip: misty::Tooltip,
     /// The key menu misty draws, while one is up.
     pub(in crate::window) transient: Option<misty::Transient>,
     /// The title of the key menu up, to tell a new menu from the same one.

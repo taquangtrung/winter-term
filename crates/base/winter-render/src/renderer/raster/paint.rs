@@ -1,6 +1,6 @@
 //! Low-level pixel work shared by every chrome surface.
 
-use glyphon::{Attrs, Color, Family, FontSystem, Shaping, SwashCache, TextBounds};
+use glyphon::{Attrs, Color, Family, FontSystem, Shaping, SwashCache};
 use resvg::usvg::Options;
 
 use crate::renderer::glyphs::{base_family, effective_bold_weight, parse_weight, FontCtx};
@@ -11,15 +11,6 @@ use crate::theme::Rgb;
 // Painting primitives
 // ========================================================================
 
-/// A glyphon clip rect from pixel edges.
-pub(in crate::renderer) fn text_bounds(left: f32, top: f32, right: f32, bottom: f32) -> TextBounds {
-    TextBounds {
-        left: left as i32,
-        top: top as i32,
-        right: right as i32,
-        bottom: bottom as i32,
-    }
-}
 /// Shorten `s` to at most `max_chars`, appending an ellipsis when truncated.
 pub(in crate::renderer) fn truncate_label(s: &str, max_chars: usize) -> String {
     let count = s.chars().count();

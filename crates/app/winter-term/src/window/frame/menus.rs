@@ -4,8 +4,8 @@
 //! the keys it moves by (the arrows, Enter, Escape); a choice runs its
 //! command, and a press outside puts the menu away.
 
+use misty::TitleBarHit;
 use misty::{EventCx, Frame, Input, MenuResponse, Widget};
-use winter_render::TabbarHit;
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
@@ -72,9 +72,9 @@ impl App {
                 let passes = match input {
                     Input::PointerButton(button) => {
                         let (x, y) = (button.position.x, button.position.y);
-                        let hit = self.tabbar_hit(x, y).unwrap_or(TabbarHit::None);
-                        let own = hit == TabbarHit::Hamburger
-                            || self.chrome.menus.open.map(TabbarHit::MenuTitle) == Some(hit);
+                        let hit = self.title_bar_hit(x, y);
+                        let own = hit == Some(TitleBarHit::MenuButton)
+                            || self.chrome.menus.open.map(TitleBarHit::MenuTitle) == hit;
                         y < self.top_chrome_height() && !own
                     }
                     _ => false,
