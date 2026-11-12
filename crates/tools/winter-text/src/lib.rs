@@ -29,8 +29,9 @@ use winter_lsp::protocol::TextEdit;
 use winter_lsp::{Event, Incoming, Port};
 use winter_model::editor::EditPoint;
 use winter_model::editor::{
-    menu_groups, Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorStatus, FileEdit,
-    JumpStep, JumpTarget, Notice, OpenTarget, Page, SharedText, TargetStyles, SAVE_ALL,
+    menu_groups, Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus,
+    FileEdit, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptReply, SharedText,
+    TargetStyles, SAVE_ALL,
 };
 use winter_model::input::Key;
 use winter_model::paint::{Frame as PaintFrame, IconKind, Row};
@@ -40,6 +41,7 @@ pub mod diff;
 mod jumps;
 mod keys;
 mod language;
+mod requests;
 mod servers;
 mod session;
 pub mod settings;
@@ -81,6 +83,10 @@ const UNSAVED: &str = "No write since last change (add ! to override)";
 pub struct TextEditor {
     /// The document shown, the file's.
     document: DocumentId,
+    /// Whether a save has the language server format the file first.
+    format_on_save: bool,
+    /// What the tab is waiting on its language server for.
+    lsp: requests::Lsp,
     /// Where the cursor was before Scout's preview moved it, to go back to
     /// should the jump be called off.
     jump_origin: Option<usize>,
@@ -128,7 +134,9 @@ impl TextEditor {
         let (document, view) = session::with(|session| session.open_view(&path))?;
         let mut editor = Self {
             document,
+            format_on_save: false,
             jump_origin: None,
+            lsp: requests::Lsp::default(),
             jump_walk: (None, Vec::new()),
             languages: BTreeMap::new(),
             problems_seen: None,
@@ -178,6 +186,9 @@ impl TextEditor {
                     false => EditorOutcome::Ignored,
                 }
             }
+            Event::Answer { id, result } => self
+                .on_lsp_answer(incoming.server, *id, result)
+                .unwrap_or(EditorOutcome::Ignored),
             Event::ApplyEdit(edits) => {
                 let ours: Vec<FileEdit> = edits
                     .iter()
@@ -232,6 +243,7 @@ impl TextEditor {
             }
         });
         self.languages.clone_from(&settings.languages);
+        self.format_on_save = settings.format_on_save;
     }
 
     /// Makes `edits` (a language server's, in its UTF-16 columns) to the
@@ -306,6 +318,9 @@ impl TextEditor {
                 view.lend(&mut session.editor).draw(frame, area, theme);
             });
         });
+        if let Some(cursor) = self.with_view(|view| view.cursor_rect()) {
+            self.draw_card(frame, cursor, area, theme);
+        }
     }
 
     /// Hands the view `input` from the pointer or an input method: a press
@@ -386,16 +401,24 @@ impl TextEditor {
                     }
                 }
                 HostRequest::ReadInto(read) => self.read_into(read.line, read.path),
-                HostRequest::Save(save) => {
-                    match session::with(|session| session.save(save.document)) {
-                        Ok(path) => outcome = EditorOutcome::Wrote(path),
-                        Err(error) => self.notice = Some(Notice::error(error.to_string())),
-                    }
+                HostRequest::Save(_) => {
+                    outcome = self.format_before_save().unwrap_or_else(|| self.write());
                 }
                 _ => {}
             }
         }
         outcome
+    }
+
+    /// Writes the file: where it went, or why it could not.
+    fn write(&mut self) -> EditorOutcome {
+        match session::with(|session| session.save(self.document)) {
+            Ok(path) => EditorOutcome::Wrote(path),
+            Err(error) => {
+                self.notice = Some(Notice::error(error.to_string()));
+                EditorOutcome::Consumed
+            }
+        }
     }
 
     /// Puts the lines of the file at `path` (this tab's own when `None`)
@@ -459,7 +482,11 @@ impl Page for TextEditor {
         PaintFrame::new(vec![Row::new()])
     }
 
+    /// A key closes the card at the cursor first; Escape does nothing else.
     fn on_key(&mut self, key: &Key) -> EditorOutcome {
+        if self.close_card() && key.code == winter_model::input::KeyCode::Escape {
+            return EditorOutcome::Consumed;
+        }
         let view = self.view_id();
         let (handled, requests) = session::with(|session| {
             let handled = session
@@ -480,13 +507,10 @@ impl Page for TextEditor {
     /// `None` for a command Viento does not have.
     fn run_command(&mut self, name: &str) -> Option<EditorOutcome> {
         if name == SAVE_ALL {
-            return Some(match session::with(|session| session.save(self.document)) {
-                Ok(path) => EditorOutcome::Wrote(path),
-                Err(error) => {
-                    self.notice = Some(Notice::error(error.to_string()));
-                    EditorOutcome::Consumed
-                }
-            });
+            return Some(self.write());
+        }
+        if let Some(outcome) = self.run_lsp_command(name) {
+            return Some(outcome);
         }
         let id = name.replace('_', "-");
         let view = self.view_id();
@@ -514,13 +538,16 @@ impl Page for TextEditor {
             )
         });
         let flush = unsynced.then(|| Instant::now() + FLUSH_DELAY);
-        [deadline.map(clock::instant), flush]
+        [deadline.map(clock::instant), flush, self.lsp_next_tick()]
             .into_iter()
             .flatten()
             .min()
     }
 
     fn on_tick(&mut self, now: Instant) -> EditorOutcome {
+        if let Some(outcome) = self.lsp_tick(now) {
+            return outcome;
+        }
         let language = self.language();
         let requests = session::with(|session| {
             session.editor.tick(clock::stamp(now));
@@ -609,6 +636,15 @@ impl Page for TextEditor {
             })
             .collect();
         menu_groups([items])
+    }
+
+    fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
+        self.on_lsp_prompt(&reply).unwrap_or(EditorOutcome::Ignored)
+    }
+
+    /// Edits a server made to files this tab does not hold.
+    fn take_requests(&mut self) -> Vec<EditorRequest> {
+        std::mem::take(&mut self.lsp.requests)
     }
 
     fn take_notice(&mut self) -> Option<Notice> {

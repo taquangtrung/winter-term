@@ -78,6 +78,15 @@ impl Session {
             .find(|port| port.is_ready() && !port.is_everywhere() && port.serves(language, path))
     }
 
+    /// The server running as `id`.
+    pub(crate) fn port(&self, id: ServerId) -> Option<Port> {
+        self.servers
+            .ports
+            .iter()
+            .find(|port| port.id() == id)
+            .cloned()
+    }
+
     /// Whether `document` changed since its server was last handed it.
     pub(crate) fn is_unsynced(&self, document: DocumentId) -> bool {
         let version = self.editor.document_version(document);

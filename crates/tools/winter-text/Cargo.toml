@@ -12,6 +12,7 @@ categories = ["text-editors"]
 rust-version.workspace = true
 
 [dependencies]
+serde_json.workspace = true
 misty.workspace = true
 misty-viento.workspace = true
 viento.workspace = true
@@ -24,6 +25,5 @@ winter-ext-api.workspace = true
 winter-syntax.workspace = true
 
 [dev-dependencies]
-serde_json.workspace = true
 winter-lsp = { workspace = true, features = ["test-support"] }
 winter-model = { workspace = true, features = ["test-support"] }
