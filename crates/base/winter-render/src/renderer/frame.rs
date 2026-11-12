@@ -1083,9 +1083,8 @@ impl GpuRenderer {
         if let Some(ti) = token_inspect {
             all_images.extend(self.rasterize_token_inspect(ti, w, h));
         }
-        let rect_of = |image: &ImagePlacement| (image.x, image.y, image.width, image.height);
-        self.hits.picture_rects = all_images[..base].iter().map(rect_of).collect();
-        self.hits.popup_rects = all_images[base..].iter().map(rect_of).collect();
+        self.hits.pictures = all_images[..base].to_vec();
+        self.hits.popups = all_images[base..].to_vec();
         self.image_pass
             .prepare(&self.queue, &all_images, base, w, h);
     }

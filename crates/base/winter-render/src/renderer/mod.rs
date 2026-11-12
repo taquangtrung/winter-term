@@ -60,6 +60,9 @@ pub struct GpuRenderer {
     /// Where the last frame drew what the pointer can act on, for the window to test a click or a hover against what is on screen.
     hits: FrameHits,
     device: Device,
+    /// Misty's GPU, which the images' textures are made on, so a host
+    /// drawing with misty draws them too.
+    gpu: misty::Gpu,
     /// The format of the textures frames are rendered into.
     format: TextureFormat,
     queue: Queue,
@@ -133,11 +136,10 @@ pub struct FrameHits {
     /// Where each pane toolbar's buttons were last drawn: whose bar, the
     /// band's top and bottom edges, and each button's span across it.
     toolbar_hits: Vec<(u64, (f32, f32), Vec<widgets::toolbar::ToolbarHit>)>,
-    /// Where the last frame drew pictures and toolbars in the content, as
-    /// `(x, y, width, height)`.
-    picture_rects: Vec<(f32, f32, f32, f32)>,
-    /// Where the last frame drew the popups floating over the content.
-    popup_rects: Vec<(f32, f32, f32, f32)>,
+    /// The pictures and toolbars the last frame drew in the content.
+    pictures: Vec<crate::image::ImagePlacement>,
+    /// The popups the last frame drew floating over the content.
+    popups: Vec<crate::image::ImagePlacement>,
 }
 
 /// The font in force and the cell it makes, with what it can draw itself and the glyphs drawn from a fallback.

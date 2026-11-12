@@ -38,8 +38,7 @@ impl GpuRenderer {
         let max = self.device.limits().max_texture_dimension_2d;
         let rgba = fit_within(rgba, max);
         let (width, height) = rgba.dimensions();
-        self.image_pass
-            .upload(&self.device, &self.queue, id, &rgba, width, height);
+        self.image_pass.upload(&self.gpu, id, &rgba, width, height);
         Some((width, height))
     }
 
@@ -56,14 +55,8 @@ impl GpuRenderer {
         let Some(raster) = rasterize_in_box(svg, &options, box_w, box_h) else {
             return false;
         };
-        self.image_pass.upload(
-            &self.device,
-            &self.queue,
-            id,
-            &raster.rgba,
-            raster.width,
-            raster.height,
-        );
+        self.image_pass
+            .upload(&self.gpu, id, &raster.rgba, raster.width, raster.height);
         true
     }
 
@@ -201,15 +194,13 @@ impl GpuRenderer {
             }
         });
 
-        self.image_pass
-            .upload(&self.device, &self.queue, id, &rgba, width, height);
+        self.image_pass.upload(&self.gpu, id, &rgba, width, height);
         Some((width, height))
     }
 
     /// Upload pre-rasterized RGBA bytes as a GPU texture under `id`.
     pub fn upload_rgba(&mut self, id: u64, rgba: &[u8], width: u32, height: u32) {
-        self.image_pass
-            .upload(&self.device, &self.queue, id, rgba, width, height);
+        self.image_pass.upload(&self.gpu, id, rgba, width, height);
     }
 
     /// Render a Vello `scene` into a `width` x `height` texture cached under
@@ -237,7 +228,9 @@ impl GpuRenderer {
         let Some(renderer) = started else {
             return false;
         };
-        let view = self.image_pass.target(&self.device, id, width, height);
+        let Some(view) = self.image_pass.target(&self.gpu, id, width, height) else {
+            return false;
+        };
         let params = RenderParams {
             antialiasing_method: AaConfig::Area,
             base_color: Color::TRANSPARENT,
@@ -248,6 +241,12 @@ impl GpuRenderer {
             .render_to_texture(&self.device, &self.queue, scene, &view, &params)
             .inspect_err(|error| eprintln!("winter: cannot draw a scene: {error}"))
             .is_ok()
+    }
+
+    /// The texture cached for `id`, for a host drawing a placement of it
+    /// itself.
+    pub fn image_texture(&self, id: u64) -> Option<&misty::GpuTexture> {
+        self.image_pass.texture(id)
     }
 
     /// Release the texture cached for `id`. A no-op for an unknown `id`,

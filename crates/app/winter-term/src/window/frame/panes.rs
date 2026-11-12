@@ -1,14 +1,14 @@
 //! The panes' cells, drawn by misty: each pane, and each strip of its
 //! gutter, as the renderer resolved them (glyphs and their colors, the
 //! backgrounds and highlights, the cursor, lines, the scrollbar), in the
-//! terminal's font, and the separators between the panes. The pictures the
-//! renderer still draws (images, the toolbars) show through where they
-//! lie, and its popups over everything.
+//! terminal's font, and the separators between the panes; then the
+//! pictures the renderer keeps textures of (images, icons, the toolbars)
+//! where they lie, and its popups over everything.
 
 use misty::cell::{Attributes, Cell, CellSource, CellWidth, Color, Cursor, Style, UnderlineStyle};
 use misty::color::{Rgb, Rgba};
 use misty::{BoxStyle, Font, Frame, GpuTexture, Point, Rect};
-use winter_render::{PaintCell, PaintFill, PaintWidth, PanePaint};
+use winter_render::{ImagePlacement, PaintCell, PaintFill, PaintWidth, PanePaint};
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
@@ -69,8 +69,8 @@ impl CellSource for PaneCells {
 
 impl App {
     /// Draw the panes the last frame worked out over `frame`, then the
-    /// renderer's pictures over them, from `texture`, where it drew some.
-    pub(in crate::window) fn draw_panes(&mut self, frame: &mut Frame, texture: &GpuTexture) {
+    /// renderer's pictures over them and its popups over everything.
+    pub(in crate::window) fn draw_panes(&mut self, frame: &mut Frame) {
         let Some(renderer) = &self.renderer else {
             return;
         };
@@ -96,19 +96,13 @@ impl App {
         for fill in &self.chrome.drawn_separators {
             draw_fill(frame, fill);
         }
-        let bounds = frame.bounds();
         let hits = renderer.hits();
-        for &(x, y, width, height) in hits.picture_rects() {
-            frame.clipped(Rect::new(x, y, width, height), |frame| {
-                frame.draw_texture(texture, bounds)
-            });
+        for placement in hits.pictures() {
+            draw_placement(frame, placement, renderer.image_texture(placement.id));
         }
-        let popups = hits.popup_rects().to_vec();
         frame.overlay(|frame| {
-            for (x, y, width, height) in popups {
-                frame.clipped(Rect::new(x, y, width, height), |frame| {
-                    frame.draw_texture(texture, bounds)
-                });
+            for placement in hits.popups() {
+                draw_placement(frame, placement, renderer.image_texture(placement.id));
             }
         });
     }
@@ -149,6 +143,27 @@ fn cell_of(paint: &PaintCell) -> Cell {
             PaintWidth::Wide => CellWidth::Wide,
         },
     }
+}
+
+/// The part of `texture` that `placement` samples, stretched over its
+/// rectangle and faded by its alpha; nothing without a texture.
+fn draw_placement(frame: &mut Frame, placement: &ImagePlacement, texture: Option<&GpuTexture>) {
+    let Some(texture) = texture else {
+        return;
+    };
+    let across = (placement.u_max - placement.u_min).max(f32::EPSILON);
+    let down = (placement.v_max - placement.v_min).max(f32::EPSILON);
+    let (width, height) = (placement.width / across, placement.height / down);
+    let whole = Rect::new(
+        placement.x - placement.u_min * width,
+        placement.y - placement.v_min * height,
+        width,
+        height,
+    );
+    let shown = Rect::new(placement.x, placement.y, placement.width, placement.height);
+    frame.with_opacity(placement.alpha, |frame| {
+        frame.clipped(shown, |frame| frame.draw_texture(texture, whole));
+    });
 }
 
 /// `fill` as a plain box in `frame`.

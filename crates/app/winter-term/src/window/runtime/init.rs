@@ -183,8 +183,7 @@ impl App {
             None => GpuTexture::FORMAT,
         };
         let mut renderer = GpuRenderer::new(
-            gpu.device().clone(),
-            gpu.queue().clone(),
+            gpu.clone(),
             format,
             size.width,
             size.height,

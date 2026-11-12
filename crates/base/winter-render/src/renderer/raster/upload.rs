@@ -198,14 +198,8 @@ impl GpuRenderer {
         id: u64,
         image: &DropdownImage,
     ) -> ImagePlacement {
-        self.image_pass.upload(
-            &self.device,
-            &self.queue,
-            id,
-            &image.rgba,
-            image.width,
-            image.height,
-        );
+        self.image_pass
+            .upload(&self.gpu, id, &image.rgba, image.width, image.height);
         ImagePlacement {
             alpha: 1.0,
             height: image.height as f32,
@@ -443,15 +437,15 @@ impl GpuRenderer {
 // ========================================================================
 
 impl FrameHits {
-    /// Where the last frame drew pictures and pane toolbars in the content,
-    /// as `(x, y, width, height)`, for a host drawing the rest itself.
-    pub fn picture_rects(&self) -> &[(f32, f32, f32, f32)] {
-        &self.picture_rects
+    /// The pictures and pane toolbars the last frame drew in the content,
+    /// for a host drawing them itself (see [`GpuRenderer::image_texture`]).
+    pub fn pictures(&self) -> &[ImagePlacement] {
+        &self.pictures
     }
 
-    /// Where the last frame drew the popups floating over the content.
-    pub fn popup_rects(&self) -> &[(f32, f32, f32, f32)] {
-        &self.popup_rects
+    /// The popups the last frame drew floating over the content.
+    pub fn popups(&self) -> &[ImagePlacement] {
+        &self.popups
     }
 
     /// Whether the surface point `(x, y)` is on the input or confirmation popup.

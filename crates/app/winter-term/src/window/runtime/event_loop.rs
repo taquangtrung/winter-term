@@ -181,7 +181,7 @@ impl App {
             .unwrap_or_else(|| texture.texture().create_view(&Default::default()));
         self.render_frame(&view);
         self.sync_strips();
-        self.draw_panes(frame, &texture);
+        self.draw_panes(frame);
         self.draw_strips(frame);
         self.draw_settings(frame);
         self.draw_title_bar(frame);

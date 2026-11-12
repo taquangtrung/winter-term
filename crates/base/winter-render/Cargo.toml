@@ -16,6 +16,7 @@ readme = "README.md"
 etagere = "0.3"
 glyphon = "0.12"
 kdl.workspace = true
+misty.workspace = true
 image = { workspace = true, features = ["bmp", "gif", "ico", "jpeg", "png", "webp"] }
 pollster.workspace = true
 pulldown-cmark.workspace = true

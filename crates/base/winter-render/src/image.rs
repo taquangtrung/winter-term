@@ -12,10 +12,9 @@ use wgpu::{
     FrontFace, MultisampleState, Origin3d, PipelineLayoutDescriptor, PrimitiveState,
     PrimitiveTopology, Queue, RenderPass, RenderPipeline, RenderPipelineDescriptor,
     SamplerBindingType, SamplerDescriptor, ShaderModuleDescriptor, ShaderSource, ShaderStages,
-    TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureDescriptor,
-    TextureDimension, TextureFormat, TextureSampleType, TextureUsages, TextureView,
-    TextureViewDescriptor, TextureViewDimension, VertexAttribute, VertexBufferLayout, VertexFormat,
-    VertexState, VertexStepMode,
+    TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect, TextureFormat,
+    TextureSampleType, TextureView, TextureViewDescriptor, TextureViewDimension, VertexAttribute,
+    VertexBufferLayout, VertexFormat, VertexState, VertexStepMode,
 };
 
 // ========================================================================
@@ -101,7 +100,8 @@ pub(crate) struct ImagePass {
 struct ImageTexture {
     bind_group: BindGroup,
     height: u32,
-    texture: Texture,
+    /// The texture, misty's so a host drawing with misty draws it too.
+    texture: misty::GpuTexture,
     width: u32,
 }
 
@@ -268,8 +268,7 @@ impl ImagePass {
     /// on the log and nothing drawn. Says whether it was uploaded.
     pub fn upload(
         &mut self,
-        device: &Device,
-        queue: &Queue,
+        gpu: &misty::Gpu,
         id: u64,
         rgba: &[u8],
         width: u32,
@@ -279,67 +278,72 @@ impl ImagePass {
             width,
             height,
             rgba.len(),
-            device.limits().max_texture_dimension_2d,
+            gpu.device().limits().max_texture_dimension_2d,
         ) {
             return false;
         }
-        let cached = self.ensure_texture(device, id, width, height);
-        write_rgba(queue, &cached.texture, rgba, width, height);
+        let Some(cached) = self.ensure_texture(gpu, id, width, height) else {
+            return false;
+        };
+        write_rgba(gpu.queue(), cached.texture.texture(), rgba, width, height);
         true
+    }
+
+    /// The texture cached under `id`, for a host drawing it itself.
+    pub fn texture(&self, id: u64) -> Option<&misty::GpuTexture> {
+        self.textures.get(&id).map(|cached| &cached.texture)
     }
 
     /// A view of the `width` x `height` texture cached under `id`, for a
     /// compute pass to draw into (a scene rendered by Vello), made or
     /// reused as [`Self::upload`] does.
-    pub fn target(&mut self, device: &Device, id: u64, width: u32, height: u32) -> TextureView {
-        let cached = self.ensure_texture(device, id, width, height);
-        cached
-            .texture
-            .create_view(&TextureViewDescriptor::default())
+    pub fn target(
+        &mut self,
+        gpu: &misty::Gpu,
+        id: u64,
+        width: u32,
+        height: u32,
+    ) -> Option<TextureView> {
+        let cached = self.ensure_texture(gpu, id, width, height)?;
+        Some(
+            cached
+                .texture
+                .texture()
+                .create_view(&TextureViewDescriptor::default()),
+        )
     }
 
     /// The texture cached under `id`, made anew unless the one there is
     /// already `width` x `height`.
     fn ensure_texture(
         &mut self,
-        device: &Device,
+        gpu: &misty::Gpu,
         id: u64,
         width: u32,
         height: u32,
-    ) -> &ImageTexture {
+    ) -> Option<&ImageTexture> {
         let reusable = self
             .textures
             .get(&id)
             .is_some_and(|cached| (cached.width, cached.height) == (width, height));
         if !reusable {
-            let image = self.create_texture(device, width, height);
+            let image = self.create_texture(gpu, width, height)?;
             self.textures.insert(id, image);
         }
-        &self.textures[&id]
+        self.textures.get(&id)
     }
 
-    /// A `width` x `height` texture and the bind group that samples it.
-    fn create_texture(&self, device: &Device, width: u32, height: u32) -> ImageTexture {
-        let texture = device.create_texture(&TextureDescriptor {
-            label: Some("winter image texture"),
-            size: Extent3d {
-                width,
-                height,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: TextureDimension::D2,
-            // Holds sRGB-encoded bytes; the image shader decodes them to
-            // linear before the (sRGB) surface re-encodes them. Vello writes
-            // the same encoding, as a storage texture.
-            format: TextureFormat::Rgba8Unorm,
-            usage: TextureUsages::TEXTURE_BINDING
-                | TextureUsages::COPY_DST
-                | TextureUsages::STORAGE_BINDING,
-            view_formats: &[],
-        });
-        let view = texture.create_view(&TextureViewDescriptor::default());
+    /// A `width` x `height` texture and the bind group that samples it, or
+    /// `None` for a size the GPU cannot hold.
+    fn create_texture(&self, gpu: &misty::Gpu, width: u32, height: u32) -> Option<ImageTexture> {
+        // Holds sRGB-encoded bytes; the image shader decodes them to linear
+        // before the (sRGB) surface re-encodes them. Vello writes the same
+        // encoding, as a storage texture.
+        let texture = misty::GpuTexture::new(gpu, width, height).ok()?;
+        let device = gpu.device();
+        let view = texture
+            .texture()
+            .create_view(&TextureViewDescriptor::default());
         let bind_group = device.create_bind_group(&BindGroupDescriptor {
             label: Some("winter image bind group"),
             layout: &self.bind_group_layout,
@@ -354,12 +358,12 @@ impl ImagePass {
                 },
             ],
         });
-        ImageTexture {
+        Some(ImageTexture {
             bind_group,
             height,
             texture,
             width,
-        }
+        })
     }
 
     /// Build the vertex buffer for this frame's `placements`, the first

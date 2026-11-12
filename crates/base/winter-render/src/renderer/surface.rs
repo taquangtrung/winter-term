@@ -14,7 +14,7 @@ use crate::glyph_quad::GlyphQuadPass;
 use crate::image::ImagePass;
 use crate::theme::Theme;
 use glyphon::{Cache, ColorMode, SwashCache, TextAtlas, TextRenderer, Viewport};
-use wgpu::{Device, MultisampleState, Queue, TextureFormat};
+use wgpu::{MultisampleState, TextureFormat};
 
 // ========================================================================
 // GpuRenderer: surface and configuration
@@ -32,8 +32,7 @@ impl GpuRenderer {
     /// [`Self::resize`] before the first [`Self::render`].
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        device: Device,
-        queue: Queue,
+        gpu: misty::Gpu,
         format: TextureFormat,
         width: u32,
         height: u32,
@@ -41,6 +40,8 @@ impl GpuRenderer {
         font: FontConfig,
         font_load: FontLoad,
     ) -> Self {
+        let device = gpu.device().clone();
+        let queue = gpu.queue().clone();
         let size = FrameSize {
             height: surface_side(height, &device),
             width: surface_side(width, &device),
@@ -150,11 +151,12 @@ impl GpuRenderer {
                 find_rect: None,
                 input_button_rects: Vec::new(),
                 input_rect: None,
-                picture_rects: Vec::new(),
-                popup_rects: Vec::new(),
+                pictures: Vec::new(),
+                popups: Vec::new(),
                 toolbar_hits: Vec::new(),
             },
             device,
+            gpu,
             format,
             queue,
             size,
