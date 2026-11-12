@@ -5,8 +5,8 @@
 //! icon is inflated only when something asks to draw it, so showing a listing
 //! unpacks the dozen icons on screen rather than the whole set.
 //!
-//! Rasterizing is the renderer's job: this module hands out SVG bytes and
-//! leaves the pixels to `winter_render`.
+//! Rasterizing is the renderer's job: this module hands out SVG bytes, or
+//! adds them to a misty widget's icons, and leaves the pixels to others.
 
 mod map;
 
@@ -122,19 +122,27 @@ fn svg(name: &str) -> Option<Vec<u8>> {
     Some(out)
 }
 
-/// The SVG a list row draws for `kind`, inflated the first time any row asks
-/// and shared after that.
-///
-/// A list redraws every visible row each frame and many rows share an icon,
-/// so inflating per row, as [`svg`] would, repeats the same work hundreds of
-/// times over.
-pub(crate) fn shared_svg(kind: &IconKind) -> Option<Arc<[u8]>> {
-    named_svg(&name_for(kind)?)
+/// Add each of `names` that `icons` lacks, from the bundled icons, for a
+/// misty widget to draw them by name.
+pub(crate) fn add_to(icons: &mut misty::IconSet, names: &[String]) {
+    for name in names {
+        if icons.get(name).is_some() {
+            continue;
+        }
+        let Some(svg) = named_svg(name).and_then(|bytes| misty::Svg::parse(&bytes).ok()) else {
+            continue;
+        };
+        // Winter's bundled icons keep their own colors, as its chrome draws
+        // them.
+        icons.insert_colored(name.clone(), svg);
+    }
 }
 
-/// The SVG for the packed icon `name`, as [`name_for`] gives it, from the
-/// same shared cache as [`shared_svg`]: one copy of each icon's document
-/// however many surfaces draw it.
+/// The SVG for the packed icon `name`, as [`name_for`] gives it, inflated
+/// the first time anything asks and shared after that: one copy of each
+/// icon's document however many surfaces draw it. A list redraws every
+/// visible row each frame and many rows share an icon, so inflating per
+/// row, as [`svg`] would, repeats the same work hundreds of times over.
 pub(crate) fn named_svg(name: &str) -> Option<Arc<[u8]>> {
     let mut cache = SHARED_SVGS
         .get_or_init(Mutex::default)

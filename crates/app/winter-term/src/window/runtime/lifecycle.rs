@@ -204,7 +204,6 @@ impl App {
                 geometry_save_due: None,
                 last_activity: Instant::now(),
                 last_frame_at: None,
-                started: Instant::now(),
                 strays: Vec::new(),
                 waker,
             },

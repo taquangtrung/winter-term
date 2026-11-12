@@ -27,10 +27,7 @@ pub use renderer::{
     WhichKeyView, THIN_SPACE,
 };
 pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};
-pub use tabbar::{
-    hit_test_pane_strip, layout_pane_strip, ControlsSide, MenuStyle, PaneStripDropTarget,
-    PaneStripHit, PaneStripLayout, PaneTab, Region,
-};
+pub use tabbar::{ControlsSide, MenuStyle, Region};
 pub use theme::{GitColors, Rgb as ThemeRgb, Theme, PAGE_DIM_MIX};
 pub use theme_file::{
     kdl_string, parse_theme_file, theme_kdl, ColorOverrides, KdlColors, ScalarColor, SCALAR_COLORS,
@@ -46,43 +43,6 @@ pub const PANE_H_PAD: f32 = 2.0;
 /// text it insets starts on one.
 pub fn pane_h_pad(scale_factor: f64) -> f32 {
     (PANE_H_PAD * scale_factor as f32).round()
-}
-
-/// Height of a pane strip's tab pills, expressed as a multiple of cell height.
-pub(crate) const MODERN_TABBAR_HEIGHT: f32 = 1.25;
-
-/// Flat pixel top-up added on top of `MODERN_TABBAR_HEIGHT * cell_height`,
-/// independent of font size (unlike that ratio).
-pub(crate) const TABBAR_EXTRA_HEIGHT_PX: f32 = 2.0;
-
-/// The height of a pane strip's tab pills. The single source of truth for
-/// this value; every place that needs it must call this rather than
-/// reimplementing `MODERN_TABBAR_HEIGHT * cell_height`, so they can never
-/// drift apart.
-pub fn modern_tabbar_height_px(cell_height: f32) -> f32 {
-    MODERN_TABBAR_HEIGHT * cell_height + TABBAR_EXTRA_HEIGHT_PX
-}
-
-/// Gap between a pane strip's top edge (where its divider lies) and its tab
-/// pills, in pixels.
-pub(crate) const PANE_STRIP_TOP_PAD_PX: f32 = 1.0;
-
-/// Height of the line along a pane strip's bottom edge that separates it from
-/// the pane below, in pixels.
-pub(crate) const PANE_STRIP_SEPARATOR_PX: f32 = 1.0;
-
-/// Space between a pane strip's separator and the pane below it, in pixels,
-/// left in the pane's own color.
-pub(crate) const PANE_STRIP_SEPARATOR_INSET_PX: f32 = 1.0;
-
-/// A pane strip's total pixel height: the pill height
-/// ([`modern_tabbar_height_px`]) plus the gap above the pills and the
-/// separator (with its inset) below them.
-pub fn pane_strip_height_px(cell_height: f32) -> f32 {
-    modern_tabbar_height_px(cell_height)
-        + PANE_STRIP_TOP_PAD_PX
-        + PANE_STRIP_SEPARATOR_PX
-        + PANE_STRIP_SEPARATOR_INSET_PX
 }
 
 /// The status bar's border: a hairline along its top.

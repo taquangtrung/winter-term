@@ -725,15 +725,13 @@ mod tests {
     fn test_a_strip_tab_s_title_hangs_under_the_tab_not_the_pointer() {
         let mut app = App::new();
         let tab = app.layout().focused();
-        let (_, strip) = app.strip_areas()[0];
-        // A point inside the strip's first tab, wherever the pointer is
-        // within it.
-        let (x, y) = (strip.x + 6.0, strip.y + 2.0);
-        assert_eq!(app.strip_hit(x, y), StripHit::Tab(tab));
-        let region = app.strip_tab_region(tab, x, y).expect("the tab's place");
-        assert!(region.x <= x && x < region.x + region.w);
-        assert!(region.y <= y && y < region.y + region.h);
-        app.input.pointer.cursor_pos = (x, y);
+        let region = Region {
+            h: 20.0,
+            w: 120.0,
+            x: 0.0,
+            y: 40.0,
+        };
+        app.input.pointer.cursor_pos = (6.0, 42.0);
         app.tabs.strip_hover = StripHit::Tab(tab);
         app.tabs.hover_anchor = Some(region);
         assert_eq!(app.tooltip_anchor(), Some(region));

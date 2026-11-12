@@ -30,7 +30,6 @@ mod colors;
 mod display;
 mod glyphs;
 mod images;
-mod parts;
 mod raster;
 mod svg;
 mod widgets;

@@ -16,7 +16,7 @@ use winter_model::paint::Point;
 
 use crate::window::input::overlay::Overlay;
 use crate::window::layout::bands::crumb_of;
-use crate::window::strip::{StripHit, DRAG_THRESHOLD_PX};
+use crate::window::strip::StripHit;
 use crate::window::terminal::pointer::ScrollbarDrag;
 use crate::window::{
     App, Selection, APPROX_CELL_HEIGHT, SCROLLBAR_CLICK_WIDTH, SCROLL_LINES_PER_WHEEL_NOTCH,
@@ -237,27 +237,6 @@ impl App {
             // The title bar is misty's; what of it misty leaves (the empty
             // bar under a system frame) selects no pane text.
             if y < self.top_chrome_height() {
-                return;
-            }
-        }
-
-        // A press on a pane's strip of tabs belongs to the strip: it shows,
-        // closes, or opens a tab rather than reaching the pane below it. A
-        // split divider running past the strip still wins, so the drag that
-        // resizes panes can start anywhere along it.
-        if state == ElementState::Pressed
-            && matches!(button, MouseButton::Left | MouseButton::Middle)
-        {
-            let (x, y) = self.input.pointer.cursor_pos;
-            let on_divider = self
-                .layout()
-                .divider_at(x, y, self.content_viewport())
-                .is_some();
-            if !on_divider && self.handle_strip_press(x, y, button == MouseButton::Middle) {
-                if button == MouseButton::Left {
-                    self.input.pointer.mouse_down = true;
-                }
-                self.dirty = true;
                 return;
             }
         }
@@ -497,7 +476,6 @@ impl App {
                     let rects = self.pane_rects();
                     self.input.pointer.scrollbar_hover = self.hovered_scrollbar_pane(&rects);
                 }
-                self.finalize_tab_drag();
                 self.copy_selection();
                 self.copy_selection_to_primary();
                 if let Some(window) = &self.window {
@@ -673,7 +651,7 @@ impl App {
         self.update_strip_hover(x, y);
         if self.tabs.strip_hover != strip_before {
             self.tabs.hover_anchor = match self.tabs.strip_hover {
-                StripHit::Tab(tab) => self.strip_tab_region(tab, x, y),
+                StripHit::Tab(tab) => self.strip_tab_region(tab),
                 _ => None,
             };
             self.update_window_title();
@@ -696,11 +674,7 @@ impl App {
             return;
         }
 
-        if self.tabs.drag_start.is_some() {
-            self.dirty = true;
-        }
-
-        if self.input.pointer.mouse_down && self.tabs.drag_start.is_none() {
+        if self.input.pointer.mouse_down {
             // Resolved against the pane the drag started in, not just the one
             // under the pointer, so running off an edge keeps selecting.
             if let Some((tab_id, row, col)) = self.drag_cell_at(x, y) {
@@ -861,9 +835,7 @@ impl App {
             };
         }
 
-        let is_tab_dragging = self.tabs.drag_start.is_some_and(|(_, sx, sy)| {
-            ((x - sx).powi(2) + (y - sy).powi(2)).sqrt() >= DRAG_THRESHOLD_PX
-        });
+        let is_tab_dragging = self.chrome.tab_drag.is_some();
         let on_dialog_button = self
             .renderer
             .as_ref()

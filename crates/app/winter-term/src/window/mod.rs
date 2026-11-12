@@ -269,8 +269,6 @@ pub(in crate::window) struct RuntimeState {
     /// When the last frame was drawn, so a hint that fell due is given the
     /// one frame that shows it rather than one every tick.
     pub(in crate::window) last_frame_at: Option<Instant>,
-    /// When the app started, the epoch every spinner frame is counted from.
-    pub(in crate::window) started: Instant,
     /// Children a reload's previous process image left behind that no tab
     /// took over (a put-aside workspace's shells, language servers, jobs):
     /// their reapers went with that image, so they are reaped here as they
@@ -359,6 +357,10 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) title_bar: Option<(frame::title_bar::TitleBarShape, misty::TitleBar)>,
     /// The tooltip misty hangs under what the pointer rests on.
     pub(in crate::window) tooltip: misty::Tooltip,
+    /// Each pane's strip of tabs, as misty draws it.
+    pub(in crate::window) strips: Vec<strip::view::PaneStrip>,
+    /// A tab dragged off its strip, while one is.
+    pub(in crate::window) tab_drag: Option<strip::view::TabDragging>,
     /// The key menu misty draws, while one is up.
     pub(in crate::window) transient: Option<misty::Transient>,
     /// The title of the key menu up, to tell a new menu from the same one.

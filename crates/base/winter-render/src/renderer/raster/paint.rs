@@ -1,10 +1,8 @@
 //! Low-level pixel work shared by every chrome surface.
 
 use glyphon::{Attrs, Color, Family, FontSystem, Shaping, SwashCache};
-use resvg::usvg::Options;
 
 use crate::renderer::glyphs::{base_family, effective_bold_weight, parse_weight, FontCtx};
-use crate::renderer::svg::rasterize_in_box;
 use crate::theme::Rgb;
 
 // ========================================================================
@@ -41,30 +39,6 @@ pub(in crate::renderer) fn blend_px(rgba: &mut [u8], idx: usize, color: Rgb, alp
     rgba[idx + 2] = (color.b as f32 * a + rgba[idx + 2] as f32 * inv) as u8;
     let out_a = a + (rgba[idx + 3] as f32 / 255.0) * inv;
     rgba[idx + 3] = (out_a * 255.0) as u8;
-}
-/// Rasterize `svg` into the `size`-pixel square whose top-left is `(x, y)` and
-/// blend it over `rgba`, in the artwork's own colors, centered the way the GPU
-/// path centers it. Does nothing when the document does not parse.
-pub(in crate::renderer) fn blit_svg(
-    rgba: &mut [u8],
-    canvas: (u32, u32),
-    svg: &[u8],
-    (x, y): (i32, i32),
-    size: u32,
-) {
-    let Some(raster) = rasterize_in_box(svg, &Options::default(), size, size) else {
-        return;
-    };
-    for (i, pixel) in raster.rgba.as_chunks::<4>().0.iter().enumerate() {
-        let px = x + (i as u32 % raster.width) as i32;
-        let py = y + (i as u32 / raster.width) as i32;
-        if px < 0 || py < 0 || px >= canvas.0 as i32 || py >= canvas.1 as i32 {
-            continue;
-        }
-        let idx = (py as usize * canvas.0 as usize + px as usize) * 4;
-        let color = Rgb::new(pixel[0], pixel[1], pixel[2]);
-        blend_px(rgba, idx, color, pixel[3] as f32 / 255.0);
-    }
 }
 
 /// Signed distance from `(px, py)` to the rounded rectangle `(x, y, w, h)` with
@@ -111,62 +85,6 @@ pub(in crate::renderer) fn fill_rounded_rect(
             }
             let idx = ((py * canvas_w + px) * 4) as usize;
             blend_px(rgba, idx, color, coverage * max_alpha);
-        }
-    }
-}
-/// Fill an anti-aliased line segment from `p1` to `p2` with given `thickness` and color.
-pub(in crate::renderer) fn fill_line_segment(
-    rgba: &mut [u8],
-    canvas: (u32, u32),
-    p1: (f32, f32),
-    p2: (f32, f32),
-    thickness: f32,
-    color: Rgb,
-    max_alpha: f32,
-) {
-    let (canvas_w, canvas_h) = canvas;
-    let (x0, y0) = p1;
-    let (x1, y1) = p2;
-    let bx0 = x0.min(x1) - thickness;
-    let by0 = y0.min(y1) - thickness;
-    let bx1 = x0.max(x1) + thickness;
-    let by1 = y0.max(y1) + thickness;
-
-    let rx0 = bx0.floor().max(0.0) as u32;
-    let ry0 = by0.floor().max(0.0) as u32;
-    let rx1 = (bx1.ceil() as u32).min(canvas_w);
-    let ry1 = (by1.ceil() as u32).min(canvas_h);
-
-    let dx = x1 - x0;
-    let dy = y1 - y0;
-    let len_sq = dx * dx + dy * dy;
-
-    for py in ry0..ry1 {
-        for px in rx0..rx1 {
-            let px_f = px as f32 + 0.5;
-            let py_f = py as f32 + 0.5;
-
-            let wx = px_f - x0;
-            let wy = py_f - y0;
-
-            let t = if len_sq > 0.0 {
-                ((wx * dx + wy * dy) / len_sq).clamp(0.0, 1.0)
-            } else {
-                0.0
-            };
-
-            let cx = x0 + t * dx;
-            let cy = y0 + t * dy;
-
-            let dist_sq = (px_f - cx) * (px_f - cx) + (py_f - cy) * (py_f - cy);
-            let dist = dist_sq.sqrt();
-
-            let sdf = dist - thickness / 2.0;
-            let coverage = (0.5 - sdf).clamp(0.0, 1.0);
-            if coverage > 0.0 {
-                let idx = ((py * canvas_w + px) * 4) as usize;
-                blend_px(rgba, idx, color, coverage * max_alpha);
-            }
         }
     }
 }
@@ -381,26 +299,6 @@ pub(in crate::renderer) fn composite_buffer(
             }
         },
     );
-}
-/// The square hover pill behind a button's icon: one cell-height (to whole
-/// pixels) on a side wherever it is drawn, so every button's pill is the same
-/// size, centered on `(cx, cy)` to within half a pixel and snapped to whole
-/// pixels so its edges stay crisp. Returned as `(x, y, width, height)`.
-pub(in crate::renderer) fn button_pill(cx: f32, cy: f32, cell_h: f32) -> (f32, f32, f32, f32) {
-    let side = cell_h.round().max(1.0);
-    (
-        (cx - side / 2.0).round(),
-        (cy - side / 2.0).round(),
-        side,
-        side,
-    )
-}
-
-/// The center of a button's pill, which is where the icon on it is drawn: the
-/// pill is snapped to whole pixels, so its center, not the button box's, is
-/// the point an icon has to be centered on to look centered on the pill.
-pub(in crate::renderer) fn pill_center((x, y, w, h): (f32, f32, f32, f32)) -> (f32, f32) {
-    (x + w / 2.0, y + h / 2.0)
 }
 
 // ========================================================================

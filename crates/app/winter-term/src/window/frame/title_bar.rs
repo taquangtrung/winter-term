@@ -60,15 +60,19 @@ impl App {
     }
 
     /// Draw the tooltip for what the pointer rests on over `frame`, or put
-    /// it away when it rests on nothing that has one, or a menu is open.
+    /// it away when it rests on nothing that has one, a menu is open, or a
+    /// tab is dragged.
     pub(in crate::window) fn draw_tooltip(&mut self, frame: &mut Frame) {
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
             None => misty_theme(&winter_render::Theme::dark()),
         };
-        // An open menu covers what the pointer rested on.
-        let menu_open = self.chrome.menus.dropdown.is_some() || self.chrome.menus.context.is_some();
-        match self.hover_tooltip().filter(|_| !menu_open) {
+        // An open menu covers what the pointer rested on, and a tab dragged
+        // off its strip has left it.
+        let covered = self.chrome.menus.dropdown.is_some()
+            || self.chrome.menus.context.is_some()
+            || self.chrome.tab_drag.is_some();
+        match self.hover_tooltip().filter(|_| !covered) {
             Some((text, x, y)) => {
                 let cell_h = frame.cell_metrics().height;
                 let anchor = self

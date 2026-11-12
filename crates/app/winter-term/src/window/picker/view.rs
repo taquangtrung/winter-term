@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use misty::color::Rgb;
 use misty::picker::{PickerAct, RowKey};
 use misty::text::{Span, StyledText, TextColor};
-use misty::{EventCx, Frame, Input, QuickPickPlacement, Rect, Svg, Widget};
+use misty::{EventCx, Frame, Input, QuickPickPlacement, Rect, Widget};
 use winter_render::{PanelView, PickerPlacement};
 
 use super::keys::KEYS;
@@ -88,7 +88,7 @@ impl App {
         }
         quick.set_panel(view.panel.as_ref().map(panel_lines).unwrap_or_default());
         let names = icon_names(quick);
-        add_icons(quick.icons_mut(), &names);
+        crate::icons::add_to(quick.icons_mut(), &names);
         let bounds = frame.bounds();
         quick.draw(frame, bounds, &theme);
     }
@@ -193,20 +193,4 @@ fn icon_names(quick: &misty::QuickPick<super::WindowOutcome, super::Preview>) ->
             shown.row.icon.clone().into_iter().chain(buttons)
         })
         .collect()
-}
-
-/// Add each of `names` that `icons` lacks, from Winter's bundled icons.
-fn add_icons(icons: &mut misty::IconSet, names: &[String]) {
-    for name in names {
-        if icons.get(name).is_some() {
-            continue;
-        }
-        let Some(svg) = crate::icons::named_svg(name).and_then(|bytes| Svg::parse(&bytes).ok())
-        else {
-            continue;
-        };
-        // Winter's bundled icons keep their own colors, as its chrome draws
-        // them.
-        icons.insert_colored(name.clone(), svg);
-    }
 }

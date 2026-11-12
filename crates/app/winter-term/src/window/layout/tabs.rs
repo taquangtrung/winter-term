@@ -31,10 +31,6 @@ pub(in crate::window) struct TabsState {
     /// The tabs closed most recently, the last closed last: what reopening a
     /// closed tab brings back, at most [`CLOSED_KEPT`] of them.
     pub(in crate::window) closed: Vec<ClosedTab>,
-    /// The tab being dragged along its strip and the pointer (x, y) position when
-    /// the drag began. `None` when no drag is in progress. Cleared on mouse
-    /// release.
-    pub(in crate::window) drag_start: Option<(TabId, f32, f32)>,
     /// Where the strip tab under the pointer is, for its tooltip to hang
     /// under.
     pub(in crate::window) hover_anchor: Option<Region>,
@@ -82,7 +78,6 @@ impl Default for TabsState {
     fn default() -> Self {
         Self {
             closed: Vec::new(),
-            drag_start: None,
             hover_anchor: None,
             layout: Layout::new(),
             labels: HashMap::new(),

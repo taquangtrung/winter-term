@@ -12,8 +12,8 @@ use winter_model::paint::{Frame, Gutter, Icon};
 use winter_pdf::PdfEditor;
 use winter_render::renderer::{GpuRenderer, GridStrip, PaneView};
 use winter_render::{
-    CellOverlay, CompletionRow, CompletionView, DropListView, FindView, ImagePlacement, InfoView,
-    InputView, PickerPlacement, PickerView, StatusSearch, ToolbarColumn, ToolbarView, WhichKeyView,
+    CellOverlay, CompletionRow, CompletionView, DropListView, FindView, InfoView, InputView,
+    PickerPlacement, PickerView, StatusSearch, ToolbarColumn, ToolbarView, WhichKeyView,
 };
 use winter_text::settings::EditorSettings;
 use winter_text::TextEditor;
@@ -27,7 +27,6 @@ use crate::window::input::sequence::WHICH_KEY_DELAY;
 use crate::window::layout::bands::{crumb_bar, PaneBands};
 use crate::window::layout::open_tabs::OpenTabs;
 use crate::window::picker::sources::{color_scout_rows, SCOUT_PICKER};
-use crate::window::strip::StripFrame;
 use crate::window::terminal::blocks::native::{image_placements, refresh_block_textures};
 use crate::window::terminal::command_marks::{self, sticky_block};
 use crate::window::terminal::navigation::search::{
@@ -38,11 +37,6 @@ use crate::window::{App, Selection};
 // ========================================================================
 // Constants
 // ========================================================================
-
-/// Base texture ID for rasterized pane tab strips, counting down from it:
-/// below the renderer's chrome IDs, which counting up from here reached once
-/// a window had enough panes.
-const PANE_STRIP_TEXTURE_BASE: u64 = u64::MAX - 200;
 
 /// Scout's picker name: while it is open, its pane lights what it matches.
 const SCOUT: &str = "scout";
@@ -340,30 +334,6 @@ fn sticky_headers(
             let row = Rect::new(whole.x, top, whole.width, cell_height);
             let command = block.command.replace('\n', " ");
             Some((*id, crumb_bar(*id, &[command], Vec::new(), row)))
-        })
-        .collect()
-}
-
-/// Each pane's tab strip, rasterized into a texture placed along the pane's top.
-fn rasterize_strips(
-    renderer: &mut GpuRenderer,
-    strip_frames: &[StripFrame],
-) -> Vec<ImagePlacement> {
-    strip_frames
-        .iter()
-        .enumerate()
-        .map(|(i, frame)| {
-            renderer.rasterize_pane_strip(
-                PANE_STRIP_TEXTURE_BASE - i as u64,
-                &frame.tabs,
-                &frame.layout,
-                frame.rect.width as u32,
-                frame.rect.height as u32,
-                frame.hover,
-                frame.drop_target,
-                frame.rect.x,
-                frame.rect.y,
-            )
         })
         .collect()
 }
@@ -1104,7 +1074,6 @@ impl App {
             .collect();
         let areas = self.layout().rects(viewport);
         let focused = self.tabs.layout.focused();
-        let strip_frames = self.strip_frames(viewport, (cw, ch));
         let mode = self.open_tabs.mode(&focused);
         let sentences = self.sentence_highlight();
         let settings = self.editor_settings();
@@ -1245,7 +1214,6 @@ impl App {
         );
         placements.extend(picture_placements);
         placements.extend(icon_placements);
-        placements.extend(rasterize_strips(renderer, &strip_frames));
         let views = build_pane_views(PaneViewInput {
             active,
             blink_phase: self.blink.phase,

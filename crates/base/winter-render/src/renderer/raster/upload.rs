@@ -22,7 +22,6 @@ use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
 use crate::renderer::widgets::{FindView, InputView, TokenInspectView, ToolbarView};
 use crate::renderer::FrameHits;
 use crate::renderer::GpuRenderer;
-use crate::tabbar::{PaneStripDropTarget, PaneStripHit, PaneStripLayout, PaneTab};
 use crate::theme::Theme;
 
 // ========================================================================
@@ -62,8 +61,6 @@ pub(in crate::renderer) struct ChromePainter<'a> {
 pub(in crate::renderer) struct OverlayCaches {
     find: RasterCache<FindView>,
     input: RasterCache<InputView>,
-    /// One per pane strip texture, keyed by its texture id.
-    pub(in crate::renderer) pane_strips: HashMap<u64, RasterCache<PaneStripKey>>,
     token_inspect: RasterCache<TokenInspectView>,
     /// One per pane toolbar texture, keyed by its texture id, with where its
     /// buttons were drawn.
@@ -107,18 +104,6 @@ struct CachedRaster<V> {
     context: RasterContext,
     placements: Vec<ImagePlacement>,
     view: V,
-}
-
-/// What a pane strip is painted from, besides the renderer's context.
-#[derive(Clone, Debug, PartialEq)]
-pub(in crate::renderer) struct PaneStripKey {
-    pub(in crate::renderer) drop_target: PaneStripDropTarget,
-    pub(in crate::renderer) height: u32,
-    pub(in crate::renderer) hover: PaneStripHit,
-    pub(in crate::renderer) layout: PaneStripLayout,
-    pub(in crate::renderer) origin: (f32, f32),
-    pub(in crate::renderer) tabs: Vec<PaneTab>,
-    pub(in crate::renderer) width: u32,
 }
 
 // ========================================================================
