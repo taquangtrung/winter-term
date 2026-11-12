@@ -87,6 +87,13 @@ enum Asked {
     Command,
     /// The formatting of the text at a version.
     Format(u64),
+    /// The inlay hints of the text at a version.
+    Hints(u64),
+    /// The title of a lens, by its place among the lenses of the text at a
+    /// version.
+    Lens(u64, usize),
+    /// The code lenses of the text at a version.
+    Lenses(u64),
     /// The formatting a save waits on, of the text at a version.
     FormatAndSave(u64),
     /// Where the name is defined, declared, typed, or implemented.
@@ -226,13 +233,26 @@ impl TextEditor {
         Some(EditorOutcome::Consumed)
     }
 
-    /// When a save waiting on the server's formatting gives up.
+    /// When a save waiting on the server's formatting gives up, or the
+    /// hints are next asked for.
     pub(super) fn lsp_next_tick(&self) -> Option<Instant> {
-        self.lsp.saving
+        [self.lsp.saving, self.hints_next_tick()]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// Writes the file of a save the server has kept waiting too long.
     pub(super) fn lsp_tick(&mut self, now: Instant) -> Option<EditorOutcome> {
+        if let Some(asks) = self.hints_tick(now) {
+            for (id, hints) in asks.ids {
+                let asked = match hints {
+                    true => Asked::Hints(asks.version),
+                    false => Asked::Lenses(asks.version),
+                };
+                self.lsp.asked.insert((asks.port.id(), id), asked);
+            }
+        }
         let late = self.lsp.saving.is_some_and(|due| now >= due);
         late.then(|| {
             self.lsp.saving = None;
@@ -255,6 +275,8 @@ impl TextEditor {
             Ok(value) => value,
             Err(error) => {
                 return Some(match asked {
+                    // Hints and lenses failing is nothing the reader asked for.
+                    Asked::Hints(_) | Asked::Lens(..) | Asked::Lenses(_) => EditorOutcome::Consumed,
                     Asked::FormatAndSave(_) => {
                         self.lsp.saving = None;
                         self.notice = Some(Notice::info(format!(
@@ -438,6 +460,24 @@ impl TextEditor {
                 })
             }
             Asked::Command => EditorOutcome::Consumed,
+            Asked::Hints(version) => {
+                self.take_hints(version, value);
+                EditorOutcome::Consumed
+            }
+            Asked::Lens(version, at) => {
+                self.take_resolved_lens(version, at, value);
+                EditorOutcome::Consumed
+            }
+            Asked::Lenses(version) => {
+                if let Some(port) = session::with(|session| session.port(server)) {
+                    for (id, at) in self.take_lenses(version, value, &port) {
+                        self.lsp
+                            .asked
+                            .insert((server, id), Asked::Lens(version, at));
+                    }
+                }
+                EditorOutcome::Consumed
+            }
             Asked::Format(_) => {
                 let edits = protocol::text_edits(value);
                 let said = match edits.is_empty() {
@@ -694,7 +734,7 @@ impl TextEditor {
     }
 
     /// The server serving the file, its text handed over first.
-    fn port(&self) -> Option<Port> {
+    pub(super) fn port(&self) -> Option<Port> {
         let language = self.language();
         session::with(|session| {
             session.sync(self.document, &language);
@@ -749,7 +789,7 @@ impl TextEditor {
     }
 
     /// The text's version, which edits worked out from it were made for.
-    fn version(&self) -> u64 {
+    pub(super) fn version(&self) -> u64 {
         session::with(|session| session.editor.document_version(self.document)).unwrap_or(0)
     }
 }

@@ -40,6 +40,7 @@ use winter_model::textedit::modal::EditMode;
 mod completing;
 pub mod diff;
 mod git_changes;
+mod hints;
 mod jumps;
 mod keys;
 mod language;
@@ -88,6 +89,8 @@ pub struct TextEditor {
     document: DocumentId,
     /// Whether a save has the language server format the file first.
     format_on_save: bool,
+    /// The language server's inlay hints and lenses in the text.
+    hints: hints::Hints,
     /// What the tab is waiting on its language server for.
     lsp: requests::Lsp,
     /// Where the cursor was before Scout's preview moved it, to go back to
@@ -139,6 +142,7 @@ impl TextEditor {
             document,
             format_on_save: false,
             jump_origin: None,
+            hints: hints::Hints::default(),
             lsp: requests::Lsp::default(),
             jump_walk: (None, Vec::new()),
             languages: BTreeMap::new(),
