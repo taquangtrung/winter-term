@@ -1,12 +1,9 @@
 //! The Settings page's model: its rows, each editing one setting through a
-//! control, the row selected, and where edits are kept. The mutating methods
-//! return the changed `(key, value)`, which the app puts in force and keeps
-//! through its `apply_setting`. How the page is drawn is the app's.
+//! control, and where edits are kept. How the page is drawn and edited is
+//! the app's; each row's value is written as `settings.kdl` writes it, for
+//! the app to put in force through its `apply_setting`.
 
 use std::collections::BTreeSet;
-
-use crate::input::Key;
-use crate::textedit::field::TextField;
 
 // ========================================================================
 // Data Structures
@@ -67,9 +64,6 @@ pub struct NumberControl {
 pub struct SettingsField {
     /// The control this field renders as.
     pub control: Control,
-    /// Whether a text row's value is kept only when its editing ends,
-    /// rather than at every key: one that adds something, a new server.
-    pub deferred: bool,
     /// The config key this field writes.
     pub key: String,
     /// The field's label in the UI.
@@ -91,21 +85,15 @@ pub enum Scope {
     Workspace,
 }
 
-/// The open settings page: an ordered list of `fields` and the `selected` row.
+/// The settings page: an ordered list of `fields`, and where edits are kept.
 #[derive(Clone, Debug)]
 pub struct SettingsPage {
-    /// The selected text row's value as a one-line field, for its Emacs keys:
-    /// it keeps the caret and the kill ring between keys, and follows the
-    /// row's value wherever something else sets it.
-    editor: TextField,
     /// Every field on the page, in display order.
     pub fields: Vec<SettingsField>,
     /// The keys of the rows the window's workspace sets over `settings.kdl`.
     pub overridden: BTreeSet<String>,
     /// Where an edit is kept.
     pub scope: Scope,
-    /// Index of the field the cursor is on.
-    pub selected: usize,
     /// The window's workspace, by name; `None` when it is in none, and only
     /// the User scope is offered.
     pub workspace: Option<String>,
@@ -217,12 +205,6 @@ impl SettingsField {
         Self::new(key, label, Control::Text(TextControl { kind, value }))
     }
 
-    /// Keep the row's value only when its editing ends.
-    pub fn deferred(mut self) -> Self {
-        self.deferred = true;
-        self
-    }
-
     /// A field toggling between on and off.
     pub fn toggle(key: &str, label: &str, on: bool) -> Self {
         Self::new(key, label, Control::Toggle(ToggleControl { on }))
@@ -243,7 +225,6 @@ impl SettingsField {
     fn new(key: &str, label: &str, control: Control) -> Self {
         Self {
             control,
-            deferred: false,
             key: key.to_string(),
             label: label.to_string(),
             note: None,
@@ -257,14 +238,12 @@ impl SettingsField {
 // ========================================================================
 
 impl SettingsPage {
-    /// A page over these fields, with the first one selected.
+    /// A page over these fields, its edits kept in the User scope.
     pub fn new(fields: Vec<SettingsField>) -> Self {
         Self {
-            editor: TextField::line(""),
             fields,
             overridden: BTreeSet::new(),
             scope: Scope::User,
-            selected: 0,
             workspace: None,
         }
     }
@@ -275,190 +254,6 @@ impl SettingsPage {
         self.workspace = Some(name);
         self.overridden = overridden;
         self
-    }
-
-    /// Go from one scope to the other. Without a workspace there is only
-    /// the User scope, and nothing changes; returns whether it did.
-    pub fn toggle_scope(&mut self) -> bool {
-        if self.workspace.is_none() {
-            return false;
-        }
-        self.scope = match self.scope {
-            Scope::User => Scope::Workspace,
-            Scope::Workspace => Scope::User,
-        };
-        true
-    }
-
-    /// The key of the selected row.
-    pub fn selected_key(&self) -> Option<&str> {
-        self.fields
-            .get(self.selected)
-            .map(|field| field.key.as_str())
-    }
-
-    /// Edit the selected text row at its caret with `key`, as a one-line
-    /// field takes it. Returns the changed `(key, value)`, or `None` if the
-    /// row is not a text field or the key changed nothing.
-    pub fn edit_text(&mut self, key: &Key) -> Option<(String, String)> {
-        self.edit_with(|editor| {
-            editor.on_key(key, 1);
-        })
-    }
-
-    /// Paste `text`'s first line into the selected text row at its caret.
-    /// Returns the changed `(key, value)`, as [`Self::edit_text`] does.
-    pub fn paste_text(&mut self, text: &str) -> Option<(String, String)> {
-        self.edit_with(|editor| editor.paste(text))
-    }
-
-    /// Run `edit` on the selected text row's field, and take what it left as
-    /// the row's value.
-    fn edit_with(&mut self, edit: impl FnOnce(&mut TextField)) -> Option<(String, String)> {
-        let field = self.fields.get_mut(self.selected)?;
-        let Control::Text(text) = &mut field.control else {
-            return None;
-        };
-        if self.editor.text() != text.value {
-            self.editor.set_text(&text.value);
-        }
-        edit(&mut self.editor);
-        if self.editor.text() == text.value {
-            return None;
-        }
-        text.value = self.editor.text().to_string();
-        Some((field.key.clone(), field.control.value()))
-    }
-
-    /// Add `name` to the end of the selected names row. Returns the changed
-    /// `(key, value)`, or `None` if the row holds no names or has it.
-    pub fn add_name(&mut self, name: &str) -> Option<(String, String)> {
-        let field = self.fields.get_mut(self.selected)?;
-        let Control::Text(text) = &mut field.control else {
-            return None;
-        };
-        let held = text.value.split_whitespace().any(|held| held == name);
-        if !matches!(text.kind, TextKind::Names(_)) || held || name.trim().is_empty() {
-            return None;
-        }
-        let mut names: Vec<&str> = text.value.split_whitespace().collect();
-        names.push(name.trim());
-        text.value = names.join(" ");
-        Some((field.key.clone(), field.control.value()))
-    }
-
-    /// Take the name at `index` out of the selected names row. Returns the
-    /// changed `(key, value)`, or `None` if there is no such name.
-    pub fn remove_name(&mut self, index: usize) -> Option<(String, String)> {
-        let field = self.fields.get_mut(self.selected)?;
-        let Control::Text(text) = &mut field.control else {
-            return None;
-        };
-        let mut names: Vec<&str> = text.value.split_whitespace().collect();
-        if !matches!(text.kind, TextKind::Names(_)) || index >= names.len() {
-            return None;
-        }
-        names.remove(index);
-        text.value = names.join(" ");
-        Some((field.key.clone(), field.control.value()))
-    }
-
-    /// The selected text row's key and value, for a row kept only when its
-    /// editing ends: `None` when the row is no such one.
-    pub fn deferred_edit(&self) -> Option<(String, String)> {
-        let field = self
-            .fields
-            .get(self.selected)
-            .filter(|field| field.deferred)?;
-        matches!(field.control, Control::Text(_))
-            .then(|| (field.key.clone(), field.control.value()))
-    }
-
-    /// Where the caret sits in the selected text row, in characters: where
-    /// the field's keys left it, or the end when something else set the
-    /// value. `None` when the selected row is not a text field.
-    pub fn text_caret(&self) -> Option<usize> {
-        let Control::Text(text) = &self.fields.get(self.selected)?.control else {
-            return None;
-        };
-        Some(match self.editor.text() == text.value {
-            true => self.editor.col(),
-            false => text.value.chars().count(),
-        })
-    }
-
-    /// Move the selection to the previous field, stopping at the first.
-    pub fn move_up(&mut self) {
-        if self.selected > 0 {
-            self.selected -= 1;
-        }
-    }
-
-    /// Move the selection to the next field, stopping at the last.
-    pub fn move_down(&mut self) {
-        if self.selected + 1 < self.fields.len() {
-            self.selected += 1;
-        }
-    }
-
-    /// Whether the selected row holds a text field, so the caller can route a
-    /// space key to typing rather than to value adjustment.
-    pub fn selected_is_text(&self) -> bool {
-        matches!(
-            self.fields.get(self.selected).map(|f| &f.control),
-            Some(Control::Text(_))
-        )
-    }
-
-    /// Set the selected choice row to its option `option`. Returns the
-    /// changed `(key, value)`, or `None` if the row is no choice, has no such
-    /// option, or is on it already.
-    pub fn choose(&mut self, option: usize) -> Option<(String, String)> {
-        let field = self.fields.get_mut(self.selected)?;
-        let Control::Choice(choice) = &mut field.control else {
-            return None;
-        };
-        if option >= choice.options.len() || option == choice.index {
-            return None;
-        }
-        choice.index = option;
-        Some((field.key.clone(), field.control.value()))
-    }
-
-    /// Step the selected control: cycle a choice, increment/decrement a number,
-    /// or flip a toggle (either direction). Returns the changed `(key, value)` to
-    /// persist, or `None` if nothing changed (e.g. a text field, or a number at
-    /// its bound).
-    pub fn adjust(&mut self, forward: bool) -> Option<(String, String)> {
-        let field = self.fields.get_mut(self.selected)?;
-        match &mut field.control {
-            Control::Choice(c) => {
-                let n = c.options.len();
-                if n <= 1 {
-                    return None;
-                }
-                c.index = if forward {
-                    (c.index + 1) % n
-                } else {
-                    (c.index + n - 1) % n
-                };
-            }
-            Control::Number(num) => {
-                let next = if forward {
-                    num.value + num.step
-                } else {
-                    num.value - num.step
-                };
-                let clamped = next.clamp(num.min, num.max);
-                if (clamped - num.value).abs() < f32::EPSILON {
-                    return None;
-                }
-                num.value = clamped;
-            }
-            Control::Toggle(t) => t.on = !t.on,
-            Control::Text(_) => return None,
-        }
-        Some((field.key.clone(), field.control.value()))
     }
 }
 
@@ -471,162 +266,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_the_workspace_scope_is_offered_only_with_a_workspace() {
-        let fields = || vec![SettingsField::toggle("ligatures", "Ligatures", true)];
-        let mut alone = SettingsPage::new(fields());
-        assert!(!alone.toggle_scope());
-        assert_eq!(alone.scope, Scope::User);
-
-        let mut page = SettingsPage::new(fields()).with_workspace("w".into(), BTreeSet::new());
-        assert!(page.toggle_scope());
-        assert_eq!(page.scope, Scope::Workspace);
-        assert!(page.toggle_scope());
-        assert_eq!(page.scope, Scope::User, "and back");
-    }
-
-    fn page() -> SettingsPage {
-        SettingsPage::new(vec![
-            SettingsField::choice(
-                "theme",
-                "Theme",
-                vec![
-                    ChoiceOption {
-                        label: "Dark".into(),
-                        value: "dark".into(),
-                    },
-                    ChoiceOption {
-                        label: "Light".into(),
-                        value: "light".into(),
-                    },
-                ],
-                0,
-            ),
-            SettingsField::toggle("status.enabled", "Show status bar", true),
-            SettingsField::text("font_family", "Font family", String::new()),
-            SettingsField::number("opacity", "Opacity", 0.9, 0.1, 1.0, 0.05, 2),
-        ])
-    }
-
-    #[test]
-    fn test_choice_cycles_and_wraps() {
-        let mut p = page();
-        assert_eq!(p.adjust(true), Some(("theme".into(), "light".into())));
-        // Wraps back to the first option.
-        assert_eq!(p.adjust(true), Some(("theme".into(), "dark".into())));
-        // Backward from the first wraps to the last.
-        assert_eq!(p.adjust(false), Some(("theme".into(), "light".into())));
-    }
-
-    #[test]
-    fn test_toggle_flips_both_directions() {
-        let mut p = page();
-        p.selected = 1;
-        assert_eq!(
-            p.adjust(true),
-            Some(("status.enabled".into(), "false".into()))
+    fn test_each_control_writes_its_value_as_settings_kdl_does() {
+        let choice = SettingsField::choice(
+            "theme",
+            "Theme",
+            vec![
+                ChoiceOption {
+                    label: "Dark".into(),
+                    value: "dark".into(),
+                },
+                ChoiceOption {
+                    label: "Light".into(),
+                    value: "light".into(),
+                },
+            ],
+            1,
         );
-        assert_eq!(
-            p.adjust(false),
-            Some(("status.enabled".into(), "true".into()))
-        );
-    }
-
-    #[test]
-    fn test_number_clamps_at_bounds() {
-        let mut p = page();
-        p.selected = 3;
-        assert_eq!(p.adjust(true), Some(("opacity".into(), "0.95".into())));
-        assert_eq!(p.adjust(true), Some(("opacity".into(), "1.00".into())));
-        // Already at max: no further change.
-        assert_eq!(p.adjust(true), None);
-    }
-
-    #[test]
-    fn test_text_only_edits_text_fields() {
-        let typed = |c| Key::plain(crate::input::KeyCode::Char(c));
-        let mut p = page();
-        // A toggle row ignores typed characters.
-        p.selected = 1;
-        assert_eq!(p.edit_text(&typed('x')), None);
-        // The text row accepts them.
-        p.selected = 2;
-        assert_eq!(
-            p.edit_text(&typed('M')),
-            Some(("font_family".into(), "M".into()))
-        );
-        assert_eq!(
-            p.edit_text(&typed('S')),
-            Some(("font_family".into(), "MS".into()))
-        );
-        assert!(p.selected_is_text());
-    }
-
-    #[test]
-    fn test_a_text_row_is_edited_at_its_caret_with_the_emacs_keys() {
-        let key = |c, ctrl| Key {
-            ctrl,
-            ..Key::plain(crate::input::KeyCode::Char(c))
-        };
-        let mut p = page();
-        p.selected = 2;
-        p.paste_text("Mono");
-        p.edit_text(&key('a', true));
-        assert_eq!(p.text_caret(), Some(0));
-        assert_eq!(
-            p.edit_text(&key('X', false)),
-            Some(("font_family".into(), "XMono".into()))
-        );
-        assert_eq!(p.text_caret(), Some(1));
-        assert_eq!(
-            p.edit_text(&key('k', true)),
-            Some(("font_family".into(), "X".into()))
-        );
-        p.selected = 1;
-        assert_eq!(p.text_caret(), None, "a toggle row has no caret");
-    }
-
-    #[test]
-    fn test_choosing_an_option_sets_it_once_and_only_on_a_choice_row() {
-        let mut p = page();
-        assert_eq!(p.choose(1), Some(("theme".into(), "light".into())));
-        assert_eq!(p.choose(1), None, "already on it");
-        assert_eq!(p.choose(9), None, "no such option");
-        p.selected = 1;
-        assert_eq!(p.choose(0), None, "a toggle row");
-    }
-
-    #[test]
-    fn test_a_names_row_adds_a_name_once_and_removes_one_by_its_place() {
-        let names = vec!["git".to_string(), "lsp".to_string()];
-        let mut p = SettingsPage::new(vec![SettingsField::names(
-            "status.segments",
-            "Segments",
-            &names,
-            vec!["git".into(), "lsp".into(), "clock".into()],
-        )]);
-        assert_eq!(
-            p.add_name("clock"),
-            Some(("status.segments".into(), "git lsp clock".into()))
-        );
-        assert_eq!(p.add_name("git"), None, "held already");
-        assert_eq!(
-            p.remove_name(0),
-            Some(("status.segments".into(), "lsp clock".into()))
-        );
-        assert_eq!(p.remove_name(5), None);
-        let mut plain = page();
-        plain.selected = 2;
-        assert_eq!(plain.add_name("x"), None, "a plain text row holds no names");
-    }
-
-    #[test]
-    fn test_navigation_clamps_to_field_range() {
-        let mut p = page();
-        p.move_up();
-        assert_eq!(p.selected, 0);
-        for _ in 0..10 {
-            p.move_down();
-        }
-        assert_eq!(p.selected, p.fields.len() - 1);
+        assert_eq!(choice.control.value(), "light", "the value, not the label");
+        let number = SettingsField::number("opacity", "Opacity", 0.9, 0.1, 1.0, 0.05, 2);
+        assert_eq!(number.control.value(), "0.90", "at its decimals");
+        let toggle = SettingsField::toggle("status.enabled", "Show status bar", true);
+        assert_eq!(toggle.control.value(), "true");
     }
 }

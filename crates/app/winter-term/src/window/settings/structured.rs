@@ -298,7 +298,6 @@ impl App {
         }
         fields.push(
             SettingsField::text(NEW_SERVER, "Add a server", String::new())
-                .deferred()
                 .in_section(SERVERS_SECTION)
                 .with_note("Its name, then the languages it serves; kept on Esc"),
         );

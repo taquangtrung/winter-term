@@ -143,7 +143,6 @@ const KEY_TABLE_GROUPS: &[&[&dyn Listed]] = &[
     winter_docker::KEY_TABLES,
     notifications::KEY_TABLES,
     list::KEY_TABLES,
-    settings::KEY_TABLES,
     EXTENSIONS_KEY_TABLES,
     launcher::KEY_TABLES,
     keys::KEY_TABLES,

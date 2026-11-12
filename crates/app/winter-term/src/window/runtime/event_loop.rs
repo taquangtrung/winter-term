@@ -216,21 +216,23 @@ impl App {
             .srgb_view()
             .unwrap_or_else(|| texture.texture().create_view(&Default::default()));
         self.render_frame(&view);
-        // Only the pane band, less the strips: misty paints pictures over its
-        // fills, so the frame over the bars and strips would hide their
-        // backgrounds and hovers.
+        // Only the pane band, less what misty draws in it (the strips, the
+        // Settings page): misty paints pictures over its fills, so the frame
+        // over them would hide their backgrounds and hovers.
         self.sync_strips();
         let band = self.viewport_rect();
         let band = misty::Rect::new(band.x, band.y, band.width, band.height);
-        let strips: Vec<misty::Rect> = self
+        let mut misty_drawn: Vec<misty::Rect> = self
             .strip_rects()
             .into_iter()
             .map(|rect| misty::Rect::new(rect.x, rect.y, rect.width, rect.height))
             .collect();
-        for piece in rects_outside(band, &strips) {
+        misty_drawn.extend(self.shown_settings().map(|(_, body)| body));
+        for piece in rects_outside(band, &misty_drawn) {
             frame.clipped(piece, |frame| frame.draw_texture(&texture, bounds));
         }
         self.draw_strips(frame);
+        self.draw_settings(frame);
         self.draw_title_bar(frame);
         self.draw_status_bar(frame);
         self.draw_pane_popups(frame);
@@ -281,6 +283,11 @@ impl App {
             input,
             Input::PointerButton(_) | Input::PointerMoved(_) | Input::PointerLeft | Input::Wheel(_)
         );
+        // Where the pointer is, kept even when a misty widget takes the move:
+        // the tooltip and the title bar's hits read it.
+        if let Some(point) = input.position() {
+            self.input.pointer.cursor_pos = (point.x, point.y);
+        }
         // The bar lights its buttons, and switches the open menu, before
         // an open menu takes the pointer moving.
         let moved = matches!(input, Input::PointerMoved(_));
@@ -296,6 +303,7 @@ impl App {
                         || self.point_at_cards(input, &mut ecx)
                         || self.point_at_status_bar(input, &mut ecx)
                         || self.offer_to_strips(input, &mut ecx))
+                || self.offer_to_settings(input, &mut ecx)
         });
         if picked {
             self.quit_if_requested(cx);
