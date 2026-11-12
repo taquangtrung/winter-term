@@ -122,7 +122,6 @@ impl GpuRenderer {
                 input_rect: None,
                 pictures: Vec::new(),
                 popups: Vec::new(),
-                toolbar_hits: Vec::new(),
             },
             device,
             gpu,

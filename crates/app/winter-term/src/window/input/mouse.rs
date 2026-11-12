@@ -405,10 +405,7 @@ impl App {
                     // An editor's toolbar is drawn in the window's font,
                     // off the pane's cells, so a press on it is told
                     // which button by where the button was drawn.
-                    let button = self
-                        .renderer
-                        .as_ref()
-                        .and_then(|renderer| renderer.hits().toolbar_button_at(x, y))
+                    let button = self.toolbar_button_at(x, y)
                         .filter(|(owner, _)| *owner == tab_id.0);
                     if let Some((_, button)) = button {
                         if let Some(slot) = self.open_tabs.page_mut(&tab_id) {
@@ -616,10 +613,7 @@ impl App {
             }
         }
 
-        let tb_button = self
-            .renderer
-            .as_ref()
-            .and_then(|renderer| renderer.hits().toolbar_button_at(x, y));
+        let tb_button = self.toolbar_button_at(x, y);
         if tb_button != self.input.pointer.hovered_toolbar_button {
             self.input.pointer.hovered_toolbar_button = tb_button;
             self.dirty = true;

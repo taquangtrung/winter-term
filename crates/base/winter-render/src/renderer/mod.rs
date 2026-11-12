@@ -69,7 +69,7 @@ pub struct GpuRenderer {
     cols: usize,
     rows: usize,
     theme: Theme,
-    /// The textures of the pictures, the popups, and the toolbars, by id.
+    /// The textures of the pictures and the popups, by id.
     image_pass: ImagePass,
     /// Each popup's and toolbar's last raster, so a frame that changes
     /// nothing about one reuses the texture already uploaded for it.
@@ -101,10 +101,7 @@ pub struct FrameHits {
     input_button_rects: Vec<(f32, f32, f32, f32)>,
     /// Where the input/confirmation dialog card was last drawn, as `(x, y, width, height)`.
     input_rect: Option<(f32, f32, f32, f32)>,
-    /// Where each pane toolbar's buttons were last drawn: whose bar, the
-    /// band's top and bottom edges, and each button's span across it.
-    toolbar_hits: Vec<(u64, (f32, f32), Vec<widgets::toolbar::ToolbarHit>)>,
-    /// The pictures and toolbars the last frame drew in the content.
+    /// The pictures the last frame drew in the content.
     pictures: Vec<crate::image::ImagePlacement>,
     /// The popups the last frame drew floating over the content.
     popups: Vec<crate::image::ImagePlacement>,

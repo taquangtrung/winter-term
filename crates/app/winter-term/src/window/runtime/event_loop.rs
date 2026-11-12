@@ -176,6 +176,7 @@ impl App {
         self.render_frame();
         self.sync_strips();
         self.draw_panes(frame);
+        self.draw_toolbars(frame);
         self.draw_strips(frame);
         self.draw_settings(frame);
         self.draw_find(frame);

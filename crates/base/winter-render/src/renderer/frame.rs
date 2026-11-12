@@ -8,7 +8,7 @@ use super::background::{
     separators, BgParams, BgVertex, DotVertex, LineFlash, SeparatorStyle,
     CURSOR_HOLLOW_STROKE_WIDTH,
 };
-use super::widgets::{InputView, ToolbarView};
+use super::widgets::InputView;
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView};
 use crate::image::ImagePlacement;
@@ -61,7 +61,6 @@ impl GpuRenderer {
     /// from [`Self::paint_pane`].
     pub fn prepare(
         &mut self,
-        panes: &[PaneView],
         status_bar: bool,
         images: &[ImagePlacement],
         input: Option<&InputView>,
@@ -71,10 +70,9 @@ impl GpuRenderer {
             height: self.size.height as f32,
             width: self.size.width as f32,
         };
-        let toolbars: Vec<&ToolbarView> = panes.iter().filter_map(|pane| pane.toolbar).collect();
         // One of each popup is drawn, so the focused pane's, the one the keys
         // reach: the first pane's in tree order took the slot from it.
-        self.prepare_overlay_images(images, &toolbars, input, surface);
+        self.prepare_overlay_images(images, input, surface);
     }
 
     // --------------------------------------------------------------------
@@ -271,15 +269,12 @@ impl GpuRenderer {
     fn prepare_overlay_images(
         &mut self,
         images: &[ImagePlacement],
-        toolbars: &[&ToolbarView],
         input: Option<&InputView>,
         surface: SurfaceSize,
     ) {
         // The popups are rasterized to textures and drawn by the image pass (after the text pass) so they overlay content.
         let (w, h) = (surface.width, surface.height);
         let mut all_images: Vec<ImagePlacement> = images.to_vec();
-        // A pane's toolbar lies over its own top rows, under every popup.
-        all_images.extend(self.rasterize_toolbars(toolbars, w, h));
         // Everything from here floats over the content, over the lines drawn
         // on the strips too (see `FrameLayers::over_image_verts`).
         let base = all_images.len();

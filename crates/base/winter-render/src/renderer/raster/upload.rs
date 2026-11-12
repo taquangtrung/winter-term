@@ -7,8 +7,6 @@
 //! a busy pane) was most of a frame's cost. A cache hit hands back the
 //! placement of the texture already on the GPU.
 
-use std::collections::HashMap;
-
 use glyphon::{FontSystem, SwashCache};
 
 use super::view::DropdownImage;
@@ -16,8 +14,7 @@ use super::DROPDOWN_SHADOW;
 use crate::image::ImagePlacement;
 use crate::renderer::glyphs::FontCtx;
 use crate::renderer::widgets::input::{confirm_button_rects, input_rgba, resolve_confirm_buttons};
-use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
-use crate::renderer::widgets::{InputView, ToolbarView};
+use crate::renderer::widgets::InputView;
 use crate::renderer::FrameHits;
 use crate::renderer::GpuRenderer;
 use crate::theme::Theme;
@@ -30,10 +27,6 @@ use crate::theme::Theme;
 /// reserved ids sit at the top of the id space so they never collide with
 /// block image ids.
 const INPUT_TEXTURE_ID: u64 = u64::MAX - 9;
-
-/// The texture of the first pane toolbar on screen; each one after takes the
-/// slot below it.
-const TOOLBAR_TEXTURE_BASE: u64 = u64::MAX - 400;
 
 // ========================================================================
 // Data Structures
@@ -52,18 +45,6 @@ pub(in crate::renderer) struct ChromePainter<'a> {
 #[derive(Default)]
 pub(in crate::renderer) struct OverlayCaches {
     input: RasterCache<InputView>,
-    /// One per pane toolbar texture, keyed by its texture id, with where its
-    /// buttons were drawn.
-    toolbars: HashMap<u64, ToolbarCache>,
-}
-
-/// A pane toolbar as last rasterized: what it was painted from, the image
-/// uploaded for it, and where its buttons landed.
-pub(in crate::renderer) struct ToolbarCache {
-    context: RasterContext,
-    hits: Vec<ToolbarHit>,
-    placements: Vec<ImagePlacement>,
-    view: ToolbarView,
 }
 
 /// Everything about the renderer an overlay's pixels depend on besides its
@@ -247,57 +228,6 @@ impl GpuRenderer {
     // Overlays
     // --------------------------------------------------------------------
 
-    /// Rasterize each pane's toolbar, reusing what was painted for one that
-    /// has not changed, and keep where its buttons were drawn for a press.
-    pub(in crate::renderer) fn rasterize_toolbars(
-        &mut self,
-        toolbars: &[&ToolbarView],
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        let mut placed = Vec::new();
-        self.hits.toolbar_hits.clear();
-        for (at, view) in toolbars.iter().enumerate() {
-            let id = TOOLBAR_TEXTURE_BASE - at as u64;
-            let fresh = self
-                .overlay_caches
-                .toolbars
-                .get(&id)
-                .is_some_and(|cache| cache.context == context && cache.view == **view);
-            if !fresh {
-                let (image, hits) = {
-                    let painter = self.chrome_painter();
-                    toolbar_rgba(
-                        painter.font_system,
-                        painter.swash_cache,
-                        &painter.ctx,
-                        painter.theme,
-                        view,
-                    )
-                };
-                let placements = vec![self.upload_overlay(id, &image)];
-                self.overlay_caches.toolbars.insert(
-                    id,
-                    ToolbarCache {
-                        context,
-                        hits,
-                        placements,
-                        view: (*view).clone(),
-                    },
-                );
-            }
-            if let Some(cache) = self.overlay_caches.toolbars.get(&id) {
-                placed.extend(cache.placements.iter().cloned());
-                let (_, top, _, height) = view.rect;
-                self.hits
-                    .toolbar_hits
-                    .push((view.owner, (top, top + height), cache.hits.clone()));
-            }
-        }
-        placed
-    }
-
     /// Rasterize the input dialog and upload it to the GPU.
     pub(in crate::renderer) fn rasterize_input(
         &mut self,
@@ -362,7 +292,7 @@ impl GpuRenderer {
 // ========================================================================
 
 impl FrameHits {
-    /// The pictures and pane toolbars the last frame drew in the content,
+    /// The pictures the last frame drew in the content,
     /// for a host drawing them itself (see [`GpuRenderer::image_texture`]).
     pub fn pictures(&self) -> &[ImagePlacement] {
         &self.pictures
@@ -385,19 +315,6 @@ impl FrameHits {
             .iter()
             .position(|&(bx, by, bw, bh)| x >= bx && x < bx + bw && y >= by && y < by + bh)
     }
-
-    /// The pane toolbar button at the surface point `(x, y)`, as the bars were
-    /// last drawn: whose bar it is, and what the button is told back as.
-    pub fn toolbar_button_at(&self, x: f32, y: f32) -> Option<(u64, u16)> {
-        self.toolbar_hits
-            .iter()
-            .filter(|(_, (top, bottom), _)| y >= *top && y < *bottom)
-            .find_map(|(owner, _, hits)| {
-                hits.iter()
-                    .find(|hit| x >= hit.left && x < hit.right)
-                    .map(|hit| (*owner, hit.button))
-            })
-    }
 }
 
 // ========================================================================
@@ -411,22 +328,6 @@ impl FrameHits {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_every_reserved_texture_id_is_its_own() {
-        // The token inspector and the first status icon shared an ID: one
-        // drew over the other's texture, and the icon stayed wrong after the
-        // inspector closed.
-        let mut ids = vec![INPUT_TEXTURE_ID];
-        let count = ids.len();
-        ids.sort_unstable();
-        ids.dedup();
-        assert_eq!(ids.len(), count, "two uses share an ID");
-        assert!(
-            ids.iter().all(|id| *id > TOOLBAR_TEXTURE_BASE),
-            "the toolbars count down from below them"
-        );
-    }
 
     fn context() -> RasterContext {
         RasterContext {

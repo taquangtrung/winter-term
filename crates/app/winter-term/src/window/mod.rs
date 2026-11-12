@@ -358,6 +358,10 @@ pub(in crate::window) struct Chrome {
     /// The token inspector's card the last frame worked out, for misty to
     /// draw.
     pub(in crate::window) drawn_token_inspect: Option<winter_render::TokenInspectView>,
+    /// The pane toolbars the last frame worked out, for misty to draw.
+    pub(in crate::window) drawn_toolbars: Vec<winter_render::ToolbarView>,
+    /// Where misty drew the toolbars' buttons, for the pointer.
+    pub(in crate::window) toolbar_hits: Vec<frame::toolbar::ToolbarHits>,
     /// The find card the last frame worked out, for misty to draw.
     pub(in crate::window) drawn_find: Option<winter_render::FindView>,
     /// Where misty drew the find card, for the pointer.
