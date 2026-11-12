@@ -150,6 +150,8 @@ impl GpuRenderer {
                 find_rect: None,
                 input_button_rects: Vec::new(),
                 input_rect: None,
+                picture_rects: Vec::new(),
+                popup_rects: Vec::new(),
                 toolbar_hits: Vec::new(),
             },
             device,
@@ -257,6 +259,19 @@ impl GpuRenderer {
     /// click or a hover against.
     pub fn hits(&self) -> &FrameHits {
         &self.hits
+    }
+
+    /// The font the grid is drawn in, for a host drawing it itself: its
+    /// size in logical pixels, its family (`None` for the system's
+    /// monospace), its line height as a multiple of its size, and whether
+    /// its ligatures are drawn.
+    pub fn grid_font(&self) -> (f32, Option<String>, f32, bool) {
+        (
+            self.fonts.logical_font_size,
+            self.fonts.font_family.clone(),
+            super::glyphs::DEFAULT_LINE_HEIGHT / super::glyphs::DEFAULT_FONT_SIZE,
+            self.fonts.ligatures,
+        )
     }
 
     /// The cell dimensions in pixels.

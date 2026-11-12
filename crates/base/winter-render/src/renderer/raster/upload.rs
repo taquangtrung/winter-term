@@ -443,6 +443,17 @@ impl GpuRenderer {
 // ========================================================================
 
 impl FrameHits {
+    /// Where the last frame drew pictures and pane toolbars in the content,
+    /// as `(x, y, width, height)`, for a host drawing the rest itself.
+    pub fn picture_rects(&self) -> &[(f32, f32, f32, f32)] {
+        &self.picture_rects
+    }
+
+    /// Where the last frame drew the popups floating over the content.
+    pub fn popup_rects(&self) -> &[(f32, f32, f32, f32)] {
+        &self.popup_rects
+    }
+
     /// Whether the surface point `(x, y)` is on the input or confirmation popup.
     pub fn input_at(&self, x: f32, y: f32) -> bool {
         self.input_rect

@@ -34,10 +34,10 @@ use wgpu::{
 use winter_emulator::{Cell, CellWidth, Color as GridColor};
 
 /// Glyph color over the current search match's tint.
-const CURRENT_MATCH_FG: (u8, u8, u8) = (255, 255, 255);
+pub(super) const CURRENT_MATCH_FG: (u8, u8, u8) = (255, 255, 255);
 
 /// Glyph color over every other search match's tint.
-const SEARCH_MATCH_FG: (u8, u8, u8) = (0, 0, 0);
+pub(super) const SEARCH_MATCH_FG: (u8, u8, u8) = (0, 0, 0);
 
 // ========================================================================
 // Data Structures
@@ -46,14 +46,14 @@ const SEARCH_MATCH_FG: (u8, u8, u8) = (0, 0, 0);
 /// Vertex and quad geometry accumulated across every pane while composing one
 /// frame, before any of it is uploaded to the GPU.
 #[derive(Default)]
-struct FrameLayers {
-    bg_verts: Vec<BgVertex>,
-    dot_verts: Vec<DotVertex>,
+pub(super) struct FrameLayers {
+    pub(super) bg_verts: Vec<BgVertex>,
+    pub(super) dot_verts: Vec<DotVertex>,
     glyph_quads: Vec<GlyphQuadPlacement>,
     /// Quads drawn after the images in the content and before those that
     /// float over it: the separators between panes, which sit on the panes'
     /// strips of tabs, which are images, and under a tooltip or a menu.
-    over_image_verts: Vec<BgVertex>,
+    pub(super) over_image_verts: Vec<BgVertex>,
     /// Quads drawn over the text and glyph quads but under the overlays:
     /// marks that must not be covered by a glyph's descender.
     over_text_verts: Vec<BgVertex>,
@@ -70,9 +70,9 @@ struct FrameTextStyle {
 
 /// The whole cell columns and rows that fit inside one pane's rect.
 #[derive(Clone, Copy)]
-struct PaneExtent {
-    cols: usize,
-    rows: usize,
+pub(super) struct PaneExtent {
+    pub(super) cols: usize,
+    pub(super) rows: usize,
 }
 
 /// One grid row ready to hand to cosmic-text: its text and the attribute spans
@@ -115,9 +115,9 @@ struct FallbackGlyphQuad<'a> {
 
 /// The physical pixel dimensions of the surface being drawn into.
 #[derive(Clone, Copy)]
-struct SurfaceSize {
-    height: f32,
-    width: f32,
+pub(super) struct SurfaceSize {
+    pub(super) height: f32,
+    pub(super) width: f32,
 }
 
 /// Everything [`collect_text_areas`] needs to place this frame's text. Theme
@@ -304,7 +304,7 @@ impl GpuRenderer {
     // --------------------------------------------------------------------
 
     /// Append one pane's cell backgrounds, cursors, and braille-dot quads.
-    fn push_pane_background(
+    pub(super) fn push_pane_background(
         &self,
         pane: &PaneView,
         surface: SurfaceSize,
@@ -954,7 +954,7 @@ impl GpuRenderer {
     /// The separators around the panes, the status bar's top edge among them,
     /// each drawn once, over their strips: the focused pane's bottom border in
     /// the focus color (see `background::divider`).
-    fn push_separator_verts(
+    pub(super) fn push_separator_verts(
         &self,
         panes: &[PaneView],
         surface: SurfaceSize,
@@ -1083,6 +1083,9 @@ impl GpuRenderer {
         if let Some(ti) = token_inspect {
             all_images.extend(self.rasterize_token_inspect(ti, w, h));
         }
+        let rect_of = |image: &ImagePlacement| (image.x, image.y, image.width, image.height);
+        self.hits.picture_rects = all_images[..base].iter().map(rect_of).collect();
+        self.hits.popup_rects = all_images[base..].iter().map(rect_of).collect();
         self.image_pass
             .prepare(&self.queue, &all_images, base, w, h);
     }
@@ -1189,7 +1192,11 @@ impl GpuRenderer {
 
 /// The whole cell columns and rows that fit inside `rect`, inset by `pad`
 /// on each side.
-fn pane_cell_extent(rect: PaneRect, (cell_w, cell_h): (f32, f32), pad: f32) -> PaneExtent {
+pub(super) fn pane_cell_extent(
+    rect: PaneRect,
+    (cell_w, cell_h): (f32, f32),
+    pad: f32,
+) -> PaneExtent {
     PaneExtent {
         cols: ((rect.width - pad * 2.0) / cell_w).floor() as usize,
         rows: (rect.height / cell_h).floor() as usize,
@@ -1213,7 +1220,7 @@ fn dim_toward_bg(r: u8, g: u8, b: u8, bg: Rgb, dim: bool) -> Color {
 /// itself. Kept in a vertex range of its own, appended after the cell
 /// backgrounds and drawn last, so it sits on top of the tabbar strip,
 /// glyphs, and image blocks instead of being painted over by them.
-fn window_border_verts(
+pub(super) fn window_border_verts(
     surface: SurfaceSize,
     border: (f32, f32, f32),
     decorated: bool,
@@ -1266,7 +1273,7 @@ fn window_border_verts(
 
 /// What `pane`'s strips draw as: each lane of its gutter, its grid in its
 /// strip.
-fn strip_panes<'a>(pane: &PaneView<'a>) -> Vec<PaneView<'a>> {
+pub(super) fn strip_panes<'a>(pane: &PaneView<'a>) -> Vec<PaneView<'a>> {
     pane.gutter
         .iter()
         .map(|strip| strip_pane(pane, *strip))

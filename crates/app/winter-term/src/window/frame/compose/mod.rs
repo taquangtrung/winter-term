@@ -1259,6 +1259,12 @@ impl App {
             find_view.as_ref(),
             token_inspect_view.as_ref(),
         );
+        // Misty draws the panes from what the renderer resolved of them.
+        self.chrome.drawn_panes = views
+            .iter()
+            .flat_map(|view| renderer.paint_pane(view))
+            .collect();
+        self.chrome.drawn_separators = renderer.paint_separators(&views);
 
         self.update_ime_anchor(focused);
     }

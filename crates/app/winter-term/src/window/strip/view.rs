@@ -343,11 +343,6 @@ impl App {
         })
     }
 
-    /// Where the strips are, for the frame to leave them to misty.
-    pub(in crate::window) fn strip_rects(&self) -> Vec<Rect> {
-        self.chrome.strips.iter().map(|pane| pane.rect).collect()
-    }
-
     /// What the strip shows of `tab`, the `index`th on it: its title led by
     /// its place, the number that switches to it.
     fn strip_tab(&self, tab: TabId, index: usize) -> StripTab {

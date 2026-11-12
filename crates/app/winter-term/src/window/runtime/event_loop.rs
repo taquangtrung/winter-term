@@ -67,42 +67,6 @@ fn is_blink_active(blink_configured: bool, window_focused: bool) -> bool {
     blink_configured && window_focused
 }
 
-/// The parts of `area` outside every one of `holes`, as rectangles: the
-/// area cut into bands at the holes' top and bottom edges, each band less
-/// the holes crossing it.
-fn rects_outside(area: misty::Rect, holes: &[misty::Rect]) -> Vec<misty::Rect> {
-    let (right, bottom) = (area.x + area.width, area.y + area.height);
-    let mut edges = vec![area.y, bottom];
-    for hole in holes {
-        edges.push(hole.y.clamp(area.y, bottom));
-        edges.push((hole.y + hole.height).clamp(area.y, bottom));
-    }
-    edges.sort_by(f32::total_cmp);
-    edges.dedup();
-    let mut pieces = Vec::new();
-    for band in edges.windows(2) {
-        let (top, low) = (band[0], band[1]);
-        let mut cuts: Vec<(f32, f32)> = holes
-            .iter()
-            .filter(|hole| hole.y < low && hole.y + hole.height > top)
-            .map(|hole| (hole.x.max(area.x), (hole.x + hole.width).min(right)))
-            .filter(|(from, to)| to > from)
-            .collect();
-        cuts.sort_by(|a, b| a.0.total_cmp(&b.0));
-        let mut x = area.x;
-        for (from, to) in cuts {
-            if from > x {
-                pieces.push(misty::Rect::new(x, top, from - x, low - top));
-            }
-            x = x.max(to);
-        }
-        if right > x {
-            pieces.push(misty::Rect::new(x, top, right - x, low - top));
-        }
-    }
-    pieces
-}
-
 // ========================================================================
 // App: Application
 // ========================================================================
@@ -216,21 +180,8 @@ impl App {
             .srgb_view()
             .unwrap_or_else(|| texture.texture().create_view(&Default::default()));
         self.render_frame(&view);
-        // Only the pane band, less what misty draws in it (the strips, the
-        // Settings page): misty paints pictures over its fills, so the frame
-        // over them would hide their backgrounds and hovers.
         self.sync_strips();
-        let band = self.viewport_rect();
-        let band = misty::Rect::new(band.x, band.y, band.width, band.height);
-        let mut misty_drawn: Vec<misty::Rect> = self
-            .strip_rects()
-            .into_iter()
-            .map(|rect| misty::Rect::new(rect.x, rect.y, rect.width, rect.height))
-            .collect();
-        misty_drawn.extend(self.shown_settings().map(|(_, body)| body));
-        for piece in rects_outside(band, &misty_drawn) {
-            frame.clipped(piece, |frame| frame.draw_texture(&texture, bounds));
-        }
+        self.draw_panes(frame, &texture);
         self.draw_strips(frame);
         self.draw_settings(frame);
         self.draw_title_bar(frame);
@@ -595,24 +546,6 @@ impl App {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_the_band_less_the_strips_leaves_their_neighbors_and_what_is_below() {
-        let area = misty::Rect::new(0.0, 10.0, 100.0, 90.0);
-        // Two panes side by side, each with its strip, a gap between them.
-        let strips = [
-            misty::Rect::new(0.0, 10.0, 49.0, 10.0),
-            misty::Rect::new(51.0, 10.0, 49.0, 10.0),
-        ];
-        assert_eq!(
-            rects_outside(area, &strips),
-            [
-                misty::Rect::new(49.0, 10.0, 2.0, 10.0),
-                misty::Rect::new(0.0, 20.0, 100.0, 80.0),
-            ]
-        );
-        assert_eq!(rects_outside(area, &[]), [area]);
-    }
 
     #[test]
     fn test_is_poll_idle_false_before_active_window_elapses() {

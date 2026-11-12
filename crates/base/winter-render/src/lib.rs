@@ -20,11 +20,11 @@ pub use renderer::POPUP_EDGE_ROOM;
 pub use renderer::{
     clamp_font_size, start_font_load, ButtonView, CellOverlay, ColumnAlign, CompletionRow,
     CompletionView, DropListRow, DropListView, FindView, FontConfig, FontLoad, GridStrip, InfoSpan,
-    InfoView, InputView, NoticeKind, PaneRect, PaneView, PanelLine, PanelSpan, PanelView,
-    PickerItem, PickerPlacement, PickerView, StatusBar, StatusBell, StatusHover, StatusNotice,
-    StatusPrompt, StatusSearch, StatusSegment, SwitchKind, TokenInspectView, ToolbarColumn,
-    ToolbarItem, ToolbarTone, ToolbarView, TransientCommand, TransientSwitch, TransientView,
-    WhichKeyView, THIN_SPACE,
+    InfoView, InputView, NoticeKind, PaintCell, PaintFill, PaintWidth, PanePaint, PaneRect,
+    PaneView, PanelLine, PanelSpan, PanelView, PickerItem, PickerPlacement, PickerView, StatusBar,
+    StatusBell, StatusHover, StatusNotice, StatusPrompt, StatusSearch, StatusSegment, SwitchKind,
+    TokenInspectView, ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView, TransientCommand,
+    TransientSwitch, TransientView, WhichKeyView, THIN_SPACE,
 };
 pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};
 pub use tabbar::{ControlsSide, MenuStyle, Region};

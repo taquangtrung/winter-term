@@ -17,10 +17,12 @@ use crate::glyph_quad::GlyphQuadPass;
 use crate::image::ImagePass;
 use crate::theme::Theme;
 mod frame;
+mod paint;
 mod surface;
 mod view;
 
 pub use display::CellOverlay;
+pub use paint::{PaintCell, PaintFill, PaintWidth, PanePaint};
 pub use view::{
     GridStrip, NoticeKind, PaneRect, PaneView, StatusBar, StatusBell, StatusHover, StatusNotice,
     StatusPrompt, StatusSearch, StatusSegment, THIN_SPACE,
@@ -131,6 +133,11 @@ pub struct FrameHits {
     /// Where each pane toolbar's buttons were last drawn: whose bar, the
     /// band's top and bottom edges, and each button's span across it.
     toolbar_hits: Vec<(u64, (f32, f32), Vec<widgets::toolbar::ToolbarHit>)>,
+    /// Where the last frame drew pictures and toolbars in the content, as
+    /// `(x, y, width, height)`.
+    picture_rects: Vec<(f32, f32, f32, f32)>,
+    /// Where the last frame drew the popups floating over the content.
+    popup_rects: Vec<(f32, f32, f32, f32)>,
 }
 
 /// The font in force and the cell it makes, with what it can draw itself and the glyphs drawn from a fallback.
