@@ -64,9 +64,6 @@ const HEADER_BG_MIX: f32 = 0.40;
 /// Width of the popup's hairline border, in pixels.
 const BORDER_W: f32 = 1.0;
 
-/// Between a floating popup and the cell it hangs from, in pixels.
-const ANCHOR_GAP: f32 = 2.0;
-
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -394,26 +391,6 @@ pub(in crate::renderer) fn shape_fitted(
     }
 }
 
-/// The top-left corner of a `panel_w` x `panel_h` panel hung from `anchor`,
-/// a cell as its left edge, top edge, and bottom edge in surface pixels:
-/// under the cell, or over it where the surface has no room below, and
-/// kept inside the surface across.
-pub(in crate::renderer) fn anchored(
-    anchor: (f32, f32, f32),
-    panel: (f32, f32),
-    margin: f32,
-    surface: (f32, f32),
-) -> (f32, f32) {
-    let ((left, top, bottom), (panel_w, panel_h)) = (anchor, panel);
-    let x = left.min(surface.0 - panel_w - margin).max(0.0);
-    let below = bottom + ANCHOR_GAP;
-    let y = match below + panel_h <= surface.1 {
-        true => below,
-        false => (top - panel_h - ANCHOR_GAP).max(0.0),
-    };
-    (x, y)
-}
-
 /// The top-left corner that centres a `panel_w` x `panel_h` panel on the
 /// surface, where a popup that interrupts the view belongs.
 pub(in crate::renderer) fn centered(
@@ -529,32 +506,6 @@ mod tests {
         assert_eq!(field_height(18.0, 18.0, 2.0), 36.0);
         // A field too short for its text is a line tall.
         assert_eq!(field_height(18.0, 21.2, 1.0), 22.0);
-    }
-
-    /// A 400 x 120 panel with `title` drawn as `bar` says, the ink of the
-    /// title, where the content below it begins, and the font's cell width
-    /// and line height.
-    #[test]
-    fn test_an_anchored_panel_hangs_below_flips_above_and_stays_inside() {
-        let surface = (800.0, 600.0);
-        let cell = (100.0, 200.0, 220.0);
-        assert_eq!(
-            anchored(cell, (300.0, 100.0), 8.0, surface),
-            (100.0, 222.0),
-            "below"
-        );
-        let low = (100.0, 560.0, 580.0);
-        assert_eq!(
-            anchored(low, (300.0, 100.0), 8.0, surface),
-            (100.0, 458.0),
-            "above"
-        );
-        let right = (700.0, 200.0, 220.0);
-        assert_eq!(
-            anchored(right, (300.0, 100.0), 8.0, surface).0,
-            492.0,
-            "inside across"
-        );
     }
 
     #[test]

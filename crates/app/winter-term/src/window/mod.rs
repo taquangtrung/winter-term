@@ -355,6 +355,9 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) title_bar: Option<(frame::title_bar::TitleBarShape, misty::TitleBar)>,
     /// The tooltip misty hangs under what the pointer rests on.
     pub(in crate::window) tooltip: misty::Tooltip,
+    /// The token inspector's card the last frame worked out, for misty to
+    /// draw.
+    pub(in crate::window) drawn_token_inspect: Option<winter_render::TokenInspectView>,
     /// The find card the last frame worked out, for misty to draw.
     pub(in crate::window) drawn_find: Option<winter_render::FindView>,
     /// Where misty drew the find card, for the pointer.

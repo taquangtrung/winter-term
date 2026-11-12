@@ -16,5 +16,6 @@ pub(in crate::window) mod panes;
 pub(in crate::window) mod popups;
 pub(in crate::window) mod settings;
 pub(in crate::window) mod title_bar;
+pub(in crate::window) mod token_card;
 pub(in crate::window) mod transient;
 pub(in crate::window) mod which_key;

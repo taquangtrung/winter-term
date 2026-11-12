@@ -8,7 +8,7 @@ use super::background::{
     separators, BgParams, BgVertex, DotVertex, LineFlash, SeparatorStyle,
     CURSOR_HOLLOW_STROKE_WIDTH,
 };
-use super::widgets::{InputView, TokenInspectView, ToolbarView};
+use super::widgets::{InputView, ToolbarView};
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView};
 use crate::image::ImagePlacement;
@@ -65,7 +65,6 @@ impl GpuRenderer {
         status_bar: bool,
         images: &[ImagePlacement],
         input: Option<&InputView>,
-        token_inspect: Option<&TokenInspectView>,
     ) {
         self.chrome.status_bar_enabled = status_bar;
         let surface = SurfaceSize {
@@ -75,7 +74,7 @@ impl GpuRenderer {
         let toolbars: Vec<&ToolbarView> = panes.iter().filter_map(|pane| pane.toolbar).collect();
         // One of each popup is drawn, so the focused pane's, the one the keys
         // reach: the first pane's in tree order took the slot from it.
-        self.prepare_overlay_images(images, &toolbars, input, token_inspect, surface);
+        self.prepare_overlay_images(images, &toolbars, input, surface);
     }
 
     // --------------------------------------------------------------------
@@ -274,7 +273,6 @@ impl GpuRenderer {
         images: &[ImagePlacement],
         toolbars: &[&ToolbarView],
         input: Option<&InputView>,
-        token_inspect: Option<&TokenInspectView>,
         surface: SurfaceSize,
     ) {
         // The popups are rasterized to textures and drawn by the image pass (after the text pass) so they overlay content.
@@ -291,9 +289,6 @@ impl GpuRenderer {
                 self.hits.input_rect = None;
                 self.hits.input_button_rects.clear();
             }
-        }
-        if let Some(ti) = token_inspect {
-            all_images.extend(self.rasterize_token_inspect(ti, w, h));
         }
         self.hits.pictures = all_images[..base].to_vec();
         self.hits.popups = all_images[base..].to_vec();

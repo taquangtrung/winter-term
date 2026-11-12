@@ -16,9 +16,8 @@ use super::DROPDOWN_SHADOW;
 use crate::image::ImagePlacement;
 use crate::renderer::glyphs::FontCtx;
 use crate::renderer::widgets::input::{confirm_button_rects, input_rgba, resolve_confirm_buttons};
-use crate::renderer::widgets::token_inspect::token_inspect_rgba;
 use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
-use crate::renderer::widgets::{InputView, TokenInspectView, ToolbarView};
+use crate::renderer::widgets::{InputView, ToolbarView};
 use crate::renderer::FrameHits;
 use crate::renderer::GpuRenderer;
 use crate::theme::Theme;
@@ -27,12 +26,9 @@ use crate::theme::Theme;
 // Constants
 // ========================================================================
 
-/// Reserved image-pass texture id for the rasterized token inspect popup. The
+/// Reserved image-pass texture id for the rasterized input dialog. The
 /// reserved ids sit at the top of the id space so they never collide with
 /// block image ids.
-const TOKEN_INSPECT_TEXTURE_ID: u64 = u64::MAX - 20;
-
-/// Reserved id for the rasterized input dialog.
 const INPUT_TEXTURE_ID: u64 = u64::MAX - 9;
 
 /// The texture of the first pane toolbar on screen; each one after takes the
@@ -56,7 +52,6 @@ pub(in crate::renderer) struct ChromePainter<'a> {
 #[derive(Default)]
 pub(in crate::renderer) struct OverlayCaches {
     input: RasterCache<InputView>,
-    token_inspect: RasterCache<TokenInspectView>,
     /// One per pane toolbar texture, keyed by its texture id, with where its
     /// buttons were drawn.
     toolbars: HashMap<u64, ToolbarCache>,
@@ -360,34 +355,6 @@ impl GpuRenderer {
         };
         placed
     }
-
-    /// Rasterize the token inspect overlay and upload it to the GPU.
-    pub(in crate::renderer) fn rasterize_token_inspect(
-        &mut self,
-        token_inspect: &TokenInspectView,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        self.cached_overlay(
-            |c| &mut c.token_inspect,
-            context,
-            token_inspect,
-            |r| {
-                r.paint_overlay(TOKEN_INSPECT_TEXTURE_ID, |p| {
-                    Some(token_inspect_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        token_inspect,
-                        surface_w,
-                        surface_h,
-                    ))
-                })
-            },
-        )
-    }
 }
 
 // ========================================================================
@@ -450,7 +417,7 @@ mod tests {
         // The token inspector and the first status icon shared an ID: one
         // drew over the other's texture, and the icon stayed wrong after the
         // inspector closed.
-        let mut ids = vec![TOKEN_INSPECT_TEXTURE_ID, INPUT_TEXTURE_ID];
+        let mut ids = vec![INPUT_TEXTURE_ID];
         let count = ids.len();
         ids.sort_unstable();
         ids.dedup();

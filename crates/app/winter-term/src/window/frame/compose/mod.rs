@@ -1160,7 +1160,7 @@ impl App {
             anchor_rect: focused_pane,
             ..view
         });
-        let token_inspect_view =
+        self.chrome.drawn_token_inspect =
             rects
                 .iter()
                 .find(|(id, _)| *id == focused)
@@ -1250,13 +1250,7 @@ impl App {
         });
         // Misty's quick pick draws the picker over the frame.
         self.pickers.drawn = palette_view.take();
-        renderer.prepare(
-            &views,
-            status,
-            &placements,
-            input_view.as_ref(),
-            token_inspect_view.as_ref(),
-        );
+        renderer.prepare(&views, status, &placements, input_view.as_ref());
         // Misty draws the panes from what the renderer resolved of them.
         self.chrome.drawn_panes = views
             .iter()
