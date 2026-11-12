@@ -24,8 +24,8 @@ mod zai;
 use std::fmt::Display;
 use std::time::Duration;
 
+use crate::render::THIN_SPACE;
 use chrono::{DateTime, Local, TimeZone, Utc};
-use winter_render::THIN_SPACE;
 
 pub(crate) use monitor::{Monitor, Shown};
 

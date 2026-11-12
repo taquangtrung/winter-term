@@ -4,9 +4,9 @@ use misty::{AppContext, Decorations, OptionAsAlt, Position, Size, WindowId, Wind
 use winit::dpi::PhysicalSize;
 
 use crate::config::{load_state, ThemeSetting, TitleBarStyle};
+use crate::render::renderer::GpuRenderer;
+use crate::render::{FontConfig, Theme};
 use crate::session::Session;
-use winter_render::renderer::GpuRenderer;
-use winter_render::{FontConfig, Theme};
 use winter_terminal::session::Terminal;
 
 use crate::window::appearance::{terminal_presentation, theme_for};
@@ -89,7 +89,7 @@ impl App {
     pub(in crate::window) fn init_window(&mut self, cx: &mut AppContext<'_, ()>, window: WindowId) {
         // Kick off the system-font scan first so it runs concurrently with
         // window creation and the whole wgpu instance/adapter/device setup.
-        let font_load = winter_render::start_font_load();
+        let font_load = crate::render::start_font_load();
 
         // The side-channel directory must exist before the shell is spawned so
         // the child inherits WINTER_SIDECHANNEL_DIR via the environment.

@@ -3,8 +3,8 @@
 //! Winter times the hint and names the keys itself; a click on an entry
 //! types its key, and a click outside puts the popup away.
 
+use crate::render::WhichKeyView;
 use misty::{EventCx, Frame, Input, Rect, WhichKeyEntry, WhichKeyResponse, Widget};
-use winter_render::WhichKeyView;
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
@@ -19,7 +19,7 @@ impl App {
     pub(in crate::window) fn draw_which_key(&mut self, frame: &mut Frame) {
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let Some(view) = &self.chrome.drawn_which_key else {
             self.chrome.which_key.reset();

@@ -4,11 +4,11 @@
 
 use std::collections::HashMap;
 
+use crate::render::{PanelView, PickerPlacement};
 use misty::color::Rgb;
 use misty::picker::{PickerAct, RowKey};
 use misty::text::{Span, StyledText, TextColor};
 use misty::{EventCx, Frame, Input, QuickPickPlacement, Rect, Widget};
-use winter_render::{PanelView, PickerPlacement};
 
 use super::keys::KEYS;
 use crate::window::misty_theme::misty_theme;
@@ -38,7 +38,7 @@ impl App {
         };
         let mut theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let cell_width = frame.cell_metrics().width;
         let Some(quick) = self.chrome.quick_pick_mut() else {
@@ -126,7 +126,7 @@ fn placement(placement: PickerPlacement) -> QuickPickPlacement {
 }
 
 /// Misty's color runs for Winter's.
-fn runs(colors: &[(usize, winter_render::ThemeRgb)]) -> Vec<(usize, Rgb)> {
+fn runs(colors: &[(usize, crate::render::ThemeRgb)]) -> Vec<(usize, Rgb)> {
     colors
         .iter()
         .map(|&(count, color)| (count, Rgb::new(color.r, color.g, color.b)))

@@ -34,6 +34,7 @@ pub mod system;
 pub mod text_file;
 pub mod textedit;
 pub mod units;
+pub mod view;
 pub mod word_diff;
 
 pub use winter_textedit::vim;

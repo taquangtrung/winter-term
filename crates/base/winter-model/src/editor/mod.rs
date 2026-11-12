@@ -314,7 +314,7 @@ pub struct Appearance<'a> {
     /// `rows` as a `<pre>` of spans in the theme's colors.
     pub styled_html: &'a dyn Fn(&[Row]) -> String,
     /// The theme in effect.
-    pub theme: &'a winter_render::Theme,
+    pub theme: &'a winter_theme::Theme,
 }
 
 /// A file an editor wants opened, and where in it to land.
@@ -524,7 +524,7 @@ pub trait Page: AsAny {
 
     /// A transient popup window being shown: action commands and parameter switches.
     /// Drawn on a content-fitted transient window rather than a full-size HUD.
-    fn transient(&self) -> Option<winter_render::TransientView> {
+    fn transient(&self) -> Option<crate::view::TransientView> {
         None
     }
 

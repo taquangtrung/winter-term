@@ -17,7 +17,7 @@ const CURSOR_BAR_WIDTH: f32 = 2.0;
 const CURSOR_BAR_OFFSET: f32 = -0.5;
 
 /// Width in pixels of a hollow cursor's outline stroke (see [`cursor_outline_quads`]),
-/// matching the window's own 1px [`Theme::window_border`](crate::Theme::window_border) hairline.
+/// matching the window's own 1px [`Theme::window_border`](winter_theme::Theme::window_border) hairline.
 pub(crate) const CURSOR_HOLLOW_STROKE_WIDTH: f32 = 1.0;
 
 // ========================================================================

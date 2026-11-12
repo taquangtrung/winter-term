@@ -2,11 +2,11 @@
 //! cursor is, where it is, the theme rule its color comes from, and the
 //! scopes it sits in, outermost first, hung by the cursor.
 
+use crate::render::TokenInspectView;
 use misty::color::Rgb;
 use misty::text::{Span, StyledText, TextColor};
 use misty::theme::ThemeToken;
 use misty::{Frame, InfoCard, Rect, Widget};
-use winter_render::TokenInspectView;
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
@@ -34,7 +34,7 @@ impl App {
         };
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let (x, top, bottom) = view.anchor;
         let anchor = Rect::new(x, top, frame.cell_metrics().width, bottom - top);
@@ -91,7 +91,7 @@ fn lines_of(view: &TokenInspectView) -> Vec<StyledText> {
 
 /// The color `#rrggbb` names.
 fn parse_hex(hex: &str) -> Option<Rgb> {
-    let parsed = winter_render::ThemeRgb::parse_hex(hex)?;
+    let parsed = crate::render::ThemeRgb::parse_hex(hex)?;
     Some(Rgb::new(parsed.r, parsed.g, parsed.b))
 }
 

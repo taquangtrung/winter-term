@@ -1,11 +1,12 @@
 //! The view types a caller fills in to describe one frame's contents.
 
 use std::sync::Arc;
+use winter_model::view::NoticeKind;
 
 use super::display::CellOverlay;
-use super::widgets::ToolbarView;
-use crate::theme::Rgb;
 use winter_emulator::{CursorShape, Grid};
+use winter_model::view::ToolbarView;
+use winter_theme::Rgb;
 
 // ========================================================================
 // Data Structures
@@ -69,7 +70,7 @@ pub struct PaneView<'a> {
     /// quick-select is not active.
     pub labels: Option<&'a [(usize, usize, char)]>,
     /// Easymotion-style `f`/`t` jump labels as `(row, col, label)`, drawn in the
-    /// theme's [`Theme::find_label_bg`](crate::Theme::find_label_bg)/[`Theme::find_label_fg`](crate::Theme::find_label_fg) so they read
+    /// theme's [`Theme::find_label_bg`](winter_theme::Theme::find_label_bg)/[`Theme::find_label_fg`](winter_theme::Theme::find_label_fg) so they read
     /// differently from the quick-select block labels above.
     pub find_labels: &'a [(usize, usize, char)],
     /// The Normal-mode traversal cursor, in viewport `(row, col)`, drawn in
@@ -80,12 +81,12 @@ pub struct PaneView<'a> {
     /// drawn as an accent outline around the whole band instead of a 1-cell
     /// block somewhere in the blank space behind the image. `None` otherwise.
     pub block_band: Option<(usize, usize)>,
-    /// The row to band with [`Theme::cursor_line_bg`](crate::Theme::cursor_line_bg) (with its soft-wrapped
+    /// The row to band with [`Theme::cursor_line_bg`](winter_theme::Theme::cursor_line_bg) (with its soft-wrapped
     /// continuations). Separate from [`Self::nav_cursor`] so an unfocused pane can
     /// keep showing where its cursor is even though the cursor block itself is
     /// only drawn for the focused pane.
     pub cursor_line_row: Option<usize>,
-    /// The row to band with [`Theme::jump_target_bg`](crate::Theme::jump_target_bg) during jump preview.
+    /// The row to band with [`Theme::jump_target_bg`](winter_theme::Theme::jump_target_bg) during jump preview.
     pub jump_target_row: Option<usize>,
     /// The row lit to show this pane just took the keyboard, and how strongly
     /// it is lit: from 1 as it happens, fading to 0. `None` once it has
@@ -99,7 +100,7 @@ pub struct PaneView<'a> {
     pub rect: PaneRect,
     /// Active search query matches as `(row, col)` pairs; empty when no search
     /// is active. Highlighted in the background pass with
-    /// [`Theme::search_match_bg`](crate::Theme::search_match_bg).
+    /// [`Theme::search_match_bg`](winter_theme::Theme::search_match_bg).
     pub search_matches: &'a [(usize, usize)],
     /// Sentence-highlight bands as row-clipped column spans `(row, start, end,
     /// tone)`, alternating `tone` parity per sentence. Driven by the
@@ -112,7 +113,7 @@ pub struct PaneView<'a> {
     /// word under the cursor).
     pub outlines: &'a [(usize, usize, usize)],
     /// The cells of the one match `n`/`N` is parked on, a subset of
-    /// [`Self::search_matches`], highlighted with [`Theme::search_current_bg`](crate::Theme::search_current_bg)
+    /// [`Self::search_matches`], highlighted with [`Theme::search_current_bg`](winter_theme::Theme::search_current_bg)
     /// instead so the focused match stands out from the rest.
     pub search_current: &'a [(usize, usize)],
     /// The selected region as `(start_row, start_col, end_row, end_col)` in
@@ -177,9 +178,6 @@ pub struct StatusBar {
     pub hovered: Option<StatusHover>,
     /// The mode label drawn over `accent`, e.g. `" NORMAL "`.
     pub mode: String,
-    /// A transient notice (an error or an info confirmation), shown after the
-    /// mode label until it expires.
-    pub notice: Option<StatusNotice>,
     /// The project name, drawn at the status bar's left edge.
     pub project: String,
     /// An optional SVG icon drawn before `project`. Falls back to the project
@@ -256,43 +254,6 @@ pub struct StatusNotice {
     /// The message shown to the user.
     pub text: String,
 }
-/// Whether a [`StatusNotice`] reports a problem or confirms an action.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum NoticeKind {
-    /// A problem, drawn in red.
-    Error,
-    /// A confirmation, drawn in green.
-    Info,
-    /// Work still under way, drawn muted in the status bar.
-    Progress,
-    /// A question whose yes loses nothing, drawn in blue.
-    Question,
-    /// Something worth knowing that is not a failure, drawn in yellow.
-    Warning,
-}
-
-impl NoticeKind {
-    /// The codicon glyph associated with this notice kind.
-    pub fn icon(&self) -> &'static str {
-        match self {
-            Self::Error => "\u{ea87}",
-            Self::Info | Self::Progress => "\u{ea74}",
-            Self::Question => "\u{eb32}",
-            Self::Warning => "\u{ea6c}",
-        }
-    }
-
-    /// The theme accent color for this notice kind.
-    pub fn color(&self, theme: &crate::theme::Theme) -> crate::theme::Rgb {
-        match self {
-            Self::Error => theme.ansi[1],
-            Self::Info | Self::Question => theme.ansi[4],
-            Self::Progress => theme.ansi[8],
-            Self::Warning => theme.ansi[3],
-        }
-    }
-}
-
 /// The notifications glyph at the status bar's right edge: `text` is the
 /// glyph and any unread count, drawn in the color of `kind`, the most
 /// pressing unread notification, or muted when there is none.
@@ -330,7 +291,7 @@ impl PaneRect {
     }
 
     /// The part of this pane its content is drawn in: the grid area less
-    /// the side padding `pad` on each side (see [`crate::PANE_H_PAD`]).
+    /// the side padding `pad` on each side (see [`crate::render::PANE_H_PAD`]).
     /// Cells, icons, and pictures all start at its left edge, so every kind
     /// of tab keeps the same margin.
     pub fn text_area(self, cell_height: f32, pad: f32) -> PaneRect {
@@ -393,7 +354,7 @@ mod tests {
         };
         let cell = (9.0, 20.0);
         // The padding of a display at twice the scale.
-        let pad = crate::pane_h_pad(2.0);
+        let pad = crate::render::pane_h_pad(2.0);
         let (left, top, bottom) = pane.cell_box((2, 3), cell, pad);
         // The rows sit in the grid area, below the pane's top by half the
         // leftover, and the text past its side padding.

@@ -20,11 +20,11 @@ use std::collections::HashSet;
 use super::colors::grid_color_to_rgb;
 use super::display::{shown_cell, CellOverlay, ScreenPresentation};
 use super::glyphs::{is_braille, push_braille_dots};
-use crate::theme::Theme;
 use cell_color::{cell_bg_color, lerp_to_bg, CellBgOverlays, FLASH_PEAK_ALPHA};
 use decoration::{push_decorations, DecorationStyle};
 use scrollbar::{scrollbar_quads, ScrollbarParams};
 use winter_emulator::{Cell, Color as GridColor, CursorShape, Grid};
+use winter_theme::Theme;
 
 // ========================================================================
 // Constants
@@ -78,7 +78,7 @@ pub(super) struct LineFlash {
 pub(super) struct BgParams<'a> {
     pub(super) ch: f32,
     /// Draw the grid cursor in its unfocused form instead of filling
-    /// `cursor_shape`. See [`PaneView::cursor_unfocused`](crate::renderer::PaneView::cursor_unfocused).
+    /// `cursor_shape`. See [`PaneView::cursor_unfocused`](crate::render::renderer::PaneView::cursor_unfocused).
     pub(super) cursor_unfocused: bool,
     pub(super) cursor_shape: CursorShape,
     pub(super) cw: f32,
@@ -99,7 +99,7 @@ pub(super) struct BgParams<'a> {
     pub(super) find_labels: &'a [(usize, usize, char)],
     pub(super) offset_x: f32,
     /// Cells drawn over the grid in place of its own (see
-    /// [`PaneView::overlay`](crate::renderer::PaneView::overlay)).
+    /// [`PaneView::overlay`](crate::render::renderer::PaneView::overlay)).
     pub(super) overlay: Option<&'a CellOverlay>,
     /// The pane-wide state cells are shown under (reverse video, conceal,
     /// the blink phase).
@@ -111,7 +111,7 @@ pub(super) struct BgParams<'a> {
     pub(super) cursor_line: Option<(usize, usize)>,
     /// The inclusive span of viewport rows to paint with [`Theme::jump_target_bg`]
     pub(super) jump_line: Option<(usize, usize)>,
-    /// The focus flash, while it lasts (see [`PaneView::line_flash`](crate::renderer::PaneView::line_flash)).
+    /// The focus flash, while it lasts (see [`PaneView::line_flash`](crate::render::renderer::PaneView::line_flash)).
     pub(super) line_flash: Option<LineFlash>,
     pub(super) scroll_offset: usize,
     pub(super) scrollback_len: usize,
@@ -120,17 +120,17 @@ pub(super) struct BgParams<'a> {
     pub(super) search_current: &'a [(usize, usize)],
     pub(super) search_matches: &'a [(usize, usize)],
     /// Sentence-highlight bands `(row, start, end, tone)`; see
-    /// [`PaneView::sentence_spans`](crate::renderer::PaneView::sentence_spans).
+    /// [`PaneView::sentence_spans`](crate::render::renderer::PaneView::sentence_spans).
     pub(super) sentence_spans: &'a [(usize, usize, usize, u8)],
     /// Runs of cells outlined over their own backgrounds (see
-    /// [`PaneView::outlines`](crate::renderer::PaneView::outlines)).
+    /// [`PaneView::outlines`](crate::render::renderer::PaneView::outlines)).
     pub(super) outlines: &'a [(usize, usize, usize)],
     pub(super) selection: Option<(usize, usize, usize, usize)>,
     pub(super) selection_block: bool,
     pub(super) surface_h: f32,
     pub(super) surface_w: f32,
     pub(super) theme: &'a Theme,
-    /// Underline cells carrying a link. See [`PaneView::url_underline`](crate::renderer::PaneView::url_underline).
+    /// Underline cells carrying a link. See [`PaneView::url_underline`](crate::render::renderer::PaneView::url_underline).
     pub(super) url_underline: bool,
 }
 

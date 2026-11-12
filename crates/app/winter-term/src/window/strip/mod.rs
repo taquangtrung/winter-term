@@ -55,7 +55,7 @@ pub(in crate::window) enum TabDrop {
 // ========================================================================
 
 /// Which split direction corresponds to a point within a pane rectangle.
-fn pane_drop_split_dir(x: f32, y: f32, pr: &winter_render::renderer::PaneRect) -> FocusDir {
+fn pane_drop_split_dir(x: f32, y: f32, pr: &crate::render::renderer::PaneRect) -> FocusDir {
     let w = pr.width.max(1.0);
     let h = pr.height.max(1.0);
     let norm_x = ((x - pr.x) / w).clamp(0.0, 1.0);
@@ -77,7 +77,7 @@ fn pane_drop_split_dir(x: f32, y: f32, pr: &winter_render::renderer::PaneRect) -
 }
 
 /// Whether a point within a pane rectangle falls into an outer edge zone.
-fn is_pane_edge_zone(x: f32, y: f32, pr: &winter_render::renderer::PaneRect) -> bool {
+fn is_pane_edge_zone(x: f32, y: f32, pr: &crate::render::renderer::PaneRect) -> bool {
     let w = pr.width.max(1.0);
     let h = pr.height.max(1.0);
     let norm_x = ((x - pr.x) / w).clamp(0.0, 1.0);

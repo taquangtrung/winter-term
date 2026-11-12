@@ -8,9 +8,9 @@ pub(in crate::window) use clipboard::Clipboards;
 
 use std::time::Instant;
 
+use crate::render::renderer::PaneRect;
 use winter_model::input::VisualKind;
 use winter_model::layout::TabId;
-use winter_render::renderer::PaneRect;
 
 use crate::window::terminal::navigation::open::find_url_at;
 use crate::window::{App, LastVisual, Selection};

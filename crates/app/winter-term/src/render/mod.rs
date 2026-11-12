@@ -1,34 +1,31 @@
-//! The GPU renderer: draws a [`winter_emulator::Grid`] and the window chrome
-//! around it to a wgpu surface, using `cosmic-text` + `glyphon` for glyph
-//! rendering. The grid and the VT parsing that drives it live in `winter-emulator`;
-//! this crate only draws them.
-
-#![forbid(unsafe_code)]
-#![deny(missing_docs)]
+//! The window's drawing layer under misty: each pane resolved into cells
+//! and shapes ([`renderer`]), the pictures' textures, Markdown laid out for
+//! a picture, and the title bar's styles. The theme and the syntax scopes
+//! come from `winter-theme`, and the views of what floats over the panes
+//! from `winter_model::view`; both are re-exported here, so the window
+//! reaches everything it draws from through `crate::render`.
 
 mod image;
 mod markdown;
-pub mod renderer;
-mod syntax;
+pub(crate) mod renderer;
 mod tabbar;
-mod theme;
-mod theme_file;
 
 pub use image::ImagePlacement;
 pub use renderer::{
-    clamp_font_size, start_font_load, ButtonView, CellOverlay, ColumnAlign, CompletionRow,
-    CompletionView, DropListRow, DropListView, FindView, FontConfig, FontLoad, GridStrip, InfoSpan,
-    InfoView, InputView, NoticeKind, PaintCell, PaintFill, PaintWidth, PanePaint, PaneRect,
-    PaneView, PanelLine, PanelSpan, PanelView, PickerItem, PickerPlacement, PickerView, StatusBar,
-    StatusBell, StatusHover, StatusNotice, StatusPrompt, StatusSearch, StatusSegment, SwitchKind,
-    TokenInspectView, ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView, TransientCommand,
-    TransientSwitch, TransientView, WhichKeyView, THIN_SPACE,
+    clamp_font_size, start_font_load, CellOverlay, FontConfig, PaintCell, PaintFill, PaintWidth,
+    PanePaint, PaneRect, StatusBar, StatusBell, StatusHover, StatusNotice, StatusPrompt,
+    StatusSearch, StatusSegment, THIN_SPACE,
 };
-pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};
 pub use tabbar::{ControlsSide, MenuStyle, Region};
-pub use theme::{GitColors, Rgb as ThemeRgb, Theme, PAGE_DIM_MIX};
-pub use theme_file::{
-    kdl_string, parse_theme_file, theme_kdl, ColorOverrides, KdlColors, ScalarColor, SCALAR_COLORS,
+pub use winter_model::view::{
+    ButtonView, ColumnAlign, CompletionRow, CompletionView, DropListRow, DropListView, FindView,
+    InfoSpan, InfoView, InputView, NoticeKind, PanelLine, PanelSpan, PanelView, PickerItem,
+    PickerPlacement, PickerView, SwitchKind, TokenInspectView, ToolbarColumn, ToolbarItem,
+    ToolbarTone, ToolbarView, TransientView, WhichKeyView,
+};
+pub use winter_theme::{
+    kdl_string, parse_theme_file, theme_kdl, ColorOverrides, KdlColors, Rgb as ThemeRgb, Theme,
+    DIM_FACTOR, PAGE_DIM_MIX, SCOPE_RULES, SENTENCE_TINT_ALPHAS,
 };
 
 /// Horizontal inset from each edge of a pane's rect to where its content
@@ -66,24 +63,6 @@ pub const DEFAULT_POPUP_INPUT_HEIGHT: f32 = 1.5;
 
 /// The shortest and tallest a popup's field may be configured, in rows.
 pub const POPUP_INPUT_HEIGHT_RANGE: (f32, f32) = (1.0, 4.0);
-
-/// How far non-focused pane colors are lerped toward the background (0 = full,
-/// 1 = fully dimmed). Public so what the host draws over a pane itself, such
-/// as an editor's icons, can fade by the same amount.
-pub const DIM_FACTOR: f32 = 0.4;
-
-/// The character an editor paints an indentation guide's cell with: a
-/// Unicode noncharacter, which text never holds, so a program's own `│` is
-/// never mistaken for one. The renderer draws it as a hairline down the
-/// cell's left edge, not as a font's glyph, whose stroke is as thick as
-/// the font draws box lines and grows with a glyph scaled to fill the cell.
-pub const INDENT_GUIDE: char = '\u{FDD0}';
-
-/// How opaque the two alternating tones of a sentence band are, over the
-/// background in the cursor line's hue: low and close together, so the bands
-/// read as a subtle rhythm rather than a zebra stripe. A terminal's sentences
-/// and an editor's take the same two.
-pub const SENTENCE_TINT_ALPHAS: [f32; 2] = [0.28, 0.14];
 
 /// Top edge of the status bar in pixels: the bar is [`status_bar_height_px`]
 /// tall and flush with the surface's bottom edge. Anchoring it to the

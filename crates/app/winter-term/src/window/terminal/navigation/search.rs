@@ -42,7 +42,7 @@ pub(in crate::window) enum SearchFrom {
 #[derive(Debug, Default)]
 pub(in crate::window) struct SearchState {
     /// The match `n`/`N` is parked on: the pane and the match's absolute
-    /// `(row, col)` start. Drawn in [`winter_render::Theme::search_current_bg`]
+    /// `(row, col)` start. Drawn in [`crate::render::Theme::search_current_bg`]
     /// so the focused match stands out from the other highlighted matches.
     pub(in crate::window) current: Option<(TabId, (usize, usize))>,
     /// When the query being typed is next searched for, and in which pane:

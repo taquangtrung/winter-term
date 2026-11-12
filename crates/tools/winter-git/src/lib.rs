@@ -1260,12 +1260,12 @@ impl GitEditor {
         &self,
         popup: Popup,
     ) -> (
-        Vec<winter_render::TransientCommand>,
-        Vec<winter_render::TransientSwitch>,
+        Vec<winter_model::view::TransientCommand>,
+        Vec<winter_model::view::TransientSwitch>,
     ) {
         if popup == Popup::PushOptions {
             if let Some(menu) = &self.menus.push {
-                let commands = vec![winter_render::TransientCommand::new(
+                let commands = vec![winter_model::view::TransientCommand::new(
                     "RET",
                     "back to Pushing",
                 )];
@@ -1274,11 +1274,16 @@ impl GitEditor {
                     .map(|(key, flag, label)| {
                         let checked = menu.switches.contains(key);
                         let kind = match key {
-                            'f' | 'F' | 'i' => winter_render::SwitchKind::Radio,
-                            _ => winter_render::SwitchKind::Checkbox,
+                            'f' | 'F' | 'i' => winter_model::view::SwitchKind::Radio,
+                            _ => winter_model::view::SwitchKind::Checkbox,
                         };
-                        winter_render::TransientSwitch::new(key.to_string(), *label, *flag, checked)
-                            .with_kind(kind)
+                        winter_model::view::TransientSwitch::new(
+                            key.to_string(),
+                            *label,
+                            *flag,
+                            checked,
+                        )
+                        .with_kind(kind)
                     })
                     .collect();
                 return (commands, switches);
@@ -1299,13 +1304,13 @@ impl GitEditor {
         };
 
         let commands = match self.menus.switch_next {
-            true => vec![winter_render::TransientCommand::new(
+            true => vec![winter_model::view::TransientCommand::new(
                 "RET",
                 format!("back to {}", popup.title()),
             )],
             false => choices
                 .into_iter()
-                .map(|(key, label)| winter_render::TransientCommand::new(key, label))
+                .map(|(key, label)| winter_model::view::TransientCommand::new(key, label))
                 .collect(),
         };
 
@@ -1315,10 +1320,10 @@ impl GitEditor {
             .map(|switch| {
                 let checked = self.menus.switches_on.contains(&(popup, switch.key));
                 let kind = match popup.exclusive_switches().contains(&switch.key) {
-                    true => winter_render::SwitchKind::Radio,
-                    false => winter_render::SwitchKind::Checkbox,
+                    true => winter_model::view::SwitchKind::Radio,
+                    false => winter_model::view::SwitchKind::Checkbox,
                 };
-                winter_render::TransientSwitch::new(
+                winter_model::view::TransientSwitch::new(
                     format!("-{}", switch.key),
                     switch.label,
                     switch.flag,
@@ -1565,7 +1570,7 @@ impl Page for GitEditor {
         })
     }
 
-    fn transient(&self) -> Option<winter_render::TransientView> {
+    fn transient(&self) -> Option<winter_model::view::TransientView> {
         let popup = self.menus.popup?;
         let (commands, switches) = self.transient_items(popup);
         let total = switches.len() + commands.len();
@@ -1575,7 +1580,7 @@ impl Page for GitEditor {
             self.menus.selected.min(total - 1)
         };
         Some(
-            winter_render::TransientView::new(popup.title(), commands, switches)
+            winter_model::view::TransientView::new(popup.title(), commands, switches)
                 .with_selected(selected),
         )
     }

@@ -879,7 +879,7 @@ impl GitEditor {
     }
 
     /// Helper to toggle a switch item in a transient popup window.
-    fn toggle_switch_item(&mut self, popup: Popup, sw: &winter_render::TransientSwitch) {
+    fn toggle_switch_item(&mut self, popup: Popup, sw: &winter_model::view::TransientSwitch) {
         if popup == Popup::PushOptions {
             if let Some(ch) = sw.key.chars().next() {
                 if let Some(menu) = self.menus.push.as_mut() {

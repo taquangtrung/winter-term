@@ -1,7 +1,7 @@
 //! Runtime appearance changes: font size, themes, and display toggles.
 
-use winter_render::renderer::GpuRenderer;
-use winter_render::Theme;
+use crate::render::renderer::GpuRenderer;
+use crate::render::Theme;
 use winter_terminal::session::{Presentation, ThemeColors};
 
 use crate::config::Config;
@@ -160,7 +160,7 @@ impl App {
 
     /// Adjust font size by `delta` points; returns true when actually changed.
     pub(in crate::window) fn change_font_size(&mut self, delta: f32) -> bool {
-        let new_size = winter_render::clamp_font_size(self.font_size() + delta);
+        let new_size = crate::render::clamp_font_size(self.font_size() + delta);
         self.change_font_size_to(new_size)
     }
 

@@ -94,10 +94,10 @@ impl GpuRenderer {
         wrap_width: f32,
     ) -> Option<(u32, u32)> {
         let width = (wrap_width.floor() as u32).clamp(1, MAX_SVG_DIM);
-        let spans = crate::markdown::parse(markdown);
+        let spans = crate::render::markdown::parse(markdown);
         let fam = self.fonts.font_family.clone();
-        let fg = self.theme.foreground.to_glyphon();
-        let code_color = self.theme.ansi[3].to_glyphon();
+        let fg = glyph_color(self.theme.foreground);
+        let code_color = glyph_color(self.theme.ansi[3]);
 
         let mut buffer = glyphon::Buffer::new(
             &mut self.font_system,
@@ -141,7 +141,7 @@ impl GpuRenderer {
         let width = (wrap_width.floor() as u32).clamp(1, MAX_SVG_DIM);
         let attrs = Attrs::new()
             .family(Family::Monospace)
-            .color(self.theme.foreground.to_glyphon());
+            .color(glyph_color(self.theme.foreground));
         let mut buffer = glyphon::Buffer::new(
             &mut self.font_system,
             glyphon::Metrics::new(self.fonts.font_size, self.fonts.line_height),
@@ -168,7 +168,7 @@ impl GpuRenderer {
 
         // Software-composite glyph coverage over an opaque themed background.
         let bg = self.theme.background;
-        let fg = self.theme.foreground.to_glyphon();
+        let fg = glyph_color(self.theme.foreground);
         let mut rgba = vec![0u8; (width * height * 4) as usize];
         for pixel in rgba.as_chunks_mut::<4>().0 {
             pixel.copy_from_slice(&[bg.r, bg.g, bg.b, 255]);
@@ -321,4 +321,9 @@ mod tests {
             .expect("encode");
         assert_eq!(decode_limited(&ok).map(|i| i.dimensions()), Some((4, 4)));
     }
+}
+
+/// `color` as an opaque glyph color, for text laid out into a picture.
+fn glyph_color(color: winter_theme::Rgb) -> glyphon::Color {
+    glyphon::Color::rgba(color.r, color.g, color.b, u8::MAX)
 }

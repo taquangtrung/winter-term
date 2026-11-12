@@ -5,9 +5,9 @@ use std::time::Instant;
 use winit::window::ResizeDirection;
 
 use crate::config::TitleBarStyle;
+use crate::render::renderer::PaneRect;
+use crate::render::PANE_H_PAD;
 use winter_model::layout::Rect;
-use winter_render::renderer::PaneRect;
-use winter_render::PANE_H_PAD;
 
 use crate::window::{
     App, AUTO_SCROLL_EDGE_MARGIN, AUTO_SCROLL_INTERVAL, AUTO_SCROLL_MAX_LINES_PER_TICK,
@@ -99,7 +99,7 @@ impl App {
         let status_h = match status_enabled {
             true => self
                 .status_bar_height()
-                .unwrap_or_else(|| winter_render::status_bar_height_px(ch)),
+                .unwrap_or_else(|| crate::render::status_bar_height_px(ch)),
             false => 0.0,
         };
 

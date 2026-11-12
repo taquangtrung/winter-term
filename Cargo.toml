@@ -18,7 +18,7 @@ members = [
     "crates/libs/winter-vcs",
     "crates/base/winter-emulator",
     "crates/base/winter-proto",
-    "crates/base/winter-render",
+    "crates/base/winter-theme",
     "crates/libs/winter-spell",
     "crates/libs/winter-lsp",
     "crates/sdk/winter-ext-api",
@@ -80,7 +80,7 @@ winter-synctex = { version = "0.1.0", path = "crates/libs/winter-synctex" }
 winter-syntax = { version = "0.1.0", path = "crates/libs/winter-syntax" }
 winter-vcs = { version = "0.1.0", path = "crates/libs/winter-vcs" }
 winter-proto = { version = "0.1.0", path = "crates/base/winter-proto" }
-winter-render = { version = "0.1.0", path = "crates/base/winter-render" }
+winter-theme = { version = "0.1.0", path = "crates/base/winter-theme" }
 winter-spell = { version = "0.1.0", path = "crates/libs/winter-spell" }
 winter-lsp = { version = "0.1.0", path = "crates/libs/winter-lsp" }
 winter-ext-api = { version = "0.1.0", path = "crates/sdk/winter-ext-api" }
@@ -125,10 +125,6 @@ portable-pty = { path = "vendor/portable-pty" }
 
 # Dependencies built optimized even in a debug build: text shaping and the GPU
 # layer run every frame, and unoptimized they make `make dev` lag on every
-# key. Winter's own crates stay unoptimized, so rebuilding them stays fast,
-# but for the renderer, whose overlays are painted a pixel at a time.
+# key. Winter's own crates stay unoptimized, so rebuilding them stays fast.
 [profile.dev.package."*"]
-opt-level = 3
-
-[profile.dev.package.winter-render]
 opt-level = 3

@@ -4,11 +4,11 @@
 //! size it grew to while the menu is up; a click on a row types the row's
 //! key, and a click outside puts the menu away.
 
+use crate::render::TransientView;
 use misty::{
     EventCx, Frame, Input, Rect, Transient, TransientCommand, TransientResponse, TransientRow,
     TransientSwitch, Widget,
 };
-use winter_render::TransientView;
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
@@ -27,12 +27,14 @@ impl App {
         };
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let same = self.chrome.transient_title.as_deref() == Some(view.title.as_str())
-            && self.chrome.transient.as_ref().is_some_and(|card| {
-                card.switches().len() == view.switches.len()
-            });
+            && self
+                .chrome
+                .transient
+                .as_ref()
+                .is_some_and(|card| card.switches().len() == view.switches.len());
         if !same {
             self.chrome.transient = Some(card_of(&view));
             self.chrome.transient_title = Some(view.title.clone());
@@ -64,7 +66,9 @@ impl App {
             return false;
         };
         let answer = card.handle(input, cx);
-        let selected = card.selected().map(|row| index_of(row, view.switches.len()));
+        let selected = card
+            .selected()
+            .map(|row| index_of(row, view.switches.len()));
         let was = view.selected;
         let chosen = match answer {
             TransientResponse::Chosen(TransientRow::Command(at)) => {
@@ -73,9 +77,9 @@ impl App {
             TransientResponse::Chosen(TransientRow::Switch(at)) => {
                 view.switches.get(at).map(|switch| switch.key.clone())
             }
-            TransientResponse::Closed
-            | TransientResponse::Handled
-            | TransientResponse::Ignored => None,
+            TransientResponse::Closed | TransientResponse::Handled | TransientResponse::Ignored => {
+                None
+            }
         };
         match answer {
             TransientResponse::Chosen(_) => {
@@ -124,8 +128,8 @@ fn card_of(view: &TransientView) -> Transient {
                 false => shown.with_flag(switch.flag.as_str()),
             };
             match switch.kind {
-                winter_render::SwitchKind::Checkbox => shown,
-                winter_render::SwitchKind::Radio => shown.radio(),
+                crate::render::SwitchKind::Checkbox => shown,
+                crate::render::SwitchKind::Radio => shown.radio(),
             }
         })
         .collect();

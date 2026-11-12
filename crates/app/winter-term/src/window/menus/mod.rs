@@ -6,8 +6,8 @@
 
 pub(in crate::window) mod context;
 
+use crate::render::MenuStyle;
 use misty::{Menu, MenuEntry, MenuItem, PopupSide};
-use winter_render::MenuStyle;
 
 use winter_model::input::format_key;
 
@@ -254,7 +254,7 @@ impl App {
 
 #[cfg(test)]
 mod tests {
-    use winter_render::MenuStyle;
+    use crate::render::MenuStyle;
 
     use crate::window::App;
 

@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use winter_render::DropListRow;
+use winter_model::view::DropListRow;
 
 use super::outline::{Entry, Target};
 

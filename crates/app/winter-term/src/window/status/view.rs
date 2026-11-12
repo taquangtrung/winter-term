@@ -4,9 +4,9 @@
 //! drawn with the notifier's message and tasks, and the pointer handed to
 //! it.
 
+use crate::render::{StatusBar, StatusHover, ThemeRgb};
 use misty::text::{Span, StyledText, TextColor};
 use misty::{Frame, Input, StatusBarResponse, StatusLine, StatusSegment, Svg, Widget};
-use winter_render::{StatusBar, StatusHover, ThemeRgb};
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
@@ -59,7 +59,7 @@ impl App {
         };
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let line = self.status_line(&view);
         let bounds = frame.bounds();
@@ -152,11 +152,11 @@ impl App {
             line = line.with_left(branch);
         }
         for (index, segment) in view.segments.iter().enumerate() {
-            let text = segment.text.replace(winter_render::THIN_SPACE, " ");
+            let text = segment.text.replace(crate::render::THIN_SPACE, " ");
             let mut shown = self.segment(&text, segment.icon.as_ref());
             shown = shown.with_priority(segment.priority);
             if let Some(short) = &segment.short {
-                shown = shown.with_short(quiet(&short.replace(winter_render::THIN_SPACE, " ")));
+                shown = shown.with_short(quiet(&short.replace(crate::render::THIN_SPACE, " ")));
             }
             if let Some(id) = SEGMENT_IDS.get(index) {
                 shown = shown.with_id(id);
@@ -192,14 +192,14 @@ impl App {
     pub(in crate::window) fn status_part_region(
         &self,
         part: StatusHover,
-    ) -> Option<winter_render::Region> {
+    ) -> Option<crate::render::Region> {
         let id = match part {
             StatusHover::Bell => BELL_ID,
             StatusHover::Mode => MODE_ID,
             StatusHover::Segment(index) => SEGMENT_IDS.get(index)?,
         };
         let rect = self.chrome.status_bar.segment_rect(id)?;
-        Some(winter_render::Region {
+        Some(crate::render::Region {
             h: rect.height,
             w: rect.width,
             x: rect.x,

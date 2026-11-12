@@ -5,8 +5,8 @@
 
 use std::collections::{HashMap, HashSet};
 
-use winter_render::renderer::GpuRenderer;
-use winter_render::ImagePlacement;
+use crate::render::renderer::GpuRenderer;
+use crate::render::ImagePlacement;
 
 use winter_model::editor::Appearance;
 use winter_model::layout::{Rect, TabId};
@@ -149,7 +149,7 @@ impl App {
             let picture = slot.page.picture();
             // Faded with the rest of an inactive pane, as an editor's icons are.
             let alpha = match self.config.dim_inactive && *tab != focused {
-                true => 1.0 - winter_render::DIM_FACTOR,
+                true => 1.0 - crate::render::DIM_FACTOR,
                 false => 1.0,
             };
             let place = |id: u64, clip: PictureClip| ImagePlacement {

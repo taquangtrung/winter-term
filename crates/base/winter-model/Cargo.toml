@@ -28,5 +28,5 @@ winter-emulator.workspace = true
 winter-ext-api.workspace = true
 winter-keys.workspace = true
 misty-notify.workspace = true
-winter-render.workspace = true
+winter-theme.workspace = true
 winter-textedit.workspace = true

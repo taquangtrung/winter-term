@@ -2,9 +2,9 @@
 //! block wrapped in an element naming the source line it starts on, and a
 //! stylesheet in the window's theme.
 
+use crate::render::Theme;
 use mermaid_rs_renderer::RenderOptions;
 use pulldown_cmark::{html, CodeBlockKind, CowStr, Event, Options, Parser, Tag, TagEnd};
-use winter_render::Theme;
 
 use winter_model::paint::{Row, Span, Style};
 use winter_syntax::LineState;

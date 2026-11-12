@@ -1,7 +1,7 @@
 //! Visual mode: acting on a selection.
 
-use winter_keys::{Key, KeyCode, Mods};
 use misty_notify::Notice;
+use winter_keys::{Key, KeyCode, Mods};
 
 use crate::buffer::Register;
 use crate::vim::grammar::{operator_of, OperatorKind};

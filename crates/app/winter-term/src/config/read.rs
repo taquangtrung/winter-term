@@ -3,7 +3,7 @@
 
 use std::sync::LazyLock;
 
-use winter_render::{ColorOverrides, MenuStyle};
+use crate::render::{ColorOverrides, MenuStyle};
 
 use winter_model::paint::{GutterSide, MarkupMarkers, WrapIndent};
 
@@ -249,7 +249,7 @@ fn read_settings(
         font_family: named(kdl.font, &base.font_family),
         font_size: kdl
             .font_size
-            .map_or(base.font_size, winter_render::clamp_font_size),
+            .map_or(base.font_size, crate::render::clamp_font_size),
         font_weight: named(kdl.font_weight, &base.font_weight),
         font_weight_bold: named(kdl.font_weight_bold, &base.font_weight_bold),
         editor_indent_guides: kdl
@@ -319,7 +319,7 @@ fn read_settings(
             .popup_input_height
             .filter(|rows| rows.is_finite())
             .map_or(base.popup_input_height, |rows| {
-                let (least, most) = winter_render::POPUP_INPUT_HEIGHT_RANGE;
+                let (least, most) = crate::render::POPUP_INPUT_HEIGHT_RANGE;
                 rows.clamp(least, most)
             }),
         paste_on_right_click: kdl

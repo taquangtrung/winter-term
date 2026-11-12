@@ -3,10 +3,10 @@
 //! about, and the drop list under a breadcrumb. The frame works out what
 //! each shows and where; misty draws them over the window.
 
+use crate::render::{CompletionView, DropListView, InfoSpan, InfoView};
 use misty::color::Rgba;
 use misty::text::{Span, StyledText, TextColor};
 use misty::{CompletionList, CompletionRow, DropList, DropRow, Frame, InfoCard, Rect, Widget};
-use winter_render::{CompletionView, DropListView, InfoSpan, InfoView};
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
@@ -45,7 +45,7 @@ impl App {
         }
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let bounds = frame.bounds();
         for popups in &self.chrome.pane_popups {
@@ -93,7 +93,7 @@ fn anchor((x, y, height): (f32, f32, f32)) -> Rect {
 }
 
 /// Misty's completion row for Winter's.
-fn completion_row(row: &winter_render::CompletionRow) -> CompletionRow {
+fn completion_row(row: &crate::render::CompletionRow) -> CompletionRow {
     CompletionRow {
         detail: row.detail.clone(),
         kind: Some(row.kind).filter(|kind| *kind != ' '),
@@ -104,7 +104,7 @@ fn completion_row(row: &winter_render::CompletionRow) -> CompletionRow {
 
 /// Misty's drop list row for Winter's: its indent from where its fold mark
 /// sits.
-fn drop_row(row: &winter_render::DropListRow) -> DropRow {
+fn drop_row(row: &crate::render::DropListRow) -> DropRow {
     let mut shown = DropRow::new(row.label.as_str()).with_depth(row.mark_col / INDENT_CELLS);
     if let Some(open) = row.fold {
         shown = shown.with_fold(open);

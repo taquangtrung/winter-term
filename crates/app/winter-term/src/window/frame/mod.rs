@@ -1,7 +1,7 @@
 //! Composing each frame for the renderer: the panes' cell grids and view state,
 //! the palette and which-key popups, the canvas's images, and the blink clock
 //! that times carets and blinking text.
-//! The drawing itself happens in `winter_render`.
+//! Misty does the drawing itself, from what [`crate::render`] resolves.
 
 pub(crate) mod blink;
 pub(crate) mod canvas;

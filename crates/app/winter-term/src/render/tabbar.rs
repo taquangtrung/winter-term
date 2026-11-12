@@ -44,9 +44,4 @@ pub struct Region {
 // Region
 // ========================================================================
 
-impl Region {
-    /// Whether the point `(px, py)` is inside this region.
-    pub fn contains(&self, px: f32, py: f32) -> bool {
-        px >= self.x && px < self.x + self.w && py >= self.y && py < self.y + self.h
-    }
-}
+impl Region {}

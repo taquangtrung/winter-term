@@ -6,9 +6,9 @@
 //! `colors.syntax.comment`), and its value is read back by
 //! [`App::apply_structured_setting`] the way every other row's is.
 
+use crate::render::{ColorOverrides, ThemeRgb};
 use winter_lsp::servers::Server;
 use winter_model::settings_page::{ChoiceOption, SettingsField};
-use winter_render::{ColorOverrides, ThemeRgb};
 
 use crate::config::{completion_backends, status_segments_named, ServerField, StatusSegmentKind};
 use crate::window::App;

@@ -9,9 +9,9 @@ use std::f32::consts::TAU;
 use super::super::colors::grid_color_to_rgb;
 use super::cell_color::lerp_to_bg;
 use super::{quad_vertices, BgVertex, DotVertex};
-use crate::theme::Theme;
-use crate::INDENT_GUIDE;
 use winter_emulator::{Cell, Color as GridColor, UnderlineStyle};
+use winter_model::paint::INDENT_GUIDE;
+use winter_theme::Theme;
 
 // ========================================================================
 // Constants

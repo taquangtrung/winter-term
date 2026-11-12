@@ -1,7 +1,7 @@
 //! Writing a [`Config`] back as `settings.kdl` text, which reads back as
 //! the same settings.
 
-use winter_render::MenuStyle;
+use crate::render::MenuStyle;
 
 use super::schema::{controls_side_as_value, cursor_shape_as_value, kdl_bool, kdl_string};
 use super::servers::write_servers;

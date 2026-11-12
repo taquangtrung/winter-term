@@ -3,9 +3,9 @@
 
 use std::collections::HashMap;
 
+use crate::render::{ImagePlacement, Theme};
 use winter_model::layout::{Rect, TabId};
 use winter_model::paint::{Icon, GUTTER_ICON_WIDTH};
-use winter_render::{ImagePlacement, Theme};
 
 use crate::window::terminal::navigation::reading::{
     bracket_marks, resolve_bracket_colors, sentence_spans,
@@ -76,7 +76,7 @@ impl App {
         let status_h = match status_enabled {
             true => self
                 .status_bar_height()
-                .unwrap_or_else(|| winter_render::status_bar_height_px(ch)),
+                .unwrap_or_else(|| crate::render::status_bar_height_px(ch)),
             false => 0.0,
         };
 
@@ -233,7 +233,7 @@ impl App {
         // background, an alpha of one less the dim factor lands each pixel
         // where the pane's own colors are blended to.
         let alpha_of = |tab: TabId| match dim_inactive && tab != focused {
-            true => 1.0 - winter_render::DIM_FACTOR,
+            true => 1.0 - crate::render::DIM_FACTOR,
             false => 1.0,
         };
         // Rows sit in the text area, centred in the pane and past its side

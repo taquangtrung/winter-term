@@ -9,11 +9,11 @@
 
 use std::time::Duration;
 
+use crate::render::{PickerView, Theme};
 use misty::picker::{MatchOn, PreviewKind, Resume, Row, RowKey};
 use winter_model::editor::JumpTarget;
 use winter_model::layout::TabId;
 use winter_model::mode::Mode;
-use winter_render::{PickerView, Theme};
 
 use super::listing::{Entry, Listing};
 use crate::window::frame::frame_grid::span_rgb;

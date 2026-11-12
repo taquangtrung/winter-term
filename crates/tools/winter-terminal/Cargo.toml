@@ -29,7 +29,7 @@ winter-emulator.workspace = true
 winter-model.workspace = true
 winter-mux.workspace = true
 winter-proto.workspace = true
-winter-render.workspace = true
+winter-theme.workspace = true
 
 [target.'cfg(windows)'.dependencies]
 uds_windows = "1"

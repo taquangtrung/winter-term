@@ -1,14 +1,53 @@
-//! The views the widgets are drawn from, handed over by the app each frame.
+//! The views of what floats over the panes (the picker, the popups, the
+//! dialogs, the transient, the toolbars), which editors and the window build
+//! and the window draws.
 
 use std::ops::Range;
 use std::sync::Arc;
 
-use crate::renderer::view::NoticeKind;
-use crate::theme::Rgb;
+use winter_theme::{Rgb, Theme};
 
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// Whether a notice reports a problem or confirms an action, which colors
+/// it and the dialog asking about it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NoticeKind {
+    /// A problem, drawn in red.
+    Error,
+    /// A confirmation, drawn in green.
+    Info,
+    /// Work still under way, drawn muted in the status bar.
+    Progress,
+    /// A question whose yes loses nothing, drawn in blue.
+    Question,
+    /// Something worth knowing that is not a failure, drawn in yellow.
+    Warning,
+}
+
+impl NoticeKind {
+    /// The codicon glyph associated with this notice kind.
+    pub fn icon(&self) -> &'static str {
+        match self {
+            Self::Error => "\u{ea87}",
+            Self::Info | Self::Progress => "\u{ea74}",
+            Self::Question => "\u{eb32}",
+            Self::Warning => "\u{ea6c}",
+        }
+    }
+
+    /// The theme accent color for this notice kind.
+    pub fn color(&self, theme: &Theme) -> Rgb {
+        match self {
+            Self::Error => theme.ansi[1],
+            Self::Info | Self::Question => theme.ansi[4],
+            Self::Progress => theme.ansi[8],
+            Self::Warning => theme.ansi[3],
+        }
+    }
+}
 
 /// One entry shown in the picker results list.
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -4,9 +4,9 @@
 //! extracting data from custom editor implementations, rasterized editor grids,
 //! or terminal cell grids.
 
+use crate::render::renderer::PaneRect;
+use crate::render::{Theme, TokenInspectView};
 use winter_emulator::{Cell, Color, UnderlineStyle};
-use winter_render::renderer::PaneRect;
-use winter_render::{Theme, TokenInspectView};
 
 use crate::window::editor::buffers::PageMut;
 use crate::window::editor::cursor::EditorCursor;
@@ -264,10 +264,10 @@ pub(in crate::window) fn ansi_color_name(idx: u8) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::render::PANE_H_PAD;
     use crate::window::App;
     use winter_emulator::{Cell, Color, Style};
     use winter_model::layout::Rect;
-    use winter_render::PANE_H_PAD;
     use winter_terminal::session::git_editor_command;
 
     #[test]

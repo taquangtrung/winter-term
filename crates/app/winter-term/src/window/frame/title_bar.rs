@@ -4,11 +4,11 @@
 //! empty bar that moves the window. Also the tooltip misty hangs under
 //! whatever the pointer rests on, in the bar or anywhere else.
 
+use crate::render::{ControlsSide, MenuStyle};
 use misty::{
     CellMetrics, EventCx, Frame, Input, Point, Rect, TitleBar, TitleBarHit, TitleBarResponse,
     Widget, WindowButtons,
 };
-use winter_render::{ControlsSide, MenuStyle};
 
 use crate::config::TitleBarStyle;
 use crate::window::menus::menu_defs;
@@ -46,7 +46,7 @@ impl App {
     pub(in crate::window) fn draw_title_bar(&mut self, frame: &mut Frame) {
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let shape = self.title_bar_shape();
         if self.chrome.title_bar.as_ref().map(|(had, _)| *had) != Some(shape) {
@@ -65,7 +65,7 @@ impl App {
     pub(in crate::window) fn draw_tooltip(&mut self, frame: &mut Frame) {
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         // An open menu covers what the pointer rested on, and a tab dragged
         // off its strip has left it.

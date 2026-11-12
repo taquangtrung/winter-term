@@ -1,13 +1,13 @@
 //! Painting an editor's styled rows into a cell grid: each span's semantic
 //! style resolved against the theme, rows folded or clipped to the pane.
 
+use crate::render::{Theme, ThemeRgb, PAGE_DIM_MIX, SCOPE_RULES};
 use unicode_width::UnicodeWidthChar;
 use winter_emulator::{Color, Grid, RgbColor, Style, UnderlineStyle};
 use winter_model::paint::{
     self, row_height, row_text, wrap_start, wrapped_lines, DiagnosticLevel, Frame, SyntaxStyle,
     TerminalColor, TerminalStyle,
 };
-use winter_render::{Theme, ThemeRgb, PAGE_DIM_MIX, SCOPE_RULES};
 
 // ========================================================================
 // Constants
@@ -365,8 +365,8 @@ pub(in crate::window) fn span_style(style: paint::Style, theme: &Theme) -> Style
             background: mix_rgb(
                 theme.background,
                 theme.cursor_line_bg,
-                winter_render::SENTENCE_TINT_ALPHAS
-                    [usize::from(tone) % winter_render::SENTENCE_TINT_ALPHAS.len()],
+                crate::render::SENTENCE_TINT_ALPHAS
+                    [usize::from(tone) % crate::render::SENTENCE_TINT_ALPHAS.len()],
             ),
             foreground: theme_rgb(theme.foreground),
             ..Style::default()

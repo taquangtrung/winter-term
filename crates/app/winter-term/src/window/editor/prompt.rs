@@ -4,6 +4,7 @@
 
 use std::time::{Duration, Instant};
 
+use crate::render::{ButtonView, InputView};
 use winter_model::button::ButtonGroup;
 use winter_model::editor::{PickPlacement, PromptMode, PromptReply, PromptRequest, SearchReport};
 use winter_model::input::{Key, KeyCode, Mods};
@@ -11,7 +12,6 @@ use winter_model::layout::TabId;
 use winter_model::textedit::field::TextField;
 use winter_model::textedit::modal::EditOutcome;
 use winter_model::textedit::recall::{Answers, Recall};
-use winter_render::{ButtonView, InputView};
 
 use crate::window::input::overlay::Overlay;
 use crate::window::{App, SEARCH_DEBOUNCE_MILLIS};
@@ -202,7 +202,7 @@ pub(in crate::window) fn input_dialog(
             .to_string(),
         title: None,
         kind: match mode {
-            PromptMode::Confirm => Some(winter_render::NoticeKind::Warning),
+            PromptMode::Confirm => Some(crate::render::NoticeKind::Warning),
             _ => None,
         },
         card: None,
@@ -479,7 +479,7 @@ impl App {
                 .as_ref()
                 .is_some_and(|text| !text.destructive)
             {
-                view.kind = Some(winter_render::NoticeKind::Question);
+                view.kind = Some(crate::render::NoticeKind::Question);
             }
             return Some(view);
         }
@@ -496,7 +496,7 @@ impl App {
                 .map(|(key, does)| (key.to_string(), does.to_string()))
                 .collect();
             view.title = Some(dialog.shown_title());
-            view.kind = Some(winter_render::NoticeKind::Error);
+            view.kind = Some(crate::render::NoticeKind::Error);
             return Some(view);
         }
         if let Some(prompt) = self.chrome.close_prompt() {
@@ -508,7 +508,7 @@ impl App {
                 prompt.buttons.to_view(),
             );
             view.title = Some(prompt.title.to_string());
-            view.kind = Some(winter_render::NoticeKind::Warning);
+            view.kind = Some(crate::render::NoticeKind::Warning);
             return Some(view);
         }
         if let Some(input) = self.chrome.password_input() {

@@ -97,7 +97,7 @@ pub(crate) mod title;
 pub(crate) mod watch;
 mod write;
 
-pub use winter_render::ColorOverrides;
+pub use crate::render::ColorOverrides;
 pub use winter_text::settings::CompletionConfig;
 
 // Keep the flat `crate::config::<name>` paths the rest of the app already uses.
@@ -116,7 +116,7 @@ pub(crate) use title::{expand_window_title_template, WindowTitleVars};
 
 use std::collections::HashMap;
 
-use winter_render::{ControlsSide, MenuStyle};
+use crate::render::{ControlsSide, MenuStyle};
 
 use winter_emulator::CursorShape;
 

@@ -189,7 +189,7 @@ impl App {
     pub(in crate::window) fn draw_strips(&mut self, frame: &mut Frame) {
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let dragging = self.chrome.tab_drag;
         for pane in &mut self.chrome.strips {
@@ -332,10 +332,10 @@ impl App {
     }
 
     /// Where `tab` was last drawn on its strip, in window pixels.
-    pub(in crate::window) fn strip_tab_region(&self, tab: TabId) -> Option<winter_render::Region> {
+    pub(in crate::window) fn strip_tab_region(&self, tab: TabId) -> Option<crate::render::Region> {
         let pane = self.chrome.strips.iter().find(|pane| pane.has(tab))?;
         let rect = pane.strip.tab_rect(pane.misty(tab)?)?;
-        Some(winter_render::Region {
+        Some(crate::render::Region {
             h: rect.height,
             w: rect.width,
             x: rect.x,

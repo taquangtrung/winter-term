@@ -4,11 +4,11 @@
 //! card of the transient or editor that asked, else centred on the window,
 //! and keeps where it and its buttons went for the pointer.
 
+use crate::render::{ButtonView, InputView, NoticeKind};
 use misty::color::{Rgb, Rgba};
 use misty::text::{width as text_width, Span, StyledText, TextColor};
 use misty::theme::{Theme, ThemeToken};
 use misty::{BoxStyle, Frame, Point, Popup, PopupSide, Rect};
-use winter_render::{ButtonView, InputView, NoticeKind};
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
@@ -75,7 +75,7 @@ impl App {
         };
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let kind_color = self
             .renderer

@@ -35,7 +35,7 @@ impl App {
         };
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         if let Some(slot) = self.open_tabs.page_mut(&tab) {
             slot.page

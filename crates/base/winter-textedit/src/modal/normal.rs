@@ -1,7 +1,7 @@
 //! Normal mode: the keys that move, edit in place, and open commands.
 
-use winter_keys::{Key, KeyCode, Mods};
 use misty_notify::Notice;
+use winter_keys::{Key, KeyCode, Mods};
 
 use crate::vim::grammar::{operator_of, push_count_digit, OperatorKind};
 use crate::vim::nav::VimKey;

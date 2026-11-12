@@ -6,10 +6,10 @@ use std::collections::HashMap;
 use winter_model::layout::{FocusDir, Layout, Rect, TabId};
 use winter_terminal::session::Terminal;
 
+use crate::render::Region;
 use crate::window::editor::{Closing, EditorKind};
 use crate::window::strip::StripHit;
 use crate::window::{App, DEFAULT_COLS, DEFAULT_ROWS};
-use winter_render::Region;
 
 // ========================================================================
 // Constants

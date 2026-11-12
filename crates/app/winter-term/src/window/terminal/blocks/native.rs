@@ -9,10 +9,10 @@ use winter_model::layout::{Rect, TabId};
 use winter_terminal::block_queue::{BlockEntry, BlockKind};
 use winter_terminal::session::{Terminal, MAX_IMAGE_ROWS};
 
+use crate::render::renderer::GpuRenderer;
+use crate::render::ImagePlacement;
 use serde_json::Value;
 use winter_proto::{EmitBlock, TEXT_PLAIN};
-use winter_render::renderer::GpuRenderer;
-use winter_render::ImagePlacement;
 
 use winter_model::picture::{Content, PictureClip, PictureFrame};
 use winter_terminal::chart::{self, ChartStyle};
@@ -659,7 +659,7 @@ impl TerminalState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use winter_render::PANE_H_PAD;
+    use crate::render::PANE_H_PAD;
 
     #[test]
     fn test_band_fit_rows_covers_the_content_within_the_image_row_cap() {

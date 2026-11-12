@@ -44,7 +44,7 @@ impl App {
         };
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let metrics = frame.cell_metrics();
         let scale_factor = frame.scale_factor();

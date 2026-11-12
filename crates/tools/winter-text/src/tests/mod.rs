@@ -204,7 +204,7 @@ fn painted(editor: &mut TextEditor, row: usize) -> Vec<(Style, String)> {
 /// The style text whose color and weight both come from the scope table's
 /// row for `selector` is painted in.
 fn scope(selector: &str) -> Style {
-    let rules = winter_render::SCOPE_RULES;
+    let rules = winter_theme::SCOPE_RULES;
     let row = rules
         .iter()
         .position(|rule| rule.scope == selector)
@@ -221,7 +221,7 @@ fn color_of(style: Style) -> Option<&'static str> {
     match style {
         Style::Syntax(rows) => rows
             .color
-            .map(|row| winter_render::SCOPE_RULES[row as usize].scope),
+            .map(|row| winter_theme::SCOPE_RULES[row as usize].scope),
         _ => None,
     }
 }

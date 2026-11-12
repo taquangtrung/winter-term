@@ -5,7 +5,7 @@
 
 use std::time::{Instant, SystemTime};
 
-use winter_render::{NoticeKind, StatusBell, StatusNotice};
+use crate::render::{NoticeKind, StatusBell, StatusNotice};
 
 use crate::editors::notifications::NotificationsEditor;
 use misty::notify::Routing;
@@ -288,7 +288,7 @@ impl App {
     pub(in crate::window) fn draw_cards(&mut self, frame: &mut misty::Frame) {
         let theme = match &self.renderer {
             Some(renderer) => crate::window::misty_theme::misty_theme(renderer.theme()),
-            None => crate::window::misty_theme::misty_theme(&winter_render::Theme::dark()),
+            None => crate::window::misty_theme::misty_theme(&crate::render::Theme::dark()),
         };
         let bounds = frame.bounds();
         let top = self.viewport_rect().y;

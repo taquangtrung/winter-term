@@ -5,7 +5,7 @@
 //! viewer leaves blank for it, as the status bar is drawn; a press on it
 //! comes back as the button it landed on.
 
-use winter_render::{ToolbarItem, ToolbarTone};
+use winter_model::view::{ToolbarItem, ToolbarTone};
 
 use winter_model::editor::Toolbar;
 

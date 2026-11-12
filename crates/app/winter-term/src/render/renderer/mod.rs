@@ -1,20 +1,14 @@
-//! GPU text renderer: renders [`Grid`](winter_emulator::Grid)s to a wgpu surface using `glyphon` +
-//! `cosmic-text` for glyph rasterization and `wgpu` for compositing.
-//!
-//! The renderer draws two layers per frame:
-//! 1. **Background layer**: colored quads for cells with non-default
-//!    backgrounds, plus the cursor.
-//! 2. **Text layer**: glyphon renders shaped glyphs with per-cell foreground
-//!    colors.
-//!
-//! Multi-pane rendering is supported: pass a slice of [`PaneView`] items, each
-//! with a viewport rect and a grid reference. Each pane is clipped to its rect.
+//! What resolves each pane for misty to draw: its cells, their colors, and
+//! the shapes over them ([`paint`]), from the views the window builds each
+//! frame ([`PaneView`]); the font the grid is drawn in and the cell it makes
+//! ([`glyphs`]); and the textures of the pictures the window shows
+//! ([`images`]), on misty's GPU.
 
 use glyphon::{FontSystem, SwashCache};
 use wgpu::{Device, Queue};
 
-use crate::image::ImagePass;
-use crate::theme::Theme;
+use crate::render::image::ImagePass;
+use winter_theme::Theme;
 mod frame;
 mod paint;
 mod surface;
@@ -23,8 +17,8 @@ mod view;
 pub use display::CellOverlay;
 pub use paint::{PaintCell, PaintFill, PaintWidth, PanePaint};
 pub use view::{
-    GridStrip, NoticeKind, PaneRect, PaneView, StatusBar, StatusBell, StatusHover, StatusNotice,
-    StatusPrompt, StatusSearch, StatusSegment, THIN_SPACE,
+    GridStrip, PaneRect, PaneView, StatusBar, StatusBell, StatusHover, StatusNotice, StatusPrompt,
+    StatusSearch, StatusSegment, THIN_SPACE,
 };
 mod background;
 mod colors;
@@ -32,15 +26,8 @@ mod display;
 mod glyphs;
 mod images;
 mod svg;
-mod widgets;
 
-pub use glyphs::{clamp_font_size, start_font_load, FontConfig, FontLoad};
-pub use widgets::{
-    ButtonView, ColumnAlign, CompletionRow, CompletionView, DropListRow, DropListView, FindView,
-    InfoSpan, InfoView, InputView, PanelLine, PanelSpan, PanelView, PickerItem, PickerPlacement,
-    PickerView, SwitchKind, TokenInspectView, ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView,
-    TransientCommand, TransientSwitch, TransientView, WhichKeyView,
-};
+pub use glyphs::{clamp_font_size, start_font_load, FontConfig};
 
 // ========================================================================
 // Data Structures
@@ -95,13 +82,13 @@ struct FrameSize {
 #[derive(Default)]
 pub struct FrameHits {
     /// The pictures the last frame drew in the content.
-    pictures: Vec<crate::image::ImagePlacement>,
+    pictures: Vec<crate::render::image::ImagePlacement>,
 }
 
 impl FrameHits {
     /// The pictures the last frame drew in the content, for a host drawing
     /// them itself (see [`GpuRenderer::image_texture`]).
-    pub fn pictures(&self) -> &[crate::image::ImagePlacement] {
+    pub fn pictures(&self) -> &[crate::render::image::ImagePlacement] {
         &self.pictures
     }
 }

@@ -23,6 +23,7 @@ pub(crate) mod extensions;
 pub use extensions::cli as extension_cli;
 pub(crate) mod icons;
 pub(crate) mod quota;
+pub(crate) mod render;
 pub mod session;
 pub mod window;
 pub mod workspace;

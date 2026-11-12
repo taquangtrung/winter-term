@@ -278,7 +278,7 @@ pub(super) fn parse_weight(
 }
 
 /// The weight to request for a cell that wants bold, given whether the active
-/// family actually has a bold face ([`FontState::font_has_bold`](crate::renderer::FontState::font_has_bold) /
+/// family actually has a bold face ([`FontState::font_has_bold`](crate::render::renderer::FontState::font_has_bold) /
 /// [`font_covers_bold_weight`]). Falls back to `Weight::NORMAL` rather than
 /// requesting a weight that would resolve to an unrelated fallback family.
 pub(super) fn effective_bold_weight(
@@ -362,7 +362,7 @@ pub(super) fn font_covers_braille(
 /// falling through to an unrelated system font. Probed by shaping the same
 /// character at both weights and comparing the matched face's family name:
 /// a real bold cut of the font keeps that name, while a fallback substitution
-/// (see [`FontState::font_has_bold`](crate::renderer::FontState::font_has_bold)) picks a different family entirely.
+/// (see [`FontState::font_has_bold`](crate::render::renderer::FontState::font_has_bold)) picks a different family entirely.
 pub(super) fn font_covers_bold_weight(
     font_system: &mut FontSystem,
     font_size: f32,

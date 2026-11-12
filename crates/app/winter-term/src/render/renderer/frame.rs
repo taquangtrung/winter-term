@@ -10,8 +10,8 @@ use super::background::{
 };
 use super::GpuRenderer;
 use super::{GridStrip, PaneRect, PaneView};
-use crate::image::ImagePlacement;
-use crate::theme::Rgb;
+use crate::render::image::ImagePlacement;
+use winter_theme::Rgb;
 
 /// Glyph color over the current search match's tint.
 pub(super) const CURRENT_MATCH_FG: (u8, u8, u8) = (255, 255, 255);
@@ -237,7 +237,7 @@ impl GpuRenderer {
         let status_top = self
             .chrome
             .status_bar_enabled
-            .then(|| crate::status_bar_top_px(surface.height, self.fonts.cell_height));
+            .then(|| crate::render::status_bar_top_px(surface.height, self.fonts.cell_height));
         let found = separators(&areas, style.width, status_top);
         layers.over_image_verts.extend(separator_vertices(
             &found,
@@ -399,9 +399,9 @@ mod tests {
         // rather than wrapping into a huge count that the row loop would then
         // try to walk.
         let extent = pane_cell_extent(
-            rect(crate::PANE_H_PAD, 100.0),
+            rect(crate::render::PANE_H_PAD, 100.0),
             (9.0, 18.0),
-            crate::PANE_H_PAD,
+            crate::render::PANE_H_PAD,
         );
         assert_eq!(extent.cols, 0);
     }

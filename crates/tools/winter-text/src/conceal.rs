@@ -17,7 +17,7 @@ use std::collections::HashMap;
 use std::path::Path;
 use std::rc::Rc;
 
-use winter_render::SCOPE_RULES;
+use winter_theme::SCOPE_RULES;
 
 use winter_model::paint::{MarkupMarkers, Style, SyntaxStyle, TAB_WIDTH};
 

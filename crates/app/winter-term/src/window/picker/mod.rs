@@ -81,7 +81,7 @@ pub(in crate::window) struct PickerMemory {
     typed: Vec<misty::Key>,
     /// The open picker as the last frame worked it out (where it goes, its
     /// rows' colors, its side panel), for misty's quick pick to draw.
-    pub(in crate::window) drawn: Option<winter_render::PickerView>,
+    pub(in crate::window) drawn: Option<crate::render::PickerView>,
     /// What wakes misty's loop when a picker's matcher has news; `None`
     /// before the window is open, when pickers match on the window's
     /// thread.

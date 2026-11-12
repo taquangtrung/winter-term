@@ -7,7 +7,7 @@
 //! renderer as per-cell data: the renderer stays free of segmentation and
 //! depth logic.
 
-use winter_render::Theme;
+use crate::render::Theme;
 
 use winter_emulator::Grid;
 

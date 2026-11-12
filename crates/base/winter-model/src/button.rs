@@ -1,6 +1,6 @@
 //! Modular button groups: button state, focus navigation, and keyboard dispatch.
 
-use winter_render::ButtonView;
+use crate::view::ButtonView;
 
 use crate::input::{Key, KeyCode, Mods};
 

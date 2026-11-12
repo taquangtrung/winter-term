@@ -2,7 +2,7 @@
 //! sized and placed by how much history there is and where the view is.
 
 use super::{quad_vertices, BgVertex};
-use crate::theme::Theme;
+use winter_theme::Theme;
 
 // ========================================================================
 // Constants

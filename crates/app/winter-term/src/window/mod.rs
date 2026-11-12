@@ -60,12 +60,12 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::config::Config;
+use crate::render::renderer::GpuRenderer;
 use winter_base::wake::Waker;
 use winter_model::input::{FindChar, Key, Keymap, VisualKind};
 use winter_model::layout::TabId;
 use winter_model::notify::Notifier;
 use winter_model::picture::Content;
-use winter_render::renderer::GpuRenderer;
 
 use self::editor::cursor::EditorCursor;
 use self::editor::prompt::TransientCard;
@@ -356,25 +356,25 @@ pub(in crate::window) struct Chrome {
     /// The tooltip misty hangs under what the pointer rests on.
     pub(in crate::window) tooltip: misty::Tooltip,
     /// The dialog the last frame worked out, for misty to draw.
-    pub(in crate::window) drawn_dialog: Option<winter_render::InputView>,
+    pub(in crate::window) drawn_dialog: Option<crate::render::InputView>,
     /// Where misty drew the dialog, and each of its buttons, for the pointer.
     pub(in crate::window) dialog_rect: Option<misty::Rect>,
     pub(in crate::window) dialog_buttons: Vec<misty::Rect>,
     /// The token inspector's card the last frame worked out, for misty to
     /// draw.
-    pub(in crate::window) drawn_token_inspect: Option<winter_render::TokenInspectView>,
+    pub(in crate::window) drawn_token_inspect: Option<crate::render::TokenInspectView>,
     /// The pane toolbars the last frame worked out, for misty to draw.
-    pub(in crate::window) drawn_toolbars: Vec<winter_render::ToolbarView>,
+    pub(in crate::window) drawn_toolbars: Vec<crate::render::ToolbarView>,
     /// Where misty drew the toolbars' buttons, for the pointer.
     pub(in crate::window) toolbar_hits: Vec<frame::toolbar::ToolbarHits>,
     /// The find card the last frame worked out, for misty to draw.
-    pub(in crate::window) drawn_find: Option<winter_render::FindView>,
+    pub(in crate::window) drawn_find: Option<crate::render::FindView>,
     /// Where misty drew the find card, for the pointer.
     pub(in crate::window) find_rect: Option<misty::Rect>,
     /// Each pane's cells as the last frame resolved them, for misty to draw.
-    pub(in crate::window) drawn_panes: Vec<winter_render::PanePaint>,
+    pub(in crate::window) drawn_panes: Vec<crate::render::PanePaint>,
     /// The separators between the panes the last frame drew.
-    pub(in crate::window) drawn_separators: Vec<winter_render::PaintFill>,
+    pub(in crate::window) drawn_separators: Vec<crate::render::PaintFill>,
     /// Each pane's strip of tabs, as misty draws it.
     pub(in crate::window) strips: Vec<strip::view::PaneStrip>,
     /// A tab dragged off its strip, while one is.
@@ -385,18 +385,18 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) transient_title: Option<String>,
     /// The key menu as the last frame worked it out, for misty to draw and
     /// take the pointer by.
-    pub(in crate::window) drawn_transient: Option<winter_render::TransientView>,
+    pub(in crate::window) drawn_transient: Option<crate::render::TransientView>,
     /// The which-key popup misty draws.
     pub(in crate::window) which_key: misty::WhichKey,
     /// The which-key popup as the last frame worked it out, for misty to
     /// draw and take clicks by.
-    pub(in crate::window) drawn_which_key: Option<winter_render::WhichKeyView>,
+    pub(in crate::window) drawn_which_key: Option<crate::render::WhichKeyView>,
     /// Each pane's popups as the last frame worked them out, for misty to
     /// draw.
     pub(in crate::window) pane_popups: Vec<frame::pane_popups::PanePopups>,
     /// The status bar the last frame built, for misty's bar to draw and
     /// take the pointer by.
-    pub(in crate::window) drawn_status: Option<winter_render::StatusBar>,
+    pub(in crate::window) drawn_status: Option<crate::render::StatusBar>,
     /// What holds the keyboard over the panes, if anything: a palette, a
     /// question, a name being typed, the settings page (see [`Overlay`]).
     pub(in crate::window) overlay: Option<Overlay>,
@@ -412,7 +412,7 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) transient_card: Option<TransientCard>,
     /// The part of the status bar's right side under the pointer, drawn on a
     /// hover background.
-    pub(in crate::window) status_hover: Option<winter_render::StatusHover>,
+    pub(in crate::window) status_hover: Option<crate::render::StatusHover>,
 }
 
 /// What the window keeps for its editors beyond the tabs themselves: the

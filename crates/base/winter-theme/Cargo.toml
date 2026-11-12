@@ -1,0 +1,17 @@
+[package]
+name = "winter-theme"
+description = "Winter's colors: the theme, its theme files, and the syntax scopes they color."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+keywords = ["terminal", "theme", "colors"]
+categories = ["gui"]
+rust-version.workspace = true
+readme = "README.md"
+
+[dependencies]
+kdl.workspace = true
+serde.workspace = true

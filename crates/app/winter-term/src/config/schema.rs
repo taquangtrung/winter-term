@@ -3,10 +3,10 @@
 use std::collections::HashMap;
 use std::fmt;
 
+pub(super) use crate::render::kdl_string;
+use crate::render::{ControlsSide, KdlColors};
 use serde::de::{self, Deserializer, SeqAccess, Visitor};
 use winter_emulator::CursorShape;
-pub(super) use winter_render::kdl_string;
-use winter_render::{ControlsSide, KdlColors};
 
 use super::diagnostics::kdl_problems;
 use super::CursorConfig;

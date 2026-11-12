@@ -3,6 +3,11 @@
 
 use std::time::Instant;
 
+use crate::render::renderer::{GpuRenderer, GridStrip, PaneView};
+use crate::render::{
+    CellOverlay, CompletionRow, CompletionView, DropListView, FindView, InfoView, InputView,
+    PickerPlacement, PickerView, StatusSearch, ToolbarColumn, ToolbarView, WhichKeyView,
+};
 use winter_emulator::{CursorShape, Grid};
 use winter_model::editor::{PickPlacement, ScrollPosition};
 use winter_model::input::PendingPrefix;
@@ -10,11 +15,6 @@ use winter_model::layout::{Rect, TabId};
 use winter_model::mode::Mode;
 use winter_model::paint::{Frame, Gutter, Icon};
 use winter_pdf::PdfEditor;
-use winter_render::renderer::{GpuRenderer, GridStrip, PaneView};
-use winter_render::{
-    CellOverlay, CompletionRow, CompletionView, DropListView, FindView, InfoView, InputView,
-    PickerPlacement, PickerView, StatusSearch, ToolbarColumn, ToolbarView, WhichKeyView,
-};
 use winter_text::settings::EditorSettings;
 use winter_text::TextEditor;
 
@@ -1143,8 +1143,8 @@ impl App {
         // Built only for a bar that shows: building it reads the disk.
         // Misty's status bar draws it over the frame.
         let _ = notice;
-        self.chrome.drawn_status = status_enabled
-            .then(|| self.build_status_bar(mode, renderer.theme(), search, None, &focused));
+        self.chrome.drawn_status =
+            status_enabled.then(|| self.build_status_bar(mode, renderer.theme(), search, &focused));
         let status = status_enabled;
         self.chrome.drawn_find = self.find_popup(&rects);
         // The key menus are sized to, and centred in, the focused pane: the
@@ -1287,7 +1287,7 @@ impl App {
         let theme = match self.renderer.as_ref() {
             Some(renderer) => renderer.theme(),
             None => {
-                fallback = winter_render::Theme::dark();
+                fallback = crate::render::Theme::dark();
                 &fallback
             }
         };
@@ -1360,7 +1360,7 @@ impl App {
     pub(in crate::window) fn transient_popup(
         &self,
         focused: TabId,
-    ) -> Option<winter_render::TransientView> {
+    ) -> Option<crate::render::TransientView> {
         self.open_tabs
             .page(&focused)
             .and_then(|slot| slot.page.transient())

@@ -4,9 +4,9 @@
 //! best rather than on the content's grid: the gutter a fraction of a column
 //! off the text, the breadcrumbs in the window's own font.
 
+use crate::render::{ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView};
 use winter_model::layout::{Rect, TabId};
 use winter_model::paint::{Gutter, GutterSide};
-use winter_render::{ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView};
 
 use crate::window::terminal::command_marks;
 use crate::window::{App, APPROX_CELL_HEIGHT, APPROX_CELL_WIDTH};
@@ -226,8 +226,8 @@ fn split_gutter(gutter: &Gutter, rect: Rect, cell_width: f32, pad: f32) -> (Rect
 
 #[cfg(test)]
 mod tests {
+    use crate::render::PANE_H_PAD;
     use winter_model::paint::GutterLane;
-    use winter_render::PANE_H_PAD;
 
     use super::*;
 

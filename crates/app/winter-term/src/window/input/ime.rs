@@ -3,11 +3,11 @@
 //! typed into the focused tab once committed, and the input method's
 //! candidate window is kept next to the cursor.
 
+use crate::render::CellOverlay;
 use crate::window::runtime::handle::WindowHandle;
 use misty::AppContext;
 use misty::ImeInput;
 use winter_emulator::{Style, UnderlineStyle};
-use winter_render::CellOverlay;
 
 use winter_model::layout::TabId;
 use winter_model::mode::Mode;

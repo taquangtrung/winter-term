@@ -1277,7 +1277,7 @@ impl Page for DirEditor {
         self.dispatch_key(key)
     }
 
-    fn transient(&self) -> Option<winter_render::TransientView> {
+    fn transient(&self) -> Option<winter_model::view::TransientView> {
         self.actions_transient()
     }
 

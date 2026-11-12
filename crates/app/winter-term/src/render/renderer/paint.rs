@@ -16,10 +16,10 @@ use super::frame::{
     SEARCH_MATCH_FG,
 };
 use super::{GpuRenderer, PaneView};
-use crate::theme::{Rgb, Theme};
-use crate::DIM_FACTOR;
-use crate::INDENT_GUIDE;
 use winter_emulator::{Cell, CellWidth, Color as GridColor, UnderlineStyle};
+use winter_model::paint::INDENT_GUIDE;
+use winter_theme::DIM_FACTOR;
+use winter_theme::{Rgb, Theme};
 
 // ========================================================================
 // Constants

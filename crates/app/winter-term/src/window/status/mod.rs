@@ -17,7 +17,7 @@ use std::time::{Duration, Instant};
 
 use winter_base::paths::is_local_host;
 
-use winter_render::{StatusBar, StatusNotice, StatusPrompt, StatusSearch, StatusSegment, Theme};
+use crate::render::{StatusBar, StatusPrompt, StatusSearch, StatusSegment, Theme};
 
 use crate::config::{StatusBarConfig, StatusSegmentKind};
 use crate::quota::{describe, describe_compact, Provider, Shown};
@@ -122,7 +122,6 @@ impl App {
         mode: Option<Mode>,
         theme: &Theme,
         search: Option<StatusSearch>,
-        notice: Option<StatusNotice>,
         focused: &TabId,
     ) -> StatusBar {
         let editor = self.open_tabs.page(focused).map(|slot| FocusedEditor {
@@ -165,7 +164,6 @@ impl App {
             theme,
             None,
             search,
-            notice,
             &self.config.status_bar,
         );
         let sources = SegmentSources {
@@ -212,7 +210,7 @@ impl App {
         if segment.text.is_empty() {
             return None;
         }
-        let clean = segment.text.replace(winter_render::THIN_SPACE, " ");
+        let clean = segment.text.replace(crate::render::THIN_SPACE, " ");
         let heard = provider_of(kind).and_then(|provider| {
             self.quota
                 .as_ref()?
@@ -283,7 +281,6 @@ fn status_bar(
     theme: &Theme,
     prompt: Option<StatusPrompt>,
     search: Option<StatusSearch>,
-    notice: Option<StatusNotice>,
     config: &StatusBarConfig,
 ) -> StatusBar {
     let (mode_symbol, accent) = match (mode, editor_mode) {
@@ -306,7 +303,6 @@ fn status_bar(
         host: String::new(),
         hovered: None,
         mode: mode_label,
-        notice,
         project: String::new(),
         project_icon: None,
         prompt,
@@ -541,8 +537,6 @@ fn resolve_git_branch(dot_git: &Path, repo_root: &Path) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use winter_render::NoticeKind;
-
     use crate::quota::Window;
 
     use super::*;
@@ -561,7 +555,7 @@ mod tests {
     }
 
     fn bar(mode: Option<Mode>, editor_mode: Option<EditMode>, cfg: &StatusBarConfig) -> StatusBar {
-        status_bar(mode, editor_mode, &Theme::dark(), None, None, None, cfg)
+        status_bar(mode, editor_mode, &Theme::dark(), None, None, cfg)
     }
 
     #[test]
@@ -608,21 +602,13 @@ mod tests {
         };
         let theme = Theme::dark();
         let cfg = shown_mode();
-        let bar = status_bar(
-            Some(Mode::Normal),
-            None,
-            &theme,
-            Some(prompt),
-            None,
-            None,
-            &cfg,
-        );
+        let bar = status_bar(Some(Mode::Normal), None, &theme, Some(prompt), None, &cfg);
         assert_eq!(bar.mode, "", "prompt suppresses mode label");
         assert!(bar.prompt.is_some());
     }
 
     #[test]
-    fn test_status_bar_carries_the_search_and_the_notice_it_is_given() {
+    fn test_status_bar_carries_the_search_it_is_given() {
         let theme = Theme::dark();
         let cfg = StatusBarConfig::default();
         let search = StatusSearch {
@@ -631,23 +617,10 @@ mod tests {
             match_total: 3,
             reverse: false,
         };
-        let notice = StatusNotice {
-            kind: NoticeKind::Info,
-            text: "oops".to_string(),
-        };
-        let bar = status_bar(
-            Some(Mode::Normal),
-            None,
-            &theme,
-            None,
-            Some(search),
-            Some(notice),
-            &cfg,
-        );
+        let bar = status_bar(Some(Mode::Normal), None, &theme, None, Some(search), &cfg);
         assert!(bar.search.is_some());
-        assert_eq!(bar.notice.map(|n| n.text), Some("oops".to_string()));
         assert!(
-            status_bar(Some(Mode::Normal), None, &theme, None, None, None, &cfg)
+            status_bar(Some(Mode::Normal), None, &theme, None, None, &cfg)
                 .search
                 .is_none()
         );

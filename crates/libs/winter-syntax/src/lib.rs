@@ -27,7 +27,7 @@ use syntect::parsing::{
     ParseState, Scope, ScopeStack, ScopeStackOp, SyntaxDefinition, SyntaxReference, SyntaxSet,
     SyntaxSetBuilder,
 };
-use winter_render::{ScopeRule, Theme, SCOPE_RULES};
+use winter_theme::{ScopeRule, Theme, SCOPE_RULES};
 
 use winter_model::paint::{Style, SyntaxStyle};
 

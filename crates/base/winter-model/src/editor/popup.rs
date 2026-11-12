@@ -67,9 +67,9 @@ pub struct InfoCard {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Toolbar {
     /// The items from the left edge.
-    pub left: Vec<winter_render::ToolbarItem>,
+    pub left: Vec<crate::view::ToolbarItem>,
     /// The items against the right edge.
-    pub right: Vec<winter_render::ToolbarItem>,
+    pub right: Vec<crate::view::ToolbarItem>,
     /// How many of the pane's top rows it covers.
     pub rows: usize,
 }
@@ -84,7 +84,7 @@ pub struct DropList {
     /// How many cells wide it is.
     pub cols: usize,
     /// Its rows, one to a cell row.
-    pub rows: Vec<winter_render::DropListRow>,
+    pub rows: Vec<crate::view::DropListRow>,
     /// Which row is chosen, if any shows.
     pub selected: Option<usize>,
 }

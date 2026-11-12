@@ -7,9 +7,9 @@ use super::glyphs::{
 };
 use super::PaneRect;
 use super::{ChromeLayout, FontState, FrameHits, FrameSize, GpuRenderer};
-use crate::image::ImagePass;
-use crate::theme::Theme;
+use crate::render::image::ImagePass;
 use glyphon::SwashCache;
+use winter_theme::Theme;
 
 // ========================================================================
 // GpuRenderer: surface and configuration
@@ -99,7 +99,7 @@ impl GpuRenderer {
             chrome: ChromeLayout {
                 decorated: true,
                 divider_width: DIVIDER_THICKNESS,
-                popup_input_height: crate::DEFAULT_POPUP_INPUT_HEIGHT,
+                popup_input_height: crate::render::DEFAULT_POPUP_INPUT_HEIGHT,
                 status_bar_enabled: true,
                 window_opacity: 1.0,
             },
@@ -164,9 +164,9 @@ impl GpuRenderer {
         self.chrome.divider_width = width.max(1.0);
     }
     /// Set how tall the field typed into is in every popup, in rows of the
-    /// font, kept within [`crate::POPUP_INPUT_HEIGHT_RANGE`].
+    /// font, kept within [`crate::render::POPUP_INPUT_HEIGHT_RANGE`].
     pub fn set_popup_input_height(&mut self, rows: f32) {
-        let (least, most) = crate::POPUP_INPUT_HEIGHT_RANGE;
+        let (least, most) = crate::render::POPUP_INPUT_HEIGHT_RANGE;
         self.chrome.popup_input_height = rows.clamp(least, most);
     }
 
@@ -217,13 +217,9 @@ impl GpuRenderer {
         (self.fonts.cell_width, self.fonts.cell_height)
     }
     /// How far a pane's content is inset from each side of its rect, in
-    /// screen pixels: [`crate::PANE_H_PAD`] at the display's scale.
+    /// screen pixels: [`crate::render::PANE_H_PAD`] at the display's scale.
     pub fn pane_pad(&self) -> f32 {
-        crate::pane_h_pad(self.fonts.scale_factor)
-    }
-    /// The size of the frames rendered, `(width, height)` in pixels.
-    pub fn size(&self) -> (u32, u32) {
-        (self.size.width, self.size.height)
+        crate::render::pane_h_pad(self.fonts.scale_factor)
     }
 
     /// Resize the frames and recompute grid dimensions. Returns `Some((cols, rows))`

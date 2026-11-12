@@ -460,7 +460,7 @@ mod tests {
         let mut editor = ExtensionEditor::new(kind);
         editor
             .page
-            .set_appearance(&winter_render::Theme::dark(), 1.0);
+            .set_appearance(&crate::render::Theme::dark(), 1.0);
         editor.set_pane_size((400.0, 300.0));
         editor.content(10, 40, false);
         assert_eq!(editor.tiles().len(), 1, "drawn as a picture over the pane");

@@ -792,7 +792,7 @@ mod tests {
     /// Lay `preview` out in a 400 by 300 pane, the way a frame does.
     fn draw(preview: &mut PreviewEditor) {
         let plain = |rows: &[Row]| format!("<pre>{}</pre>", rows.len());
-        let theme = winter_render::Theme::dark();
+        let theme = crate::render::Theme::dark();
         preview.set_appearance(&Appearance {
             scale: 1.0,
             styled_html: &plain,

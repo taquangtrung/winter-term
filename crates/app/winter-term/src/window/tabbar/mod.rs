@@ -8,8 +8,8 @@ mod title;
 
 use std::path::Path;
 
+use crate::render::{Region, StatusHover};
 use misty::{TitleBarHit, WindowButton};
-use winter_render::{Region, StatusHover};
 
 use winter_model::layout::TabId;
 use winter_model::path::abbreviate_home;

@@ -12,10 +12,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use crate::render::Theme;
 use winter_model::editor::ScrollPosition;
 use winter_model::paint::Point;
 use winter_model::picture::{Content, Tile};
-use winter_render::Theme;
 
 use super::preview::WebPage;
 

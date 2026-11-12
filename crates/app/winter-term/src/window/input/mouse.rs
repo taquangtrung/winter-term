@@ -4,11 +4,11 @@
 
 use std::time::{Duration, Instant};
 
+use crate::render::PaneRect;
 use misty::AppContext;
 use winit::dpi::PhysicalPosition;
 use winit::event::{ElementState, MouseButton, MouseScrollDelta};
 use winit::window::CursorIcon;
-use winter_render::PaneRect;
 
 use winter_model::input::{Key, KeyCode};
 use winter_model::layout::TabId;
@@ -214,14 +214,12 @@ impl App {
                 return;
             }
             // Confirmation dialog buttons or input dialog clicks
-            if let Some(btn_idx) = self.dialog_button_at(x, y)
-            {
+            if let Some(btn_idx) = self.dialog_button_at(x, y) {
                 self.click_dialog_button(btn_idx);
                 self.dirty = true;
                 return;
             }
-            if self.dialog_at(x, y)
-            {
+            if self.dialog_at(x, y) {
                 return;
             }
             // The title bar is misty's; what of it misty leaves (the empty
@@ -399,7 +397,8 @@ impl App {
                     // An editor's toolbar is drawn in the window's font,
                     // off the pane's cells, so a press on it is told
                     // which button by where the button was drawn.
-                    let button = self.toolbar_button_at(x, y)
+                    let button = self
+                        .toolbar_button_at(x, y)
                         .filter(|(owner, _)| *owner == tab_id.0);
                     if let Some((_, button)) = button {
                         if let Some(slot) = self.open_tabs.page_mut(&tab_id) {
@@ -743,8 +742,7 @@ impl App {
         if self.manage_window_at(x, y) {
             return;
         }
-        if let Some(btn_idx) = self.dialog_button_at(x, y)
-        {
+        if let Some(btn_idx) = self.dialog_button_at(x, y) {
             self.click_dialog_button(btn_idx);
             self.dirty = true;
             return;
@@ -797,8 +795,7 @@ impl App {
             if let Some(direction) = self.edge_resize_direction(x, y) {
                 return CursorIcon::from(direction);
             }
-            return match self.dialog_button_at(x, y)
-            {
+            return match self.dialog_button_at(x, y) {
                 Some(_) => CursorIcon::Pointer,
                 None => CursorIcon::Default,
             };
@@ -1032,7 +1029,6 @@ impl App {
         self.input.keys.prefix = winter_model::input::PendingPrefix::None;
         self.input.keys.prefix_since = None;
     }
-
 }
 
 // ========================================================================
@@ -1055,7 +1051,7 @@ mod tests {
         let mut app = App::new();
         app.on_cursor_moved(PhysicalPosition::new(10.0, 10.0));
         assert!(app.input.pointer.in_window);
-        app.chrome.status_hover = Some(winter_render::StatusHover::Bell);
+        app.chrome.status_hover = Some(crate::render::StatusHover::Bell);
         app.dirty = false;
         app.on_cursor_left();
         assert_eq!(app.chrome.status_hover, None);
@@ -1119,9 +1115,9 @@ mod tests {
         assert_eq!(
             kinds,
             [
-                ("-c", winter_render::SwitchKind::Radio),
-                ("-d", winter_render::SwitchKind::Radio),
-                ("-A", winter_render::SwitchKind::Checkbox),
+                ("-c", crate::render::SwitchKind::Radio),
+                ("-d", crate::render::SwitchKind::Radio),
+                ("-A", crate::render::SwitchKind::Checkbox),
             ],
             "the dates switches are a pair, the stash one stands alone"
         );
@@ -1142,8 +1138,8 @@ mod tests {
 
         let tr = app.transient_popup(tab).unwrap();
         assert_eq!(tr.title, "Merge");
-        assert_eq!(tr.switches[0].kind, winter_render::SwitchKind::Radio);
-        assert_eq!(tr.switches[1].kind, winter_render::SwitchKind::Radio);
+        assert_eq!(tr.switches[0].kind, crate::render::SwitchKind::Radio);
+        assert_eq!(tr.switches[1].kind, crate::render::SwitchKind::Radio);
 
         // Click -f (--ff-only)
         app.click_which_key("-f");

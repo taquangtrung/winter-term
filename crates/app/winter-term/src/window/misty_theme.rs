@@ -3,9 +3,9 @@
 //! tab bar its chrome surface), so a misty widget over a pane matches the
 //! chrome Winter draws around it.
 
+use crate::render::{Theme, ThemeRgb};
 use misty::color::Rgb;
 use misty::theme::Theme as MistyTheme;
-use winter_render::{Theme, ThemeRgb};
 
 // ========================================================================
 // Constants

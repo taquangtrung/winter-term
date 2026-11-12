@@ -5,8 +5,14 @@
 
 use std::ops::Range;
 
+pub use crate::view::ColumnAlign;
 use winter_emulator::RgbColor;
-pub use winter_render::ColumnAlign;
+
+/// The character an editor paints an indentation guide's cell with: a
+/// Unicode noncharacter, which text never holds, so a program's own `│` is
+/// never mistaken for one. The window draws it as a hairline down the
+/// cell's left edge, not as a font's glyph.
+pub const INDENT_GUIDE: char = '\u{FDD0}';
 pub use winter_textedit::place::{clamp_margin, Place, Shown};
 
 use crate::editor::ScrollPosition;
@@ -475,7 +481,7 @@ pub struct TerminalStyle {
     pub underline: bool,
 }
 
-/// The rows of the theme's scope table (`winter_render::SCOPE_RULES`) a run
+/// The rows of the theme's scope table (`winter_theme::SCOPE_RULES`) a run
 /// of source takes its color and its weight from, settled apart as a VS Code
 /// theme settles them. `None` leaves the text's color or weight as it is.
 #[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]

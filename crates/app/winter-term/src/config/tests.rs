@@ -5,7 +5,8 @@
 // which is clearer here than large struct literals.
 #![allow(clippy::field_reassign_with_default)]
 
-use winter_render::{Theme, ThemeRgb, SCALAR_COLORS};
+use crate::render::{Theme, ThemeRgb};
+use winter_theme::SCALAR_COLORS;
 
 use super::*;
 
@@ -232,13 +233,13 @@ fn test_todo_keywords_parse_clean_and_roundtrip() {
 fn test_the_popup_input_height_is_read_kept_in_range_and_written_back() {
     assert_eq!(
         Config::default().popup_input_height,
-        winter_render::DEFAULT_POPUP_INPUT_HEIGHT
+        crate::render::DEFAULT_POPUP_INPUT_HEIGHT
     );
     assert_eq!(
         Config::parse("popup-input-height 2.5").popup_input_height,
         2.5
     );
-    let (least, most) = winter_render::POPUP_INPUT_HEIGHT_RANGE;
+    let (least, most) = crate::render::POPUP_INPUT_HEIGHT_RANGE;
     assert_eq!(
         Config::parse("popup-input-height 0.2").popup_input_height,
         least

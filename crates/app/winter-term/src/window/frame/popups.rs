@@ -1,9 +1,9 @@
 //! The popups composed over the panes each frame: the picker, and the
 //! which-key hint for a pending prefix.
 
+use crate::render::{InfoSpan, PanelLine, PanelSpan, PanelView, PickerItem, PickerView, Theme};
 use misty::picker::{MenuView, PreviewKind, SessionView, Status};
 use winter_model::paint::Style;
-use winter_render::{InfoSpan, PanelLine, PanelSpan, PanelView, PickerItem, PickerView, Theme};
 
 use crate::window::frame::frame_grid::{span_rgb, span_style};
 use crate::window::input::sequence::WHICH_KEY_DELAY;
@@ -207,11 +207,11 @@ pub(in crate::window) fn card_runs(line: &str, styles: &[Style], theme: &Theme) 
 pub(in crate::window) fn which_key_view(
     pending: &winter_model::input::PendingPrefix,
     since: Option<std::time::Instant>,
-) -> Option<winter_render::WhichKeyView> {
+) -> Option<crate::render::WhichKeyView> {
     since.filter(|s| s.elapsed() >= WHICH_KEY_DELAY)?;
     pending
         .hint()
-        .map(|(title, items)| winter_render::WhichKeyView {
+        .map(|(title, items)| crate::render::WhichKeyView {
             anchor_rect: None,
             items: items
                 .iter()

@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use winter_render::{parse_theme_file, theme_kdl, Theme};
+use crate::render::{parse_theme_file, theme_kdl, Theme};
 
 use winter_base::paths::config_dir;
 

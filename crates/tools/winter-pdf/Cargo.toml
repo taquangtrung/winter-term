@@ -22,7 +22,6 @@ hayro = "0.8"
 regex.workspace = true
 winter-synctex.workspace = true
 winter-model.workspace = true
-winter-render.workspace = true
 winter-spell.workspace = true
 
 [dev-dependencies]

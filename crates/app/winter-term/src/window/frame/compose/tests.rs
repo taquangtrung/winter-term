@@ -1,9 +1,9 @@
 //! Tests for composing a frame.
 
 use super::*;
+use crate::render::{Theme, PANE_H_PAD};
 use crate::window::editor;
 use crate::window::input::overlay::Overlay;
-use winter_render::{Theme, PANE_H_PAD};
 
 #[test]
 fn test_a_lit_search_marks_an_editors_matches_and_the_one_its_cursor_is_on() {

@@ -15,7 +15,6 @@ rust-version.workspace = true
 notify = "8"
 winter-base.workspace = true
 winter-model.workspace = true
-winter-render.workspace = true
 winter-vcs.workspace = true
 
 [target.'cfg(unix)'.dependencies]

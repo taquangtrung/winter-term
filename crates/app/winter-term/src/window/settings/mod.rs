@@ -8,9 +8,9 @@ mod workspace;
 
 use crate::config::schema::{cursor_shape_as_value, cursor_shape_from_value};
 use crate::config::{Config, OptionAsAlt, PromptEditBindings, TitleBarStyle, MAX_SCROLL_MARGIN};
+use crate::render::{ControlsSide, MenuStyle};
 use winter_model::paint::{GutterSide, MarkupMarkers, WrapIndent};
 use winter_model::settings_page::{ChoiceOption, SettingsField, SettingsPage};
-use winter_render::{ControlsSide, MenuStyle};
 
 use super::{
     App, FONT_SIZE_STEP, MAX_FONT_SIZE, MAX_OPACITY, MAX_PANE_BORDER, MAX_SCROLLBACK,
@@ -375,8 +375,8 @@ impl App {
                 "popup_input_height",
                 "Popup input height",
                 self.config.popup_input_height,
-                winter_render::POPUP_INPUT_HEIGHT_RANGE.0,
-                winter_render::POPUP_INPUT_HEIGHT_RANGE.1,
+                crate::render::POPUP_INPUT_HEIGHT_RANGE.0,
+                crate::render::POPUP_INPUT_HEIGHT_RANGE.1,
                 POPUP_INPUT_STEP,
                 1,
             )
@@ -557,7 +557,7 @@ impl App {
             "font_size" => match value.parse::<f32>() {
                 Ok(size) => {
                     // A size chosen here is the setting, and ends any zoom.
-                    self.config.font_size = winter_render::clamp_font_size(size);
+                    self.config.font_size = crate::render::clamp_font_size(size);
                     self.reset_font_size();
                 }
                 Err(_) => return false,
@@ -763,7 +763,7 @@ impl App {
             }
             "popup_input_height" => match value.parse::<f32>() {
                 Ok(rows) => {
-                    let (least, most) = winter_render::POPUP_INPUT_HEIGHT_RANGE;
+                    let (least, most) = crate::render::POPUP_INPUT_HEIGHT_RANGE;
                     self.config.popup_input_height = rows.clamp(least, most);
                     if let Some(renderer) = &mut self.renderer {
                         renderer.set_popup_input_height(self.config.popup_input_height);

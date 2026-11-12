@@ -5,10 +5,10 @@
 //! pictures the renderer keeps textures of (images, icons, pages) where
 //! they lie.
 
+use crate::render::{ImagePlacement, PaintCell, PaintFill, PaintWidth, PanePaint};
 use misty::cell::{Attributes, Cell, CellSource, CellWidth, Color, Cursor, Style, UnderlineStyle};
 use misty::color::{Rgb, Rgba};
 use misty::{BoxStyle, Font, Frame, GpuTexture, Point, Rect};
-use winter_render::{ImagePlacement, PaintCell, PaintFill, PaintWidth, PanePaint};
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;

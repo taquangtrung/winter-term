@@ -77,11 +77,6 @@ impl CellOverlay {
         Self { cells, col, row }
     }
 
-    /// How many columns the overlay covers.
-    pub fn width(&self) -> usize {
-        self.cells.len()
-    }
-
     fn cell(&self, row: usize, col: usize) -> Option<&Cell> {
         if row != self.row {
             return None;
@@ -208,7 +203,11 @@ mod tests {
     fn test_an_overlay_lays_out_wide_text_and_covers_only_its_run() {
         let style = Style::default();
         let overlay = CellOverlay::from_text(1, 2, "a\u{4e2d}\u{301}b", style);
-        assert_eq!(overlay.width(), 4, "a, the wide glyph and its spacer, b");
+        assert_eq!(
+            overlay.cells.len(),
+            4,
+            "a, the wide glyph and its spacer, b"
+        );
         assert_eq!(overlay.cell(1, 3).map(|c| c.width), Some(CellWidth::Wide));
         assert_eq!(overlay.cell(1, 4).map(|c| c.width), Some(CellWidth::Spacer));
         assert_eq!(overlay.cell(1, 1), None, "left of the run");

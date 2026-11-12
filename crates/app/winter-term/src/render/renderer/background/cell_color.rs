@@ -3,9 +3,9 @@
 //! sentence bands.
 
 use super::super::colors::{grid_color_to_rgb, resolve_fg_linear};
-use crate::theme::Theme;
-use crate::DIM_FACTOR;
 use winter_emulator::Color as GridColor;
+use winter_theme::Theme;
+use winter_theme::DIM_FACTOR;
 
 // ========================================================================
 // Constants
@@ -23,9 +23,9 @@ pub(super) const SEARCH_MATCH_ALPHA: f32 = 0.6;
 /// cell's own background like the search tints. Kept low and close together so
 /// the bands read as a subtle rhythm, not a zebra stripe; tone parity is the
 /// signal, not brightness.
-const SENTENCE_TINT_ALPHA_EVEN: f32 = crate::SENTENCE_TINT_ALPHAS[0];
+const SENTENCE_TINT_ALPHA_EVEN: f32 = winter_theme::SENTENCE_TINT_ALPHAS[0];
 
-const SENTENCE_TINT_ALPHA_ODD: f32 = crate::SENTENCE_TINT_ALPHAS[1];
+const SENTENCE_TINT_ALPHA_ODD: f32 = winter_theme::SENTENCE_TINT_ALPHAS[1];
 
 /// How opaque a focus flash is the moment it lights, over whatever the row's
 /// cells show: strong enough to catch the eye across a split window, and gone

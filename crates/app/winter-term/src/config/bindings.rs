@@ -5,13 +5,13 @@
 
 use std::io::ErrorKind;
 
+use crate::render::kdl_string;
 use kdl::{KdlDocument, KdlError, KdlNode};
 use winter_base::paths::config_dir;
 use winter_base::persist::write_atomic;
 use winter_model::input::{
     block_of, platform_of, BLOCK_PROPERTY, COMMANDS_NODE, PLATFORM_PROPERTY,
 };
-use winter_render::kdl_string;
 
 // ========================================================================
 // Constants

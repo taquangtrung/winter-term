@@ -1,8 +1,8 @@
 //! Color resolution: grid colors, the indexed palettes, and blending
 //! math shared by every pass.
 
-use crate::theme::{Rgb, Theme};
 use winter_emulator::{Cell, Color as GridColor, CursorShape, RgbColor};
+use winter_theme::{Rgb, Theme};
 
 // ========================================================================
 // Constants

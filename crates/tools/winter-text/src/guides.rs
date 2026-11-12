@@ -5,8 +5,8 @@
 //! the shallower of the lines either side of it, so a block's guides run on
 //! through the blank lines inside it.
 
+use winter_model::paint::INDENT_GUIDE;
 use winter_model::paint::{Style, TAB_WIDTH};
-use winter_render::INDENT_GUIDE;
 
 use super::Cell;
 

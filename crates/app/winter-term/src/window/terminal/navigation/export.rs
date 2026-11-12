@@ -6,9 +6,9 @@
 
 use std::fmt::Write;
 
+use crate::render::Theme;
 use winter_emulator::{Color, Grid, Style};
 use winter_model::layout::TabId;
-use winter_render::Theme;
 
 use crate::window::App;
 

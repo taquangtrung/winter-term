@@ -11,8 +11,8 @@ use winter_model::editor::{
 };
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
 use winter_model::input::{transient_key, Key, TransientKey};
+use winter_model::view::{TransientCommand, TransientView};
 use winter_model::vim::nav::{VimKey, VimNav};
-use winter_render::{TransientCommand, TransientView};
 
 use super::archive::is_browseable_archive;
 use super::{vcs, DirEditor, ASK_COPY, ASK_GIT_MOVE, ASK_MKDIR, ASK_MOVE, ASK_NEW_FILE};

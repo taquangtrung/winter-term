@@ -19,7 +19,7 @@ impl App {
     pub(in crate::window) fn draw_menus(&mut self, frame: &mut Frame) {
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let area = frame.bounds();
         if let Some(menu) = &mut self.chrome.menus.dropdown {

@@ -40,7 +40,7 @@ fn test_kill_buffer_asks_about_unsaved_text_then_lets_it_go() {
         asked.label
     );
     let view = app.input_view().expect("input view is up");
-    assert_eq!(view.kind, Some(winter_render::NoticeKind::Warning));
+    assert_eq!(view.kind, Some(crate::render::NoticeKind::Warning));
     assert_eq!(view.title.as_deref(), Some("Discard Unsaved Changes?"));
     assert_eq!(
         asked.label,

@@ -4,11 +4,11 @@
 //! them, and every button's span kept so a press on the band is told which
 //! button it landed on.
 
+use crate::render::{ColumnAlign, ToolbarItem, ToolbarTone, ToolbarView};
 use misty::color::Rgba;
 use misty::text::{width as text_width, Span, StyledText, TextColor};
 use misty::theme::{Theme, ThemeToken};
 use misty::{BoxStyle, Frame, Point, Rect};
-use winter_render::{ColumnAlign, ToolbarItem, ToolbarTone, ToolbarView};
 
 use crate::window::misty_theme::misty_theme;
 use crate::window::App;
@@ -58,7 +58,7 @@ impl App {
     pub(in crate::window) fn draw_toolbars(&mut self, frame: &mut Frame) {
         let theme = match &self.renderer {
             Some(renderer) => misty_theme(renderer.theme()),
-            None => misty_theme(&winter_render::Theme::dark()),
+            None => misty_theme(&crate::render::Theme::dark()),
         };
         let bars = std::mem::take(&mut self.chrome.drawn_toolbars);
         self.chrome.toolbar_hits = bars

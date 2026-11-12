@@ -359,11 +359,6 @@ impl Rgb {
         )
     }
 
-    /// The color as an opaque `glyphon::Color` for text rendering.
-    pub fn to_glyphon(self) -> glyphon::Color {
-        glyphon::Color::rgba(self.r, self.g, self.b, 255)
-    }
-
     /// Parse `#rrggbb` or `#rrggbbaa`, returning `None` for any other shape.
     /// The leading `#` is required and three-digit shorthand is not accepted.
     pub fn parse_hex(s: &str) -> Option<Self> {

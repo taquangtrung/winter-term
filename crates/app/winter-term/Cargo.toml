@@ -26,7 +26,7 @@ arboard = "3"
 flate2 = "1"
 open = "5"
 base64.workspace = true
-image = { workspace = true, features = ["png", "jpeg", "gif", "webp"] }
+image = { workspace = true, features = ["bmp", "gif", "ico", "jpeg", "png", "webp"] }
 # HTML blocks drawn as rich text: parsed the way a browser parses (html5ever)
 # and turned into Markdown, with nothing ever run.
 htmd = "0.5"
@@ -73,7 +73,9 @@ winter-syntax.workspace = true
 winter-vcs.workspace = true
 winter-proto.workspace = true
 
-winter-render.workspace = true
+winter-theme.workspace = true
+glyphon = "0.12"
+resvg = { version = "0.48", default-features = false, features = ["text", "system-fonts"] }
 misty = { workspace = true, features = ["serde"] }
 winter-spell.workspace = true
 winter-lsp.workspace = true

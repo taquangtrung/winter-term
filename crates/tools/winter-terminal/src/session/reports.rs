@@ -4,7 +4,7 @@
 //! (XTGETTCAP). Each reply is built here from the grid and the host's
 //! [`Presentation`]; the performer only routes the query.
 
-use winter_render::{Theme, ThemeRgb};
+use winter_theme::{Rgb as ThemeRgb, Theme};
 
 use winter_emulator::{AnsiMode, CursorShape, DecMode, Grid, RgbColor};
 

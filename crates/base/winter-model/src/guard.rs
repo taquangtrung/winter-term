@@ -381,7 +381,7 @@ impl<H: Held> Page for Guarded<H> {
         self.read(|editor| editor.hint())
     }
 
-    fn transient(&self) -> Option<winter_render::TransientView> {
+    fn transient(&self) -> Option<crate::view::TransientView> {
         self.read(|editor| editor.transient())
     }
 
