@@ -208,40 +208,22 @@ struct ChromeLayout {
 pub(crate) mod test_support {
     use super::glyphs::FontCtx;
 
-    pub(super) fn sample_menu_chrome(selected: Option<usize>) -> crate::tabbar::TopTabbar {
-        use crate::tabbar::{ControlsSide, Menu, MenuItem, MenuStyle, TabLabel, TopTabbar};
-        let leaf = |label: &str, shortcut: &str| MenuItem {
-            children: Vec::new(),
-            label: label.into(),
-            shortcut: shortcut.into(),
-        };
+    pub(super) fn sample_menu_chrome() -> crate::tabbar::TopTabbar {
+        use crate::tabbar::{ControlsSide, Menu, MenuStyle, TabLabel, TopTabbar};
         TopTabbar {
             active_tab: 0,
             controls_side: ControlsSide::Right,
             menu_style: MenuStyle::Modern,
             menus: vec![Menu {
                 title: "Menu".into(),
-                items: vec![
-                    leaf("New Tab", "C-S-n"),
-                    leaf("Split Vertical", ""),
-                    MenuItem {
-                        children: vec![leaf("Dark", ""), leaf("Light", "")],
-                        label: "Theme".into(),
-                        shortcut: String::new(),
-                    },
-                ],
             }],
             open_menu: Some(0),
-            open_submenu: None,
             path: String::new(),
-            selected_item: selected,
-            selected_subitem: None,
             tabs: vec![TabLabel {
                 title: "Terminal 1".into(),
                 zoomed: false,
             }],
             tabbar_hover: crate::tabbar::TabbarHit::None,
-            context_menu: None,
             url_tooltip: None,
             tooltip_anchor: None,
             window_controls: false,

@@ -185,6 +185,7 @@ impl App {
         self.draw_transient(frame);
         self.draw_cards(frame);
         self.draw_picker(frame);
+        self.draw_menus(frame);
     }
 
     /// The texture frames of `size` are rendered into: last frame's while
@@ -226,15 +227,16 @@ impl App {
             input,
             Input::PointerButton(_) | Input::PointerMoved(_) | Input::PointerLeft | Input::Wheel(_)
         );
-        let picked = pointer
-            && window.is_some_and(|window| {
-                let mut ecx = cx.event_cx(window);
-                self.point_at_picker(input, &mut ecx)
-                    || self.point_at_transient(input, &mut ecx)
-                    || self.point_at_which_key(input, &mut ecx)
-                    || self.point_at_cards(input, &mut ecx)
-                    || self.point_at_status_bar(input, &mut ecx)
-            });
+        let picked = window.is_some_and(|window| {
+            let mut ecx = cx.event_cx(window);
+            self.offer_to_menus(input, &mut ecx)
+                || pointer
+                    && (self.point_at_picker(input, &mut ecx)
+                        || self.point_at_transient(input, &mut ecx)
+                        || self.point_at_which_key(input, &mut ecx)
+                        || self.point_at_cards(input, &mut ecx)
+                        || self.point_at_status_bar(input, &mut ecx))
+        });
         match input {
             _ if picked => {}
             Input::Key(key) => self.on_key(*key, true, cx),

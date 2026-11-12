@@ -514,14 +514,10 @@ impl App {
         KeyRoute::Handled
     }
 
-    /// Escape puts away an open menu, then a mouse-drag selection, before
-    /// anything else acts on it.
+    /// Escape puts away the token inspector, then a mouse-drag selection,
+    /// before anything else acts on it. An open menu has had the key first.
     fn route_dismissing_escape(&mut self, press: &KeyPress) -> KeyRoute {
         let escape = press.key.chord() == (Mods::NONE, KeyCode::Escape);
-        if self.chrome.menus.open.is_some() && escape {
-            self.close_menu();
-            return KeyRoute::Handled;
-        }
         if self.host.token_inspect.is_some() && escape {
             self.dismiss_token_inspect();
             return KeyRoute::Handled;

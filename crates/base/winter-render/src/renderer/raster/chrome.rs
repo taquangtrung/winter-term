@@ -193,8 +193,9 @@ impl Chrome {
         self.margin
     }
 
-    /// The raw pixels and their `(width, height)`, for painters that work on
-    /// the buffer directly.
+    /// The raw pixels and their `(width, height)`, for tests that look at
+    /// what was painted.
+    #[cfg(test)]
     pub(in crate::renderer) fn pixels(&mut self) -> (&mut [u8], (u32, u32)) {
         (&mut self.rgba, self.canvas)
     }

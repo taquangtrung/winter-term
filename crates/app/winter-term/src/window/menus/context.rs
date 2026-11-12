@@ -1,5 +1,5 @@
-//! The right-click context menu: what it offers where it was opened, hovering
-//! it, and running the entry picked.
+//! The right-click context menu: what it offers where it was opened, and
+//! running the entry picked. Misty's [`Menu`] draws it at the pointer.
 //!
 //! The menu is built in groups, top to bottom, the most particular first:
 //!
@@ -16,7 +16,7 @@
 
 use std::path::{Path, PathBuf};
 
-use winter_render::TabbarHit;
+use misty::{Menu, MenuEntry, MenuItem, PopupSide, Rect};
 
 use winter_model::editor::{EditorMenuItem, MenuRun};
 use winter_model::input::Key;
@@ -25,7 +25,6 @@ use winter_model::paint::Point;
 
 use super::keys_label;
 use crate::window::App;
-use crate::window::Chrome;
 
 // ========================================================================
 // Constants
@@ -151,11 +150,9 @@ impl ContextAction {
 impl App {
     /// Close the right-click context menu.
     pub(in crate::window) fn close_context_menu(&mut self) {
-        if self.chrome.menus.context_pos.is_some() {
-            self.chrome.menus.context_pos = None;
-            self.chrome.menus.context_url = None;
+        if self.chrome.menus.context.is_some() {
+            self.chrome.menus.context = None;
             self.chrome.menus.context_actions.clear();
-            self.chrome.menus.context_selected = None;
             self.dirty = true;
         }
     }
@@ -186,10 +183,10 @@ impl App {
             self.close_context_menu();
             return;
         }
-        self.chrome.menus.context_pos = Some((x, y));
-        self.chrome.menus.context_url = self.input.pointer.hovered_url.clone();
+        let mut menu = Menu::new(context_entries(&actions));
+        menu.open(Rect::new(x, y, 0.0, 0.0), PopupSide::Below);
+        self.chrome.menus.context = Some(menu);
         self.chrome.menus.context_actions = actions;
-        self.chrome.menus.context_selected = None;
         self.close_menu();
         self.dirty = true;
     }
@@ -341,55 +338,31 @@ impl App {
             false => self.set_error("clipboard unavailable"),
         }
     }
-
-    /// Update the hovered context menu item from the pointer position while the
-    /// context menu is open.
-    pub(in crate::window) fn update_context_menu_hover(&mut self, x: f32, y: f32) {
-        if self.chrome.menus.context_pos.is_none() {
-            return;
-        }
-        let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) else {
-            return;
-        };
-        let surface_w = self.viewport_rect().width;
-        let tabbar = self.build_top_tabbar();
-        let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
-        // A separator is no entry to light.
-        let new_sel = match hit {
-            TabbarHit::ContextMenuItem(i) => Some(i).filter(|i| {
-                !matches!(
-                    self.chrome.menus.context_actions.get(*i),
-                    Some(ContextAction::Separator)
-                )
-            }),
-            _ => None,
-        };
-        if new_sel != self.chrome.menus.context_selected {
-            self.chrome.menus.context_selected = new_sel;
-            self.dirty = true;
-        }
-    }
-}
-
-// ========================================================================
-// Chrome
-// ========================================================================
-
-impl Chrome {
-    /// The context menu's entry at `index`, when it is one a click runs: a
-    /// separator is not, and a click on it leaves the menu open.
-    pub(in crate::window) fn context_entry(&self, index: usize) -> Option<ContextAction> {
-        self.menus
-            .context_actions
-            .get(index)
-            .filter(|action| !matches!(action, ContextAction::Separator))
-            .cloned()
-    }
 }
 
 // ========================================================================
 // Functions
 // ========================================================================
+
+/// Misty's entries for `actions`, each item numbered by its place there and
+/// showing the keys an editor's entry types.
+fn context_entries(actions: &[ContextAction]) -> Vec<MenuEntry<usize>> {
+    actions
+        .iter()
+        .enumerate()
+        .map(|(index, action)| {
+            if matches!(action, ContextAction::Separator) {
+                return MenuEntry::Separator;
+            }
+            let item = MenuItem::new(index, action.label());
+            let shortcut = action.shortcut();
+            match shortcut.is_empty() {
+                true => item.into(),
+                false => item.with_accelerator(shortcut).into(),
+            }
+        })
+        .collect()
+}
 
 /// What every tab offers of its pane, the menu's last group.
 fn pane_context_actions(tab: TabId) -> Vec<ContextAction> {

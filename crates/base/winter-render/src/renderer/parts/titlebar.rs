@@ -776,7 +776,7 @@ mod tests {
     fn test_strip_covers_its_whole_canvas() {
         // The strip is the window's title bar: any transparent pixel is a hole
         // straight through to whatever the clear color left behind.
-        let image = strip(&sample_menu_chrome(None));
+        let image = strip(&sample_menu_chrome());
         assert_eq!(image.rgba.len(), (image.width * image.height * 4) as usize);
         for x in [0, image.width / 2, image.width - 1] {
             for y in [0, image.height / 2, image.height - 1] {
@@ -790,7 +790,7 @@ mod tests {
         // The band is what every pill floats on, so it has to be the theme's
         // tabbar color rather than the content background.
         let theme = Theme::dark();
-        let image = strip(&sample_menu_chrome(None));
+        let image = strip(&sample_menu_chrome());
         // The strip's very last row sits below every tab pill's bottom inset.
         let (r, g, b, _) = pixel(&image, 2, image.height - 1);
         assert_eq!(
@@ -803,7 +803,7 @@ mod tests {
     fn test_active_tab_pill_is_distinct_from_the_band() {
         // The active tab has to read as active. If the pill resolved to the
         // band color it would vanish into the chrome.
-        let tabbar = sample_menu_chrome(None);
+        let tabbar = sample_menu_chrome();
         let image = strip(&tabbar);
         let layout = tabbar_layout(&tabbar, SURFACE_W, CELL_W, CELL_H);
         let tab = layout.tabs[tabbar.active_tab];
@@ -822,9 +822,9 @@ mod tests {
         // Classic stacks a menubar row above the tabs; Modern is a single
         // band. The rasterized height has to match whichever the caller
         // reserved, or the strip is drawn over the panes.
-        let mut modern = sample_menu_chrome(None);
+        let mut modern = sample_menu_chrome();
         modern.menu_style = MenuStyle::Modern;
-        let mut classic = sample_menu_chrome(None);
+        let mut classic = sample_menu_chrome();
         classic.menu_style = MenuStyle::Classic;
         assert_eq!(
             strip(&modern).height,
@@ -839,7 +839,7 @@ mod tests {
     #[test]
     fn test_titlebar_button_hover_pills_are_equal_squares_centered_in_the_bar() {
         let theme = Theme::dark();
-        let mut bar = sample_menu_chrome(None);
+        let mut bar = sample_menu_chrome();
         bar.tabs.clear();
         bar.open_menu = None;
         bar.window_controls = true;
@@ -987,7 +987,7 @@ mod tests {
         };
 
         // The title bar's hamburger and window controls.
-        let mut bar = sample_menu_chrome(None);
+        let mut bar = sample_menu_chrome();
         bar.tabs.clear();
         bar.open_menu = None;
         bar.window_controls = true;

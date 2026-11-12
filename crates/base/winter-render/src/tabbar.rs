@@ -71,16 +71,6 @@ const CLOSE_CONTROL_CELLS: f32 = 4.0;
 const CLOSE_CONTROL_LEFT_PAD_CELLS: f32 = 0.4;
 /// Horizontal padding around a classic menu title, in cells (one each side).
 const MENU_TITLE_PAD_CELLS: f32 = 2.0;
-/// Minimum dropdown panel width, in cells.
-const DROPDOWN_MIN_CELLS: f32 = 22.0;
-/// Padding added to the widest `label` + `shortcut` when sizing a dropdown, in
-/// cells (leading indent, gap between label and shortcut, trailing margin).
-const DROPDOWN_PAD_CELLS: f32 = 4.0;
-/// Height of one dropdown item row as a multiple of the cell height. Taller than
-/// a terminal row so the menu reads as an app menu, not a packed text grid.
-const DROPDOWN_ITEM_RATIO: f32 = 1.9;
-/// Padding above the first and below the last dropdown item, in cells.
-const DROPDOWN_PAD_Y_CELLS: f32 = 0.4;
 
 // ========================================================================
 // Data Structures
@@ -116,47 +106,12 @@ pub struct TabLabel {
     pub zoomed: bool,
 }
 
-/// One dropdown menu: a `title` (shown only in the classic menubar) and its
-/// items. Item order matches the app's parallel command list.
+/// One menu of the menubar: its `title`, drawn only in the classic style.
+/// What it holds is the app's, drawn by misty.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Menu {
-    /// The dropdown's lines, top to bottom.
-    pub items: Vec<MenuItem>,
     /// Menubar title, drawn only in the classic style.
     pub title: String,
-}
-
-/// One selectable line in a dropdown. Purely presentational; the app maps the
-/// same index to a command name. An item with `children` is a submenu parent:
-/// hovering it opens a child panel to the right instead of running a command.
-#[derive(Clone, Debug, PartialEq)]
-pub struct MenuItem {
-    /// Submenu entries. Empty for a plain command item.
-    pub children: Vec<MenuItem>,
-    /// The item text.
-    pub label: String,
-    /// Keyboard shortcut hint drawn right-aligned; empty when unbound.
-    pub shortcut: String,
-}
-
-impl MenuItem {
-    /// Whether this item opens a submenu rather than dispatching a command.
-    pub fn has_children(&self) -> bool {
-        !self.children.is_empty()
-    }
-}
-
-/// A right-click context menu anchored at a pixel position.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ContextMenu {
-    /// The menu's lines, top to bottom.
-    pub items: Vec<MenuItem>,
-    /// Index of the hovered item, or `None`.
-    pub selected: Option<usize>,
-    /// Surface-pixel position of the top-left corner of the panel.
-    pub x: f32,
-    /// Surface-pixel top edge of the panel.
-    pub y: f32,
 }
 
 /// The full top-tabbar model the app hands the renderer each frame.
@@ -166,8 +121,6 @@ pub struct TopTabbar {
     pub active_tab: usize,
     /// Which tabbar element the cursor is currently over; drives hover highlights.
     pub tabbar_hover: TabbarHit,
-    /// A right-click context menu, or `None` when closed.
-    pub context_menu: Option<ContextMenu>,
     /// Which edge the window controls occupy; the hamburger button (modern style
     /// only) is placed on the opposite edge.
     pub controls_side: ControlsSide,
@@ -175,15 +128,9 @@ pub struct TopTabbar {
     pub menu_style: MenuStyle,
     /// The app's menus, in bar order.
     pub menus: Vec<Menu>,
-    /// Index into `menus` of the open dropdown, or `None` when closed.
+    /// Index into `menus` of the open menu, whose title is lit, or `None`
+    /// when closed.
     pub open_menu: Option<usize>,
-    /// Index (into the open menu's `items`) of the parent whose submenu is shown,
-    /// or `None` when no submenu is open.
-    pub open_submenu: Option<usize>,
-    /// The highlighted dropdown item (mouse hover), if any.
-    pub selected_item: Option<usize>,
-    /// The highlighted submenu child (mouse hover), if any.
-    pub selected_subitem: Option<usize>,
     /// The working path of the focused pane, drawn centered in the free space
     /// of the title bar; empty draws nothing.
     pub path: String,
@@ -277,18 +224,6 @@ pub struct PaneStripLayout {
     pub scroll_right: Option<Region>,
 }
 
-/// Geometry of an open dropdown panel and its item rows.
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct DropdownLayout {
-    pub item_h: f32,
-    pub items: usize,
-    pub origin_x: f32,
-    /// Vertical padding inside the panel, above the first and below the last row.
-    pub pad: f32,
-    pub top: f32,
-    pub width: f32,
-}
-
 /// Concrete pixel geometry of the whole tabbar for one frame.
 pub(crate) struct TabbarLayout {
     /// Per-tab close (`×`) targets, parallel to `tabs`.
@@ -296,9 +231,6 @@ pub(crate) struct TabbarLayout {
     /// The `[minimize, maximize, close]` window-control targets at the right edge,
     /// or `None` when the OS draws the decorations.
     pub controls: Option<[Region; 3]>,
-    /// The right-click context menu panel, or `None` when closed.
-    pub context_menu: Option<DropdownLayout>,
-    pub dropdown: Option<DropdownLayout>,
     /// The modern hamburger button, or `None` in classic style.
     pub hamburger: Option<Region>,
     /// Classic menubar band top (`y`), or `None` in modern style.
@@ -312,8 +244,6 @@ pub(crate) struct TabbarLayout {
     pub scroll_left: Option<Region>,
     /// Right scroll arrow (`›`), present only when the tab strip is paginated.
     pub scroll_right: Option<Region>,
-    /// The child panel of the open submenu parent, to the right of `dropdown`.
-    pub submenu: Option<DropdownLayout>,
     /// Top (`y`) of the tabbar row.
     pub tab_row_top: f32,
     /// Per-tab hit/draw regions, parallel to `tabbar.tabs`. Tabs scrolled out of
@@ -328,10 +258,6 @@ pub enum TabbarHit {
     Close,
     /// A tab's close (`✕`) glyph, by tab index.
     CloseTab(usize),
-    /// An item in the right-click context menu, by index.
-    ContextMenuItem(usize),
-    /// An item in the open dropdown, by index into that menu's `items`.
-    DropdownItem(usize),
     /// The modern-style hamburger button that opens the menu dropdown.
     Hamburger,
     /// The window maximize/restore (`□`) control.
@@ -346,9 +272,6 @@ pub enum TabbarHit {
     ScrollTabsLeft,
     /// The right tab-strip scroll arrow: navigate to the next tab.
     ScrollTabsRight,
-    /// A child of the open submenu, by index into that submenu's items. The
-    /// parent is the tabbar's `open_submenu`.
-    SubmenuItem(usize),
     /// A tab's body, by index; selects that tab.
     Tab(usize),
 }
@@ -379,9 +302,9 @@ pub fn tabbar_rows(style: MenuStyle) -> usize {
     }
 }
 
-/// Map a click at `(x, y)` to the tabbar element under it. The open submenu wins
-/// first (it overlays the parent), then the parent dropdown, then per-tab close
-/// buttons, tabs, the new-tab button, and finally the menu triggers.
+/// Map a click at `(x, y)` to the tabbar element under it: the window
+/// controls, the scroll arrows, per-tab close buttons, tabs, and finally the
+/// menu triggers.
 pub fn hit_test(
     tabbar: &TopTabbar,
     surface_w: f32,
@@ -391,30 +314,6 @@ pub fn hit_test(
     y: f32,
 ) -> TabbarHit {
     let layout = layout(tabbar, surface_w, cell_w, cell_h);
-
-    // The context menu overlays everything else when open.
-    if let Some(cm_layout) = &layout.context_menu {
-        for i in 0..cm_layout.items {
-            if dropdown_item_region(cm_layout, i).contains(x, y) {
-                return TabbarHit::ContextMenuItem(i);
-            }
-        }
-    }
-
-    if let Some(submenu) = &layout.submenu {
-        for i in 0..submenu.items {
-            if dropdown_item_region(submenu, i).contains(x, y) {
-                return TabbarHit::SubmenuItem(i);
-            }
-        }
-    }
-    if let Some(dropdown) = &layout.dropdown {
-        for i in 0..dropdown.items {
-            if dropdown_item_region(dropdown, i).contains(x, y) {
-                return TabbarHit::DropdownItem(i);
-            }
-        }
-    }
 
     if let Some([minimize, maximize, close]) = &layout.controls {
         if close.contains(x, y) {
@@ -863,110 +762,29 @@ pub(crate) fn layout(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Ta
         Vec::new()
     };
 
-    let dropdown = tabbar.open_menu.and_then(|open| {
-        let menu = tabbar.menus.get(open)?;
-        let width = panel_width(&menu.items, cw).min(surface_w);
-        let (origin_x, top) = if classic {
-            let title = menu_titles.get(open)?;
-            (title.x, ch)
-        } else {
-            // Anchor to the hamburger: when it is on the left (controls right,
-            // the default) the dropdown opens flush with its left edge growing
-            // right; when it is on the right (controls left) the dropdown right-
-            // aligns with the hamburger so it stays on screen.
-            let hb = hamburger.as_ref()?;
-            let x = if controls_left {
-                (hb.x + hb.w - width).max(0.0)
-            } else {
-                hb.x
-            };
-            (x, tabbar_h)
-        };
-        Some(DropdownLayout {
-            item_h: ch * DROPDOWN_ITEM_RATIO,
-            items: menu.items.len(),
-            origin_x,
-            pad: ch * DROPDOWN_PAD_Y_CELLS,
-            top,
-            width,
-        })
-    });
-
-    // The submenu opens beside the parent panel, to the right by default, or
-    // to the left when controls are on the left edge (so it does not run off the
-    // right side of the window). Its first child row aligns with the hovered
-    // parent item; the parent panel stays put.
-    let submenu = dropdown.and_then(|parent| {
-        let open = tabbar.open_menu?;
-        let parent_idx = tabbar.open_submenu?;
-        let item = tabbar.menus.get(open)?.items.get(parent_idx)?;
-        if item.children.is_empty() {
-            return None;
-        }
-        let child_width = panel_width(&item.children, cw).min(surface_w);
-        let origin_x = if controls_left {
-            (parent.origin_x - child_width).max(0.0)
-        } else {
-            parent.origin_x + parent.width
-        };
-        Some(DropdownLayout {
-            item_h: parent.item_h,
-            items: item.children.len(),
-            origin_x,
-            pad: parent.pad,
-            top: parent.top + parent_idx as f32 * parent.item_h,
-            width: child_width,
-        })
-    });
-
-    let context_menu = tabbar.context_menu.as_ref().map(|cm| {
-        let width = panel_width(&cm.items, cw).min(surface_w);
-        let origin_x = cm.x.min(surface_w - width).max(0.0);
-        DropdownLayout {
-            item_h: ch * DROPDOWN_ITEM_RATIO,
-            items: cm.items.len(),
-            origin_x,
-            pad: ch * DROPDOWN_PAD_Y_CELLS,
-            top: cm.y,
-            width,
-        }
-    });
-
     TabbarLayout {
         closes,
-        context_menu,
         controls,
-        dropdown,
         hamburger,
         menubar_top,
         menu_titles,
         path,
         scroll_left,
         scroll_right,
-        submenu,
         tab_row_top,
         tabs,
     }
 }
 
-/// The pixel rect of dropdown item `i`.
-pub(crate) fn dropdown_item_region(dropdown: &DropdownLayout, i: usize) -> Region {
-    Region {
-        h: dropdown.item_h,
-        w: dropdown.width,
-        x: dropdown.origin_x,
-        y: dropdown.top + dropdown.pad + i as f32 * dropdown.item_h,
+/// The element the open menu drops from: its title in the classic menubar,
+/// the hamburger button in the modern bar; `None` when no menu is open.
+pub fn menu_anchor(tabbar: &TopTabbar, surface_w: f32, cw: f32, ch: f32) -> Option<Region> {
+    let open = tabbar.open_menu?;
+    let layout = layout(tabbar, surface_w, cw, ch);
+    match tabbar.menu_style {
+        MenuStyle::Classic => layout.menu_titles.get(open).copied(),
+        MenuStyle::Modern => layout.hamburger,
     }
-}
-
-/// Panel width sized to the widest `label` + `shortcut`, floored at a minimum.
-fn panel_width(items: &[MenuItem], cw: f32) -> f32 {
-    let widest = items
-        .iter()
-        .map(|item| item.label.chars().count() + item.shortcut.chars().count())
-        .max()
-        .unwrap_or(0) as f32;
-    (widest + DROPDOWN_PAD_CELLS).max(DROPDOWN_MIN_CELLS) * cw
 }
 
 // ========================================================================
@@ -981,50 +799,24 @@ mod tests {
     const CH: f32 = 20.0;
     const SURFACE_W: f32 = 1200.0;
 
-    fn leaf(label: &str, shortcut: &str) -> MenuItem {
-        MenuItem {
-            children: Vec::new(),
-            label: label.into(),
-            shortcut: shortcut.into(),
-        }
-    }
-
     fn tabbar(style: MenuStyle, tabs: usize, open: Option<usize>) -> TopTabbar {
         let menus = match style {
-            MenuStyle::Modern => vec![Menu {
-                title: "Menu".into(),
-                items: vec![
-                    leaf("New Tab", "C-S-n"),
-                    // A submenu parent: hovering it opens its children.
-                    MenuItem {
-                        children: vec![leaf("Vertical", ""), leaf("Horizontal", "")],
-                        label: "Split".into(),
-                        shortcut: String::new(),
-                    },
-                ],
-            }],
-            MenuStyle::Classic => vec![
-                Menu {
-                    title: "File".into(),
-                    items: vec![leaf("New Tab", "")],
-                },
-                Menu {
-                    title: "View".into(),
-                    items: vec![leaf("Theme", "")],
-                },
-            ],
+            MenuStyle::Modern => vec!["Menu"],
+            MenuStyle::Classic => vec!["File", "View"],
         };
+        let menus = menus
+            .into_iter()
+            .map(|title| Menu {
+                title: title.into(),
+            })
+            .collect();
         TopTabbar {
             active_tab: 0,
-            context_menu: None,
             controls_side: ControlsSide::Right,
             menu_style: style,
             menus,
             open_menu: open,
             path: String::new(),
-            open_submenu: None,
-            selected_item: None,
-            selected_subitem: None,
             tabs: (0..tabs)
                 .map(|i| TabLabel {
                     title: format!("Tab {i}"),
@@ -1216,28 +1008,6 @@ mod tests {
     }
 
     #[test]
-    fn test_open_dropdown_items_are_hit_first() {
-        let c = tabbar(MenuStyle::Modern, 1, Some(0));
-        let layout = layout(&c, SURFACE_W, CW, CH);
-        let dropdown = layout.dropdown.expect("dropdown open");
-        let first = dropdown_item_region(&dropdown, 0);
-        let hit = hit_test(
-            &c,
-            SURFACE_W,
-            CW,
-            CH,
-            first.x + 2.0,
-            first.y + first.h / 2.0,
-        );
-        assert_eq!(hit, TabbarHit::DropdownItem(0));
-        let second = dropdown_item_region(&dropdown, 1);
-        assert_eq!(
-            hit_test(&c, SURFACE_W, CW, CH, second.x + 2.0, second.y + 2.0),
-            TabbarHit::DropdownItem(1)
-        );
-    }
-
-    #[test]
     fn test_minimize_maximize_hover_pills_do_not_overlap() {
         // Minimize and maximize sit flush against each other with no
         // button-level gap. The square hover pill (one cell-height on a side)
@@ -1408,46 +1178,14 @@ mod tests {
     }
 
     #[test]
-    fn test_submenu_opens_right_of_parent_and_is_hit_first() {
-        let mut c = tabbar(MenuStyle::Modern, 1, Some(0));
-        c.open_submenu = Some(1); // "Split" carries children.
-        let layout = layout(&c, SURFACE_W, CW, CH);
-        let parent = layout.dropdown.expect("parent open");
-        let submenu = layout.submenu.expect("submenu open");
-        // The child panel sits immediately right of the parent panel.
-        assert_eq!(submenu.origin_x, parent.origin_x + parent.width);
-        assert_eq!(submenu.items, 2);
-        // A click on a child resolves to the submenu, which overlays the parent.
-        let child = dropdown_item_region(&submenu, 0);
-        assert_eq!(
-            hit_test(
-                &c,
-                SURFACE_W,
-                CW,
-                CH,
-                child.x + 2.0,
-                child.y + child.h / 2.0
-            ),
-            TabbarHit::SubmenuItem(0)
-        );
-    }
-
-    #[test]
-    fn test_no_submenu_without_an_open_parent() {
-        // open_submenu set but no menu open: no submenu geometry.
-        let mut c = tabbar(MenuStyle::Modern, 1, None);
-        c.open_submenu = Some(1);
-        assert!(layout(&c, SURFACE_W, CW, CH).submenu.is_none());
-    }
-
-    #[test]
-    fn test_classic_dropdown_anchors_under_its_title() {
-        let c = tabbar(MenuStyle::Classic, 1, Some(1));
-        let layout = layout(&c, SURFACE_W, CW, CH);
-        let dropdown = layout.dropdown.expect("dropdown open");
-        // Opens directly below the menubar row.
-        assert_eq!(dropdown.top, CH);
-        // Left edge aligns with the second menu title.
-        assert_eq!(dropdown.origin_x, layout.menu_titles[1].x);
+    fn test_a_menu_drops_from_its_title_or_the_hamburger() {
+        let classic = tabbar(MenuStyle::Classic, 1, Some(1));
+        let titles = layout(&classic, SURFACE_W, CW, CH).menu_titles;
+        assert_eq!(menu_anchor(&classic, SURFACE_W, CW, CH), Some(titles[1]));
+        let modern = tabbar(MenuStyle::Modern, 1, Some(0));
+        let hamburger = layout(&modern, SURFACE_W, CW, CH).hamburger;
+        assert_eq!(menu_anchor(&modern, SURFACE_W, CW, CH), hamburger);
+        let closed = tabbar(MenuStyle::Modern, 1, None);
+        assert_eq!(menu_anchor(&closed, SURFACE_W, CW, CH), None);
     }
 }

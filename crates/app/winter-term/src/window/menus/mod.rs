@@ -1,11 +1,13 @@
 //! The menubar: the menus each title-bar style offers, built from the same
-//! command names the palette runs, opened, hovered, and closed, and the state
-//! the menubar shares with the right-click context menu, which lives in
-//! [`context`].
+//! command names the palette runs, opened and closed, and the state the
+//! menubar shares with the right-click context menu, which lives in
+//! [`context`]. Misty's [`Menu`] draws both and follows the pointer and the
+//! keys over them (see [`crate::window::frame::menus`]).
 
 pub(in crate::window) mod context;
 
-use winter_render::{MenuItem, MenuStyle, TabbarHit};
+use misty::{Menu, MenuEntry, MenuItem, PopupSide, Rect};
+use winter_render::MenuStyle;
 
 use winter_model::input::format_key;
 
@@ -109,25 +111,19 @@ const CLASSIC_MENUS: &[MenuDef] = &[
 // ========================================================================
 
 /// What the menubar and the right-click context menu currently have open.
-/// Both are drawn by the same dropdown pass, so they share one struct.
 #[derive(Default)]
 pub(in crate::window) struct MenuState {
-    /// The actions bound to each context-menu item, parallel to the rendered list.
+    /// The right-click context menu, its items numbered by their place in
+    /// `context_actions`, or `None` while closed.
+    pub(in crate::window) context: Option<Menu<usize>>,
+    /// What each context-menu item runs, parallel to its entries.
     pub(in crate::window) context_actions: Vec<ContextAction>,
-    /// Active right-click context menu: pixel position where it was opened.
-    pub(in crate::window) context_pos: Option<(f32, f32)>,
-    /// The currently hovered item in the context menu (drives the hover highlight).
-    pub(in crate::window) context_selected: Option<usize>,
-    /// The URL (if any) that was under the pointer when the context menu opened.
-    pub(in crate::window) context_url: Option<String>,
-    /// The open menu/dropdown (index into the tabbar's menu list), or `None`.
+    /// The open menubar menu, its items naming the commands they run, or
+    /// `None` while closed.
+    pub(in crate::window) dropdown: Option<Menu<&'static str>>,
+    /// The open menu (index into the tabbar's menu list), whose title is lit,
+    /// or `None`.
     pub(in crate::window) open: Option<usize>,
-    /// Index of the open submenu's parent within the open menu's items, or `None`.
-    pub(in crate::window) open_submenu: Option<usize>,
-    /// The hovered dropdown item while a menu is open.
-    pub(in crate::window) selected_item: Option<usize>,
-    /// The hovered submenu child while a submenu is open.
-    pub(in crate::window) selected_subitem: Option<usize>,
 }
 
 /// A menu line: its display `label`, an optional `shortcut` hint, and the
@@ -185,7 +181,6 @@ pub(in crate::window) fn menu_defs(style: MenuStyle) -> &'static [MenuDef] {
     }
 }
 
-/// Recursively convert a static [`ItemDef`] into the renderer's [`MenuItem`].
 /// How a menu shows the keys an entry types: run together when each is one
 /// character (`gg`, `"+y`), apart when any is a chord (`C-c C-k`).
 pub(in crate::window) fn keys_label(keys: &[winter_model::input::Key]) -> String {
@@ -197,12 +192,26 @@ pub(in crate::window) fn keys_label(keys: &[winter_model::input::Key]) -> String
     names.join(separator)
 }
 
-pub(in crate::window) fn menu_item(item: &ItemDef) -> MenuItem {
-    MenuItem {
-        children: item.children.iter().map(menu_item).collect(),
-        label: item.label.to_string(),
-        shortcut: item.shortcut.to_string(),
-    }
+/// Misty's entries for `items`: a separator for `-`, a submenu for a parent,
+/// and an item naming its command for a leaf.
+fn entries_of(items: &'static [ItemDef]) -> Vec<MenuEntry<&'static str>> {
+    items
+        .iter()
+        .map(|item| {
+            if item.label == SEPARATOR.label {
+                return MenuEntry::Separator;
+            }
+            let entry = MenuItem::new(item.command, item.label);
+            let entry = match item.children.is_empty() {
+                true => entry,
+                false => entry.with_submenu(entries_of(item.children)),
+            };
+            match item.shortcut.is_empty() {
+                true => entry.into(),
+                false => entry.with_accelerator(item.shortcut).into(),
+            }
+        })
+        .collect()
 }
 
 // ========================================================================
@@ -210,80 +219,27 @@ pub(in crate::window) fn menu_item(item: &ItemDef) -> MenuItem {
 // ========================================================================
 
 impl App {
-    /// The static def of item `i` in the currently open menu, if any.
-    pub(in crate::window) fn open_menu_item(&self, i: usize) -> Option<&'static ItemDef> {
-        let open = self.chrome.menus.open?;
-        menu_defs(self.config.menu_style).get(open)?.items.get(i)
-    }
-
-    /// The static def of submenu child `child` under the open submenu parent.
-    pub(in crate::window) fn open_submenu_item(&self, child: usize) -> Option<&'static ItemDef> {
-        let open = self.chrome.menus.open?;
-        let parent = self.chrome.menus.open_submenu?;
-        let item = menu_defs(self.config.menu_style)
-            .get(open)?
-            .items
-            .get(parent)?;
-        item.children.get(child)
-    }
-
-    /// Update the hovered menu/submenu rows from the pointer position while a menu
-    /// is open, requesting a redraw when the highlight changes. Hovering a submenu
-    /// parent opens its child panel; the parent stays open throughout.
-    pub(in crate::window) fn update_menu_hover(&mut self, x: f32, y: f32) {
-        if self.chrome.menus.open.is_none() {
-            return;
-        }
-        let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) else {
-            return;
-        };
-        let surface_w = self.viewport_rect().width;
-        let tabbar = self.build_top_tabbar();
-        let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
-
-        // (selected_item, open_submenu, selected_subitem) for this hover.
-        let next = match hit {
-            TabbarHit::DropdownItem(i) => match self.open_menu_item(i) {
-                Some(item) if item.label == "-" => (None, self.chrome.menus.open_submenu, None),
-                Some(item) if !item.children.is_empty() => (Some(i), Some(i), None),
-                Some(_) => (Some(i), None, None),
-                None => (None, self.chrome.menus.open_submenu, None),
-            },
-            // Keep the parent highlighted and its submenu open over its children.
-            TabbarHit::SubmenuItem(child) => (
-                self.chrome.menus.open_submenu,
-                self.chrome.menus.open_submenu,
-                Some(child),
-            ),
-            // Off the items: leave the submenu open so the cursor can reach it.
-            _ => (None, self.chrome.menus.open_submenu, None),
-        };
-
-        let current = (
-            self.chrome.menus.selected_item,
-            self.chrome.menus.open_submenu,
-            self.chrome.menus.selected_subitem,
-        );
-        if next != current {
-            (
-                self.chrome.menus.selected_item,
-                self.chrome.menus.open_submenu,
-                self.chrome.menus.selected_subitem,
-            ) = next;
-            self.dirty = true;
-        }
-    }
-
-    /// Toggle the dropdown for menu `index` open or closed.
+    /// Toggle the dropdown for menu `index` open or closed, dropping it from
+    /// its title (or the hamburger button).
     pub(in crate::window) fn toggle_menu(&mut self, index: usize) {
-        self.chrome.menus.open = if self.chrome.menus.open == Some(index) {
-            None
-        } else {
-            Some(index)
+        if self.chrome.menus.open == Some(index) {
+            self.close_menu();
+            return;
+        }
+        let Some(def) = menu_defs(self.config.menu_style).get(index) else {
+            return;
         };
-        self.chrome.menus.open_submenu = None;
-        self.chrome.menus.selected_item = None;
-        self.chrome.menus.selected_subitem = None;
+        self.close_context_menu();
+        self.chrome.menus.open = Some(index);
+        let anchor = self.renderer.as_ref().and_then(|renderer| {
+            let (cell_w, cell_h) = renderer.cell_size();
+            let surface_w = self.viewport_rect().width;
+            winter_render::menu_anchor(&self.build_top_tabbar(), surface_w, cell_w, cell_h)
+        });
+        let anchor = anchor.map_or_else(Rect::default, |at| Rect::new(at.x, at.y, at.w, at.h));
+        let mut menu = Menu::new(entries_of(def.items));
+        menu.open(anchor, PopupSide::Below);
+        self.chrome.menus.dropdown = Some(menu);
         self.dirty = true;
     }
 
@@ -291,9 +247,7 @@ impl App {
     pub(in crate::window) fn close_menu(&mut self) {
         if self.chrome.menus.open.is_some() {
             self.chrome.menus.open = None;
-            self.chrome.menus.open_submenu = None;
-            self.chrome.menus.selected_item = None;
-            self.chrome.menus.selected_subitem = None;
+            self.chrome.menus.dropdown = None;
             self.dirty = true;
         }
     }
@@ -345,15 +299,21 @@ mod tests {
     }
 
     #[test]
-    fn test_open_submenu_item_resolves_the_child_command() {
+    fn test_a_parent_opens_its_children_and_a_leaf_runs_its_command() {
         let mut app = App::new();
-        app.chrome.menus.open = Some(0);
-        app.chrome.menus.open_submenu = MODERN_ITEMS.iter().position(|it| it.label == "Layout");
-        assert_eq!(
-            app.open_submenu_item(0).map(|it| it.command),
-            Some("split_vertical")
-        );
-        assert!(app.open_submenu_item(99).is_none());
+        app.toggle_menu(0);
+        let menu = app.chrome.menus.dropdown.as_mut().expect("open");
+        menu.move_highlight(1);
+        assert_eq!(menu.highlighted(), Some("new_tab"));
+        // The highlight passes over the separators.
+        let layout = MODERN_ITEMS
+            .iter()
+            .filter(|item| item.label != SEPARATOR.label)
+            .position(|item| item.label == "Layout")
+            .expect("Layout");
+        menu.move_highlight(layout as isize);
+        assert!(menu.open_submenu(), "Layout holds a submenu");
+        assert_eq!(menu.choose(), Some("split_vertical"));
     }
 
     #[test]

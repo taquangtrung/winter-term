@@ -7,7 +7,7 @@ mod title;
 
 use std::path::Path;
 
-use winter_render::{ContextMenu, Menu, MenuItem, StatusHover, TabbarHit, TopTabbar};
+use winter_render::{Menu, StatusHover, TabbarHit, TopTabbar};
 
 use crate::config::TitleBarStyle;
 use winter_model::layout::TabId;
@@ -15,7 +15,7 @@ use winter_model::path::abbreviate_home;
 use winter_terminal::session::TitleFacts;
 
 use crate::window::editor::buffers::shown_path;
-use crate::window::menus::{menu_defs, menu_item};
+use crate::window::menus::menu_defs;
 use crate::window::status::mode_label_and_name;
 use crate::window::strip::StripHit;
 use crate::window::App;
@@ -272,26 +272,9 @@ impl App {
         let menus = menu_defs(self.config.menu_style)
             .iter()
             .map(|menu| Menu {
-                items: menu.items.iter().map(menu_item).collect(),
                 title: menu.title.to_string(),
             })
             .collect();
-        let context_menu = self.chrome.menus.context_pos.map(|(x, y)| ContextMenu {
-            items: self
-                .chrome
-                .menus
-                .context_actions
-                .iter()
-                .map(|a| MenuItem {
-                    children: vec![],
-                    label: a.label(),
-                    shortcut: a.shortcut(),
-                })
-                .collect(),
-            selected: self.chrome.menus.context_selected,
-            x,
-            y,
-        });
         let url_tooltip = self.hover_tooltip();
         // A strip tab's title hangs under the tab, and a status bar part's
         // over the bar, not the pointer: hung off the pointer's cell, it
@@ -307,14 +290,10 @@ impl App {
         TopTabbar {
             active_tab: 0,
             tabbar_hover: self.tabs.hover,
-            context_menu,
             controls_side: self.config.window_controls_side,
             menu_style: self.config.menu_style,
             menus,
             open_menu: self.chrome.menus.open,
-            open_submenu: self.chrome.menus.open_submenu,
-            selected_item: self.chrome.menus.selected_item,
-            selected_subitem: self.chrome.menus.selected_subitem,
             // Tabs live on each pane's own strip; the title bar keeps the
             // menus, the window controls, and a button opening a tab in the
             // focused pane. What a pane shows is named on its own breadcrumb
@@ -449,19 +428,23 @@ impl App {
         true
     }
 
-    /// Handle a left-click at `(x, y)` against the tabbar. Returns `true` when the
-    /// click was consumed (a tabbar element, or dismissing an open menu) and the
-    /// caller should not treat it as a pane click.
-    pub(in crate::window) fn handle_tabbar_click(&mut self, x: f32, y: f32) -> bool {
-        let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) else {
-            return false;
-        };
+    /// The title bar's element at `(x, y)`, or `None` before the renderer
+    /// knows its cell size.
+    pub(in crate::window) fn tabbar_hit(&self, x: f32, y: f32) -> Option<TabbarHit> {
+        let (cw, ch) = self.renderer.as_ref()?.cell_size();
         let surface_w = self.viewport_rect().width;
         let tabbar = self.build_top_tabbar();
-        let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
-        let menu_was_open = self.chrome.menus.open.is_some();
-        let focused = self.layout().focused();
+        Some(winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y))
+    }
 
+    /// Handle a left-click at `(x, y)` against the tabbar. Returns `true` when the
+    /// click was consumed (a tabbar element, or the bar's empty space) and the
+    /// caller should not treat it as a pane click. An open menu takes every
+    /// press itself (see [`crate::window::frame::menus`]).
+    pub(in crate::window) fn handle_tabbar_click(&mut self, x: f32, y: f32) -> bool {
+        let Some(hit) = self.tabbar_hit(x, y) else {
+            return false;
+        };
         match hit {
             TabbarHit::Tab(_)
             | TabbarHit::CloseTab(_)
@@ -469,13 +452,7 @@ impl App {
             | TabbarHit::ScrollTabsRight => {
                 // The title bar draws no tabs, so nothing lands here.
             }
-            TabbarHit::Hamburger => {
-                if self.chrome.menus.open.is_some() {
-                    self.close_menu();
-                } else {
-                    self.toggle_menu(0);
-                }
-            }
+            TabbarHit::Hamburger => self.toggle_menu(0),
             TabbarHit::Minimize => {
                 self.close_menu();
                 if let Some(window) = &self.window {
@@ -493,58 +470,19 @@ impl App {
                 self.runtime.exit.requested = true;
             }
             TabbarHit::MenuTitle(i) => self.toggle_menu(i),
-            TabbarHit::DropdownItem(i) => {
-                if let Some(item) = self.open_menu_item(i) {
-                    if item.label == "-" {
-                        return true;
-                    }
-                    if item.children.is_empty() {
-                        let command = item.command;
-                        self.close_menu();
-                        self.run_command(command, focused);
-                    } else {
-                        // A submenu parent: keep it open and expand its children.
-                        self.chrome.menus.open_submenu = Some(i);
-                        self.chrome.menus.selected_item = Some(i);
-                        self.chrome.menus.selected_subitem = None;
-                    }
-                }
-            }
-            TabbarHit::SubmenuItem(child) => {
-                if let Some(item) = self.open_submenu_item(child) {
-                    if item.label != "-" {
-                        let command = item.command;
-                        self.close_menu();
-                        self.run_command(command, focused);
-                    }
-                }
-            }
-            TabbarHit::ContextMenuItem(i) => {
-                if let Some(action) = self.chrome.context_entry(i) {
-                    self.close_context_menu();
-                    self.run_context_action(action);
-                }
-            }
             TabbarHit::None => {
-                if self.chrome.menus.context_pos.is_some() {
-                    self.close_context_menu();
-                    return true;
-                }
-                if menu_was_open {
-                    self.close_menu();
-                } else if y < self.top_chrome_height() {
-                    // Empty title-bar space. In the borderless modern style this is
-                    // the drag handle to move the window; either way, swallow the
-                    // click so it does not select pane text.
-                    if self.config.title_bar_style == TitleBarStyle::Modern {
-                        if let Some(window) = &self.window {
-                            let _ = window.drag_window();
-                        }
-                    }
-                    return true;
-                } else {
+                if y >= self.top_chrome_height() {
                     return false;
                 }
+                // Empty title-bar space. In the borderless modern style this is
+                // the drag handle to move the window; either way, swallow the
+                // click so it does not select pane text.
+                if self.config.title_bar_style == TitleBarStyle::Modern {
+                    if let Some(window) = &self.window {
+                        let _ = window.drag_window();
+                    }
+                }
+                return true;
             }
         }
         self.dirty = true;
@@ -563,26 +501,9 @@ mod tests {
     use super::*;
     use crate::editors::keys::KeysEditor;
     use crate::window::editor::EditorKind;
-    use crate::window::menus::MODERN_ITEMS;
     use winter_model::editor::{Editor, EditorOutcome, Page};
     use winter_model::input::{Key, Keymap};
     use winter_model::paint::Frame;
-
-    #[test]
-    fn test_build_top_tabbar_carries_submenu_children_and_state() {
-        let mut app = App::new();
-        app.chrome.menus.open = Some(0);
-        let layout_idx = MODERN_ITEMS
-            .iter()
-            .position(|it| it.label == "Layout")
-            .unwrap();
-        app.chrome.menus.open_submenu = Some(layout_idx);
-        app.chrome.menus.selected_subitem = Some(1);
-        let tabbar = app.build_top_tabbar();
-        assert_eq!(tabbar.open_submenu, Some(layout_idx));
-        assert_eq!(tabbar.selected_subitem, Some(1));
-        assert!(tabbar.menus[0].items[layout_idx].has_children());
-    }
 
     #[test]
     fn test_a_terminal_s_full_name_writes_its_directory_whole_and_its_short_one_shortens_it() {

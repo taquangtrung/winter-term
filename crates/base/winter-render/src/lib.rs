@@ -28,9 +28,9 @@ pub use renderer::{
 };
 pub use syntax::{ScopeRule, SyntaxColors, SCOPE_COUNT, SCOPE_RULES};
 pub use tabbar::{
-    hit_test, hit_test_pane_strip, layout_pane_strip, tabbar_rows, ContextMenu, ControlsSide, Menu,
-    MenuItem, MenuStyle, PaneStripDropTarget, PaneStripHit, PaneStripLayout, PaneTab, Region,
-    TabLabel, TabbarHit, TopTabbar,
+    hit_test, hit_test_pane_strip, layout_pane_strip, menu_anchor, tabbar_rows, ControlsSide, Menu,
+    MenuStyle, PaneStripDropTarget, PaneStripHit, PaneStripLayout, PaneTab, Region, TabLabel,
+    TabbarHit, TopTabbar,
 };
 pub use theme::{GitColors, Rgb as ThemeRgb, Theme, PAGE_DIM_MIX};
 pub use theme_file::{

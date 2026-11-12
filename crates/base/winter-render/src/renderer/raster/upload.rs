@@ -18,7 +18,6 @@ use crate::renderer::glyphs::FontCtx;
 use crate::renderer::parts::titlebar::tabbar_strip_rgba;
 use crate::renderer::widgets::find::find_rgba;
 use crate::renderer::widgets::input::{confirm_button_rects, input_rgba, resolve_confirm_buttons};
-use crate::renderer::widgets::menu::{context_menu_rgba, dropdown_rgba, submenu_rgba};
 use crate::renderer::widgets::token_inspect::token_inspect_rgba;
 use crate::renderer::widgets::toolbar::{toolbar_rgba, ToolbarHit};
 use crate::renderer::widgets::tooltip::url_tooltip_rgba;
@@ -35,15 +34,9 @@ use crate::theme::Theme;
 // Constants
 // ========================================================================
 
-/// Reserved image-pass texture ids for the rasterized menu overlays. Set to the
-/// top of the id space so they never collide with block image ids.
-const DROPDOWN_TEXTURE_ID: u64 = u64::MAX;
-
-const SUBMENU_TEXTURE_ID: u64 = u64::MAX - 1;
-
-const CONTEXT_MENU_TEXTURE_ID: u64 = u64::MAX - 5;
-
-/// Reserved id for the rasterized top-tabbar strip (band + rounded tab pills).
+/// Reserved image-pass texture id for the rasterized top-tabbar strip (band +
+/// rounded tab pills). The reserved ids sit at the top of the id space so they
+/// never collide with block image ids.
 const TABBAR_STRIP_TEXTURE_ID: u64 = u64::MAX - 2;
 
 /// Reserved id for the rasterized URL hover tooltip.
@@ -78,7 +71,6 @@ pub(in crate::renderer) struct ChromePainter<'a> {
 /// The last raster of every overlay, beside what it was painted from.
 #[derive(Default)]
 pub(in crate::renderer) struct OverlayCaches {
-    dropdown: RasterCache<TopTabbar>,
     find: RasterCache<FindView>,
     input: RasterCache<InputView>,
     /// One per pane strip texture, keyed by its texture id.
@@ -525,59 +517,6 @@ impl GpuRenderer {
         )
     }
 
-    /// Rasterize and place the open menu's overlays: the parent dropdown, the
-    /// open submenu (drawn after, so it overlays the parent), and the context
-    /// menu. One placement per visible panel, or empty when no menu is open.
-    ///
-    /// The pixel work lives in [`dropdown_rgba`] and [`submenu_rgba`] so it can
-    /// run (and be tested) without the GPU; this only uploads the result.
-    pub(in crate::renderer) fn rasterize_dropdown(
-        &mut self,
-        tabbar: &TopTabbar,
-        surface_w: f32,
-        surface_h: f32,
-    ) -> Vec<ImagePlacement> {
-        let context = self.raster_context(surface_w, surface_h);
-        self.cached_overlay(
-            |c| &mut c.dropdown,
-            context,
-            tabbar,
-            |r| {
-                let mut placements = r.paint_overlay(DROPDOWN_TEXTURE_ID, |p| {
-                    dropdown_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        tabbar,
-                        surface_w,
-                    )
-                });
-                placements.extend(r.paint_overlay(SUBMENU_TEXTURE_ID, |p| {
-                    submenu_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        tabbar,
-                        surface_w,
-                    )
-                }));
-                placements.extend(r.paint_overlay(CONTEXT_MENU_TEXTURE_ID, |p| {
-                    context_menu_rgba(
-                        p.font_system,
-                        p.swash_cache,
-                        &p.ctx,
-                        p.theme,
-                        tabbar,
-                        surface_w,
-                    )
-                }));
-                placements
-            },
-        )
-    }
-
     /// Where to draw the tabbar strip, repainting it only when what it is drawn
     /// from has moved since the last frame.
     pub(in crate::renderer) fn tabbar_strip_placement(
@@ -682,8 +621,6 @@ mod tests {
         // drew over the other's texture, and the icon stayed wrong after the
         // inspector closed.
         let mut ids = vec![
-            SUBMENU_TEXTURE_ID,
-            CONTEXT_MENU_TEXTURE_ID,
             TABBAR_STRIP_TEXTURE_ID,
             URL_TOOLTIP_TEXTURE_ID,
             TOKEN_INSPECT_TEXTURE_ID,
@@ -731,7 +668,7 @@ mod tests {
 
     #[test]
     fn test_an_unchanged_overlay_reuses_the_raster_it_already_painted() {
-        let tabbar = sample_menu_chrome(None);
+        let tabbar = sample_menu_chrome();
         let mut cache = RasterCache::default();
         assert!(cache.hit(&context(), |v| *v == tabbar).is_none(), "cold");
         cache.store(context(), tabbar.clone(), vec![placement()]);
@@ -742,7 +679,7 @@ mod tests {
 
     #[test]
     fn test_an_overlay_is_repainted_when_anything_it_is_drawn_from_moves() {
-        let tabbar = sample_menu_chrome(None);
+        let tabbar = sample_menu_chrome();
         let mut cache = RasterCache::default();
         cache.store(context(), tabbar.clone(), vec![placement()]);
 

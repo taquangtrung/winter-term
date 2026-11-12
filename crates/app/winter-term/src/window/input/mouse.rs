@@ -234,9 +234,7 @@ impl App {
             {
                 return;
             }
-            if (self.chrome.menus.open.is_some() || y < self.top_chrome_height())
-                && self.handle_tabbar_click(x, y)
-            {
+            if y < self.top_chrome_height() && self.handle_tabbar_click(x, y) {
                 self.dirty = true;
                 return;
             }
@@ -327,28 +325,6 @@ impl App {
                 self.dirty = true;
             }
             return;
-        }
-
-        // Any left-press dismisses an open context menu before other handling.
-        if state == ElementState::Pressed
-            && button == MouseButton::Left
-            && self.chrome.menus.context_pos.is_some()
-        {
-            let (x, y) = self.input.pointer.cursor_pos;
-            let surface_w = self.viewport_rect().width;
-            if let Some((cw, ch)) = self.renderer.as_ref().map(|r| r.cell_size()) {
-                let tabbar = self.build_top_tabbar();
-                let hit = winter_render::hit_test(&tabbar, surface_w, cw, ch, x, y);
-                if let winter_render::TabbarHit::ContextMenuItem(i) = hit {
-                    if let Some(action) = self.chrome.context_entry(i) {
-                        self.close_context_menu();
-                        self.run_context_action(action);
-                        self.dirty = true;
-                        return;
-                    }
-                }
-            }
-            self.close_context_menu();
         }
 
         match (state, button) {
@@ -663,13 +639,6 @@ impl App {
                 }
                 return;
             }
-        }
-
-        if self.chrome.menus.open.is_some() {
-            self.update_menu_hover(x, y);
-        }
-        if self.chrome.menus.context_pos.is_some() {
-            self.update_context_menu_hover(x, y);
         }
 
         // Update tabbar hover state so the renderer can show hover highlights.

@@ -1106,8 +1106,7 @@ impl GpuRenderer {
         token_inspect: Option<&TokenInspectView>,
         surface: SurfaceSize,
     ) {
-        // The open dropdown and the popups are rasterized to textures and
-        // drawn by the image pass (after the text pass) so they overlay content.
+        // The popups are rasterized to textures and drawn by the image pass (after the text pass) so they overlay content.
         let (w, h) = (surface.width, surface.height);
         let mut all_images: Vec<ImagePlacement> = images.to_vec();
         // A pane's toolbar lies over its own top rows, under every popup.
@@ -1116,7 +1115,6 @@ impl GpuRenderer {
         // on the strips too (see `FrameLayers::over_image_verts`).
         let base = all_images.len();
         if let Some(c) = tabbar {
-            all_images.extend(self.rasterize_dropdown(c, w, h));
             all_images.extend(self.rasterize_url_tooltip(c, w, h));
         }
         match input {

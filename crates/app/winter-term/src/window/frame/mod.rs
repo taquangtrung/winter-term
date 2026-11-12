@@ -8,6 +8,7 @@ pub(crate) mod canvas;
 pub(crate) mod compose;
 pub(in crate::window) mod frame_grid;
 pub(in crate::window) mod inspect;
+pub(in crate::window) mod menus;
 mod overlays;
 pub(in crate::window) mod pane_popups;
 pub(in crate::window) mod popups;
