@@ -1,6 +1,6 @@
 //! Operators, and the motions and text objects that say how far they reach.
 
-use misty_notify::Notice;
+use misty::notify::Notice;
 use winter_keys::{Key, KeyCode, Mods};
 
 use crate::buffer::Register;

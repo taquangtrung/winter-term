@@ -1,6 +1,6 @@
 //! Insert and Replace: the Emacs keys of typing, and writing over text.
 
-use misty_notify::Notice;
+use misty::notify::Notice;
 use winter_keys::{Key, KeyCode, Mods};
 
 use crate::buffer::{TextBuffer, WordCase};

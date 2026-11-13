@@ -32,7 +32,7 @@ mod visual;
 
 use std::collections::HashMap;
 
-use misty_notify::Notice;
+use misty::notify::Notice;
 use winter_keys::{Key, KeyCode, Mods};
 
 use crate::buffer::{Register, TextBuffer};

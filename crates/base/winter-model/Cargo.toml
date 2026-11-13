@@ -27,6 +27,6 @@ winter-base.workspace = true
 winter-emulator.workspace = true
 winter-ext-api.workspace = true
 winter-keys.workspace = true
-misty-notify.workspace = true
+misty.workspace = true
 winter-theme.workspace = true
 winter-textedit.workspace = true

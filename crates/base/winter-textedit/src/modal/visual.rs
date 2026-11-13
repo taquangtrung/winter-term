@@ -1,6 +1,6 @@
 //! Visual mode: acting on a selection.
 
-use misty_notify::Notice;
+use misty::notify::Notice;
 use winter_keys::{Key, KeyCode, Mods};
 
 use crate::buffer::Register;

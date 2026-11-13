@@ -2,7 +2,7 @@
 //! places that are not a file: a one-line answer to a question, or a column of
 //! names, one per listed entry, being renamed in place.
 
-use misty_notify::Notice;
+use misty::notify::Notice;
 use winter_keys::Key;
 
 use crate::buffer::TextBuffer;
