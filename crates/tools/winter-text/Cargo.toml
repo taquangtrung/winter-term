@@ -14,7 +14,7 @@ rust-version.workspace = true
 [dependencies]
 serde_json.workspace = true
 misty.workspace = true
-misty-cherry.workspace = true
+winter-cherry.workspace = true
 cherry.workspace = true
 cherry-keys.workspace = true
 cherry-markup.workspace = true

@@ -12,7 +12,7 @@
 //! band, so each side's own lines keep their colors.
 
 use cherry::{Decoration, DecorationKind, DocumentId, HighlightId, Mode};
-use misty_cherry::HighlightStyle;
+use winter_cherry::HighlightStyle;
 use winter_model::editor::{EditorOutcome, Notice, PickPlacement, PickRequest, PromptReply};
 
 use super::session::{self, Session};

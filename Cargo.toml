@@ -12,6 +12,7 @@ members = [
     "crates/tools/winter-pdf",
     "crates/tools/winter-terminal",
     "crates/tools/winter-text",
+    "crates/libs/winter-cherry",
     "crates/libs/winter-mux",
     "crates/libs/winter-synctex",
     "crates/libs/winter-syntax",
@@ -68,11 +69,11 @@ winter-textedit = { version = "0.1.0", path = "crates/base/winter-textedit" }
 # The GUI toolkit Winter is moving onto (local branch only: misty is not
 # published yet).
 misty = { version = "0.1.0", path = "../misty/crates/misty" }
-misty-cherry = { version = "0.1.0", path = "../misty/crates/misty-cherry" }
 # The editor Winter's text editing runs on (local branch only, as misty).
 cherry = { version = "0.1.0", path = "../cherry/crates/cherry" }
 cherry-keys = { version = "0.1.0", path = "../cherry/crates/cherry-keys" }
 cherry-markup = { version = "0.1.0", path = "../cherry/crates/cherry-markup" }
+cherry-syntax = { version = "0.1.0", path = "../cherry/crates/cherry-syntax" }
 winter-dir = { version = "0.1.0", path = "crates/tools/winter-dir" }
 winter-docker = { version = "0.1.0", path = "crates/tools/winter-docker" }
 winter-git = { version = "0.1.0", path = "crates/tools/winter-git" }
@@ -80,6 +81,7 @@ winter-monitor = { version = "0.1.0", path = "crates/tools/winter-monitor" }
 winter-pdf = { version = "0.1.0", path = "crates/tools/winter-pdf" }
 winter-terminal = { version = "0.1.0", path = "crates/tools/winter-terminal" }
 winter-text = { version = "0.1.0", path = "crates/tools/winter-text" }
+winter-cherry = { version = "0.1.0", path = "crates/libs/winter-cherry" }
 winter-mux = { version = "0.1.0", path = "crates/libs/winter-mux" }
 winter-synctex = { version = "0.1.0", path = "crates/libs/winter-synctex" }
 winter-syntax = { version = "0.1.0", path = "crates/libs/winter-syntax" }
@@ -127,12 +129,6 @@ winresource = "0.1"
 # searching PATH for the sideloaded DLL.
 [patch.crates-io]
 portable-pty = { path = "vendor/portable-pty" }
-
-# misty-cherry pins Cherry to a commit of its local repository; Winter takes
-# the same checkout by path, so the three share one `cherry`.
-[patch."file:///home/trung/Workspace/apps/cherry"]
-cherry = { path = "../cherry/crates/cherry" }
-cherry-keys = { path = "../cherry/crates/cherry-keys" }
 
 # Dependencies built optimized even in a debug build: text shaping and the GPU
 # layer run every frame, and unoptimized they make `make dev` lag on every

@@ -370,7 +370,9 @@ mod tests {
     /// that defines no command of its own: the Vim and Emacs engine every
     /// editor's text is typed through, whose keys are built in and listed for
     /// reading only, and the plumbing that parses, routes, records, and edits
-    /// keys. Paths under `crates/`.
+    /// keys (`winter-cherry`'s conversion between misty's keys and Cherry's
+    /// among it, and its examples, small apps of their own with no Winter
+    /// keymap). Paths under `crates/`.
     const KEY_ENGINE_FILES: &[&str] = &[
         "app/winter-term/src/window/editor/column.rs",
         "app/winter-term/src/window/editor/cursor.rs",
@@ -398,6 +400,9 @@ mod tests {
         "base/winter-textedit/src/vim/grammar.rs",
         "base/winter-textedit/src/vim/motion.rs",
         "base/winter-textedit/src/vim/nav.rs",
+        "libs/winter-cherry/examples/chrome.rs",
+        "libs/winter-cherry/examples/settings.rs",
+        "libs/winter-cherry/src/keys.rs",
         "tools/winter-text/src/keys.rs",
     ];
 

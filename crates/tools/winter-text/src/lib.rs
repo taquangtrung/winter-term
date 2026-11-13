@@ -1,5 +1,5 @@
 //! The text editor tab: a view of a file open in Cherry, the editor every
-//! text tab shares ([`session`]), drawn by misty-cherry's `EditorView` in
+//! text tab shares ([`session`]), drawn by winter-cherry's `EditorView` in
 //! its pane. Cherry owns the text, the cursor, the modes, and every editing
 //! key; the tab reads the file in, writes it out, and carries what the
 //! editor asks of the window (a save, a close, a notice, a file to open)
@@ -22,8 +22,8 @@ use std::time::{Duration, Instant};
 use cherry::{CommandError, DocumentId, Handled, HostRequest, Mode, NoticeLevel, ViewId};
 use misty::theme::Theme;
 use misty::{EventCx, Font, Frame, Input, Rect};
-use misty_cherry::{clock, EditorResponse, EditorView};
 use winter_base::edit_wait::EditWaiter;
+use winter_cherry::{clock, EditorResponse, EditorView};
 use winter_lsp::diagnostics;
 use winter_lsp::protocol::TextEdit;
 use winter_lsp::{Event, Incoming, Port};
@@ -58,9 +58,9 @@ mod swatch;
 pub use inline::{InlineAsk, InlineCall, InlineTold};
 pub use keys::KEY_TABLES;
 pub use language::known_languages;
-pub use misty_cherry::HighlightStyle;
 pub use session::save_through;
 pub use settings::history_dir;
+pub use winter_cherry::HighlightStyle;
 
 // ========================================================================
 // Constants

@@ -1,0 +1,43 @@
+[package]
+name = "winter-cherry"
+description = "Winter's link between misty and the Cherry editor: Cherry's keymap bound to misty's command registry, and Cherry's modal text editor as a misty widget."
+version.workspace = true
+# Its own edition: the code uses Rust 2024's let chains.
+edition = "2024"
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[lints.rust]
+missing_docs = "deny"
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[features]
+# Syntax highlighting in `EditorView` through `cherry-syntax`, colored by
+# the theme's syntax colors; re-exported as `winter_cherry::cherry_syntax`.
+syntax = ["dep:cherry-syntax"]
+
+[dependencies]
+cherry.workspace = true
+cherry-keys.workspace = true
+# Tree-sitter highlighting with its default grammars: JSON, Markdown,
+# Python, Rust, and TOML.
+cherry-syntax = { workspace = true, optional = true }
+misty.workspace = true
+
+[dev-dependencies]
+misty = { workspace = true, features = ["testing"] }
+
+# The chrome example's tests check its command table.
+[[example]]
+name = "chrome"
+test = true
+
+[[example]]
+name = "editor"
+required-features = ["syntax"]

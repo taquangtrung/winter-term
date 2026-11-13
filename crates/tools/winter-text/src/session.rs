@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 
 use cherry::{CompletionTicket, DocumentId, Editor, EditorOptions, Position, ViewId};
 use misty::SystemClipboard;
-use misty_cherry::EditorClipboard;
+use winter_cherry::EditorClipboard;
 use winter_lsp::protocol::Diagnostic;
 use winter_lsp::ServerId;
 use winter_model::text_file::{self, FileShape, FileStamp};

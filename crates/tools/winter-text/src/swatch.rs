@@ -6,7 +6,7 @@
 
 use cherry::{Decoration, DecorationKind, DocumentId, HighlightId};
 use misty::color::Rgb;
-use misty_cherry::HighlightStyle;
+use winter_cherry::HighlightStyle;
 
 use super::session::Session;
 

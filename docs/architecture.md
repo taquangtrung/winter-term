@@ -38,6 +38,7 @@ crates/ext       extensions shipped with Winter, on the sdk alone
 | `tools` | `winter-pdf` | The PDF viewer: pages drawn with hayro, selection, SyncTeX. |
 | `tools` | `winter-terminal` | The terminal runtime: PTY sessions through the parser, the blocks programs emit, charts, and the image protocols. Its tab is still the app's. |
 | `tools` | `winter-text` | The text editor, with Vim and Emacs keys and language servers, and texts compared and merged. |
+| `libs` | `winter-cherry` | The link between misty and the Cherry editor, which know nothing of each other: Cherry's keymap bound to misty's command registry, and Cherry's modal editor drawn as a misty widget (`EditorView`). |
 | `libs` | `winter-lsp` | Language servers, and the store of problems found. |
 | `libs` | `winter-spell` | Hunspell dictionaries, prose tokens, suggestions, and the one dictionary every editor checks against. |
 | `libs` | `winter-synctex` | SyncTeX both ways, between a PDF page and the LaTeX that set it. |

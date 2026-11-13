@@ -1,4 +1,4 @@
-//! The text tabs, drawn by misty-cherry's `EditorView` in their panes in
+//! The text tabs, drawn by winter-cherry's `EditorView` in their panes in
 //! the terminal's font: the frame leaves a text tab's body to it, the
 //! highlighter's styles resolved against Winter's theme. The pointer over
 //! a text tab and an input method's text while one has the focus go to
@@ -17,7 +17,7 @@ use crate::window::misty_theme::misty_theme;
 use crate::window::App;
 
 // ========================================================================
-// App: the text tabs misty-cherry draws
+// App: the text tabs winter-cherry draws
 // ========================================================================
 
 impl App {
