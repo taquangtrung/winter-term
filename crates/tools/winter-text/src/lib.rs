@@ -41,6 +41,7 @@ mod completing;
 pub mod diff;
 mod git_changes;
 mod hints;
+mod inline;
 mod jumps;
 mod keys;
 mod language;
@@ -51,6 +52,7 @@ mod session;
 pub mod settings;
 mod spelling;
 
+pub use inline::{InlineAsk, InlineCall, InlineTold};
 pub use keys::KEY_TABLES;
 pub use language::known_languages;
 pub use misty_viento::HighlightStyle;
@@ -92,6 +94,8 @@ pub struct TextEditor {
     format_on_save: bool,
     /// The language server's inlay hints and lenses in the text.
     hints: hints::Hints,
+    /// The extensions' inline suggestions at the cursor.
+    inline: inline::Inline,
     /// What the tab is waiting on its language server for.
     lsp: requests::Lsp,
     /// Where the cursor was before Scout's preview moved it, to go back to
@@ -144,6 +148,7 @@ impl TextEditor {
             format_on_save: false,
             jump_origin: None,
             hints: hints::Hints::default(),
+            inline: inline::Inline::default(),
             lsp: requests::Lsp::default(),
             jump_walk: (None, Vec::new()),
             languages: BTreeMap::new(),
@@ -283,6 +288,7 @@ impl TextEditor {
         });
         self.languages.clone_from(&settings.languages);
         self.format_on_save = settings.format_on_save;
+        self.configure_inline(settings);
     }
 
     /// Makes `edits` (a language server's, in its UTF-16 columns) to the
@@ -363,7 +369,9 @@ impl TextEditor {
             });
         });
         if let Some(cursor) = self.with_view(|view| view.cursor_rect()) {
-            self.draw_card(frame, cursor, area, theme);
+            if !self.draw_card(frame, cursor, area, theme) {
+                self.draw_next_edit(frame, cursor, area, theme);
+            }
         }
     }
 
@@ -371,6 +379,7 @@ impl TextEditor {
     /// moves the cursor, a drag selects, the wheel scrolls, composed text is
     /// typed. What it asks of the window.
     pub fn handle_input(&mut self, input: &Input, cx: &mut EventCx<'_>) -> EditorOutcome {
+        let before = self.version();
         let response = self.with_view(|view| {
             session::with(|session| {
                 use misty::Widget;
@@ -378,6 +387,7 @@ impl TextEditor {
             })
         });
         self.send_asks();
+        self.inline_after_key(before);
         match response {
             EditorResponse::Handled => EditorOutcome::Consumed,
             EditorResponse::Ignored => EditorOutcome::Ignored,
@@ -532,6 +542,10 @@ impl Page for TextEditor {
         if self.close_card() && key.code == winter_model::input::KeyCode::Escape {
             return EditorOutcome::Consumed;
         }
+        if let Some(outcome) = self.inline_key(key) {
+            return outcome;
+        }
+        let before = self.version();
         let view = self.view_id();
         let (handled, requests) = session::with(|session| {
             let handled = session
@@ -540,6 +554,7 @@ impl Page for TextEditor {
             (handled, session.editor.take_requests())
         });
         self.send_asks();
+        self.inline_after_key(before);
         match (handled, requests.is_empty()) {
             (Handled::Ignored, true) => EditorOutcome::Ignored,
             (_, true) => EditorOutcome::Consumed,
@@ -574,8 +589,8 @@ impl Page for TextEditor {
         }
     }
 
-    /// When a half-typed key times out, or the text edited since its
-    /// server last had it is handed over.
+    /// When a half-typed key times out, the text edited since its server
+    /// last had it is handed over, or an inline source is asked.
     fn next_tick(&self) -> Option<Instant> {
         let (deadline, unsynced) = session::with(|session| {
             (
@@ -594,6 +609,7 @@ impl Page for TextEditor {
             deadline.map(clock::instant),
             flush,
             self.lsp_next_tick(),
+            self.inline_next_tick(),
             git,
             spelling,
         ]
@@ -603,6 +619,7 @@ impl Page for TextEditor {
     }
 
     fn on_tick(&mut self, now: Instant) -> EditorOutcome {
+        self.inline_tick(now);
         if let Some(outcome) = self.lsp_tick(now) {
             return outcome;
         }
@@ -723,8 +740,8 @@ impl Page for TextEditor {
         self.notice.take()
     }
 
-    /// The mode, the cursor's line and column (from 1), and the file's
-    /// length.
+    /// The mode; the source of the ghost text on screen, the cursor's line
+    /// and column (from 1), and the file's length.
     fn status(&self) -> EditorStatus {
         let place = session::with(|session| {
             let cursor = session.editor.view(self.view_id())?.cursor();
@@ -736,7 +753,14 @@ impl Page for TextEditor {
             };
             let problems = session.problem_counts(self.document);
             let place = format!("{}:{}", at.line + 1, at.column + 1);
-            Some(problems.into_iter().chain([place, total]).collect())
+            let ghost = self.inline_status();
+            Some(
+                ghost
+                    .into_iter()
+                    .chain(problems)
+                    .chain([place, total])
+                    .collect(),
+            )
         });
         EditorStatus {
             mode: self.mode(),

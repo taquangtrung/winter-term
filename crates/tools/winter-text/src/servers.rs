@@ -65,6 +65,8 @@ impl Session {
             {
                 file.synced = None;
             }
+            file.extension_synced
+                .retain(|server, _| live.contains(server));
         }
         true
     }
@@ -104,15 +106,66 @@ impl Session {
             return;
         };
         self.complete_with(document, &port);
-        let Some(at) = self.editor.document_version(document) else {
+        let Some(file) = self.files.get(&document) else {
             return;
         };
+        if let Some(synced) = self.hand_over(document, &port, file.synced, language) {
+            if let Some(file) = self.files.get_mut(&document) {
+                file.synced = Some(synced);
+            }
+        }
+    }
+
+    /// Hands `document`, written in `language`, to each of `servers` that
+    /// is running and ready, as [`Self::sync`] hands it to its own: what an
+    /// extension's servers read before its inline source is asked. The
+    /// version the first of them knows the text by.
+    pub(crate) fn sync_extension(
+        &mut self,
+        document: DocumentId,
+        servers: &[ServerId],
+        language: &str,
+    ) -> Option<i32> {
+        let ports: Vec<Port> = servers
+            .iter()
+            .filter_map(|id| self.port(*id))
+            .filter(Port::is_ready)
+            .collect();
+        for port in &ports {
+            let before = self
+                .files
+                .get(&document)?
+                .extension_synced
+                .get(&port.id())
+                .copied();
+            if let Some(synced) = self.hand_over(document, port, before, language) {
+                if let Some(file) = self.files.get_mut(&document) {
+                    file.extension_synced.insert(port.id(), synced);
+                }
+            }
+        }
+        let file = self.files.get(&document)?;
+        let first = ports.first()?;
+        file.extension_synced
+            .get(&first.id())
+            .map(|synced| synced.version)
+    }
+
+    /// Hands `document`, written in `language`, to `port`, which last had
+    /// it as `before`: opened where it has not seen it, its text sent where
+    /// it changed since. What `port` has of it now, where anything was sent.
+    fn hand_over(
+        &self,
+        document: DocumentId,
+        port: &Port,
+        before: Option<Synced>,
+        language: &str,
+    ) -> Option<Synced> {
+        let at = self.editor.document_version(document)?;
+        let file = self.files.get(&document)?;
         let text = self.lines(document).join("\n") + "\n";
-        let Some(file) = self.files.get_mut(&document) else {
-            return;
-        };
-        let synced = match file.synced {
-            Some(synced) if synced.server == port.id() && synced.at == at => return,
+        match before {
+            Some(synced) if synced.server == port.id() && synced.at == at => None,
             Some(synced) if synced.server == port.id() => {
                 let version = synced.version + 1;
                 let params = protocol::change_params(&file.path, version, &text);
@@ -133,9 +186,6 @@ impl Session {
                         version: 1,
                     })
             }
-        };
-        if synced.is_some() {
-            file.synced = synced;
         }
     }
 
@@ -144,9 +194,21 @@ impl Session {
         self.tell(document, "textDocument/didSave");
     }
 
-    /// Tells `document`'s server it is closed, its last tab gone.
+    /// Tells `document`'s server it is closed, its last tab gone, and the
+    /// extensions' servers handed it too.
     pub(crate) fn tell_closed(&self, document: DocumentId) {
         self.tell(document, "textDocument/didClose");
+        let Some(file) = self.files.get(&document) else {
+            return;
+        };
+        for server in file.extension_synced.keys() {
+            if let Some(port) = self.port(*server) {
+                port.notify(
+                    "textDocument/didClose",
+                    protocol::document_params(&file.path),
+                );
+            }
+        }
     }
 
     /// Lays what every checker found in `document`'s file on its text:

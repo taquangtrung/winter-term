@@ -483,8 +483,9 @@ impl Host for ExtensionHost<'_> {
         self.app.offer_extension_inline(self.extension, name, offer);
     }
 
-    /// No text tab asks an inline source yet, so no answer has a taker.
-    fn answer_inline(&mut self, _ticket: u64, _answer: InlineAnswer) {}
+    fn answer_inline(&mut self, ticket: u64, answer: InlineAnswer) {
+        self.app.answer_extension_inline(ticket, &answer);
+    }
 
     fn copy_text(&mut self, text: &str) {
         self.app.copy_quietly(text);

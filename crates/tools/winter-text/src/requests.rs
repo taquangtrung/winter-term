@@ -350,21 +350,26 @@ impl TextEditor {
     }
 
     /// Draws the card at the cursor, hung from `cursor` within `bounds`.
-    pub(super) fn draw_card(&self, frame: &mut Frame, cursor: Rect, bounds: Rect, theme: &Theme) {
+    /// Whether one was open.
+    pub(super) fn draw_card(
+        &self,
+        frame: &mut Frame,
+        cursor: Rect,
+        bounds: Rect,
+        theme: &Theme,
+    ) -> bool {
         let Some(card) = &self.lsp.card else {
-            return;
+            return false;
         };
-        let color = TextColor::Token(ThemeToken::Foreground);
-        let lines = card
-            .text
-            .lines()
-            .map(|line| StyledText::plain(line, color))
-            .collect();
-        let mut shown = InfoCard::new(lines, cursor);
-        if let Some(footer) = &card.footer {
-            shown = shown.with_footer(footer.as_str());
-        }
-        shown.draw(frame, bounds, theme);
+        draw_info_card(
+            frame,
+            &card.text,
+            card.footer.as_deref(),
+            cursor,
+            bounds,
+            theme,
+        );
+        true
     }
 
     /// Sends `method` with `params` to the server serving the file, which
@@ -792,6 +797,32 @@ impl TextEditor {
     pub(super) fn version(&self) -> u64 {
         session::with(|session| session.editor.document_version(self.document)).unwrap_or(0)
     }
+}
+
+// ========================================================================
+// Functions
+// ========================================================================
+
+/// Draws a card saying `text`, `footer` set apart under it, hung from
+/// `cursor` within `bounds`.
+pub(super) fn draw_info_card(
+    frame: &mut Frame,
+    text: &str,
+    footer: Option<&str>,
+    cursor: Rect,
+    bounds: Rect,
+    theme: &Theme,
+) {
+    let color = TextColor::Token(ThemeToken::Foreground);
+    let lines = text
+        .lines()
+        .map(|line| StyledText::plain(line, color))
+        .collect();
+    let mut shown = InfoCard::new(lines, cursor);
+    if let Some(footer) = footer {
+        shown = shown.with_footer(footer);
+    }
+    shown.draw(frame, bounds, theme);
 }
 
 // ========================================================================

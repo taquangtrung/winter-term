@@ -64,6 +64,8 @@ pub(crate) struct OpenFile {
     pub(crate) completing: Option<ServerId>,
     /// The document's version its markup's markers were found in.
     pub(crate) concealed: Option<u64>,
+    /// What each extension server handed it last had of it, by server.
+    pub(crate) extension_synced: HashMap<ServerId, Synced>,
     /// Its text as last committed, and the marks of what changed since.
     pub(crate) git: GitBase,
     /// Where it is.
@@ -236,6 +238,7 @@ impl Session {
                 asks: Asks::default(),
                 completing: None,
                 concealed: None,
+                extension_synced: HashMap::new(),
                 git: GitBase::default(),
                 path: path.to_path_buf(),
                 problems: Vec::new(),

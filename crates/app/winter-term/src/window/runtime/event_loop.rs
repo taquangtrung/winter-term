@@ -435,6 +435,11 @@ impl App {
         // Editors that keep themselves current (the process monitor) ask for
         // their next refresh here, and the loop wakes for the earliest.
         let editor_tick = self.tick_editors(Instant::now());
+        // What the editors asked of the extensions' inline sources, as typing
+        // paused or a key asked.
+        if self.call_extension_inlines() {
+            self.dirty = true;
+        }
         let picker_tick = self.tick_picker(Instant::now());
         if self.sync_progress() {
             self.dirty = true;
