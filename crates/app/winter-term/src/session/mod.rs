@@ -425,14 +425,12 @@ fn session_to_layout_tree(tree: &SessionTree) -> LayoutTree {
 
 /// Where the snapshot lives (see [`winter_base::paths::state_file`]).
 fn session_path() -> Option<PathBuf> {
-    winter_base::paths::state_file(SESSION_FILE_NAME)
+    crate::config::state_file(SESSION_FILE_NAME)
 }
 
 /// Where a reload's handover for this process is written.
 fn handover_path() -> Option<PathBuf> {
-    winter_base::paths::state_file(
-        &HANDOVER_FILE_NAME.replace("{}", &std::process::id().to_string()),
-    )
+    crate::config::state_file(&HANDOVER_FILE_NAME.replace("{}", &std::process::id().to_string()))
 }
 
 /// Let go of every program a handover file names, when the file cannot be

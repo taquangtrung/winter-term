@@ -2347,7 +2347,7 @@ fn test_the_caret_in_an_edited_name_is_the_windows_and_takes_the_modes_shape() {
     // Regression: the name drew a `│` of its own a column wide, and with no
     // caret reported the window put its one-cell block on the row too, so
     // the cursor never took the typing shape.
-    let tree = TempTree::new("edit-caret");
+    let tree = TempTree::new("edit-caret-shape");
     tree.touch("notes.txt");
     let mut editor = DirEditor::new(tree.0.clone());
     assert_eq!(editor.caret(), None, "browsing, the row is the cursor");

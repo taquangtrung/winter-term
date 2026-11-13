@@ -585,7 +585,9 @@ mod tests {
         app.new_tab();
         assert_eq!(app.layout().tabs_in_pane(first).len(), 3);
 
-        app.close_other_tabs(first);
+        // The `_now` closes, as a running shell (still in its startup scripts)
+        // would have the asking ones put a question instead.
+        app.close_other_tabs_now(first);
 
         assert_eq!(app.layout().tabs_in_pane(first), vec![first]);
     }
@@ -602,7 +604,7 @@ mod tests {
         let t3 = app.layout().focused();
         assert_eq!(app.layout().tabs_in_pane(t0), vec![t0, t1, t2, t3]);
 
-        app.close_tabs_to_right(t1);
+        app.close_tabs_to_right_now(t1);
 
         assert_eq!(app.layout().tabs_in_pane(t0), vec![t0, t1]);
     }
@@ -619,7 +621,7 @@ mod tests {
         let t3 = app.layout().focused();
         assert_eq!(app.layout().tabs_in_pane(t0), vec![t0, t1, t2, t3]);
 
-        app.close_tabs_to_left(t2);
+        app.close_tabs_to_left_now(t2);
 
         assert_eq!(app.layout().tabs_in_pane(t2), vec![t2, t3]);
     }
@@ -632,7 +634,7 @@ mod tests {
         let t1 = app.layout().focused();
         assert_eq!(app.layout().tabs_in_pane(t0), vec![t0, t1]);
 
-        app.close_tabs_to_right(t1);
+        app.close_tabs_to_right_now(t1);
 
         assert_eq!(app.layout().tabs_in_pane(t0), vec![t0, t1]);
     }
@@ -645,7 +647,7 @@ mod tests {
         let t1 = app.layout().focused();
         assert_eq!(app.layout().tabs_in_pane(t0), vec![t0, t1]);
 
-        app.close_tabs_to_left(t0);
+        app.close_tabs_to_left_now(t0);
 
         assert_eq!(app.layout().tabs_in_pane(t0), vec![t0, t1]);
     }

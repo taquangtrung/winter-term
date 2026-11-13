@@ -1,12 +1,14 @@
 //! The crash log: every panic, caught or not, written with its backtrace to
 //! `crash.log` in the state directory, so a crash leaves something to read
 //! after the window is gone, and a panic Winter recovered from can still be
-//! looked into.
+//! looked into. Nothing is written until the program turns the log on
+//! ([`enable`]), so a library's tests and tools never write to the user's.
 
 use std::backtrace::Backtrace;
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::panic::PanicHookInfo;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 // ========================================================================
 // Constants
@@ -19,9 +21,18 @@ const FILE_NAME: &str = "crash.log";
 /// panic repeating for days never fills the disk.
 const MAX_BYTES: u64 = 1024 * 1024;
 
+/// Whether the program turned the log on.
+static ENABLED: AtomicBool = AtomicBool::new(false);
+
 // ========================================================================
 // Functions
 // ========================================================================
+
+/// Turns the log on for the rest of the process: the program calls it as it
+/// starts, and nothing else does.
+pub fn enable() {
+    ENABLED.store(true, Ordering::Relaxed);
+}
 
 /// Where the log is written, when there is a state directory to put it in.
 pub fn path() -> Option<std::path::PathBuf> {
@@ -32,6 +43,9 @@ pub fn path() -> Option<std::path::PathBuf> {
 /// panics itself, since a panic inside the panic hook aborts the process:
 /// whatever goes wrong writing the log is let go.
 pub fn append(info: &PanicHookInfo) {
+    if !ENABLED.load(Ordering::Relaxed) {
+        return;
+    }
     let Some(path) = path() else {
         return;
     };

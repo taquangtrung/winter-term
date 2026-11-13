@@ -8,7 +8,7 @@ use std::sync::mpsc;
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
 
-use winter_base::paths::config_dir;
+use super::config_dir;
 use winter_base::watch::is_content_change;
 
 // ========================================================================

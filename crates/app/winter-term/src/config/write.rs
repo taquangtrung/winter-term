@@ -3,10 +3,10 @@
 
 use crate::render::MenuStyle;
 
+use super::config_dir;
 use super::schema::{controls_side_as_value, cursor_shape_as_value, kdl_bool, kdl_string};
 use super::servers::write_servers;
 use super::Config;
-use winter_base::paths::config_dir;
 
 // ========================================================================
 // Config

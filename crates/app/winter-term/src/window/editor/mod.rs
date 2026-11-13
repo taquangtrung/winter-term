@@ -817,9 +817,9 @@ impl App {
     /// The scratch file, a page kept beside the settings for notes that
     /// belong to no project, made the first time it is asked for.
     pub(in crate::window) fn open_scratch(&mut self) {
-        let path = winter_base::paths::config_dir().join(SCRATCH_FILE);
+        let path = crate::config::config_dir().join(SCRATCH_FILE);
         if !path.exists() {
-            if let Err(e) = std::fs::create_dir_all(winter_base::paths::config_dir())
+            if let Err(e) = std::fs::create_dir_all(crate::config::config_dir())
                 .and_then(|()| std::fs::write(&path, ""))
             {
                 self.set_error(format!("scratch: {e}"));

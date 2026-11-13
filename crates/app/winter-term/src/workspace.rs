@@ -91,7 +91,7 @@ impl Workspace {
 impl Store {
     /// The store in the state directory, or `None` when there is none.
     pub fn open() -> Option<Self> {
-        winter_base::paths::state_file(STORE_DIR_NAME).map(Self::at)
+        crate::config::state_file(STORE_DIR_NAME).map(Self::at)
     }
 
     /// The store kept in `dir`.

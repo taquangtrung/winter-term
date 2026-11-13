@@ -127,7 +127,7 @@ pub(super) fn with_installed(
     if components.is_empty() {
         return (extensions, problems);
     }
-    let runtime = match Runtime::new(winter_base::paths::state_file(CACHE_DIR).as_deref()) {
+    let runtime = match Runtime::new(crate::config::state_file(CACHE_DIR).as_deref()) {
         Ok(runtime) => runtime,
         Err(error) => {
             problems.push(format!(
@@ -240,7 +240,7 @@ fn id_of(path: &Path) -> Option<&str> {
 
 /// Run `component`, sandboxed to what it is granted.
 fn load(runtime: &Runtime, component: ToLoad) -> Result<Box<dyn Extension>, String> {
-    let data_dir = winter_base::paths::state_file(DATA_DIR)
+    let data_dir = crate::config::state_file(DATA_DIR)
         .ok_or("there is no state directory to keep its files in")?
         .join(&component.id);
     let granted = component.granted;

@@ -287,7 +287,7 @@ fn find_program(extension: &str, spec: &ServerSpec, named: Option<&Path>) -> Opt
 /// Where `extension`'s server `name` is fetched to.
 fn install_dir(extension: &str, name: &str) -> Option<PathBuf> {
     Some(
-        winter_base::paths::state_file(SERVERS_DIR)?
+        crate::config::state_file(SERVERS_DIR)?
             .join(extension)
             .join(name),
     )

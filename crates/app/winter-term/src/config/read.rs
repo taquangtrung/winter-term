@@ -7,6 +7,7 @@ use crate::render::{ColorOverrides, MenuStyle};
 
 use winter_model::paint::{GutterSide, MarkupMarkers, WrapIndent};
 
+use super::config_dir;
 use super::diagnostics::config_problems;
 use super::extensions;
 use super::schema::{
@@ -18,7 +19,6 @@ use super::{
     PromptEditBindings, ServerSetting, StatusBarConfig, StatusSegmentKind, ThemeSetting,
     TitleBarStyle, MAX_SCROLL_MARGIN,
 };
-use winter_base::paths::config_dir;
 
 // ========================================================================
 // Constants

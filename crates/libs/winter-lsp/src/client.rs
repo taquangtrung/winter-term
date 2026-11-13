@@ -966,12 +966,17 @@ mod tests {
     use super::*;
 
     /// A port onto no process, for reading messages against.
+    /// The fake server's id: past any a hub numbers its servers with, so
+    /// a hub in another test stopping its servers never forgets what this
+    /// one found.
+    const FAKE_SERVER: ServerId = ServerId::MAX;
+
     fn port() -> (Port, Receiver<Value>) {
         let (to_server, sent) = mpsc::sync_channel(MAX_QUEUED_MESSAGES);
         let port = Port(Arc::new(Shared {
             capabilities: Mutex::new(Value::Null),
             everywhere: false,
-            id: 7,
+            id: FAKE_SERVER,
             languages: vec!["rust".to_string()],
             name: "fake".to_string(),
             next_request: AtomicU64::new(1),
@@ -1140,11 +1145,11 @@ mod tests {
             [Event::Diagnostics(PathBuf::from("/lsp-client-test/a.rs"))]
         );
         let path = Path::new("/lsp-client-test/a.rs");
-        assert_eq!(diagnostics::of(Backend::Lsp(7), path).len(), 1);
+        assert_eq!(diagnostics::of(Backend::Lsp(FAKE_SERVER), path).len(), 1);
         let cleared = json!({"method": "textDocument/publishDiagnostics",
             "params": {"uri": "file:///lsp-client-test/a.rs", "diagnostics": []}});
         read(&cleared, &port, &to, &mut BTreeMap::new());
-        assert!(diagnostics::of(Backend::Lsp(7), path).is_empty());
+        assert!(diagnostics::of(Backend::Lsp(FAKE_SERVER), path).is_empty());
     }
 
     #[test]

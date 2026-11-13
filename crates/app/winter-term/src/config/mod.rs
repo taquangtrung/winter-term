@@ -115,6 +115,7 @@ pub(crate) use theme::{available_themes, is_valid_theme_name, load_named_theme, 
 pub(crate) use title::{expand_window_title_template, WindowTitleVars};
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 
 use crate::render::{ControlsSide, MenuStyle};
 
@@ -780,6 +781,37 @@ pub(crate) fn completion_backends() -> Vec<&'static str> {
         .copied()
         .chain(extensions)
         .collect()
+}
+
+/// The configuration directory: the user's own, except in this crate's
+/// tests, which read and write a folder of their own so that no test sees
+/// the user's settings and keys, or writes over them.
+pub(crate) fn config_dir() -> PathBuf {
+    #[cfg(test)]
+    {
+        std::env::temp_dir().join(format!("winter-term-test-config-{}", std::process::id()))
+    }
+    #[cfg(not(test))]
+    {
+        winter_base::paths::config_dir()
+    }
+}
+
+/// Where `name` is kept in the state directory (the session, the
+/// workspaces, the extensions' data): the user's own, except in this
+/// crate's tests, which keep a folder of their own as they do for the
+/// configuration.
+pub(crate) fn state_file(name: &str) -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        let dir =
+            std::env::temp_dir().join(format!("winter-term-test-state-{}", std::process::id()));
+        Some(dir.join(name))
+    }
+    #[cfg(not(test))]
+    {
+        winter_base::paths::state_file(name)
+    }
 }
 
 // ========================================================================

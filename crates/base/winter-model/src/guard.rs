@@ -768,10 +768,9 @@ pub fn install_panic_hook() {
                 let at = format!("{}:{}", at.file(), at.line());
                 LAST_PANIC.with(|last| *last.borrow_mut() = Some(at));
             }
-            // Not from tests: their deliberate panics are no crash to keep.
-            if !cfg!(test) {
-                winter_base::crash_log::append(info);
-            }
+            // Written only where the program turned the log on, never from
+            // tests, whose deliberate panics are no crash to keep.
+            winter_base::crash_log::append(info);
             previous(info);
         }));
     });

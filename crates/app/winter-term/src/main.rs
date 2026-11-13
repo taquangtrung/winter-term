@@ -180,6 +180,7 @@ Docs: {repository}",
 fn run_window() -> ExitCode {
     // misty reports through `log`; without a logger its warnings are lost.
     winter_app::logging::init();
+    winter_base::crash_log::enable();
     // Pin the Vulkan loader to the integrated GPU before anything (misty's
     // wgpu instance, or another thread) reads the environment. On a hybrid
     // laptop enumerating the discrete GPU's driver costs ~1.7s at instance

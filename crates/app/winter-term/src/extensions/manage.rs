@@ -96,8 +96,8 @@ impl Places {
     /// state directory; `None` without a state directory.
     pub(crate) fn user() -> Option<Self> {
         Some(Self {
-            approvals: winter_base::paths::state_file(APPROVALS_FILE)?,
-            extensions: winter_base::paths::config_dir().join(DIR_NAME),
+            approvals: crate::config::state_file(APPROVALS_FILE)?,
+            extensions: crate::config::config_dir().join(DIR_NAME),
         })
     }
 
