@@ -19,6 +19,7 @@ use winter_model::text_file::{self, FileShape, FileStamp};
 use winter_syntax::SyntaxHighlighter;
 
 use super::completing::Asks;
+use super::conflict::{self, Conflicts};
 use super::git_changes::GitBase;
 use super::git_files;
 use super::language::grammar_of;
@@ -66,6 +67,8 @@ pub(crate) struct OpenFile {
     pub(crate) asks: Asks,
     /// The server completing it, once one is.
     pub(crate) completing: Option<ServerId>,
+    /// The merge conflicts found in it.
+    pub(crate) conflicts: Conflicts,
     /// The document's version its markup's markers were found in.
     pub(crate) concealed: Option<u64>,
     /// What each extension server handed it last had of it, by server.
@@ -101,7 +104,10 @@ impl Session {
     fn new() -> Self {
         let mut editor = Editor::new(options(&EditorOptions::default()));
         editor.set_clipboard(EditorClipboard::new(SystemClipboard::new()));
-        for id in git_files::host_commands() {
+        for id in git_files::host_commands()
+            .into_iter()
+            .chain(conflict::host_commands())
+        {
             let registered = editor.register_host_command(id.as_str());
             debug_assert!(registered.is_ok(), "{id}: {registered:?}");
         }
@@ -251,6 +257,7 @@ impl Session {
             OpenFile {
                 asks: Asks::default(),
                 completing: None,
+                conflicts: Conflicts::default(),
                 concealed: None,
                 extension_synced: HashMap::new(),
                 git: GitBase::default(),

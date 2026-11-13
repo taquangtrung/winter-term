@@ -38,6 +38,7 @@ use winter_model::paint::{Frame as PaintFrame, IconKind, Row};
 use winter_model::textedit::modal::EditMode;
 
 mod completing;
+mod conflict;
 pub mod diff;
 mod git_changes;
 mod git_files;
@@ -352,8 +353,8 @@ impl TextEditor {
     }
 
     /// Draws the view in `area` of `frame` in `font`, the highlighter's
-    /// styles drawn as `styles` gives them, by number, and the color
-    /// swatches' numbered past them.
+    /// styles drawn as `styles` gives them, by number, and the conflict
+    /// markers' band and the color swatches' numbered past them.
     pub fn draw(
         &mut self,
         frame: &mut Frame,
@@ -362,11 +363,14 @@ impl TextEditor {
         font: &Font,
         mut styles: Vec<HighlightStyle>,
     ) {
+        let band = styles.len();
+        styles.push(conflict::band_style(theme.raised));
         session::with(|session| {
             session.git_shown(self.document);
             session.conceal_markup(self.document);
             session.check_spelling(self.document);
             session.mark_summary(self.document);
+            session.lay_conflicts(self.document, band);
             let swatches = session.lay_swatches(self.document, styles.len());
             styles.extend(swatches);
         });
@@ -440,6 +444,36 @@ impl TextEditor {
         });
     }
 
+    /// The lines of the file.
+    fn lines(&self) -> Vec<String> {
+        session::with(|session| session.lines(self.document))
+    }
+
+    /// Replaces `count` lines from line `first` (as many as there are, for
+    /// a count past the end) with `text`, as one edit.
+    fn replace_lines(&mut self, first: usize, count: usize, text: &str) {
+        let view = self.view_id();
+        session::with(|session| {
+            let Some(document) = session.editor.document(self.document) else {
+                return;
+            };
+            let total = document.len_lines();
+            let length = document.len_chars();
+            let start = session.offset_of(self.document, first, 0);
+            let end = match first.saturating_add(count) < total {
+                true => session.offset_of(self.document, first + count, 0),
+                false => length,
+            };
+            let text = match end < length {
+                true => format!("{text}\n"),
+                false => text.to_string(),
+            };
+            session
+                .editor
+                .apply_edits(view, vec![viento::Edit::new(start..end, text)]);
+        });
+    }
+
     /// The cursor's line and column, both from 0, the column in chars.
     fn cursor_line_column(&self) -> (usize, usize) {
         let view = self.view_id();
@@ -478,7 +512,11 @@ impl TextEditor {
                     }
                 }
                 HostRequest::Command(command) => {
-                    if let Some(done) = self.run_git_command(command.command.as_str()) {
+                    let id = command.command.as_str();
+                    let done = self
+                        .run_git_command(id)
+                        .or_else(|| self.run_conflict_command(id));
+                    if let Some(done) = done {
                         outcome = done;
                     }
                 }
@@ -777,7 +815,9 @@ impl Page for TextEditor {
     }
 
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
-        self.on_lsp_prompt(&reply).unwrap_or(EditorOutcome::Ignored)
+        self.on_conflict_prompt(&reply)
+            .or_else(|| self.on_lsp_prompt(&reply))
+            .unwrap_or(EditorOutcome::Ignored)
     }
 
     /// Edits a server made to files this tab does not hold.

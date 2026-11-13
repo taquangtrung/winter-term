@@ -16,7 +16,7 @@
 
 use std::path::Path;
 
-use viento::{Decoration, DecorationKind, DocumentId, Edit, Editor, Mode};
+use viento::{Decoration, DecorationKind, DocumentId, Editor, Mode};
 use winter_model::editor::{EditorOutcome, JobRequest, Notice};
 use winter_vcs::exec;
 
@@ -397,11 +397,6 @@ impl TextEditor {
         EditorOutcome::Consumed
     }
 
-    /// The lines of the file.
-    fn lines(&self) -> Vec<String> {
-        session::with(|session| session.lines(self.document))
-    }
-
     /// The first and last lines the selection covers, or the cursor's line
     /// twice.
     fn selected_lines(&self) -> (usize, usize) {
@@ -421,31 +416,6 @@ impl TextEditor {
             let anchor = shown.visual_anchor().map_or(cursor, line);
             (anchor.min(cursor), anchor.max(cursor))
         })
-    }
-
-    /// Replaces `count` lines from line `first` (as many as there are, for
-    /// a count past the end) with `text`, as one edit.
-    fn replace_lines(&mut self, first: usize, count: usize, text: &str) {
-        let view = self.view_id();
-        session::with(|session| {
-            let Some(document) = session.editor.document(self.document) else {
-                return;
-            };
-            let total = document.len_lines();
-            let length = document.len_chars();
-            let start = session.offset_of(self.document, first, 0);
-            let end = match first.saturating_add(count) < total {
-                true => session.offset_of(self.document, first + count, 0),
-                false => length,
-            };
-            let text = match end < length {
-                true => format!("{text}\n"),
-                false => text.to_string(),
-            };
-            session
-                .editor
-                .apply_edits(view, vec![Edit::new(start..end, text)]);
-        });
     }
 }
 
