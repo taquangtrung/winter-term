@@ -40,6 +40,7 @@ use winter_model::textedit::modal::EditMode;
 mod completing;
 pub mod diff;
 mod git_changes;
+mod git_files;
 mod hints;
 mod inline;
 mod jumps;
@@ -110,6 +111,8 @@ pub struct TextEditor {
     problems_seen: Option<u64>,
     /// The language each extension settings add is written in.
     languages: BTreeMap<String, String>,
+    /// Where recalling earlier commit messages has got to.
+    recall: git_files::MessageRecall,
     /// A notice for the window, not yet taken.
     notice: Option<Notice>,
     /// Where the file is.
@@ -155,12 +158,19 @@ impl TextEditor {
             languages: BTreeMap::new(),
             problems_seen: None,
             notice: None,
+            recall: git_files::MessageRecall::default(),
             path,
             view: RefCell::new(Some(EditorView::new(view))),
             waiter: None,
         };
         if let Some(line) = line {
             editor.move_to(line.saturating_sub(1), 0);
+        }
+        if editor.holds_message() {
+            let view = editor.view_id();
+            session::with(|session| {
+                let _ = session.editor.run_command(view, "enter-insert", None);
+            });
         }
         Ok(editor)
     }
@@ -356,6 +366,7 @@ impl TextEditor {
             session.git_shown(self.document);
             session.conceal_markup(self.document);
             session.check_spelling(self.document);
+            session.mark_summary(self.document);
             let swatches = session.lay_swatches(self.document, styles.len());
             styles.extend(swatches);
         });
@@ -429,6 +440,20 @@ impl TextEditor {
         });
     }
 
+    /// The cursor's line and column, both from 0, the column in chars.
+    fn cursor_line_column(&self) -> (usize, usize) {
+        let view = self.view_id();
+        session::with(|session| {
+            let cursor = session.editor.view(view)?.cursor();
+            let at = session
+                .editor
+                .document(self.document)?
+                .char_to_position(cursor)?;
+            Some((at.line, at.column))
+        })
+        .unwrap_or_default()
+    }
+
     /// Carries out what the editor asked, oldest first: what the window is
     /// to do, the last request's that asks anything of it.
     fn carry_out(&mut self, requests: Vec<HostRequest>) -> EditorOutcome {
@@ -451,6 +476,14 @@ impl TextEditor {
                         };
                         outcome = EditorOutcome::OpenPath(target);
                     }
+                }
+                HostRequest::Command(command) => {
+                    if let Some(done) = self.run_git_command(command.command.as_str()) {
+                        outcome = done;
+                    }
+                }
+                HostRequest::Quit(quit) if quit.force && self.holds_message() => {
+                    outcome = self.cancel_message().unwrap_or(EditorOutcome::Close);
                 }
                 HostRequest::Quit(quit) => {
                     if quit.force || !self.is_dirty() {
@@ -680,9 +713,7 @@ impl Page for TextEditor {
     }
 
     fn jump_cursor(&self) -> Option<usize> {
-        self.snapshot()
-            .and_then(|target| target.line)
-            .map(|line| line - 1)
+        Some(self.cursor_line_column().0)
     }
 
     /// A preview moves the cursor to the target's line, remembering where
@@ -730,14 +761,19 @@ impl Page for TextEditor {
         menu_groups([items])
     }
 
-    /// Git's answer to the read of the file as last committed.
+    /// Git's answers: to the read of the file as last committed, and to
+    /// the read of earlier commit messages a recall steps back through.
     fn on_job(&mut self, reply: JobReply) -> EditorOutcome {
-        if let JobReply::Command(output) = reply {
-            if output.tag == git_changes::TAG_GIT_BASE {
-                session::with(|session| session.git_answered(self.document, &output));
-            }
+        let JobReply::Command(output) = reply else {
+            return EditorOutcome::Consumed;
+        };
+        if output.tag == git_changes::TAG_GIT_BASE {
+            session::with(|session| session.git_answered(self.document, &output));
+            return EditorOutcome::Consumed;
         }
-        EditorOutcome::Consumed
+        let log = winter_vcs::exec::succeeded(&output).then_some(output.stdout.as_str());
+        self.take_messages(output.tag, log)
+            .unwrap_or(EditorOutcome::Consumed)
     }
 
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
@@ -921,7 +957,12 @@ impl Editor for TextEditor {
         })
     }
 
+    /// The file at the cursor's line; nothing for a file git hands the
+    /// editor, which git reopens itself.
     fn snapshot(&self) -> Option<OpenTarget> {
+        if self.holds_git_file() {
+            return None;
+        }
         let line = session::with(|session| {
             let cursor = session.editor.view(self.view_id())?.cursor();
             session

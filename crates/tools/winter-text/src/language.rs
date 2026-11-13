@@ -56,10 +56,10 @@ const COMMIT_MESSAGE: &str = "COMMIT_EDITMSG";
 
 /// Files git opens an editor on for a message, read with the commit
 /// message grammar.
-const MESSAGE_FILES: [&str; 3] = [COMMIT_MESSAGE, "MERGE_MSG", "TAG_EDITMSG"];
+pub(super) const MESSAGE_FILES: [&str; 3] = [COMMIT_MESSAGE, "MERGE_MSG", "TAG_EDITMSG"];
 
 /// The file git opens an editor on for an interactive rebase's plan.
-const REBASE_TODO: &str = "git-rebase-todo";
+pub(super) const REBASE_TODO: &str = "git-rebase-todo";
 
 /// The grammars git's files are read with.
 const COMMIT_GRAMMAR: &str = "Git Commit";

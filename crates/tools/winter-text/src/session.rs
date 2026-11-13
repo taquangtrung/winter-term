@@ -20,6 +20,7 @@ use winter_syntax::SyntaxHighlighter;
 
 use super::completing::Asks;
 use super::git_changes::GitBase;
+use super::git_files;
 use super::language::grammar_of;
 use super::servers::{Servers, Synced};
 use super::spelling::Spelling;
@@ -79,6 +80,9 @@ pub(crate) struct OpenFile {
     shape: FileShape,
     /// What the file was when last read or written.
     stamp: FileStamp,
+    /// The document's version its summary was marked past its width in,
+    /// where it is a message.
+    pub(crate) summary_marked: Option<u64>,
     /// The color swatches laid on it, once they are.
     pub(crate) swatched: Option<Swatched>,
     /// What the server serving it last had of it.
@@ -97,6 +101,10 @@ impl Session {
     fn new() -> Self {
         let mut editor = Editor::new(options(&EditorOptions::default()));
         editor.set_clipboard(EditorClipboard::new(SystemClipboard::new()));
+        for id in git_files::host_commands() {
+            let registered = editor.register_host_command(id.as_str());
+            debug_assert!(registered.is_ok(), "{id}: {registered:?}");
+        }
         Self {
             editor,
             files: HashMap::new(),
@@ -250,12 +258,14 @@ impl Session {
                 problems: Vec::new(),
                 shape,
                 stamp,
+                summary_marked: None,
                 swatched: None,
                 synced: None,
                 views: Vec::new(),
             },
         );
         self.spell_from_the_start(document, path);
+        self.bind_git_keys(document, path);
         Ok(document)
     }
 }
