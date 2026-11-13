@@ -2,5 +2,5 @@
 # reproducible across machines and CI. Bump deliberately, re-running
 # `make lint` and `make fmt` after any change.
 [toolchain]
-channel = "1.99.1"
+channel = "1.100.0"
 components = ["rustfmt", "clippy"]

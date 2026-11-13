@@ -6,7 +6,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 keywords = ["terminal", "pty", "scrollback", "vt100", "grid"]
 categories = ["command-line-interface", "os"]
 rust-version.workspace = true

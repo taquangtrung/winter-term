@@ -6,7 +6,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 keywords = ["pdf", "synctex", "latex", "terminal", "viewer"]
 categories = ["text-editors", "visualization"]
 rust-version.workspace = true

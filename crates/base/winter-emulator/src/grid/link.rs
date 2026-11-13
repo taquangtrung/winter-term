@@ -338,8 +338,8 @@ mod tests {
             grid.print(ch);
         }
         grid.detect_urls();
-        for i in 0..19 {
-            assert_eq!(grid.cells[i].style.link, 0);
+        for cell in grid.cells.iter().take(19) {
+            assert_eq!(cell.style.link, 0);
         }
     }
 

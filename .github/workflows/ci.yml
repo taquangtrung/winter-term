@@ -86,11 +86,11 @@ jobs:
   # this the field is an unverified claim; with it, a dependency bump that
   # raises the real floor fails here instead of in a user's build.
   msrv:
-    name: MSRV (1.99)
+    name: MSRV (1.100)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@1.99
+      - uses: dtolnay/rust-toolchain@1.100
       - uses: Swatinem/rust-cache@v2
       - name: Install Linux GUI dependencies
         run: |

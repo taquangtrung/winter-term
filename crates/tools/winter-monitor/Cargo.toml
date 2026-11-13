@@ -6,7 +6,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 keywords = ["process-monitor", "system-monitor", "terminal", "editor"]
 categories = ["command-line-utilities"]
 rust-version.workspace = true

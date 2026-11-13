@@ -6,7 +6,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 keywords = ["syntax", "highlighting", "textmate", "editor"]
 categories = ["text-editors", "text-processing"]
 rust-version.workspace = true

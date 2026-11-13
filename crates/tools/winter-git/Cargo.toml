@@ -6,7 +6,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 keywords = ["git", "terminal", "editor", "magit"]
 categories = ["development-tools"]
 rust-version.workspace = true

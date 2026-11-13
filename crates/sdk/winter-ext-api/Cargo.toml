@@ -6,7 +6,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 keywords = ["terminal", "editor", "extension", "plugin"]
 categories = ["api-bindings"]
 rust-version.workspace = true

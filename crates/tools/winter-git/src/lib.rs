@@ -1190,9 +1190,9 @@ impl GitEditor {
         let cols = self.cols;
         let start = self.list.view().scroll();
         let mut top = 0;
-        for index in start..self.rows.len() {
-            let text = row_text(&self.rows[index].spans);
-            let height = row_height(&text, cols, true, self.rows[index].wrap_indent);
+        for (index, row) in self.rows.iter().enumerate().skip(start) {
+            let text = row_text(&row.spans);
+            let height = row_height(&text, cols, true, row.wrap_indent);
             if screen_row < top + height {
                 return Some(index);
             }

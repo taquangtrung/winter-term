@@ -40,16 +40,14 @@ edition = "2021"
 authors = ["Quang Trung Ta <taquangtrungvn@gmail.com>"]
 license = "MIT"
 repository = "https://github.com/taquangtrung/winter-term"
-homepage = "https://github.com/taquangtrung/winter-term"
 keywords = ["terminal", "pty", "multiplexer", "terminal-emulator", "vim"]
 categories = ["command-line-interface", "command-line-utilities"]
-readme = "README.md"
-# The verified floor, not an aspiration: `rust-toolchain.toml` pins 1.99.1 and
+# The verified floor, not an aspiration: `rust-toolchain.toml` pins 1.100.0 and
 # CI builds the MSRV job against exactly this value. The dependency graph
 # already forces most of it (kdl declares 1.95, cosmic-text 1.89), so a lower
 # number here would be a claim that cannot build. Bump deliberately, and only
 # after the MSRV CI job passes at the new value.
-rust-version = "1.99"
+rust-version = "1.100"
 
 [workspace.dependencies]
 # What the libraries report (misty's GPU fallback, text not drawn), written

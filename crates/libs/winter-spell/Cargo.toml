@@ -6,7 +6,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 keywords = ["spelling", "spellcheck", "hunspell", "dictionary", "terminal"]
 categories = ["text-processing"]
 rust-version.workspace = true

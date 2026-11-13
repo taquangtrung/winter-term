@@ -6,7 +6,6 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 repository.workspace = true
-homepage.workspace = true
 keywords = ["terminal", "tbp", "rich-output", "blocks", "jupyter"]
 categories = ["api-bindings", "command-line-interface"]
 rust-version.workspace = true
