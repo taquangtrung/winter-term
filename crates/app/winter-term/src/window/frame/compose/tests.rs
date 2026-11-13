@@ -300,7 +300,7 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
         origin: None,
         buttons: None,
         query_buttons: None,
-        field: winter_model::textedit::field::TextField::line("hello"),
+        field: winter_field::Field::line("hello"),
         recall: winter_model::textedit::recall::Recall::default(),
         tab: TabId(0),
         request: winter_model::editor::PromptRequest {
@@ -318,9 +318,7 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
     assert_eq!(dialog.input.as_deref(), Some("hello"));
     assert_eq!(dialog.caret, 5);
 
-    app.chrome.overlay = Some(Overlay::ThemeName(
-        winter_model::textedit::field::TextField::line("dracula"),
-    ));
+    app.chrome.overlay = Some(Overlay::ThemeName(winter_field::Field::line("dracula")));
     assert!(app.find_target().is_none());
     let dialog = app.input_view().expect("the theme name question");
     assert_eq!(dialog.label, "New theme name");
@@ -331,7 +329,7 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
         origin: None,
         buttons: None,
         query_buttons: None,
-        field: winter_model::textedit::field::TextField::line("needle"),
+        field: winter_field::Field::line("needle"),
         recall: winter_model::textedit::recall::Recall::default(),
         tab: TabId(3),
         request: winter_model::editor::PromptRequest {

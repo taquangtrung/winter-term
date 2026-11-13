@@ -463,7 +463,7 @@ impl App {
         let Some(Overlay::Rename(input)) = &mut self.chrome.overlay else {
             return KeyRoute::Pass;
         };
-        match input.field.on_key(&press.key.typed(), 1) {
+        match input.field.on_key(&press.key.typed()) {
             EditOutcome::Submit => {
                 let tab = input.tab;
                 let name = input.field.text().to_string();
@@ -500,7 +500,7 @@ impl App {
             Some(Overlay::EditorPrompt(_)) => self.handle_prompt_key(&press.key),
             Some(Overlay::Password(_)) => self.handle_password_key(&press.key),
             Some(Overlay::ZaiKey(_)) => self.handle_zai_key_key(&press.key),
-            Some(Overlay::ThemeName(input)) => match input.on_key(&press.key.typed(), 1) {
+            Some(Overlay::ThemeName(input)) => match input.on_key(&press.key.typed()) {
                 EditOutcome::Submit => {
                     let name = input.text().to_string();
                     self.chrome.overlay = None;
@@ -1197,7 +1197,7 @@ mod tests {
         assert!(!pressed);
         assert_eq!(
             app.chrome.rename_input().map(|input| input.field.text()),
-            Some("ab")
+            Some("ab".to_string())
         );
     }
 
@@ -1236,7 +1236,7 @@ mod tests {
         app.route_key(ElementState::Pressed, input::Key::plain(KeyCode::Char('x')));
         assert_eq!(
             app.chrome.rename_input().map(|input| input.field.text()),
-            Some("xhello")
+            Some("xhello".to_string())
         );
         assert_eq!(
             app.strip_title(renamed),

@@ -7389,6 +7389,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "winter-field"
+version = "0.1.0"
+dependencies = [
+ "cherry",
+ "misty",
+ "winter-cherry",
+ "winter-model",
+]
+
+[[package]]
 name = "winter-git"
 version = "0.1.0"
 dependencies = [
@@ -7553,6 +7563,7 @@ dependencies = [
  "winter-docker",
  "winter-emulator",
  "winter-ext-api",
+ "winter-field",
  "winter-git",
  "winter-lsp",
  "winter-model",
@@ -7602,6 +7613,7 @@ dependencies = [
  "winter-base",
  "winter-cherry",
  "winter-ext-api",
+ "winter-field",
  "winter-lsp",
  "winter-model",
  "winter-spell",

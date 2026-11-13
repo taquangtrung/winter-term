@@ -969,7 +969,7 @@ impl App {
             .and_then(|prompt| prompt.typed_search())
             .map(|(text, _)| text);
         let Some(query) = typed
-            .or(self.term.search.query.as_deref())
+            .or_else(|| self.term.search.query.clone())
             .filter(|query| !query.is_empty())
         else {
             return Default::default();
@@ -988,7 +988,7 @@ impl App {
                 }
                 _ => Vec::new(),
             };
-            return (visible_match_cells(grid, query), current);
+            return (visible_match_cells(grid, &query), current);
         }
         let Some(slot) = self.open_tabs.page(&id) else {
             return Default::default();
@@ -996,7 +996,7 @@ impl App {
         let Some(grid) = slot.view.painted.as_ref() else {
             return Default::default();
         };
-        let spans = painted_match_spans(grid, query);
+        let spans = painted_match_spans(grid, &query);
         // An editor's search moves its cursor, so the match the cursor is on is
         // the current one: the one under the caret where the editor has one,
         // else the one on the cursor's row nearest it, so a caret a column

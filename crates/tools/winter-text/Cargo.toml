@@ -15,6 +15,7 @@ rust-version.workspace = true
 serde_json.workspace = true
 misty.workspace = true
 winter-cherry.workspace = true
+winter-field.workspace = true
 cherry.workspace = true
 unicode-width.workspace = true
 winter-base.workspace = true

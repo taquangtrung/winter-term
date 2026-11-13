@@ -720,7 +720,7 @@ fn test_a_dialog_of_the_window_s_own_waits_for_the_open_one() {
     app.kill_buffer(tab);
     assert!(app.chrome.close_prompt().is_some());
     app.open_overlay(crate::window::Overlay::ThemeName(
-        winter_model::textedit::field::TextField::line(""),
+        winter_field::Field::line(""),
     ));
     assert!(app.chrome.close_prompt().is_some(), "the open dialog stays");
     app.handle_close_prompt_key(&press(KeyCode::Char('c')));

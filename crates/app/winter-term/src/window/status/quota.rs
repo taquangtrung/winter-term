@@ -77,7 +77,7 @@ impl App {
             return;
         };
         self.dirty = true;
-        match field.on_key(&key.typed(), 1) {
+        match field.on_key(&key.typed()) {
             EditOutcome::Submit => {
                 let typed = field.text().to_string();
                 self.chrome.overlay = None;

@@ -2,10 +2,10 @@
 
 use std::time::Instant;
 
+use winter_field::Field;
 use winter_model::editor::match_spans;
 use winter_model::input;
 use winter_model::layout::TabId;
-use winter_model::textedit::field::TextField;
 use winter_model::vim::objects::keyword_at;
 
 use super::vim::line_chars;
@@ -51,7 +51,7 @@ pub(in crate::window) struct SearchState {
     /// The query being typed as a one-line field, for its Emacs keys: it
     /// keeps the caret and the kill ring between keys, and follows the query
     /// wherever something else sets it. Made the first time a query is typed.
-    editor: Option<TextField>,
+    editor: Option<Field>,
     /// The last query searched for, kept after the search is put away with `Esc`
     /// so `n`/`N` can pick it back up from wherever the cursor now is: vim keeps
     /// the pattern the same way across `:nohlsearch`.
@@ -83,12 +83,12 @@ impl SearchState {
         let Some(query) = self.query.as_mut() else {
             return false;
         };
-        let editor = self.editor.get_or_insert_with(|| TextField::line(""));
-        if editor.text() != query {
+        let editor = self.editor.get_or_insert_with(|| Field::line(""));
+        if editor.text() != *query {
             editor.set_text(query);
         }
-        editor.on_key(&key.typed(), 1);
-        if editor.text() == query {
+        editor.on_key(&key.typed());
+        if editor.text() == *query {
             return false;
         }
         *query = editor.text().to_string();

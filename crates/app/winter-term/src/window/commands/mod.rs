@@ -12,13 +12,13 @@
 use crate::config::ThemeSetting;
 use crate::window::picker::sources::IconRow;
 use misty::picker::{MatchOn, PreviewKind, Row, RowKey};
+use winter_field::Field;
 use winter_lsp::servers::INSTALL_COMMAND_TITLE;
 use winter_model::editor::{FORWARDED_COMMANDS, LSP_COMMANDS, PROBLEM_COMMANDS, WRITING_COMMANDS};
 use winter_model::input::{self, window_action_by_name, Keymap};
 use winter_model::layout::{Direction, FocusDir, Rect, TabId};
 use winter_model::mode::Mode;
 use winter_model::paint::IconKind;
-use winter_model::textedit::field::TextField;
 
 use super::editor::compile::TRUST_TASKS_TITLE;
 use super::input::overlay::{Overlay, RenameInput};
@@ -632,7 +632,7 @@ pub(crate) const BUILTIN: &[Builtin] = &[
         app.refresh_quotas()
     }),
     window("quota_zai_key", "Quota: Set Z.ai API Key", |app, _| {
-        app.open_overlay(Overlay::ZaiKey(TextField::line("")))
+        app.open_overlay(Overlay::ZaiKey(Field::line("")))
     }),
     window("sys_page", "System: Monitor", |app, _| {
         app.open_sys_editor()
@@ -797,7 +797,7 @@ pub(crate) const BUILTIN: &[Builtin] = &[
         app.set_theme(ThemeSetting::Light)
     }),
     window("theme_new", "Theme: Create New…", |app, _| {
-        app.open_overlay(Overlay::ThemeName(TextField::line("")))
+        app.open_overlay(Overlay::ThemeName(Field::line("")))
     }),
     window("toggle_fold", "Toggle Fold", |app, focused| {
         app.toggle_block_folds(focused)

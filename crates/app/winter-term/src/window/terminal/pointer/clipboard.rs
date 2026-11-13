@@ -536,10 +536,10 @@ mod tests {
     use std::path::PathBuf;
     use std::rc::Rc;
 
+    use winter_field::Field;
     use winter_model::editor::{Editor, EditorOutcome, Page, PromptRequest};
     use winter_model::input::Key;
     use winter_model::paint::{Frame, Span};
-    use winter_model::textedit::field::TextField;
     use winter_model::textedit::recall::Recall;
 
     use super::*;
@@ -586,7 +586,7 @@ mod tests {
                 }
                 _ => None,
             },
-            field: TextField::line("find "),
+            field: Field::line("find "),
             recall: Recall::default(),
             tab: TabId(0),
             request: PromptRequest {
@@ -613,10 +613,10 @@ mod tests {
     #[test]
     fn test_a_paste_lands_in_the_field_of_whichever_dialog_is_up() {
         let dialogs = [
-            Overlay::ZaiKey(TextField::line("")),
-            Overlay::ThemeName(TextField::line("")),
+            Overlay::ZaiKey(Field::line("")),
+            Overlay::ThemeName(Field::line("")),
             Overlay::Password(PasswordInput {
-                field: TextField::line(""),
+                field: Field::line(""),
                 then: PathBuf::from("/"),
             }),
             Overlay::Rename(RenameInput::new(TabId(0), "")),

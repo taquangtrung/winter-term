@@ -5,11 +5,11 @@
 use std::time::{Duration, Instant};
 
 use crate::render::{ButtonView, InputView};
+use winter_field::Field;
 use winter_model::button::ButtonGroup;
 use winter_model::editor::{PickPlacement, PromptMode, PromptReply, PromptRequest, SearchReport};
 use winter_model::input::{Key, KeyCode, Mods};
 use winter_model::layout::TabId;
-use winter_model::textedit::field::TextField;
 use winter_model::textedit::modal::EditOutcome;
 use winter_model::textedit::recall::{Answers, Recall};
 
@@ -72,7 +72,7 @@ pub(in crate::window) struct ActivePrompt {
     /// Optional button group for interactive query replace.
     pub(in crate::window) query_buttons: Option<ButtonGroup<String>>,
     /// What has been typed, edited with the same keys as any other text.
-    pub(in crate::window) field: TextField,
+    pub(in crate::window) field: Field,
     /// The card of the transient whose choice asked, which the dialog opens
     /// on; `None` for one asked otherwise.
     pub(in crate::window) origin: Option<(f32, f32, f32, f32)>,
@@ -129,7 +129,7 @@ impl ActivePrompt {
         Self {
             buttons,
             query_buttons,
-            field: TextField::line(&request.initial),
+            field: Field::line(&request.initial),
             origin: None,
             recall: Recall::default(),
             tab,
@@ -139,7 +139,7 @@ impl ActivePrompt {
 
     /// What a search question has had typed into it so far, and whether it
     /// runs backwards. `None` for any other question.
-    pub(in crate::window) fn typed_search(&self) -> Option<(&str, bool)> {
+    pub(in crate::window) fn typed_search(&self) -> Option<(String, bool)> {
         match self.request.mode {
             PromptMode::Search { reverse } => Some((self.field.text(), reverse)),
             PromptMode::Confirm
@@ -285,7 +285,7 @@ impl App {
                 (_, (Mods::NONE, KeyCode::Escape)) => Some(None),
                 // A password is edited like any answer, but is neither
                 // recorded for recall nor handed to the editor while typed.
-                (PromptMode::Secret, _) => match prompt.field.on_key(key, 1) {
+                (PromptMode::Secret, _) => match prompt.field.on_key(key) {
                     EditOutcome::Submit => Some(Some(prompt.field.text().to_string())),
                     EditOutcome::Cancel => Some(None),
                     _ => None,
@@ -308,7 +308,7 @@ impl App {
                 // The answer is a line of text like any other, so it takes
                 // the same Emacs keys a file does while typing.
                 (PromptMode::Search { .. } | PromptMode::Text, _) => {
-                    match prompt.field.on_key(key, 1) {
+                    match prompt.field.on_key(key) {
                         EditOutcome::Submit => {
                             let answer = prompt.field.text().to_string();
                             self.host
@@ -465,7 +465,7 @@ impl App {
                 .unwrap_or_default();
             let mut view = input_dialog(
                 &prompt.request.label,
-                prompt.field.text(),
+                &prompt.field.text(),
                 prompt.field.col(),
                 prompt.request.mode,
                 buttons,
@@ -514,7 +514,7 @@ impl App {
         if let Some(input) = self.chrome.password_input() {
             return Some(input_dialog(
                 super::remote::PASSWORD_LABEL,
-                input.field.text(),
+                &input.field.text(),
                 input.field.col(),
                 PromptMode::Secret,
                 Vec::new(),
@@ -523,7 +523,7 @@ impl App {
         if let Some(field) = self.chrome.zai_key_input() {
             return Some(input_dialog(
                 crate::window::status::quota::ZAI_KEY_LABEL,
-                field.text(),
+                &field.text(),
                 field.col(),
                 PromptMode::Secret,
                 Vec::new(),
@@ -532,7 +532,7 @@ impl App {
         let field = self.chrome.theme_name_input()?;
         Some(input_dialog(
             THEME_NAME_LABEL,
-            field.text(),
+            &field.text(),
             field.col(),
             PromptMode::Text,
             Vec::new(),

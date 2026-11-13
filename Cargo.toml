@@ -13,6 +13,7 @@ members = [
     "crates/tools/winter-terminal",
     "crates/tools/winter-text",
     "crates/libs/winter-cherry",
+    "crates/libs/winter-field",
     "crates/libs/winter-mux",
     "crates/libs/winter-synctex",
     "crates/libs/winter-syntax",
@@ -78,6 +79,7 @@ winter-pdf = { version = "0.1.0", path = "crates/tools/winter-pdf" }
 winter-terminal = { version = "0.1.0", path = "crates/tools/winter-terminal" }
 winter-text = { version = "0.1.0", path = "crates/tools/winter-text" }
 winter-cherry = { version = "0.1.0", path = "crates/libs/winter-cherry" }
+winter-field = { version = "0.1.0", path = "crates/libs/winter-field" }
 winter-mux = { version = "0.1.0", path = "crates/libs/winter-mux" }
 winter-synctex = { version = "0.1.0", path = "crates/libs/winter-synctex" }
 winter-syntax = { version = "0.1.0", path = "crates/libs/winter-syntax" }

@@ -368,16 +368,14 @@ mod tests {
         app.config.status_bar.enabled = false;
         assert!(!app.status_bar_visible());
 
-        app.chrome.overlay = Some(Overlay::ThemeName(
-            winter_model::textedit::field::TextField::line("custom"),
-        ));
+        app.chrome.overlay = Some(Overlay::ThemeName(winter_field::Field::line("custom")));
         assert!(!app.status_bar_visible());
 
         let prompt = editor::ActivePrompt {
             origin: None,
             buttons: None,
             query_buttons: None,
-            field: winter_model::textedit::field::TextField::line("query"),
+            field: winter_field::Field::line("query"),
             recall: winter_model::textedit::recall::Recall::default(),
             tab: TabId(0),
             request: winter_model::editor::PromptRequest {

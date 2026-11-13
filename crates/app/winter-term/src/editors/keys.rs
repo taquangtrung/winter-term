@@ -17,6 +17,7 @@ use std::fmt::Write;
 use crate::config::schema::WINDOW_BLOCK;
 use crate::editors::{key_tables, COMMAND_BLOCKS, UNBOUND};
 use misty::picker::Query;
+use winter_field::Field;
 use winter_model::editor::{
     menu_groups, present, Appearance, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus,
     Notice, Page, ScrollPosition,
@@ -25,7 +26,6 @@ use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, Table
 use winter_model::input::{format_sequence, Key, KeyCode, Keymap, Mods, MAX_SEQUENCE_LEN};
 use winter_model::paint::{Frame, Point, Row};
 use winter_model::picture::Tile;
-use winter_model::textedit::field::TextField;
 use winter_model::textedit::modal::{EditMode, EditOutcome};
 
 use super::web_page::{escape, PageView};
@@ -308,7 +308,7 @@ pub struct KeysEditor {
     /// one of them runs.
     contested: HashSet<usize>,
     /// The filter line.
-    filter: TextField,
+    filter: Field,
     focus: Focus,
     /// A report of the editor's own.
     notice: Option<Notice>,
@@ -491,7 +491,7 @@ impl KeysEditor {
             capture: None,
             contested: contested(&commands),
             commands,
-            filter: TextField::line(""),
+            filter: Field::line(""),
             focus: Focus::List,
             notice: None,
             recording: None,
@@ -687,7 +687,7 @@ impl KeysEditor {
             Some(_) => None,
             None => Some(Vec::new()),
         };
-        self.filter = TextField::line("");
+        self.filter = Field::line("");
         self.apply_filter();
     }
 
@@ -702,7 +702,7 @@ impl KeysEditor {
             keys.clear();
         }
         keys.push(*key);
-        self.filter = TextField::line(&format_sequence(keys));
+        self.filter = Field::line(&format_sequence(keys));
         self.apply_filter();
     }
 
@@ -760,11 +760,11 @@ impl KeysEditor {
             return EditorOutcome::Consumed;
         }
         let before = self.filter.text().to_string();
-        match self.filter.on_key(&key.typed(), 1) {
+        match self.filter.on_key(&key.typed()) {
             EditOutcome::Submit => return self.run_row(),
             // `Esc` leaves Insert mode, as in Vim, keeping what is typed.
             EditOutcome::Cancel => {
-                self.filter = TextField::line(&before);
+                self.filter = Field::line(&before);
                 self.focus = Focus::List;
             }
             _ => {}
@@ -905,7 +905,7 @@ impl KeysEditor {
                 };
                 format!("{caret}<span class=\"empty\">{placeholder}</span>")
             }
-            (false, false) => escape(text),
+            (false, false) => escape(&text),
             (false, true) => {
                 let at = self.filter.col();
                 let before: String = text.chars().take(at).collect();
@@ -1362,7 +1362,7 @@ mod tests {
         let mut editor = filtering();
         type_filter(&mut editor, "split");
         assert_eq!(listed(&editor), ["split_vertical"]);
-        editor.filter = TextField::line("");
+        editor.filter = Field::line("");
         editor.apply_filter();
         type_filter(&mut editor, "C-,");
         assert_eq!(listed(&editor), ["open_settings"]);

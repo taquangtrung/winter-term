@@ -4,8 +4,8 @@
 //! password first where browsing as root needs it.
 
 use winter_base::remote::{self, Kind, Remote, RemoteError};
+use winter_field::Field;
 use winter_model::input::Key;
-use winter_model::textedit::field::TextField;
 use winter_model::textedit::modal::EditOutcome;
 
 use crate::window::input::overlay::{Overlay, PasswordInput};
@@ -34,7 +34,7 @@ impl App {
         match remote::sudo_ready() {
             true => self.open_browser_at(start),
             false => self.open_overlay(Overlay::Password(PasswordInput {
-                field: TextField::line(""),
+                field: Field::line(""),
                 then: start,
             })),
         }
@@ -60,7 +60,7 @@ impl App {
             return;
         };
         self.dirty = true;
-        match input.field.on_key(&key.typed(), 1) {
+        match input.field.on_key(&key.typed()) {
             EditOutcome::Submit => {
                 let password = input.field.text().to_string();
                 let then = input.then.clone();
@@ -104,7 +104,7 @@ mod tests {
     fn test_the_password_dialog_shows_dots_and_escape_puts_it_away() {
         let mut app = App::new();
         app.open_overlay(Overlay::Password(PasswordInput {
-            field: TextField::line(""),
+            field: Field::line(""),
             then: PathBuf::from("sudo:///etc"),
         }));
         for c in "pw".chars() {

@@ -621,9 +621,10 @@ impl Page for TextEditor {
         let before = self.version();
         let view = self.view_id();
         let (handled, requests) = session::with(|session| {
-            let handled = session
-                .editor
-                .handle_key(view, keys::to_cherry(key), clock::now());
+            let handled =
+                session
+                    .editor
+                    .handle_key(view, winter_field::to_cherry(key), clock::now());
             (handled, session.editor.take_requests())
         });
         self.send_asks();

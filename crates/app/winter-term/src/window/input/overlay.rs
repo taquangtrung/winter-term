@@ -7,11 +7,11 @@ use std::path::PathBuf;
 
 use misty::picker::Picker;
 use misty::QuickPick;
+use winter_field::Field;
 use winter_model::button::{Button, ButtonGroup};
 use winter_model::editor::PromptReply;
 use winter_model::layout::TabId;
 use winter_model::notify::Notice;
-use winter_model::textedit::field::TextField;
 
 use crate::window::editor::{ActivePick, ActivePrompt, PendingClose};
 use crate::window::picker::Preview;
@@ -48,13 +48,13 @@ pub(in crate::window) enum Overlay {
     /// A tab's new name being typed.
     Rename(RenameInput),
     /// The name of the theme about to be saved.
-    ThemeName(TextField),
+    ThemeName(Field),
     /// The sudo password, asked before browsing as root.
     Password(PasswordInput),
     /// A question an editor asked, boxed as the largest of these.
     EditorPrompt(Box<ActivePrompt>),
     /// The Z.ai API key, for the system's secret store.
-    ZaiKey(TextField),
+    ZaiKey(Field),
     /// An error being reported, up until it is acknowledged.
     Error(ErrorDialog),
 }
@@ -113,7 +113,7 @@ pub(in crate::window) struct PickerOverlay {
 /// The sudo password being typed, and where the browser opens once sudo
 /// takes it.
 pub(in crate::window) struct PasswordInput {
-    pub(in crate::window) field: TextField,
+    pub(in crate::window) field: Field,
     pub(in crate::window) then: PathBuf,
 }
 
@@ -121,7 +121,7 @@ pub(in crate::window) struct PasswordInput {
 /// moving the focus meanwhile cannot hand the name to another tab.
 pub(in crate::window) struct RenameInput {
     /// The name as typed, edited with a field's Emacs keys.
-    pub(in crate::window) field: TextField,
+    pub(in crate::window) field: Field,
     pub(in crate::window) tab: TabId,
 }
 
@@ -265,7 +265,7 @@ impl RenameInput {
     /// A rename of tab `tab`, starting from the name `text` it has.
     pub(in crate::window) fn new(tab: TabId, text: &str) -> Self {
         Self {
-            field: TextField::line(text),
+            field: Field::line(text),
             tab,
         }
     }
@@ -484,7 +484,7 @@ impl Chrome {
     }
 
     /// The Z.ai API key being typed.
-    pub(in crate::window) fn zai_key_input(&self) -> Option<&TextField> {
+    pub(in crate::window) fn zai_key_input(&self) -> Option<&Field> {
         let Some(Overlay::ZaiKey(field)) = &self.overlay else {
             return None;
         };
@@ -492,7 +492,7 @@ impl Chrome {
     }
 
     /// The new theme's name being typed.
-    pub(in crate::window) fn theme_name_input(&self) -> Option<&TextField> {
+    pub(in crate::window) fn theme_name_input(&self) -> Option<&Field> {
         let Some(Overlay::ThemeName(field)) = &self.overlay else {
             return None;
         };

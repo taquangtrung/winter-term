@@ -33,7 +33,7 @@ use winter_syntax::LineState;
 use cherry::{DocumentId, Edit, Handled, HostRequest, Mode, NoticeLevel, ViewId};
 use winter_cherry::clock;
 
-use super::{edit_mode_of, keys, session};
+use super::{edit_mode_of, session};
 use model::{Aligned, Kind, Session, Side, SideText, Variant, A, ANCESTOR, B, C};
 use paint::{Column, Widths, DIVIDER};
 
@@ -955,7 +955,7 @@ impl DiffEditor {
             let handled =
                 session
                     .editor
-                    .handle_key(editing.view, keys::to_cherry(key), clock::now());
+                    .handle_key(editing.view, winter_field::to_cherry(key), clock::now());
             (handled, session.editor.take_requests())
         });
         self.take_edit(editing);

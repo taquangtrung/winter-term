@@ -60,6 +60,7 @@ regex.workspace = true
 winter-base.workspace = true
 winter-emulator.workspace = true
 winter-model.workspace = true
+winter-field.workspace = true
 winter-dir.workspace = true
 winter-docker.workspace = true
 winter-git.workspace = true

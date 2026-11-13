@@ -371,7 +371,8 @@ mod tests {
     /// editor's text is typed through, whose keys are built in and listed for
     /// reading only, and the plumbing that parses, routes, records, and edits
     /// keys (`winter-cherry`'s conversion between misty's keys and Cherry's
-    /// among it, and its examples, small apps of their own with no Winter
+    /// and `winter-field`'s between Winter's and Cherry's among it, and
+    /// `winter-cherry`'s examples, small apps of their own with no Winter
     /// keymap). Paths under `crates/`.
     const KEY_ENGINE_FILES: &[&str] = &[
         "app/winter-term/src/window/editor/column.rs",
@@ -403,6 +404,7 @@ mod tests {
         "libs/winter-cherry/examples/chrome.rs",
         "libs/winter-cherry/examples/settings.rs",
         "libs/winter-cherry/src/keys.rs",
+        "libs/winter-field/src/lib.rs",
         "tools/winter-text/src/keys.rs",
     ];
 

@@ -1,11 +1,8 @@
-//! The text editor's keys: Winter's key values as Cherry's, which owns
-//! every editing key; and the key tables the Keys page lists for it, of
-//! Winter's own keys over the text (the inline suggestions').
+//! The text editor's key tables the Keys page lists for it: Winter's own
+//! keys over the text (the inline suggestions'), as Cherry owns every
+//! editing key.
 
 use winter_model::input::table::{Binding, KeyTable, Listed};
-use winter_model::input::{Key, KeyCode};
-
-use cherry::keys::{Key as CherryKey, KeyCode as CherryCode, Mods};
 
 // ========================================================================
 // Constants
@@ -96,75 +93,4 @@ pub(crate) enum InlineAct {
     TakeLine,
     /// Take the ghost text's next word.
     TakeWord,
-}
-
-// ========================================================================
-// Functions
-// ========================================================================
-
-/// `key` as Cherry names it.
-pub(crate) fn to_cherry(key: &Key) -> CherryKey {
-    let code = match key.code {
-        KeyCode::Backspace => CherryCode::Backspace,
-        KeyCode::Char(c) => CherryCode::Char(c),
-        KeyCode::Delete => CherryCode::Delete,
-        KeyCode::Down => CherryCode::Down,
-        KeyCode::End => CherryCode::End,
-        KeyCode::Enter => CherryCode::Enter,
-        KeyCode::Escape => CherryCode::Esc,
-        KeyCode::F(number) => CherryCode::F(number),
-        KeyCode::Home => CherryCode::Home,
-        KeyCode::Insert => CherryCode::Insert,
-        KeyCode::Left => CherryCode::Left,
-        KeyCode::PageDown => CherryCode::PageDown,
-        KeyCode::PageUp => CherryCode::PageUp,
-        KeyCode::Right => CherryCode::Right,
-        KeyCode::Space => CherryCode::Char(' '),
-        KeyCode::Tab => CherryCode::Tab,
-        KeyCode::Up => CherryCode::Up,
-    };
-    let held = [
-        (key.alt, Mods::ALT),
-        (key.ctrl, Mods::CTRL),
-        (key.shift, Mods::SHIFT),
-        (key.sup, Mods::SUPER),
-    ];
-    let mods = held
-        .into_iter()
-        .filter(|(down, _)| *down)
-        .fold(Mods::NONE, |mods, (_, held)| mods | held);
-    CherryKey::new(code, mods)
-}
-
-// ========================================================================
-// Tests
-// ========================================================================
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_keys_keep_their_modifiers_and_space_and_escape_take_cherry_s_names() {
-        let key = |code, ctrl, alt| Key {
-            alt,
-            code,
-            ctrl,
-            shift: false,
-            sup: false,
-        };
-        let parsed = |spec| cherry::keys::parse_key(spec).expect("a valid key");
-        assert_eq!(
-            to_cherry(&key(KeyCode::Char('x'), true, true)),
-            parsed("C-M-x")
-        );
-        assert_eq!(
-            to_cherry(&key(KeyCode::Space, true, false)),
-            parsed("C-SPC")
-        );
-        assert_eq!(
-            to_cherry(&key(KeyCode::Escape, false, false)),
-            parsed("<esc>")
-        );
-    }
 }

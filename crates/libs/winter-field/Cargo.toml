@@ -1,0 +1,15 @@
+[package]
+name = "winter-field"
+description = "Winter's text fields (a prompt's answer, a search box, a rename) as single-line Cherry documents, with the keys that edit them."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+cherry.workspace = true
+misty.workspace = true
+winter-cherry.workspace = true
+winter-model.workspace = true
