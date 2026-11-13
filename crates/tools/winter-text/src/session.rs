@@ -1,4 +1,4 @@
-//! The one Viento editor every text tab shows a view of, on the window's
+//! The one Cherry editor every text tab shows a view of, on the window's
 //! thread: a file open in several tabs is one document, a Buffer, its
 //! edits, history, and marks shared, and it is closed when the last tab on
 //! it goes. Each document remembers the file it came from: where it is, the
@@ -10,9 +10,9 @@ use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use cherry::{CompletionTicket, DocumentId, Editor, EditorOptions, Position, ViewId};
 use misty::SystemClipboard;
-use misty_viento::EditorClipboard;
-use viento::{CompletionTicket, DocumentId, Editor, EditorOptions, Position, ViewId};
+use misty_cherry::EditorClipboard;
 use winter_lsp::protocol::Diagnostic;
 use winter_lsp::ServerId;
 use winter_model::text_file::{self, FileShape, FileStamp};
@@ -338,12 +338,12 @@ fn key_of(path: &Path) -> PathBuf {
 /// Replaces the whole text of the document `view` shows with `text`, as
 /// one edit, every view of it following.
 fn replace_text(editor: &mut Editor, view: ViewId, text: &str) {
-    let document = editor.view(view).map(viento::View::document);
+    let document = editor.view(view).map(cherry::View::document);
     let Some(length) = document
         .and_then(|document| editor.document(document))
-        .map(viento::Document::len_chars)
+        .map(cherry::Document::len_chars)
     else {
         return;
     };
-    editor.apply_edits(view, vec![viento::Edit::new(0..length, text)]);
+    editor.apply_edits(view, vec![cherry::Edit::new(0..length, text)]);
 }

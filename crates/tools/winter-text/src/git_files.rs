@@ -1,8 +1,8 @@
 //! The files git hands the editor: a message (`COMMIT_EDITMSG`,
 //! `MERGE_MSG`, `TAG_EDITMSG`) and an interactive rebase's plan
-//! (`git-rebase-todo`). They are text like any other, and Viento's keys
+//! (`git-rebase-todo`). They are text like any other, and Cherry's keys
 //! edit them; what this adds are keys of their own, bound in their
-//! documents alone as Viento's host commands:
+//! documents alone as Cherry's host commands:
 //!
 //! - a message is finished (`C-c C-c`) or cancelled (`C-c C-k`, or `:q!`,
 //!   which empties it so git stops at an empty message), swapped for an
@@ -16,7 +16,7 @@
 
 use std::path::Path;
 
-use viento::{Decoration, DecorationKind, DocumentId, Editor, Mode};
+use cherry::{Decoration, DecorationKind, DocumentId, Editor, Mode};
 use winter_model::editor::{EditorOutcome, JobRequest, Notice};
 use winter_vcs::exec;
 

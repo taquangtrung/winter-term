@@ -44,7 +44,7 @@ fn test_an_editor_s_command_chosen_in_the_palette_reaches_the_editor_in_front() 
     let text = editor
         .and_then(|editor| editor.document())
         .map(|(_, text)| text);
-    assert_eq!(text.as_deref(), Some("TEXT"), "Viento's upcase-word ran");
+    assert_eq!(text.as_deref(), Some("TEXT"), "Cherry's upcase-word ran");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

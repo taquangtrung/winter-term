@@ -11,11 +11,11 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use cherry::Utf16Position;
 use misty::text::{StyledText, TextColor};
 use misty::theme::{Theme, ThemeToken};
 use misty::{Frame, InfoCard, Rect, Widget};
 use serde_json::{json, Value};
-use viento::Utf16Position;
 use winter_lsp::protocol::{self, CodeAction, FileEdits, Location, TextEdit};
 use winter_lsp::{Port, ServerId};
 use winter_model::editor::{

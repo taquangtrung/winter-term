@@ -8,7 +8,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
-use viento::{DecorationKind, DocumentId, GutterLane, Sign};
+use cherry::{DecorationKind, DocumentId, GutterLane, Sign};
 use winter_model::editor::{CommandOutput, CommandRequest, EditorOutcome, JobRequest};
 use winter_model::paint::Style;
 use winter_vcs::exec;

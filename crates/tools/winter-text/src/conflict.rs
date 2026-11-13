@@ -4,15 +4,15 @@
 //! file was merged with `merge.conflictStyle diff3`.
 //!
 //! A file holding any has keys of its own from then on, bound in its
-//! document alone as Viento's host commands: `M-n` and `M-p` step between
+//! document alone as Cherry's host commands: `M-n` and `M-p` step between
 //! the conflicts, and `C-c` then a letter keeps what of the one under the
 //! cursor the letter names, the way Emacs' smerge offers it (`C-c m` lists
 //! every way, and the ways of resolving the whole file). What is kept
 //! replaces the whole block, markers and all. The markers are drawn on a
 //! band, so each side's own lines keep their colors.
 
-use misty_viento::HighlightStyle;
-use viento::{Decoration, DecorationKind, DocumentId, HighlightId, Mode};
+use cherry::{Decoration, DecorationKind, DocumentId, HighlightId, Mode};
+use misty_cherry::HighlightStyle;
 use winter_model::editor::{EditorOutcome, Notice, PickPlacement, PickRequest, PromptReply};
 
 use super::session::{self, Session};
@@ -369,7 +369,7 @@ impl TextEditor {
             };
             session
                 .editor
-                .apply_edits(view, vec![viento::Edit::new(range, "")]);
+                .apply_edits(view, vec![cherry::Edit::new(range, "")]);
         });
     }
 
@@ -387,7 +387,7 @@ impl TextEditor {
     fn leave_to_normal(&mut self) {
         let view = self.view_id();
         session::with(|session| {
-            let mode = session.editor.view(view).map(viento::View::mode);
+            let mode = session.editor.view(view).map(cherry::View::mode);
             let command = match mode {
                 Some(Mode::Insert) => "exit-insert",
                 Some(Mode::Visual | Mode::VisualBlock | Mode::VisualLine) => "exit-visual",

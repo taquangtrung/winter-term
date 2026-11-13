@@ -914,7 +914,7 @@ impl App {
 
     /// Run the command `id` names that the palette does not list: one the
     /// focused editor knows, a key binding's action, an extension's, or else
-    /// whatever the page in front runs by that name (a text tab, Viento's
+    /// whatever the page in front runs by that name (a text tab, Cherry's
     /// commands).
     fn run_unlisted(&mut self, id: &str, focused: TabId) {
         if is_editor_command(id) {

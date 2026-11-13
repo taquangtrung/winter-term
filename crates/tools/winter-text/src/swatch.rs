@@ -1,12 +1,12 @@
 //! Color swatches: each color a file writes as `#rrggbb` or `#rrggbbaa`
 //! drawn on the color it names, its text dark on a light color and light
 //! on a dark one. Each document's colors are found again only once its
-//! text changes, and laid on it as Viento's washes, one host style for
+//! text changes, and laid on it as Cherry's washes, one host style for
 //! each color, numbered past the highlighter's own.
 
+use cherry::{Decoration, DecorationKind, DocumentId, HighlightId};
 use misty::color::Rgb;
-use misty_viento::HighlightStyle;
-use viento::{Decoration, DecorationKind, DocumentId, HighlightId};
+use misty_cherry::HighlightStyle;
 
 use super::session::Session;
 

@@ -1,6 +1,6 @@
-//! The text editor tab: a view of a file open in Viento, the editor every
-//! text tab shares ([`session`]), drawn by misty-viento's `EditorView` in
-//! its pane. Viento owns the text, the cursor, the modes, and every editing
+//! The text editor tab: a view of a file open in Cherry, the editor every
+//! text tab shares ([`session`]), drawn by misty-cherry's `EditorView` in
+//! its pane. Cherry owns the text, the cursor, the modes, and every editing
 //! key; the tab reads the file in, writes it out, and carries what the
 //! editor asks of the window (a save, a close, a notice, a file to open)
 //! to the window as an [`EditorOutcome`].
@@ -19,10 +19,10 @@ use std::io;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use cherry::{CommandError, DocumentId, Handled, HostRequest, Mode, NoticeLevel, ViewId};
 use misty::theme::Theme;
 use misty::{EventCx, Font, Frame, Input, Rect};
-use misty_viento::{clock, EditorResponse, EditorView};
-use viento::{CommandError, DocumentId, Handled, HostRequest, Mode, NoticeLevel, ViewId};
+use misty_cherry::{clock, EditorResponse, EditorView};
 use winter_base::edit_wait::EditWaiter;
 use winter_lsp::diagnostics;
 use winter_lsp::protocol::TextEdit;
@@ -58,7 +58,7 @@ mod swatch;
 pub use inline::{InlineAsk, InlineCall, InlineTold};
 pub use keys::KEY_TABLES;
 pub use language::known_languages;
-pub use misty_viento::HighlightStyle;
+pub use misty_cherry::HighlightStyle;
 pub use session::save_through;
 pub use settings::history_dir;
 
@@ -67,13 +67,13 @@ pub use settings::history_dir;
 // ========================================================================
 
 /// The text editor's commands the palette runs by name: none of Winter's
-/// own, as Viento runs every editing command.
+/// own, as Cherry runs every editing command.
 pub const COMMANDS: &[EditorCommand] = &[];
 
 /// What a tab's title ends with while its file has edits not written.
 pub const DIRTY_MARK: &str = " [+]";
 
-/// The right-click menu's entries, as the keys Viento binds them to and
+/// The right-click menu's entries, as the keys Cherry binds them to and
 /// their labels: over a selection, and elsewhere.
 const SELECTION_MENU: [(&str, &str); 2] = [("y", "Copy"), ("d", "Cut")];
 const TEXT_MENU: [(&str, &str); 3] = [("p", "Paste"), ("u", "Undo"), ("C-r", "Redo")];
@@ -238,7 +238,7 @@ impl TextEditor {
         }
     }
 
-    /// Sends the completion asks Viento noted while a key was handled, the
+    /// Sends the completion asks Cherry noted while a key was handled, the
     /// text handed over first.
     fn send_asks(&mut self) {
         let language = self.language();
@@ -287,7 +287,7 @@ impl TextEditor {
     pub fn configure(&mut self, settings: &settings::EditorSettings) {
         session::with(|session| {
             let options = session.editor.options();
-            let wanted = viento::EditorOptions {
+            let wanted = cherry::EditorOptions {
                 auto_complete: settings.completion.auto,
                 conceal: markup::conceal_mode(settings.markup_markers),
                 indent_guides: settings.indent_guides,
@@ -312,16 +312,16 @@ impl TextEditor {
                 return false;
             };
             let offset = |point: EditPoint| {
-                let position = viento::Utf16Position {
+                let position = cherry::Utf16Position {
                     column: point.column as usize,
                     line: point.line as usize,
                 };
                 text.utf16_position_to_char(position)
                     .unwrap_or_else(|| text.len_chars())
             };
-            let mut changes: Vec<viento::Edit> = edits
+            let mut changes: Vec<cherry::Edit> = edits
                 .iter()
-                .map(|edit| viento::Edit::new(offset(edit.start)..offset(edit.end), &edit.new_text))
+                .map(|edit| cherry::Edit::new(offset(edit.start)..offset(edit.end), &edit.new_text))
                 .collect();
             changes.sort_by_key(|edit| edit.range.start);
             session.editor.apply_edits(view, changes);
@@ -429,7 +429,7 @@ impl TextEditor {
         act(view)
     }
 
-    /// The Viento view the tab in front shows.
+    /// The Cherry view the tab in front shows.
     fn view_id(&self) -> ViewId {
         self.with_view(|view| view.view())
     }
@@ -470,7 +470,7 @@ impl TextEditor {
             };
             session
                 .editor
-                .apply_edits(view, vec![viento::Edit::new(start..end, text)]);
+                .apply_edits(view, vec![cherry::Edit::new(start..end, text)]);
         });
     }
 
@@ -625,7 +625,7 @@ impl Page for TextEditor {
         let (handled, requests) = session::with(|session| {
             let handled = session
                 .editor
-                .handle_key(view, keys::to_viento(key), clock::now());
+                .handle_key(view, keys::to_cherry(key), clock::now());
             (handled, session.editor.take_requests())
         });
         self.send_asks();
@@ -639,9 +639,9 @@ impl Page for TextEditor {
 
     /// Writes the file for the window's [`SAVE_ALL`] (a build about to
     /// start); turns the color swatches off or on for [`TOGGLE_SWATCHES`];
-    /// runs Viento's command of any other name, its words joined by
+    /// runs Cherry's command of any other name, its words joined by
     /// hyphens rather than underscores (`upcase_word` runs `upcase-word`).
-    /// `None` for a command Viento does not have.
+    /// `None` for a command Cherry does not have.
     fn run_command(&mut self, name: &str) -> Option<EditorOutcome> {
         if name == SAVE_ALL {
             return Some(self.write());
@@ -724,10 +724,10 @@ impl Page for TextEditor {
     fn on_paste(&mut self, text: String) -> EditorOutcome {
         let view = self.view_id();
         session::with(|session| {
-            let Some(cursor) = session.editor.view(view).map(viento::View::cursor) else {
+            let Some(cursor) = session.editor.view(view).map(cherry::View::cursor) else {
                 return;
             };
-            let edit = viento::Edit::new(cursor..cursor, text);
+            let edit = cherry::Edit::new(cursor..cursor, text);
             session.editor.apply_edits(view, vec![edit]);
         });
         EditorOutcome::Consumed
@@ -772,7 +772,7 @@ impl Page for TextEditor {
             JumpStep::Preview(line) => {
                 if self.jump_origin.is_none() {
                     self.jump_origin = session::with(|session| {
-                        session.editor.view(view).map(viento::View::cursor)
+                        session.editor.view(view).map(cherry::View::cursor)
                     });
                 }
                 line

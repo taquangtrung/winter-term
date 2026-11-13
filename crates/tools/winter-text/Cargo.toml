@@ -14,10 +14,10 @@ rust-version.workspace = true
 [dependencies]
 serde_json.workspace = true
 misty.workspace = true
-misty-viento.workspace = true
-viento.workspace = true
-viento-keys.workspace = true
-viento-markup.workspace = true
+misty-cherry.workspace = true
+cherry.workspace = true
+cherry-keys.workspace = true
+cherry-markup.workspace = true
 unicode-width.workspace = true
 winter-base.workspace = true
 winter-lsp.workspace = true

@@ -1,10 +1,10 @@
 //! Markup's markers hidden, as the `editor-markup-markers` setting asks:
 //! Markdown's `**` and `_`, its backticks, a heading's `#`s, and a link's
-//! `[` and `](url)`, found by `viento-markup` and concealed by Viento. The
+//! `[` and `](url)`, found by `cherry-markup` and concealed by Cherry. The
 //! hidden characters stay in the text: the cursor walks over them, and
 //! they take no cell on screen.
 
-use viento::{ConcealMode, DocumentId};
+use cherry::{ConcealMode, DocumentId};
 use winter_model::paint::MarkupMarkers;
 
 use super::session::Session;
@@ -41,7 +41,7 @@ impl Session {
         }
         file.concealed = version;
         let text = self.lines(document).join("\n");
-        let hidden = viento_markup::markdown_conceals(&text);
+        let hidden = cherry_markup::markdown_conceals(&text);
         self.editor.set_conceals(document, MARKERS, hidden);
     }
 }
@@ -50,7 +50,7 @@ impl Session {
 // Functions
 // ========================================================================
 
-/// How Viento conceals for the setting's `markers`.
+/// How Cherry conceals for the setting's `markers`.
 pub(crate) fn conceal_mode(markers: MarkupMarkers) -> ConcealMode {
     match markers {
         MarkupMarkers::AlwaysHidden => ConcealMode::Hide,

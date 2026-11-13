@@ -1,21 +1,21 @@
-//! The text editor's keys: Winter's key values as Viento's, which owns
+//! The text editor's keys: Winter's key values as Cherry's, which owns
 //! every editing key; and the key tables the Keys page lists for it, of
 //! Winter's own keys over the text (the inline suggestions').
 
 use winter_model::input::table::{Binding, KeyTable, Listed};
 use winter_model::input::{Key, KeyCode};
 
-use viento_keys::{Key as VientoKey, KeyCode as VientoCode, Mods};
+use cherry_keys::{Key as CherryKey, KeyCode as CherryCode, Mods};
 
 // ========================================================================
 // Constants
 // ========================================================================
 
-/// Every key table of the text editor, for the Keys page to list; Viento
+/// Every key table of the text editor, for the Keys page to list; Cherry
 /// binds every editing key.
 pub const KEY_TABLES: &[&dyn Listed] = &[&INLINE_KEYS];
 
-/// The keys over an inline suggestion, ahead of Viento's: ghost text's
+/// The keys over an inline suggestion, ahead of Cherry's: ghost text's
 /// while typing, a next edit's while its card shows.
 pub(crate) const INLINE_KEYS: KeyTable<InlineAct> = KeyTable {
     block: "inline",
@@ -82,7 +82,7 @@ pub(crate) const INLINE_KEYS: KeyTable<InlineAct> = KeyTable {
 pub(crate) enum InlineAct {
     /// Ask for ghost text where none came by itself.
     Ask,
-    /// Put the suggestion away, the key going on to Viento.
+    /// Put the suggestion away, the key going on to Cherry.
     Leave,
     /// Show the next ghost text suggestion.
     Next,
@@ -102,26 +102,26 @@ pub(crate) enum InlineAct {
 // Functions
 // ========================================================================
 
-/// `key` as Viento names it.
-pub(crate) fn to_viento(key: &Key) -> VientoKey {
+/// `key` as Cherry names it.
+pub(crate) fn to_cherry(key: &Key) -> CherryKey {
     let code = match key.code {
-        KeyCode::Backspace => VientoCode::Backspace,
-        KeyCode::Char(c) => VientoCode::Char(c),
-        KeyCode::Delete => VientoCode::Delete,
-        KeyCode::Down => VientoCode::Down,
-        KeyCode::End => VientoCode::End,
-        KeyCode::Enter => VientoCode::Enter,
-        KeyCode::Escape => VientoCode::Esc,
-        KeyCode::F(number) => VientoCode::F(number),
-        KeyCode::Home => VientoCode::Home,
-        KeyCode::Insert => VientoCode::Insert,
-        KeyCode::Left => VientoCode::Left,
-        KeyCode::PageDown => VientoCode::PageDown,
-        KeyCode::PageUp => VientoCode::PageUp,
-        KeyCode::Right => VientoCode::Right,
-        KeyCode::Space => VientoCode::Char(' '),
-        KeyCode::Tab => VientoCode::Tab,
-        KeyCode::Up => VientoCode::Up,
+        KeyCode::Backspace => CherryCode::Backspace,
+        KeyCode::Char(c) => CherryCode::Char(c),
+        KeyCode::Delete => CherryCode::Delete,
+        KeyCode::Down => CherryCode::Down,
+        KeyCode::End => CherryCode::End,
+        KeyCode::Enter => CherryCode::Enter,
+        KeyCode::Escape => CherryCode::Esc,
+        KeyCode::F(number) => CherryCode::F(number),
+        KeyCode::Home => CherryCode::Home,
+        KeyCode::Insert => CherryCode::Insert,
+        KeyCode::Left => CherryCode::Left,
+        KeyCode::PageDown => CherryCode::PageDown,
+        KeyCode::PageUp => CherryCode::PageUp,
+        KeyCode::Right => CherryCode::Right,
+        KeyCode::Space => CherryCode::Char(' '),
+        KeyCode::Tab => CherryCode::Tab,
+        KeyCode::Up => CherryCode::Up,
     };
     let held = [
         (key.alt, Mods::ALT),
@@ -133,7 +133,7 @@ pub(crate) fn to_viento(key: &Key) -> VientoKey {
         .into_iter()
         .filter(|(down, _)| *down)
         .fold(Mods::NONE, |mods, (_, held)| mods | held);
-    VientoKey::new(code, mods)
+    CherryKey::new(code, mods)
 }
 
 // ========================================================================
@@ -145,7 +145,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_keys_keep_their_modifiers_and_space_and_escape_take_vientos_names() {
+    fn test_keys_keep_their_modifiers_and_space_and_escape_take_cherry_s_names() {
         let key = |code, ctrl, alt| Key {
             alt,
             code,
@@ -153,17 +153,17 @@ mod tests {
             shift: false,
             sup: false,
         };
-        let parsed = |spec| viento_keys::parse_key(spec).expect("a valid key");
+        let parsed = |spec| cherry_keys::parse_key(spec).expect("a valid key");
         assert_eq!(
-            to_viento(&key(KeyCode::Char('x'), true, true)),
+            to_cherry(&key(KeyCode::Char('x'), true, true)),
             parsed("C-M-x")
         );
         assert_eq!(
-            to_viento(&key(KeyCode::Space, true, false)),
+            to_cherry(&key(KeyCode::Space, true, false)),
             parsed("C-SPC")
         );
         assert_eq!(
-            to_viento(&key(KeyCode::Escape, false, false)),
+            to_cherry(&key(KeyCode::Escape, false, false)),
             parsed("<esc>")
         );
     }

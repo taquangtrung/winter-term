@@ -1,12 +1,12 @@
 //! Completion from the language server serving a document, as one of
-//! Viento's completion providers. Viento asks while a key is being handled,
+//! Cherry's completion providers. Cherry asks while a key is being handled,
 //! when the server cannot be: the provider only notes the ask, and the tab
 //! sends it once the key is done (the text handed over first), answering
-//! Viento's ticket when the server answers.
+//! Cherry's ticket when the server answers.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use viento::{
+use cherry::{
     CompletionAnswer, CompletionItem, CompletionKind, CompletionProvider, CompletionRequest,
     CompletionTicket, DocumentId, Utf16Position,
 };
@@ -136,7 +136,7 @@ impl Session {
 // Functions
 // ========================================================================
 
-/// What a server offered, as Viento's menu shows it.
+/// What a server offered, as Cherry's menu shows it.
 fn item_of(entry: &CompletionEntry) -> CompletionItem {
     let item = CompletionItem::new(&entry.insert);
     let item = CompletionItem {
@@ -154,7 +154,7 @@ fn item_of(entry: &CompletionEntry) -> CompletionItem {
     }
 }
 
-/// The kind of thing a server's kind number names, as Viento sorts them.
+/// The kind of thing a server's kind number names, as Cherry sorts them.
 fn kind_of(kind: u64) -> Option<CompletionKind> {
     Some(match kind {
         1 => CompletionKind::Text,
@@ -224,7 +224,7 @@ mod tests {
         let view = editor.view_id();
         session::with(|session| {
             assert!(session.answer_completion(server, id, &answer));
-            let menu = session.editor.view(view).and_then(viento::View::completion);
+            let menu = session.editor.view(view).and_then(cherry::View::completion);
             let labels: Vec<_> = menu
                 .map(|menu| menu.items().iter().map(|item| item.label.clone()).collect())
                 .unwrap_or_default();

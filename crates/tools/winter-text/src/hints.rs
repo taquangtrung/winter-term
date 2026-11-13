@@ -2,13 +2,13 @@
 //! that the text does not, a binding's type or a call's parameter names in
 //! the line where it applies, and a lens (`3 references`) after the last
 //! character of the line it is about. They are asked for once typing
-//! pauses, of the whole file, and laid in as Viento's inlays, which edits
+//! pauses, of the whole file, and laid in as Cherry's inlays, which edits
 //! carry along until the next answer.
 
 use std::time::{Duration, Instant};
 
+use cherry::{Inlay, Utf16Position};
 use serde_json::{json, Value};
-use viento::{Inlay, Utf16Position};
 use winter_lsp::protocol;
 use winter_lsp::Port;
 
@@ -200,7 +200,7 @@ impl TextEditor {
             let inlays = by_line
                 .into_iter()
                 .filter_map(|(line, titles)| {
-                    let start = text.position_to_char(viento::Position { column: 0, line })?;
+                    let start = text.position_to_char(cherry::Position { column: 0, line })?;
                     let end = start + text.line_text(line)?.chars().count();
                     Some(Inlay::new(end, format!("{LENS_GAP}{}", titles.join(" | "))))
                 })
@@ -217,7 +217,7 @@ impl TextEditor {
 // ========================================================================
 
 /// The char offset in `text` a server's position names.
-fn offset_of(text: &viento::Document, position: &Value) -> Option<usize> {
+fn offset_of(text: &cherry::Document, position: &Value) -> Option<usize> {
     let line = position.get("line")?.as_u64()? as usize;
     let column = position.get("character")?.as_u64()? as usize;
     text.utf16_position_to_char(Utf16Position { column, line })

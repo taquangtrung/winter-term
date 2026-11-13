@@ -4,7 +4,7 @@
 //! tab; and what every checker publishes about its file (a server, an
 //! extension) is laid on its text as undercurls and in its sign column.
 
-use viento::{Decoration, DecorationKind, DocumentId, Sign, Utf16Position};
+use cherry::{Decoration, DecorationKind, DocumentId, Sign, Utf16Position};
 use winter_lsp::diagnostics;
 use winter_lsp::protocol::{self, Diagnostic, Range, Severity};
 use winter_lsp::{servers, Port, ServerId};
@@ -356,7 +356,7 @@ mod tests {
             assert_eq!(methods(&sent), ["textDocument/didOpen"], "once, unchanged");
             session
                 .editor
-                .apply_edits(view, vec![viento::Edit::new(0..0, "// ")]);
+                .apply_edits(view, vec![cherry::Edit::new(0..0, "// ")]);
             assert!(session.is_unsynced(document));
             session.sync(document, "rust");
             assert_eq!(methods(&sent), ["textDocument/didChange"]);

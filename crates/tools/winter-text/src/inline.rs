@@ -6,7 +6,7 @@
 //! A tab asks once typing pauses, of the first source offering what is
 //! wanted, through the window ([`InlineCall`]), and takes the answer when
 //! the window hands it back under its ticket. Ghost text is laid in as
-//! Viento's inlay at the cursor, its later lines as virtual lines under the
+//! Cherry's inlay at the cursor, its later lines as virtual lines under the
 //! cursor's, and goes as soon as typing no longer fits it; a next edit is a
 //! card at the cursor until the text changes.
 
@@ -14,9 +14,9 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use cherry::{Edit, Inlay, Mode, Utf16Position, VirtualLine};
 use misty::theme::Theme;
 use misty::{Frame, Rect};
-use viento::{Edit, Inlay, Mode, Utf16Position, VirtualLine};
 use winter_ext_api::{InlineAnswer, InlineEdit, InlineKind, InlineRequest, TextPosition};
 use winter_lsp::protocol;
 use winter_model::editor::{EditorOutcome, Notice};
@@ -225,7 +225,7 @@ impl TextEditor {
     }
 
     /// A key the suggestions give a meaning of their own: what it did, or
-    /// `None` for a key left to Viento. `C-\` asks for ghost text while
+    /// `None` for a key left to Cherry. `C-\` asks for ghost text while
     /// typing.
     pub(super) fn inline_key(&mut self, key: &Key) -> Option<EditorOutcome> {
         let act = table::find(&INLINE_KEYS, key)?;
@@ -246,7 +246,7 @@ impl TextEditor {
         None
     }
 
-    /// After a key or the pointer Viento handled: the ghost text follows
+    /// After a key or the pointer Cherry handled: the ghost text follows
     /// the typing or goes; an edit (the text no longer at `before`) puts
     /// away a next edit and asks again once typing pauses, for ghost text
     /// while typing and a next edit otherwise.
@@ -533,7 +533,7 @@ impl TextEditor {
 
     /// What `act` does over ghost text: takes all of it, its next word,
     /// or its line; steps through the suggestions; or puts it away, before
-    /// the key goes on to Viento where it leaves.
+    /// the key goes on to Cherry where it leaves.
     fn ghost_key(&mut self, act: InlineAct) -> Option<EditorOutcome> {
         match act {
             InlineAct::Ask => return None,
@@ -722,8 +722,8 @@ impl TextEditor {
     }
 
     /// What `act` does over a next edit: makes it, or leaves it, before
-    /// the key goes on to Viento where it leaves; the ghost text's own
-    /// keys go on to Viento.
+    /// the key goes on to Cherry where it leaves; the ghost text's own
+    /// keys go on to Cherry.
     fn next_edit_key(&mut self, act: InlineAct) -> Option<EditorOutcome> {
         match act {
             InlineAct::Ask

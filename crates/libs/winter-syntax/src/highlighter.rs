@@ -1,4 +1,4 @@
-//! The grammars as a Viento [`Highlighter`]: a document's lines walked top
+//! The grammars as a Cherry [`Highlighter`]: a document's lines walked top
 //! down a budget at a time, as a line's colors depend on every line above
 //! it, each line's runs kept until an edit above or in it makes them
 //! untrue. A run's [`Style`] is numbered as a [`HighlightId`] the window
@@ -6,7 +6,7 @@
 //! same for every document.
 //!
 //! A line's state holds the grammar engine's match registers, which may
-//! not cross threads, while Viento's highlighters must be able to: the
+//! not cross threads, while Cherry's highlighters must be able to: the
 //! states are kept on the thread that colors, by the highlighter's number,
 //! and a highlighter moved to another thread starts its walk over there.
 
@@ -16,7 +16,7 @@ use std::ops::Range;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use viento::{ChangeSet, Document, HighlightId, HighlightSpan, Highlighter, Position, Preparation};
+use cherry::{ChangeSet, Document, HighlightId, HighlightSpan, Highlighter, Position, Preparation};
 use winter_model::paint::Style;
 
 use super::{highlight, next_state, Grammar, LineState};
@@ -241,7 +241,7 @@ fn runs_of(styles: &[Style]) -> LineRuns {
 
 #[cfg(test)]
 mod tests {
-    use viento::Edit;
+    use cherry::Edit;
 
     use super::*;
 

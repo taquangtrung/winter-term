@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
-use viento::DocumentId;
+use cherry::DocumentId;
 use winter_base::project;
 use winter_lsp::diagnostics::{self, Backend};
 use winter_lsp::protocol::{self, Diagnostic, Range, Severity};
