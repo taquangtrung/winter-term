@@ -26,13 +26,15 @@ use winter_model::editor::{
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
 use winter_model::input::{format_sequence, Key};
 use winter_model::list::Viewport;
-use winter_model::paint::{Caret, Frame, IconKind, Point, Row, Shown, Span, Style};
+use winter_model::paint::{Caret, Frame, IconKind, Point, Row, Span, Style};
 use winter_model::text_file::{self, FileShape};
-use winter_model::textedit::buffer::TextBuffer;
-use winter_model::textedit::modal::{EditOutcome, EditView, Marks, ModalEditor};
 use winter_syntax::LineState;
 
-use model::{Aligned, Kind, Session, Side, Variant, A, ANCESTOR, B, C};
+use cherry::{DocumentId, Edit, Handled, HostRequest, Mode, NoticeLevel, ViewId};
+use winter_cherry::clock;
+
+use super::{edit_mode_of, keys, session};
+use model::{Aligned, Kind, Session, Side, SideText, Variant, A, ANCESTOR, B, C};
 use paint::{Column, Widths, DIVIDER};
 
 // ========================================================================
@@ -461,6 +463,15 @@ enum Layout {
     Bands,
 }
 
+/// A text edited in place: its side, and the Cherry document and view it
+/// is edited in, its lines taken back into the side after every key.
+#[derive(Clone, Copy, Debug)]
+struct Editing {
+    document: DocumentId,
+    side: usize,
+    view: ViewId,
+}
+
 /// A diff session in a tab.
 #[derive(Debug)]
 pub struct DiffEditor {
@@ -474,15 +485,13 @@ pub struct DiffEditor {
     /// Whether `n` and `p` step only through merge regions in conflict.
     conflicts_only: bool,
     current: Option<usize>,
-    /// The text being edited in place.
-    editing: Option<usize>,
+    /// The text being edited in place, as a Cherry document of its own.
+    editing: Option<Editing>,
     /// The keys of a sequence of the edit keys typed so far (`C-c`), while
     /// they wait for the rest.
     edit_pending: Vec<Key>,
     hscroll: usize,
     layout: Layout,
-    marks: Marks,
-    modal: ModalEditor,
     notice: Option<Notice>,
     /// The keys of a sequence typed so far (`w`, `#`, `a` with three
     /// texts), while they wait for the rest.
@@ -493,6 +502,20 @@ pub struct DiffEditor {
     session: Session,
     /// Whether a merge shows its ancestor as a text of its own.
     with_ancestor: bool,
+}
+
+// ========================================================================
+// Editing
+// ========================================================================
+
+impl Editing {
+    /// Closes the view and the document the text was edited in.
+    fn close(self) {
+        session::with(|session| {
+            session.editor.close_view(self.view);
+            session.editor.close_document(self.document);
+        });
+    }
 }
 
 // ========================================================================
@@ -514,7 +537,7 @@ impl DiffEditor {
                 false => text.lines,
             };
             Side {
-                buffer: TextBuffer::new(lines),
+                text: SideText::new(lines),
                 label: text.label,
                 path: text.path,
                 shape,
@@ -539,8 +562,6 @@ impl DiffEditor {
             edit_pending: Vec::new(),
             hscroll: 0,
             layout: Layout::Columns,
-            marks: Marks::default(),
-            modal: ModalEditor::new(),
             notice: None,
             pending: Vec::new(),
             view: Viewport::new(),
@@ -796,7 +817,7 @@ impl DiffEditor {
 
     /// Vimdiff `dp` (diffput): copy from active side to other side.
     fn diff_put(&mut self) {
-        let (from, to) = match self.editing {
+        let (from, to) = match self.editing_side() {
             Some(B) => (B, A),
             _ => (A, B),
         };
@@ -805,7 +826,7 @@ impl DiffEditor {
 
     /// Vimdiff `do` (diffget/obtain): copy other side into active side.
     fn diff_obtain(&mut self) {
-        let (from, to) = match self.editing {
+        let (from, to) = match self.editing_side() {
             Some(B) => (A, B),
             _ => (B, A),
         };
@@ -858,11 +879,11 @@ impl DiffEditor {
         // Through the buffer a tab has the file open in, where one does: that
         // tab then shows what was written, and holds no older copy a save of
         // its own could put back over it.
-        let written = crate::save_through(&path, text.buffer.lines())
-            .unwrap_or_else(|| text_file::save(&path, text.buffer.lines(), text.shape));
+        let written = crate::save_through(&path, text.text.lines())
+            .unwrap_or_else(|| text_file::save(&path, text.text.lines(), text.shape));
         match written {
             Ok(_) => {
-                text.buffer.mark_saved();
+                text.text.mark_saved();
                 self.notice = Some(Notice::info(format!("wrote {}", path.display())));
             }
             Err(e) => self.notice = Some(Notice::error(format!("{}: {e}", path.display()))),
@@ -878,12 +899,23 @@ impl DiffEditor {
         // The edit starts at the current region's first line in that text.
         let line = self
             .current
-            .map(|index| self.session.regions[index].lines[side].start)
-            .unwrap_or_else(|| self.session.sides[side].buffer.row());
-        let buffer = &mut self.session.sides[side].buffer;
-        buffer.move_to(line.min(buffer.lines().len() - 1), 0);
-        self.modal.reset(buffer);
-        self.editing = Some(side);
+            .map_or(0, |index| self.session.regions[index].lines[side].start);
+        let text = self.session.lines(side).join("\n");
+        let opened = session::with(|session| {
+            let document = session.editor.open_document(&text);
+            let view = session.editor.new_view(document)?;
+            let at = session.offset_of(document, line, 0);
+            session.editor.set_cursor(view, at);
+            Some(Editing {
+                document,
+                side,
+                view,
+            })
+        });
+        let Some(editing) = opened else {
+            return;
+        };
+        self.editing = Some(editing);
         self.notice = Some(
             Notice::info(format!(
                 "editing {}: C-c C-c or C-S-c goes back to the regions",
@@ -895,7 +927,9 @@ impl DiffEditor {
 
     /// Stop editing in place, back to the regions, compared afresh.
     fn stop_editing(&mut self) -> EditorOutcome {
-        self.editing = None;
+        if let Some(editing) = self.editing.take() {
+            editing.close();
+        }
         self.caret = None;
         if self.session.kind != Kind::Merge {
             self.recompute();
@@ -904,8 +938,9 @@ impl DiffEditor {
     }
 
     /// One key while a text is edited in place: `C-c C-c`, or `C-S-c` as in
-    /// every edit mode, goes back to the regions.
-    fn edit_key(&mut self, side: usize, key: &Key) -> EditorOutcome {
+    /// every edit mode, goes back to the regions; every other key is
+    /// Cherry's.
+    fn edit_key(&mut self, editing: Editing, key: &Key) -> EditorOutcome {
         self.edit_pending.push(*key);
         match table::lookup(&EDIT_KEYS, &self.edit_pending) {
             TableMatch::Exact(act) => {
@@ -916,48 +951,80 @@ impl DiffEditor {
             // A key after a prefix that ends nothing is the editor's own.
             TableMatch::Miss => self.edit_pending.clear(),
         }
-        let rows = self.view.rows();
-        let others: Vec<Vec<String>> = (0..self.session.sides.len())
-            .filter(|other| *other != side)
-            .map(|other| self.session.lines(other).to_vec())
-            .collect();
-        let others: Vec<&[String]> = others.iter().map(Vec::as_slice).collect();
-        let before = self.session.sides[side].buffer.lines().len();
-        let revision = self.session.sides[side].buffer.revision();
-        let buffer = &mut self.session.sides[side].buffer;
-        let outcome = self.modal.on_key(
-            EditView {
-                buffer,
-                marks: &mut self.marks,
-                others: &others,
-                shown: Shown::default(),
-                viewport: rows,
-            },
-            key,
-        );
-        let changed_from = self.session.sides[side].buffer.take_change();
-        if self.session.sides[side].buffer.revision() != revision {
-            let delta = self.session.sides[side].buffer.lines().len() as isize - before as isize;
-            match self.session.kind {
-                Kind::Merge => self.session.merge_edited(changed_from.unwrap_or(0), delta),
-                Kind::Compare | Kind::Compare3 => self.session.recompute(),
-            }
-        }
-        match outcome {
-            EditOutcome::Save => self.write(side),
-            EditOutcome::Quit { save } => {
-                if save {
-                    self.write(side);
+        let (handled, requests) = session::with(|session| {
+            let handled =
+                session
+                    .editor
+                    .handle_key(editing.view, keys::to_cherry(key), clock::now());
+            (handled, session.editor.take_requests())
+        });
+        self.take_edit(editing);
+        for request in requests {
+            match request {
+                HostRequest::Notice(notice) => {
+                    self.notice = Some(match notice.level {
+                        NoticeLevel::Error => Notice::error(notice.message),
+                        NoticeLevel::Warning => Notice::warning(notice.message),
+                        _ => Notice::info(notice.message),
+                    });
                 }
-                self.editing = None;
-                self.caret = None;
+                HostRequest::Save(_) => self.write(editing.side),
+                HostRequest::Quit(_) => {
+                    self.stop_editing();
+                }
+                _ => {}
             }
-            EditOutcome::Yank(text) => return EditorOutcome::Yank(text),
-            EditOutcome::Paste => return EditorOutcome::Paste,
-            EditOutcome::Ignored => return EditorOutcome::Ignored,
-            _ => {}
         }
-        EditorOutcome::Consumed
+        match handled {
+            Handled::Ignored => EditorOutcome::Ignored,
+            _ => EditorOutcome::Consumed,
+        }
+    }
+
+    /// Takes what Cherry's document of the text edited holds back into the
+    /// text, where it changed, the regions following.
+    fn take_edit(&mut self, editing: Editing) {
+        let lines = session::with(|session| session.lines(editing.document));
+        let before = self.session.lines(editing.side);
+        if lines == before {
+            return;
+        }
+        let first = before
+            .iter()
+            .zip(&lines)
+            .position(|(was, now)| was != now)
+            .unwrap_or(before.len().min(lines.len()));
+        let delta = lines.len() as isize - before.len() as isize;
+        self.session.sides[editing.side].text.set_lines(lines);
+        match self.session.kind {
+            Kind::Merge => self.session.merge_edited(first, delta),
+            Kind::Compare | Kind::Compare3 => self.session.recompute(),
+        }
+    }
+
+    /// The text edited in place, if one is.
+    fn editing_side(&self) -> Option<usize> {
+        self.editing.map(|editing| editing.side)
+    }
+
+    /// Where the cursor of the text edited in place is: its line, and its
+    /// column in chars.
+    fn edit_cursor(&self) -> Option<(usize, usize)> {
+        let editing = self.editing?;
+        session::with(|session| {
+            let cursor = session.editor.view(editing.view)?.cursor();
+            let at = session
+                .editor
+                .document(editing.document)?
+                .char_to_position(cursor)?;
+            Some((at.line, at.column))
+        })
+    }
+
+    /// The mode of the text edited in place, if one is.
+    fn edit_mode(&self) -> Option<Mode> {
+        let editing = self.editing?;
+        session::with(|session| session.editor.view(editing.view).map(cherry::View::mode))
     }
 
     /// Show the differences between A and B as a diff, in a view beside.
@@ -980,7 +1047,7 @@ impl DiffEditor {
                     |name| name.to_string_lossy().into_owned(),
                 );
             let copy = dir.join(format!("{sequence}-{}-{name}", letter_of(side)));
-            let mut body = text.buffer.lines().join("\n");
+            let mut body = text.text.lines().join("\n");
             body.push('\n');
             if let Err(e) = std::fs::write(&copy, body) {
                 self.notice = Some(Notice::error(e.to_string()));
@@ -1058,14 +1125,14 @@ impl DiffEditor {
             let (revision, grammar) = match side {
                 ANCESTOR => match &self.session.ancestor {
                     Some(text) => (
-                        text.buffer.revision(),
+                        text.text.revision(),
                         text.path.as_deref().and_then(winter_syntax::of_path),
                     ),
                     None => continue,
                 },
                 side => match self.session.sides.get(side) {
                     Some(text) => (
-                        text.buffer.revision(),
+                        text.text.revision(),
                         text.path
                             .as_deref()
                             .or_else(|| self.session.sides[A].path.as_deref())
@@ -1115,7 +1182,7 @@ impl DiffEditor {
                 &self.session,
                 side,
                 width,
-                self.editing == Some(side),
+                self.editing_side() == Some(side),
             ));
         }
         out.push(header);
@@ -1161,7 +1228,7 @@ impl DiffEditor {
                 &self.session,
                 side,
                 cols,
-                self.editing == Some(side),
+                self.editing_side() == Some(side),
             ));
             let column = Column {
                 colors: &self.colors[side].1,
@@ -1208,11 +1275,10 @@ impl DiffEditor {
     /// Keep the line being edited in view, and note where its caret is
     /// painted.
     fn place_caret(&mut self, aligned: &[Aligned], cols: usize) {
-        let Some(side) = self.editing else {
+        let (Some(side), Some((row, column))) = (self.editing_side(), self.edit_cursor()) else {
             self.caret = None;
             return;
         };
-        let row = self.session.sides[side].buffer.row();
         let Some(index) = aligned
             .iter()
             .position(|aligned| aligned.lines[side] == Some(row))
@@ -1245,7 +1311,7 @@ impl DiffEditor {
             .unwrap_or_default();
         let display: usize = line
             .chars()
-            .take(self.session.sides[side].buffer.col())
+            .take(column)
             .map(|c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0))
             .sum();
         if display < self.hscroll {
@@ -1370,7 +1436,7 @@ impl Page for DiffEditor {
 
     fn on_key(&mut self, key: &Key) -> EditorOutcome {
         match self.editing {
-            Some(side) => self.edit_key(side, &key.typed()),
+            Some(editing) => self.edit_key(editing, &key.typed()),
             None => self.control_key(key),
         }
     }
@@ -1379,7 +1445,7 @@ impl Page for DiffEditor {
         let (_, col) = self.caret?;
         Some(Caret {
             col,
-            insert: self.modal.is_typing(),
+            insert: self.edit_mode() == Some(Mode::Insert),
         })
     }
 
@@ -1428,24 +1494,17 @@ impl Page for DiffEditor {
     }
 
     fn on_paste(&mut self, text: String) -> EditorOutcome {
-        let Some(side) = self.editing else {
+        let Some(editing) = self.editing else {
             return EditorOutcome::Consumed;
         };
-        let rows = self.view.rows();
-        let buffer = &mut self.session.sides[side].buffer;
-        self.modal.paste_text(
-            EditView {
-                buffer,
-                marks: &mut self.marks,
-                others: &[],
-                shown: Shown::default(),
-                viewport: rows,
-            },
-            text,
-        );
-        if self.session.kind != Kind::Merge {
-            self.session.recompute();
-        }
+        session::with(|session| {
+            let Some(cursor) = session.editor.view(editing.view).map(cherry::View::cursor) else {
+                return;
+            };
+            let paste = Edit::new(cursor..cursor, text);
+            session.editor.apply_edits(editing.view, vec![paste]);
+        });
+        self.take_edit(editing);
         EditorOutcome::Consumed
     }
 
@@ -1472,7 +1531,7 @@ impl Page for DiffEditor {
     }
 
     fn take_notice(&mut self) -> Option<Notice> {
-        self.notice.take().or_else(|| self.modal.take_notice())
+        self.notice.take()
     }
 
     fn status(&self) -> EditorStatus {
@@ -1497,7 +1556,7 @@ impl Page for DiffEditor {
             segments.push(format!("{}-", format_sequence(&self.pending)));
         }
         EditorStatus {
-            mode: self.editing.map(|_| self.modal.mode()),
+            mode: self.edit_mode().map(edit_mode_of),
             segments,
         }
     }
@@ -1507,6 +1566,16 @@ impl Page for DiffEditor {
             .sides
             .iter()
             .find_map(|text| text.path.as_ref()?.parent().map(PathBuf::from))
+    }
+}
+
+/// A tab closed while a text is edited in place closes Cherry's document
+/// of it too.
+impl Drop for DiffEditor {
+    fn drop(&mut self) {
+        if let Some(editing) = self.editing.take() {
+            editing.close();
+        }
     }
 }
 

@@ -9,7 +9,6 @@ use std::ops::Range;
 use std::path::PathBuf;
 
 use winter_model::text_file::FileShape;
-use winter_model::textedit::buffer::TextBuffer;
 
 use super::lines::{self, Compare};
 
@@ -49,10 +48,19 @@ pub(super) enum Kind {
 /// is written back to, for one that can be.
 #[derive(Debug)]
 pub(super) struct Side {
-    pub(super) buffer: TextBuffer,
+    pub(super) text: SideText,
     pub(super) label: String,
     pub(super) path: Option<PathBuf>,
     pub(super) shape: FileShape,
+}
+
+/// A text's lines, never none (an empty text is one empty line), with a
+/// revision every change moves on and the revision last written.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub(super) struct SideText {
+    lines: Vec<String>,
+    revision: usize,
+    saved: usize,
 }
 
 /// What a merge region holds now.
@@ -115,7 +123,7 @@ impl Session {
         if kind == Kind::Merge {
             sides.truncate(2);
             sides.push(Side {
-                buffer: TextBuffer::new(vec![String::new()]),
+                text: SideText::new(Vec::new()),
                 label: output
                     .as_ref()
                     .map_or_else(|| "merge".to_string(), |path| path.display().to_string()),
@@ -143,11 +151,11 @@ impl Session {
             ANCESTOR => self
                 .ancestor
                 .as_ref()
-                .map_or(&[][..], |side| side.buffer.lines()),
+                .map_or(&[][..], |side| side.text.lines()),
             side => self
                 .sides
                 .get(side)
-                .map_or(&[][..], |side| side.buffer.lines()),
+                .map_or(&[][..], |side| side.text.lines()),
         }
     }
 
@@ -179,15 +187,12 @@ impl Session {
             }
             Kind::Merge if !self.regions.is_empty() => return,
             Kind::Merge => match &self.ancestor {
-                Some(ancestor) => lines::three_way(
-                    ancestor.buffer.lines(),
-                    self.lines(A),
-                    self.lines(B),
-                    compare,
-                )
-                .into_iter()
-                .map(|[base, one, two]| [one, two, 0..0, base])
-                .collect(),
+                Some(ancestor) => {
+                    lines::three_way(ancestor.text.lines(), self.lines(A), self.lines(B), compare)
+                        .into_iter()
+                        .map(|[base, one, two]| [one, two, 0..0, base])
+                        .collect()
+                }
                 None => lines::diff(self.lines(A), self.lines(B), compare)
                     .into_iter()
                     .map(|hunk| [hunk.a, hunk.b, 0..0, 0..0])
@@ -249,7 +254,7 @@ impl Session {
         if merged.is_empty() {
             merged.push(String::new());
         }
-        self.sides[C].buffer = TextBuffer::new(merged);
+        self.sides[C].text = SideText::new(merged);
     }
 
     /// The lines merge region `index` holds when it keeps `variant`.
@@ -276,18 +281,12 @@ impl Session {
     fn replace_region(&mut self, index: usize, side: usize, text: Vec<String>) {
         let range = self.regions[index].lines[side].clone();
         let delta = text.len() as isize - range.len() as isize;
-        let buffer = &mut self.sides[side].buffer;
-        let (row, col) = (buffer.row(), buffer.col());
-        // An empty buffer is one empty line, which a region taking its
-        // first lines replaces rather than pushes down.
-        let empty = buffer.lines().len() == 1 && buffer.lines()[0].is_empty() && range.is_empty();
+        let lines = &mut self.sides[side].text;
+        // An empty text is one empty line, which a region taking its first
+        // lines replaces rather than pushes down.
+        let empty = lines.lines().len() == 1 && lines.lines()[0].is_empty() && range.is_empty();
         let count = if empty { 1 } else { range.len() };
-        if text.is_empty() && buffer.lines().len() == range.len() {
-            buffer.replace_rows(range.start, count, vec![String::new()]);
-        } else {
-            buffer.replace_rows(range.start, count, text);
-        }
-        buffer.move_to(row.min(buffer.lines().len() - 1), col);
+        lines.replace_rows(range.start, count, text);
         let region = &mut self.regions[index];
         region.lines[side] = range.start..(range.end as isize + delta) as usize;
         for later in self.regions.iter_mut().skip(index + 1) {
@@ -425,7 +424,65 @@ impl Session {
     pub(super) fn is_dirty(&self, side: usize) -> bool {
         self.sides
             .get(side)
-            .is_some_and(|side| side.buffer.is_dirty())
+            .is_some_and(|side| side.text.is_dirty())
+    }
+}
+
+// ========================================================================
+// SideText
+// ========================================================================
+
+impl SideText {
+    /// A text of `lines`, one empty line where there are none, as last
+    /// written.
+    pub(super) fn new(lines: Vec<String>) -> Self {
+        let mut text = Self::default();
+        text.set_lines(lines);
+        text.saved = text.revision;
+        text
+    }
+
+    /// The lines.
+    pub(super) fn lines(&self) -> &[String] {
+        &self.lines
+    }
+
+    /// How many changes the text has had.
+    pub(super) fn revision(&self) -> usize {
+        self.revision
+    }
+
+    /// Whether it changed since it was last written.
+    pub(super) fn is_dirty(&self) -> bool {
+        self.revision != self.saved
+    }
+
+    /// Counts it written as it now reads.
+    pub(super) fn mark_saved(&mut self) {
+        self.saved = self.revision;
+    }
+
+    /// Puts `rows` in place of the `count` lines from `start`, the text
+    /// keeping one empty line where nothing is left.
+    pub(super) fn replace_rows(&mut self, start: usize, count: usize, rows: Vec<String>) {
+        let start = start.min(self.lines.len());
+        let end = (start + count).min(self.lines.len());
+        self.lines.splice(start..end, rows);
+        if self.lines.is_empty() {
+            self.lines.push(String::new());
+        }
+        self.revision += 1;
+    }
+
+    /// Takes `lines` as the whole text, where they differ from it.
+    pub(super) fn set_lines(&mut self, mut lines: Vec<String>) {
+        if lines.is_empty() {
+            lines.push(String::new());
+        }
+        if lines != self.lines {
+            self.lines = lines;
+            self.revision += 1;
+        }
     }
 }
 
@@ -439,7 +496,7 @@ mod tests {
 
     fn side(text: &str) -> Side {
         Side {
-            buffer: TextBuffer::new(text.split(' ').map(str::to_string).collect()),
+            text: SideText::new(text.split(' ').map(str::to_string).collect()),
             label: String::new(),
             path: None,
             shape: FileShape::default(),

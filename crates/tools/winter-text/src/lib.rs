@@ -576,14 +576,12 @@ impl TextEditor {
 
     /// The view's mode, as the status bar names it.
     fn mode(&self) -> Option<EditMode> {
+        let view = self.view_id();
         session::with(|session| {
-            let mode = session.editor.view(self.view_id())?.mode();
-            Some(match mode {
-                Mode::Insert | Mode::CommandLine => EditMode::Insert,
-                Mode::Replace => EditMode::Replace,
-                Mode::Visual | Mode::VisualBlock | Mode::VisualLine => EditMode::Visual,
-                _ => EditMode::Normal,
-            })
+            session
+                .editor
+                .view(view)
+                .map(|view| edit_mode_of(view.mode()))
         })
     }
 }
@@ -1032,6 +1030,16 @@ fn file_edit(edit: &TextEdit) -> FileEdit {
         end: point(edit.range.end),
         new_text: edit.new_text.clone(),
         start: point(edit.range.start),
+    }
+}
+
+/// A Cherry view's `mode`, as the status bar names it.
+pub(crate) fn edit_mode_of(mode: Mode) -> EditMode {
+    match mode {
+        Mode::Insert | Mode::CommandLine => EditMode::Insert,
+        Mode::Replace => EditMode::Replace,
+        Mode::Visual | Mode::VisualBlock | Mode::VisualLine => EditMode::Visual,
+        _ => EditMode::Normal,
     }
 }
 
