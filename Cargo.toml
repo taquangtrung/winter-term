@@ -66,9 +66,9 @@ winter-keys = { version = "0.1.0", path = "crates/base/winter-keys" }
 winter-model = { version = "0.1.0", path = "crates/base/winter-model" }
 # The GUI toolkit Winter is moving onto (local branch only: misty is not
 # published yet).
-misty = { version = "0.1.0", path = "../misty" }
+misty = { version = "0.0.1", path = "../misty" }
 # The editor Winter's text editing runs on (local branch only, as misty).
-cherry = { version = "0.1.0", path = "../cherry" }
+cherry = { version = "0.0.1", path = "../cherry" }
 winter-dir = { version = "0.1.0", path = "crates/tools/winter-dir" }
 winter-docker = { version = "0.1.0", path = "crates/tools/winter-docker" }
 winter-git = { version = "0.1.0", path = "crates/tools/winter-git" }
