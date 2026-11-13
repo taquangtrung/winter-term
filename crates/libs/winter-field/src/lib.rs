@@ -5,6 +5,13 @@
 //! `C-g` withdraw the answer, and the keys that move between lines (the
 //! arrows up and down, the page keys) are left to whatever holds it.
 //!
+//! [`Rows`] is a field of several lines, one per listed entry, renamed in
+//! place (wdired's names, grep's matched lines): a Cherry document with the
+//! Vim modes, its lines fixed, so Enter while typing answers rather than
+//! breaking a line, a key that deletes whole lines (`dd`) empties them in
+//! place, and any other key that would add or take away a line is taken
+//! back.
+//!
 //! What a field copies goes to the system clipboard, and is reported too
 //! ([`EditOutcome::Yank`]), for the window to keep in its clipboard history.
 
@@ -24,7 +31,7 @@ use misty::SystemClipboard;
 use winter_cherry::{clock, EditorClipboard};
 use winter_model::editor::Notice;
 use winter_model::input::{Key, KeyCode};
-use winter_model::textedit::modal::EditOutcome;
+use winter_model::textedit::modal::{EditMode, EditOutcome};
 
 // ========================================================================
 // Constants
@@ -40,6 +47,9 @@ const VERTICAL_KEYS: [KeyCode; 4] = [
     KeyCode::Up,
 ];
 
+/// What is said when a key would add or take away a line of [`Rows`].
+const FIXED_LINES: &str = "one line per entry: lines are not added or taken away here";
+
 thread_local! {
     /// The window thread's editor every field is a document of.
     static FIELDS: RefCell<FieldEditor> = RefCell::new(FieldEditor::new());
@@ -53,6 +63,19 @@ thread_local! {
 pub struct Field {
     /// The field's single-line document.
     document: DocumentId,
+    /// What the last key reported, for the status bar.
+    notice: Option<Notice>,
+    /// The field's view of it.
+    view: ViewId,
+}
+
+/// A field of several fixed lines, one per listed entry, and the Vim keys
+/// that edit them.
+pub struct Rows {
+    /// The field's document.
+    document: DocumentId,
+    /// How many lines it has, which no key changes.
+    lines: usize,
     /// What the last key reported, for the status bar.
     notice: Option<Notice>,
     /// The field's view of it.
@@ -229,6 +252,277 @@ impl Drop for Field {
 }
 
 // ========================================================================
+// Rows Implementations
+// ========================================================================
+
+impl Rows {
+    /// A field of `lines` in `mode`, the cursor on the last character of
+    /// line `row`, which is where a rewrite of its tail starts.
+    pub fn new(lines: Vec<String>, row: usize, mode: EditMode) -> Self {
+        let count = lines.len().max(1);
+        let rows = with(|fields| {
+            let document = fields.editor.open_document(&lines.join("\n"));
+            let view = fields
+                .editor
+                .new_view(document)
+                .expect("a document just opened takes a view");
+            Self {
+                document,
+                lines: count,
+                notice: None,
+                view,
+            }
+        });
+        rows.put_cursor(row, usize::MAX);
+        if mode == EditMode::Insert {
+            with(|fields| {
+                let _ = fields.editor.run_command(rows.view, "enter-insert", None);
+            });
+        }
+        rows
+    }
+
+    /// The text, one string per line.
+    pub fn lines(&self) -> Vec<String> {
+        with(|fields| {
+            let Some(text) = fields.editor.document(self.document) else {
+                return Vec::new();
+            };
+            (0..text.len_lines())
+                .filter_map(|line| text.line_text(line))
+                .collect()
+        })
+    }
+
+    /// The line the cursor is on.
+    pub fn row(&self) -> usize {
+        self.place().0
+    }
+
+    /// The character the cursor is on, or sits before while typing.
+    pub fn col(&self) -> usize {
+        self.place().1
+    }
+
+    /// The mode, as the status bar names it.
+    pub fn mode(&self) -> EditMode {
+        match self.cherry_mode() {
+            Some(cherry::Mode::Insert | cherry::Mode::CommandLine) => EditMode::Insert,
+            Some(cherry::Mode::Replace) => EditMode::Replace,
+            Some(cherry::Mode::Visual | cherry::Mode::VisualBlock | cherry::Mode::VisualLine) => {
+                EditMode::Visual
+            }
+            _ => EditMode::Normal,
+        }
+    }
+
+    /// Whether keys type text into the field (not into its `:` line).
+    pub fn is_typing(&self) -> bool {
+        matches!(
+            self.cherry_mode(),
+            Some(cherry::Mode::Insert | cherry::Mode::Replace)
+        )
+    }
+
+    /// Whether nothing is part-typed: Normal mode, no key of a sequence
+    /// waiting on the rest.
+    pub fn is_idle(&self) -> bool {
+        let pending = with(|fields| {
+            fields
+                .editor
+                .view(self.view)
+                .is_some_and(|view| !view.pending_keys().is_empty())
+        });
+        self.cherry_mode() == Some(cherry::Mode::Normal) && !pending
+    }
+
+    /// The view's mode, as Cherry has it.
+    fn cherry_mode(&self) -> Option<cherry::Mode> {
+        with(|fields| fields.editor.view(self.view).map(cherry::View::mode))
+    }
+
+    /// Puts the cursor on line `row`, as the host does when something other
+    /// than a key in the field moved it there.
+    pub fn move_to_row(&mut self, row: usize) {
+        let (at, column) = self.place();
+        if row != at {
+            self.put_cursor(row, column);
+        }
+    }
+
+    /// Takes what the last key reported, for the status bar.
+    pub fn take_notice(&mut self) -> Option<Notice> {
+        self.notice.take()
+    }
+
+    /// One key: what it asks of whatever holds the field.
+    pub fn on_key(&mut self, key: &Key) -> EditOutcome {
+        let alone = !(key.alt || key.ctrl || key.shift || key.sup);
+        if alone && key.code == KeyCode::Enter && self.is_typing() {
+            return EditOutcome::Submit;
+        }
+        let before = self.lines();
+        let (handled, requests, copied) = with(|fields| {
+            let handled = fields
+                .editor
+                .handle_key(self.view, to_cherry(key), clock::now());
+            let requests = fields.editor.take_requests();
+            let copied = fields
+                .copied
+                .lock()
+                .ok()
+                .and_then(|mut copied| copied.take());
+            (handled, requests, copied)
+        });
+        self.keep_lines(&before);
+        let mut outcome = match handled {
+            Handled::Ignored => EditOutcome::Ignored,
+            _ => EditOutcome::Consumed,
+        };
+        let mut saved = false;
+        for request in requests {
+            match request {
+                HostRequest::Notice(notice) => {
+                    self.notice = Some(match notice.level {
+                        NoticeLevel::Error => Notice::error(notice.message),
+                        NoticeLevel::Warning => Notice::warning(notice.message),
+                        _ => Notice::info(notice.message),
+                    });
+                }
+                HostRequest::Save(_) => {
+                    saved = true;
+                    outcome = EditOutcome::Save;
+                }
+                HostRequest::Quit(quit) => {
+                    outcome = EditOutcome::Quit {
+                        save: saved && !quit.force,
+                    };
+                }
+                HostRequest::Cancel(_) => outcome = EditOutcome::Cancel,
+                HostRequest::Submit(_) => outcome = EditOutcome::Submit,
+                _ => {}
+            }
+        }
+        match copied {
+            Some(text) if outcome == EditOutcome::Consumed => EditOutcome::Yank(text),
+            _ => outcome,
+        }
+    }
+
+    /// Puts text from the clipboard in at the cursor: its first line, since
+    /// the field's lines are fixed.
+    pub fn paste(&mut self, text: &str) {
+        let text = text.lines().next().unwrap_or_default();
+        // Typing, it goes in where the cursor sits; otherwise after the
+        // character the cursor is on, as `p` puts.
+        let (row, column) = self.place();
+        let typing = self.is_typing();
+        with(|fields| {
+            let Some(document) = fields.editor.document(self.document) else {
+                return;
+            };
+            let length = document
+                .line_text(row)
+                .map_or(0, |line| line.chars().count());
+            let column = match typing {
+                true => column,
+                false => (column + 1).min(length),
+            };
+            let Some(at) = document.position_to_char(cherry::Position { column, line: row }) else {
+                return;
+            };
+            let edit = Edit::new(at..at, text);
+            fields.editor.apply_edits(self.view, vec![edit]);
+        });
+    }
+
+    /// Keeps the lines fixed after a key, the text having read `before`:
+    /// whole lines it deleted are put back empty, and any other change to
+    /// how many lines there are is taken back, saying why.
+    fn keep_lines(&mut self, before: &[String]) {
+        let after = self.lines();
+        if after.len() == self.lines {
+            return;
+        }
+        with(|fields| {
+            let _ = fields.editor.run_command(self.view, "undo", None);
+        });
+        let Some(deleted) = deleted_lines(before, &after) else {
+            self.notice = Some(Notice::warning(FIXED_LINES));
+            return;
+        };
+        let emptied = vec![String::new(); deleted.len()].join("\n");
+        with(|fields| {
+            let Some(text) = fields.editor.document(self.document) else {
+                return;
+            };
+            let last = deleted.end - 1;
+            let from = text.position_to_char(cherry::Position {
+                column: 0,
+                line: deleted.start,
+            });
+            let to = text.line_text(last).and_then(|line| {
+                let column = line.chars().count();
+                text.position_to_char(cherry::Position { column, line: last })
+            });
+            if let (Some(from), Some(to)) = (from, to) {
+                let edit = Edit::new(from..to, emptied);
+                fields.editor.apply_edits(self.view, vec![edit]);
+            }
+        });
+        self.put_cursor(deleted.start, 0);
+    }
+
+    /// Where the cursor is: its line, and its column in chars.
+    fn place(&self) -> (usize, usize) {
+        with(|fields| {
+            let cursor = fields.editor.view(self.view)?.cursor();
+            let at = fields
+                .editor
+                .document(self.document)?
+                .char_to_position(cursor)?;
+            Some((at.line, at.column))
+        })
+        .unwrap_or_default()
+    }
+
+    /// Puts the cursor on `row` at `column`, each clamped to the text, a
+    /// column past the end landing on the line's last character.
+    fn put_cursor(&self, row: usize, column: usize) {
+        with(|fields| {
+            let Some(text) = fields.editor.document(self.document) else {
+                return;
+            };
+            let row = row.min(text.len_lines().saturating_sub(1));
+            let length = text.line_text(row).map_or(0, |line| line.chars().count());
+            let column = column.min(length.saturating_sub(1));
+            let at = text
+                .position_to_char(cherry::Position { column, line: row })
+                .unwrap_or(0);
+            fields.editor.set_cursor(self.view, at);
+        });
+    }
+}
+
+impl fmt::Debug for Rows {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Rows")
+            .field("lines", &self.lines())
+            .field("row", &self.row())
+            .finish()
+    }
+}
+
+impl Drop for Rows {
+    fn drop(&mut self) {
+        with(|fields| {
+            fields.editor.close_view(self.view);
+            fields.editor.close_document(self.document);
+        });
+    }
+}
+
+// ========================================================================
 // FieldEditor Implementations
 // ========================================================================
 
@@ -265,6 +559,22 @@ impl Clipboard for NotingClipboard {
 // ========================================================================
 // Functions
 // ========================================================================
+
+/// The lines `after` lost from `before` where a key deleted whole lines,
+/// those around them as they were; `None` for any other change.
+fn deleted_lines(before: &[String], after: &[String]) -> Option<std::ops::Range<usize>> {
+    let lost = before
+        .len()
+        .checked_sub(after.len())
+        .filter(|lost| *lost > 0)?;
+    let start = before
+        .iter()
+        .zip(after)
+        .position(|(was, now)| was != now)
+        .unwrap_or(after.len());
+    let kept = before[..start] == after[..start] && before[start + lost..] == after[start..];
+    kept.then_some(start..start + lost)
+}
 
 /// `act` on the window thread's field editor.
 fn with<R>(act: impl FnOnce(&mut FieldEditor) -> R) -> R {
@@ -329,6 +639,50 @@ mod tests {
         for c in typed.chars() {
             field.on_key(&press(KeyCode::Char(c), false));
         }
+    }
+
+    /// Each key of `typed` pressed in `rows`, each a plain character.
+    fn type_rows(rows: &mut Rows, typed: &str) -> Vec<EditOutcome> {
+        typed
+            .chars()
+            .map(|c| rows.on_key(&press(KeyCode::Char(c), false)))
+            .collect()
+    }
+
+    #[test]
+    fn test_rows_rename_a_line_in_place_and_keep_their_count() {
+        let names = vec!["alpha.txt".to_string(), "beta.txt".to_string()];
+        let mut rows = Rows::new(names, 1, EditMode::Normal);
+        assert_eq!((rows.row(), rows.col()), (1, 7), "on the last character");
+        assert!(rows.is_idle());
+        type_rows(&mut rows, "0");
+        type_rows(&mut rows, "c");
+        assert!(!rows.is_idle(), "an operator waits on its motion");
+        type_rows(&mut rows, "wgamma");
+        assert!(rows.is_typing());
+        assert_eq!(
+            rows.on_key(&press(KeyCode::Enter, false)),
+            EditOutcome::Submit,
+            "Enter answers rather than breaking the line"
+        );
+        assert_eq!(rows.lines(), ["alpha.txt", "gamma.txt"]);
+        rows.on_key(&press(KeyCode::Escape, false));
+        type_rows(&mut rows, "kJ");
+        assert_eq!(rows.lines(), ["alpha.txt", "gamma.txt"], "no lines joined");
+        assert!(rows.take_notice().is_some(), "and why said");
+        type_rows(&mut rows, "dd");
+        assert_eq!(rows.lines(), ["", "gamma.txt"], "a deleted line left empty");
+    }
+
+    #[test]
+    fn test_rows_save_with_w() {
+        let mut rows = Rows::new(vec!["a".to_string()], 0, EditMode::Normal);
+        let outcomes = type_rows(&mut rows, ":w");
+        assert_eq!(outcomes.last(), Some(&EditOutcome::Consumed));
+        assert_eq!(
+            rows.on_key(&press(KeyCode::Enter, false)),
+            EditOutcome::Save
+        );
     }
 
     #[test]

@@ -1,11 +1,10 @@
 //! Editing the listed names in place, in the manner of Emacs' `wdired`, and
 //! the renames an edit session comes to.
 
+use winter_field::Rows;
 use winter_model::editor::{EditorOutcome, Notice, PromptRequest};
 use winter_model::input::table::{self, TableMatch};
 use winter_model::input::{Key, KeyCode, Mods};
-use winter_model::paint::Shown;
-use winter_model::textedit::field::TextField;
 use winter_model::textedit::modal::{EditMode, EditOutcome};
 
 use super::keys::{Act, EDIT_KEYS};
@@ -46,7 +45,7 @@ impl DirEditor {
             return;
         }
         let line = self.list.cursor().saturating_sub(self.nav_count());
-        self.edit = Some(TextField::rows(names, line).with_mode(mode));
+        self.edit = Some(Rows::new(names, line, mode));
     }
 
     /// Keys while the names are editable text. `C-x C-q` saves the renames
@@ -75,7 +74,7 @@ impl DirEditor {
                 self.discard_edit();
                 return EditorOutcome::Consumed;
             }
-            Some(Act::Discard) if edit.modal().is_idle() => {
+            Some(Act::Discard) if edit.is_idle() => {
                 self.discard_edit();
                 return EditorOutcome::Consumed;
             }
@@ -85,15 +84,9 @@ impl DirEditor {
         let Some(edit) = self.edit.as_mut() else {
             return EditorOutcome::Ignored;
         };
-        edit.move_to_row(self.list.cursor().saturating_sub(nav));
         // The names are the entries' rows, one each, after `.` and `..`.
-        let shown = self.list.view().shown();
-        edit.show(Shown {
-            bottom: shown.bottom.saturating_sub(nav),
-            middle: shown.middle.saturating_sub(nav),
-            top: shown.top.saturating_sub(nav),
-        });
-        let outcome = edit.on_key(key, self.list.view().rows().max(1));
+        edit.move_to_row(self.list.cursor().saturating_sub(nav));
+        let outcome = edit.on_key(key);
         self.list.set_cursor(edit.row() + nav);
         if let Some(notice) = edit.take_notice() {
             self.notice = Some(notice);
@@ -214,12 +207,13 @@ impl DirEditor {
             return Vec::new();
         };
         let nav = self.nav_count();
+        let names = edit.lines();
         self.rows
             .iter()
             .enumerate()
             .skip(nav)
             .filter_map(|(index, row)| {
-                let name = edit.lines().get(index - nav)?;
+                let name = names.get(index - nav)?;
                 (*name != row.entry.name).then(|| (index, name.clone()))
             })
             .collect()

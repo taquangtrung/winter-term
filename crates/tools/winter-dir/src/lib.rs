@@ -37,6 +37,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use winter_field::Rows;
 use winter_model::background::{self, Background};
 use winter_model::editor::{
     DiffRequest, DiffText, Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorStatus,
@@ -54,7 +55,6 @@ use winter_model::paint::{
 };
 use winter_model::path::{abbreviate_home, crumb_label, crumb_paths, normalize_path, parent_dir};
 use winter_model::spinner;
-use winter_model::textedit::field::TextField;
 use winter_model::textedit::modal::EditMode;
 use winter_model::vim::nav::VimNav;
 use winter_vcs::watch::TreeWatch;
@@ -145,7 +145,7 @@ pub struct DirEditor {
     /// The names as editable text while renaming entries in place, in the
     /// manner of Emacs' `wdired`: one line per row, Vim keys over them and
     /// Emacs keys while typing, as in the editor.
-    edit: Option<TextField>,
+    edit: Option<Rows>,
     folds: Folds,
     /// Directories stepped back out of, most recent last.
     forward: Vec<PathBuf>,
@@ -1079,7 +1079,7 @@ impl Page for DirEditor {
         let row = self.rows.get(self.list.cursor())?;
         Some(Caret {
             col: rows::name_col(row) + edit.col(),
-            insert: edit.modal().is_typing(),
+            insert: edit.is_typing(),
         })
     }
 
@@ -1253,7 +1253,7 @@ impl Page for DirEditor {
         let mode = self
             .edit
             .as_ref()
-            .map_or(EditMode::Normal, |edit| edit.modal().mode());
+            .map_or(EditMode::Normal, |edit| edit.mode());
         let mut segments = vec![item_pos];
         if marked > 0 {
             segments.push(format!("{marked} marked"));

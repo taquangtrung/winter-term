@@ -22,6 +22,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use regex::NoExpand;
+use winter_field::Rows;
 use winter_model::background::{self, Background};
 use winter_model::editor::{
     menu_of, text_regex, Editor, EditorMenuItem, EditorOutcome, EditorStatus, JobReply, JobRequest,
@@ -31,10 +32,9 @@ use winter_model::editor::{
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
 use winter_model::input::{format_key, Key, KeyCode, Mods};
 use winter_model::list::{ListPlace, ListView};
-use winter_model::paint::{row_height, row_text, Caret, Frame, Point, Row, Shown, Span, Style};
+use winter_model::paint::{row_height, row_text, Caret, Frame, Point, Row, Span, Style};
 use winter_model::text_file;
-use winter_model::textedit::field::TextField;
-use winter_model::textedit::modal::EditOutcome;
+use winter_model::textedit::modal::{EditMode, EditOutcome};
 use winter_model::vim::nav::{VimKey, VimNav};
 
 // ========================================================================
@@ -348,7 +348,7 @@ enum Command {
 pub struct GrepEditor {
     /// The matched lines as editable text while they are being rewritten in
     /// place, one line per hit.
-    edit: Option<TextField>,
+    edit: Option<Rows>,
     /// The first key of a sequence (`C-x`, which `C-q` completes into the
     /// chord that starts or ends editing), while it waits for the second.
     edit_chord: Option<Key>,
@@ -914,7 +914,7 @@ impl GrepEditor {
         }
         let lines = self.hits.iter().map(|hit| hit.text.clone()).collect();
         let at = self.rows.get(self.list.cursor()).map_or(0, |row| row.hit);
-        self.edit = Some(TextField::rows(lines, at));
+        self.edit = Some(Rows::new(lines, at, EditMode::Normal));
         if let Some(row) = self.row_of_hit(at) {
             self.list.set_cursor(row);
         }
@@ -977,7 +977,7 @@ impl GrepEditor {
             return EditorOutcome::Consumed;
         }
         let at = self.rows.get(self.list.cursor()).map_or(0, |row| row.hit);
-        self.edit = Some(TextField::rows(lines, at));
+        self.edit = Some(Rows::new(lines, at, EditMode::Normal));
         self.notice = Some(Notice::info(format!(
             "replaced in {}: C-S-c writes, C-x C-q throws away",
             lines_count(changed)
@@ -990,11 +990,12 @@ impl GrepEditor {
         let Some(edit) = self.edit.as_ref() else {
             return Vec::new();
         };
+        let lines = edit.lines();
         self.hits
             .iter()
             .enumerate()
             .filter_map(|(index, hit)| {
-                let text = edit.lines().get(index)?;
+                let text = lines.get(index)?;
                 (*text != hit.text).then(|| (index, text.clone()))
             })
             .collect()
@@ -1078,16 +1079,8 @@ impl GrepEditor {
     /// while typing writes; `ZQ`, `C-x C-q`, or `q` with nothing part-typed,
     /// throws it away.
     fn on_edit_key(&mut self, key: &Key) -> EditorOutcome {
-        let at = self.rows.get(self.list.cursor()).map(|row| row.hit);
-        let viewport = self.list.view().rows().max(1);
         // The field holds a line per hit, under the listing's rows.
-        let hit = |row: usize| self.rows.get(row).map_or(0, |row| row.hit);
-        let shown = self.list.view().shown();
-        let shown = Shown {
-            bottom: hit(shown.bottom),
-            middle: hit(shown.middle),
-            top: hit(shown.top),
-        };
+        let at = self.rows.get(self.list.cursor()).map(|row| row.hit);
         let Some(edit) = self.edit.as_mut() else {
             return EditorOutcome::Ignored;
         };
@@ -1099,7 +1092,7 @@ impl GrepEditor {
                 self.discard_edit();
                 return EditorOutcome::Consumed;
             }
-            Some(Command::Discard) if edit.modal().is_idle() => {
+            Some(Command::Discard) if edit.is_idle() => {
                 self.discard_edit();
                 return EditorOutcome::Consumed;
             }
@@ -1111,8 +1104,7 @@ impl GrepEditor {
         if let Some(at) = at {
             edit.move_to_row(at);
         }
-        edit.show(shown);
-        let outcome = edit.on_key(key, viewport);
+        let outcome = edit.on_key(key);
         let row = edit.row();
         if let Some(notice) = edit.take_notice() {
             self.notice = Some(notice);
@@ -1288,7 +1280,7 @@ impl Page for GrepEditor {
     /// The edit mode while the matched lines are being rewritten.
     fn status(&self) -> EditorStatus {
         EditorStatus {
-            mode: self.edit.as_ref().map(|edit| edit.modal().mode()),
+            mode: self.edit.as_ref().map(|edit| edit.mode()),
             segments: Vec::new(),
         }
     }
@@ -1391,7 +1383,7 @@ impl Page for GrepEditor {
         }
         Some(Caret {
             col: LINE_WIDTH + LINE_GAP.len() + edit.col(),
-            insert: edit.modal().is_typing(),
+            insert: edit.is_typing(),
         })
     }
 

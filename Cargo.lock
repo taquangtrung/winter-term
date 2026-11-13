@@ -7351,6 +7351,7 @@ dependencies = [
  "libc",
  "notify",
  "winter-base",
+ "winter-field",
  "winter-model",
  "winter-vcs",
 ]

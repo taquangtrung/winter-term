@@ -1544,7 +1544,7 @@ fn test_escape_leaves_insert_for_normal_and_never_discards() {
     editor.on_key(&press(KeyCode::Char('A')));
     editor.on_key(&press(KeyCode::Char('2')));
     assert_eq!(
-        editor.edit.as_ref().expect("editing").modal().mode(),
+        editor.edit.as_ref().expect("editing").mode(),
         EditMode::Insert,
         "fixture: typing keeps Insert"
     );
@@ -1552,7 +1552,7 @@ fn test_escape_leaves_insert_for_normal_and_never_discards() {
     editor.on_key(&press(KeyCode::Escape));
     editor.on_key(&press(KeyCode::Escape));
     assert_eq!(
-        editor.edit.as_ref().expect("editing").modal().mode(),
+        editor.edit.as_ref().expect("editing").mode(),
         EditMode::Normal,
         "the first Escape steps out"
     );
@@ -1562,9 +1562,8 @@ fn test_escape_leaves_insert_for_normal_and_never_discards() {
         editor
             .edit
             .as_ref()
-            .and_then(|e| e.lines().first())
-            .map(String::as_str),
-        Some("base.txt2")
+            .and_then(|e| e.lines().first().cloned()),
+        Some("base.txt2".to_string())
     );
 }
 
