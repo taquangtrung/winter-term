@@ -68,7 +68,7 @@ winter-model = { version = "0.1.0", path = "crates/base/winter-model" }
 # published yet).
 misty = { version = "0.1.0", path = "../misty/crates/misty" }
 # The editor Winter's text editing runs on (local branch only, as misty).
-cherry = { version = "0.1.0", path = "../cherry/crates/cherry" }
+cherry = { version = "0.1.0", path = "../cherry" }
 winter-dir = { version = "0.1.0", path = "crates/tools/winter-dir" }
 winter-docker = { version = "0.1.0", path = "crates/tools/winter-docker" }
 winter-git = { version = "0.1.0", path = "crates/tools/winter-git" }
