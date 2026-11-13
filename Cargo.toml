@@ -52,6 +52,9 @@ readme = "README.md"
 rust-version = "1.99"
 
 [workspace.dependencies]
+# What the libraries report (misty's GPU fallback, text not drawn), written
+# to standard error by the app's logger.
+log = "0.4"
 anyhow = "1"
 base64 = "0.22"
 # Each crate turns on the formats it decodes.

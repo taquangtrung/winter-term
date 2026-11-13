@@ -139,9 +139,9 @@ pub enum IconKind {
 }
 
 /// The name of one of an editor's columns, drawn on the breadcrumb row over
-/// the column it names (see [`Editor::column_header`]).
+/// the column it names (see [`Page::column_header`]).
 ///
-/// [`Editor::column_header`]: crate::editor::Editor::column_header
+/// [`Page::column_header`]: crate::editor::Page::column_header
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ColumnName {
     /// Which edge of the column it stands against.
@@ -161,13 +161,13 @@ pub type Row = Vec<Span>;
 /// same columns on every row rather than pushing the text about. A fraction
 /// of a column parts lanes holding marks from the content.
 ///
-/// Every editor has one: it names its lanes ([`Editor::gutter_lanes`]) and
+/// Every editor has one: it names its lanes ([`Page::gutter_lanes`]) and
 /// fills each row's marks ([`Frame::gutter`]), and paints its content as
 /// though the gutter were not there. The host draws the gutter off the
-/// content's grid, in a strip of its own beside it: [`Gutter::frame`] lays
-/// out its rows.
+/// content's grid, in a strip of its own beside it: [`Gutter::lane_frames`]
+/// lays out its rows.
 ///
-/// [`Editor::gutter_lanes`]: crate::editor::Editor::gutter_lanes
+/// [`Page::gutter_lanes`]: crate::editor::Page::gutter_lanes
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Gutter {
     lanes: Vec<GutterLane>,

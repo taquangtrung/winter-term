@@ -4,8 +4,10 @@
 //!
 //! A view acts on Winter through a [`Host`] while it takes a key, but the
 //! editor has no window to lend it: what it asks is kept, and the window
-//! does it once the key is done (see [`Editor::take_extension_calls`]). A
-//! view that panics is stopped there, its tab saying so, and Winter goes on.
+//! does it once the key is done (see
+//! [`winter_model::editor::Page::take_extension_calls`]).
+//! A view that panics is stopped there, its tab saying so, and Winter goes
+//! on.
 
 use std::panic::{self, AssertUnwindSafe};
 use std::path::{Path, PathBuf};

@@ -287,6 +287,11 @@ fn fit_within(image: RgbaImage, max: u32) -> RgbaImage {
     image::imageops::thumbnail(&image, fitted(width), fitted(height))
 }
 
+/// `color` as an opaque glyph color, for text laid out into a picture.
+fn glyph_color(color: winter_theme::Rgb) -> glyphon::Color {
+    glyphon::Color::rgba(color.r, color.g, color.b, u8::MAX)
+}
+
 // ========================================================================
 // Tests
 // ========================================================================
@@ -321,9 +326,4 @@ mod tests {
             .expect("encode");
         assert_eq!(decode_limited(&ok).map(|i| i.dimensions()), Some((4, 4)));
     }
-}
-
-/// `color` as an opaque glyph color, for text laid out into a picture.
-fn glyph_color(color: winter_theme::Rgb) -> glyphon::Color {
-    glyphon::Color::rgba(color.r, color.g, color.b, u8::MAX)
 }

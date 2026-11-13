@@ -5,21 +5,21 @@
 //! paints it through the cell grid, Cherry's styles mapped to theme colors
 //! and its cursor drawn as a block or a bar.
 //!
-//! Keys come from [`KeyInput`](misty::keys::KeyInput). What the editor asks
+//! Keys come in as misty [`misty::Input::Key`]s. What the editor asks
 //! of its host (save a document, close a view, show a message) comes back
-//! from the lent [`Widget::handle`](misty::Widget::handle) as [`EditorResponse::Requests`], for the
+//! from the lent [`misty::Widget::handle`] as [`EditorResponse::Requests`], for the
 //! app to act on in order. A half-typed key sequence (the `g` of `g g`)
 //! times out on the deadline [`EditorView::about_to_wait`] returns. While
 //! a search (`/`, `?`) or command line (`:`) prompt is open, the view gives
 //! its bottom row to the prompt, whose cursor takes over.
 //!
-//! Input method events go to the lent [`Widget::handle`](misty::Widget::handle): text being
+//! Input method events go to the lent [`misty::Widget::handle`]: text being
 //! composed is drawn underlined over the cells from the cursor on, and
 //! committed text is typed as keys while the view takes text (Insert mode
 //! or a prompt). [`EditorView::ime_area`] says where the cursor is then,
 //! for [`ImeFocus::follow`](misty::ImeFocus::follow).
 //!
-//! The mouse goes to the lent [`Widget::handle`](misty::Widget::handle): a press moves the
+//! The mouse goes to the lent [`misty::Widget::handle`]: a press moves the
 //! cursor to the character under the pointer, a drag selects, a double
 //! click selects a word and a triple click a line, and the wheel scrolls,
 //! all through Cherry's own mouse handling, in cells counted from the
@@ -213,7 +213,7 @@ struct ViewLayout {
     metrics: CellMetrics,
 }
 
-/// What became of a key fed to the lent [`Widget::handle`](misty::Widget::handle).
+/// What became of a key fed to the lent [`misty::Widget::handle`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum EditorResponse {
     /// The editor used the key and asked nothing of the app.

@@ -19,6 +19,7 @@ pub mod config;
 pub mod control;
 pub mod editors;
 pub(crate) mod extensions;
+pub mod logging;
 #[cfg(feature = "wasm-extensions")]
 pub use extensions::cli as extension_cli;
 pub(crate) mod icons;

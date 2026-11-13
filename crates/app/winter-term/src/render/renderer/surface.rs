@@ -24,7 +24,7 @@ impl GpuRenderer {
     /// write: glyph and overlay antialiasing then blends in linear space
     /// (gamma-correct), which keeps light-on-dark text crisp instead of thin
     /// and fuzzy. The bg/image shaders output linear to match. Call
-    /// [`Self::resize`] before the first [`Self::render`].
+    /// [`Self::resize`] before the first frame is prepared.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         gpu: misty::Gpu,

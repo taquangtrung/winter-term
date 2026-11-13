@@ -293,7 +293,9 @@ impl GpuRenderer {
 /// in window pixels and sRGB.
 fn fills_of(verts: &[BgVertex], surface: SurfaceSize) -> Vec<PaintFill> {
     verts
-        .chunks_exact(QUAD_VERTICES)
+        .as_chunks::<QUAD_VERTICES>()
+        .0
+        .iter()
         .map(|quad| {
             let xs = quad
                 .iter()

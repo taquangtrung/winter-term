@@ -6,7 +6,7 @@
 //! next one in its place, asks it to stop, and an answer to work that has
 //! been replaced can never arrive: the receiver it would have come down is
 //! gone with it. That is what keeps a slow read from overwriting what a newer
-//! one already showed. The editor polls it from [`crate::editor::Editor::on_tick`],
+//! one already showed. The editor polls it from [`crate::editor::Page::on_tick`],
 //! after first giving it a moment to finish, so quick work lands in the same
 //! frame as the key that asked for it.
 

@@ -383,7 +383,7 @@ impl App {
                 window.set_maximized(!window.is_maximized())
             }
             Some(TitleBarHit::Drag) => {
-                let _ = window.drag_window();
+                window.drag_window();
             }
             _ => return false,
         }

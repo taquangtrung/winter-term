@@ -205,7 +205,7 @@ impl App {
             let (x, y) = self.input.pointer.cursor_pos;
             if let Some(direction) = self.edge_resize_direction(x, y) {
                 if let Some(window) = &self.window {
-                    let _ = window.drag_resize_window(direction);
+                    window.drag_resize_window(direction);
                 }
                 return;
             }
@@ -735,7 +735,7 @@ impl App {
         let (x, y) = self.input.pointer.cursor_pos;
         if let Some(direction) = self.edge_resize_direction(x, y) {
             if let Some(window) = &self.window {
-                let _ = window.drag_resize_window(direction);
+                window.drag_resize_window(direction);
             }
             return;
         }

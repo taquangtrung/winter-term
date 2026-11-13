@@ -1046,7 +1046,7 @@ impl dyn Page {
 }
 
 impl dyn Editor {
-    /// [`with_kind`](Page::with_kind) for an editor: the same, through the
+    /// `with_kind` for an editor: the same, through the
     /// page it is.
     pub fn with_kind<T: Page + 'static, R>(&self, run: impl FnOnce(&T) -> R) -> Option<R> {
         let page: &dyn Page = self;
