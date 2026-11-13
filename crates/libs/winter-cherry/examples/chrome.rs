@@ -40,7 +40,7 @@ use misty::{
     PopupSide, Rect, Route, Size, TabId, TabStrip, TabStripResponse, TitleBar, TitleBarResponse,
     WhichKey, Widget, WindowId, WindowOptions,
 };
-use winter_cherry::cherry_keys::{Keymap, Resolution, Resolver};
+use winter_cherry::cherry::keys::{Keymap, Resolution, Resolver};
 use winter_cherry::keys::to_cherry;
 use winter_cherry::{clock, keymap};
 

@@ -35,7 +35,7 @@ use misty::{
     Input, KeyScope, NumberRange, Outcome, Point, Rect, Route, Setting, SettingValue, SettingsPage,
     SettingsResponse, SettingsSection, Widget, WindowId, WindowOptions,
 };
-use winter_cherry::cherry_keys::{Keymap, Resolution, Resolver};
+use winter_cherry::cherry::keys::{Keymap, Resolution, Resolver};
 use winter_cherry::clock;
 use winter_cherry::keymap;
 use winter_cherry::keys::to_cherry;

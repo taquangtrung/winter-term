@@ -5,7 +5,7 @@
 use winter_model::input::table::{Binding, KeyTable, Listed};
 use winter_model::input::{Key, KeyCode};
 
-use cherry_keys::{Key as CherryKey, KeyCode as CherryCode, Mods};
+use cherry::keys::{Key as CherryKey, KeyCode as CherryCode, Mods};
 
 // ========================================================================
 // Constants
@@ -153,7 +153,7 @@ mod tests {
             shift: false,
             sup: false,
         };
-        let parsed = |spec| cherry_keys::parse_key(spec).expect("a valid key");
+        let parsed = |spec| cherry::keys::parse_key(spec).expect("a valid key");
         assert_eq!(
             to_cherry(&key(KeyCode::Char('x'), true, true)),
             parsed("C-M-x")

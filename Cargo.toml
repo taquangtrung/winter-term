@@ -71,9 +71,6 @@ winter-textedit = { version = "0.1.0", path = "crates/base/winter-textedit" }
 misty = { version = "0.1.0", path = "../misty/crates/misty" }
 # The editor Winter's text editing runs on (local branch only, as misty).
 cherry = { version = "0.1.0", path = "../cherry/crates/cherry" }
-cherry-keys = { version = "0.1.0", path = "../cherry/crates/cherry-keys" }
-cherry-markup = { version = "0.1.0", path = "../cherry/crates/cherry-markup" }
-cherry-syntax = { version = "0.1.0", path = "../cherry/crates/cherry-syntax" }
 winter-dir = { version = "0.1.0", path = "crates/tools/winter-dir" }
 winter-docker = { version = "0.1.0", path = "crates/tools/winter-docker" }
 winter-git = { version = "0.1.0", path = "crates/tools/winter-git" }

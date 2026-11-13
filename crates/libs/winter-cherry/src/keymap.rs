@@ -1,13 +1,13 @@
 //! The keymap adapter: for an app that resolves its keys with Cherry's
 //! keymap, [`bind`] binds a [`CommandRegistry`]'s keys into a
-//! `cherry_keys::Keymap`, [`which_key_entries`] turns the continuations of
+//! `cherry::keys::Keymap`, [`which_key_entries`] turns the continuations of
 //! a pending prefix into [`WhichKeyEntry`] rows, and [`to_keys`] turns
 //! Cherry keys (a resolver's pending prefix) into misty keys. Single keys
 //! convert with [`crate::keys`].
 
 use std::hash::Hash;
 
-use cherry_keys::{BindError, Continuation, Keymap};
+use cherry::keys::{BindError, Continuation, Keymap};
 use misty::key::Key;
 use misty::{CommandRegistry, KeyScope, WhichKeyEntry};
 
@@ -35,7 +35,7 @@ pub fn bind<L: Copy + Eq + Hash>(
 ) -> Result<(), BindError> {
     for row in registry.bindings(scope) {
         for sequence in &row.keys {
-            let sequence: Vec<cherry_keys::Key> =
+            let sequence: Vec<cherry::keys::Key> =
                 sequence.iter().map(|&key| to_cherry(key)).collect();
             match row.overridden {
                 true => keymap.bind_user(layer, &sequence, row.id)?,
@@ -65,7 +65,7 @@ pub fn which_key_entries<C>(
 }
 
 /// `keys`, Cherry keys such as a resolver's pending prefix, as misty keys.
-pub fn to_keys(keys: &[cherry_keys::Key]) -> Vec<Key> {
+pub fn to_keys(keys: &[cherry::keys::Key]) -> Vec<Key> {
     keys.iter().map(|&key| from_cherry(key)).collect()
 }
 
@@ -91,7 +91,7 @@ mod tests {
         Command::new("deep", "Deep", "Go").with_keys(&["g z a"]),
     ];
 
-    fn theirs(spec: &str) -> Vec<cherry_keys::Key> {
+    fn theirs(spec: &str) -> Vec<cherry::keys::Key> {
         parse_sequence(spec)
             .expect("a valid sequence")
             .into_iter()

@@ -9,7 +9,7 @@
 use std::sync::OnceLock;
 use std::time::Instant;
 
-use cherry_keys::Timestamp;
+use cherry::keys::Timestamp;
 
 // ========================================================================
 // Constants

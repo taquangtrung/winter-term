@@ -903,34 +903,9 @@ dependencies = [
 name = "cherry"
 version = "0.1.0"
 dependencies = [
- "cherry-keys",
  "regex",
  "ropey",
  "slotmap",
- "thiserror 2.0.20",
- "unicode-segmentation",
- "unicode-width 0.2.2",
-]
-
-[[package]]
-name = "cherry-keys"
-version = "0.1.0"
-dependencies = [
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "cherry-markup"
-version = "0.1.0"
-dependencies = [
- "cherry",
-]
-
-[[package]]
-name = "cherry-syntax"
-version = "0.1.0"
-dependencies = [
- "cherry",
  "streaming-iterator",
  "thiserror 2.0.20",
  "tree-sitter",
@@ -939,6 +914,8 @@ dependencies = [
  "tree-sitter-python",
  "tree-sitter-rust",
  "tree-sitter-toml-ng",
+ "unicode-segmentation",
+ "unicode-width 0.2.2",
 ]
 
 [[package]]
@@ -7350,8 +7327,6 @@ name = "winter-cherry"
 version = "0.1.0"
 dependencies = [
  "cherry",
- "cherry-keys",
- "cherry-syntax",
  "misty",
 ]
 
@@ -7626,8 +7601,6 @@ name = "winter-text"
 version = "0.1.0"
 dependencies = [
  "cherry",
- "cherry-keys",
- "cherry-markup",
  "misty",
  "serde_json",
  "unicode-width 0.1.14",

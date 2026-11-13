@@ -18,16 +18,12 @@ dbg_macro = "warn"
 todo = "warn"
 
 [features]
-# Syntax highlighting in `EditorView` through `cherry-syntax`, colored by
-# the theme's syntax colors; re-exported as `winter_cherry::cherry_syntax`.
-syntax = ["dep:cherry-syntax"]
+# Syntax highlighting in `EditorView` through Cherry's `syntax` module,
+# colored by the theme's syntax colors.
+syntax = ["cherry/syntax"]
 
 [dependencies]
 cherry.workspace = true
-cherry-keys.workspace = true
-# Tree-sitter highlighting with its default grammars: JSON, Markdown,
-# Python, Rust, and TOML.
-cherry-syntax = { workspace = true, optional = true }
 misty.workspace = true
 
 [dev-dependencies]

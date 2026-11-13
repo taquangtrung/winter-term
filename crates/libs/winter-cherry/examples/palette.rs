@@ -24,7 +24,7 @@ use misty::{
     ImeFocus, Input, KeyScope, Point, QuickPick, Rect, Size, TitleBar, TitleBarResponse, Widget,
     WindowId, WindowOptions, command_palette, picker,
 };
-use winter_cherry::cherry_keys::{Keymap, Resolution, Resolver};
+use winter_cherry::cherry::keys::{Keymap, Resolution, Resolver};
 use winter_cherry::clock;
 use winter_cherry::keymap;
 use winter_cherry::keys::to_cherry;

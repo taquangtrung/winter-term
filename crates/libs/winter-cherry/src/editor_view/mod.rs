@@ -906,7 +906,7 @@ fn respond(editor: &mut Editor, cx: &mut EventCx<'_>, handled: Handled) -> Edito
 /// colors.
 #[cfg(feature = "syntax")]
 fn highlight_colors(theme: &Theme) -> Vec<HighlightStyle> {
-    cherry_syntax::HIGHLIGHT_NAMES
+    cherry::syntax::HIGHLIGHT_NAMES
         .iter()
         .map(|name| HighlightStyle {
             foreground: theme.syntax.color(name),
@@ -1349,7 +1349,7 @@ mod tests {
         let view = editor.new_view(document).expect("a view");
         editor.resize_view(view, 10, 3);
         for spec in keys {
-            let key = cherry_keys::parse_key(spec).expect("a valid key");
+            let key = cherry::keys::parse_key(spec).expect("a valid key");
             editor.handle_key(view, key, clock::now());
         }
         let mut surface = Surface::new(0, 0);
@@ -1376,7 +1376,7 @@ mod tests {
         let document = editor.open_document("ab ab\n    cd");
         let view = editor.new_view(document).expect("a view");
         for spec in ["M-s", "h", "."] {
-            let key = cherry_keys::parse_key(spec).expect("a valid key");
+            let key = cherry::keys::parse_key(spec).expect("a valid key");
             editor.handle_key(view, key, clock::now());
         }
         let cells = cells_of(&mut editor, view, &theme);
@@ -1461,7 +1461,7 @@ mod tests {
         };
         draw(&mut editor, &mut view);
         for _ in 0..12 {
-            let key = cherry_keys::parse_key("j").expect("a key");
+            let key = cherry::keys::parse_key("j").expect("a key");
             editor.handle_key(id, key, clock::now());
         }
         draw(&mut editor, &mut view);
@@ -1470,7 +1470,7 @@ mod tests {
             "a short scroll glides"
         );
         assert!(view.shift > 0);
-        let key = cherry_keys::parse_key("G").expect("a key");
+        let key = cherry::keys::parse_key("G").expect("a key");
         editor.handle_key(id, key, clock::now());
         draw(&mut editor, &mut view);
         assert!(
@@ -1536,7 +1536,7 @@ mod tests {
         let document = editor.open_document("");
         let view = editor.new_view(document).expect("a view");
         assert!(!takes_text(&editor, view));
-        let i = cherry_keys::parse_key("i").expect("a valid key");
+        let i = cherry::keys::parse_key("i").expect("a valid key");
         editor.handle_key(view, i, clock::now());
         assert!(takes_text(&editor, view));
         for key in "你好\n".chars().filter_map(typed_key) {
@@ -1556,7 +1556,7 @@ mod tests {
         let mut editor = Editor::new(EditorOptions::default());
         let document = editor.open_document("ab\ncd\nef\ngh");
         let view = editor.new_view(document).expect("a view");
-        let key = cherry_keys::parse_key("/").expect("a valid key");
+        let key = cherry::keys::parse_key("/").expect("a valid key");
         editor.handle_key(view, key, clock::now());
         let mut editor_view = EditorView::new(view);
         let mut rows = 0;
@@ -1714,7 +1714,7 @@ mod tests {
         let view = editor.new_view(document).expect("a view");
         let decorations = vec![Decoration::new(0..3, DecorationKind::Error)];
         editor.set_decorations(document, "test", decorations);
-        let key = cherry_keys::parse_key("j").expect("a valid key");
+        let key = cherry::keys::parse_key("j").expect("a valid key");
         editor.handle_key(view, key, clock::now());
         let mut editor_view = EditorView::new(view);
         let Some(snapshot) = TestWindow::new(200, 120).render(|frame| {
@@ -1750,7 +1750,7 @@ mod tests {
         let document = editor.open_document("alpha\nalpine\n");
         let view = editor.new_view(document).expect("a view");
         for spec in ["G", "o", "a", "l", "C-x", "C-n"] {
-            let key = cherry_keys::parse_key(spec).expect("a valid key");
+            let key = cherry::keys::parse_key(spec).expect("a valid key");
             editor.handle_key(view, key, clock::now());
         }
         let items = editor
@@ -1793,7 +1793,7 @@ mod tests {
         let mut editor_view = EditorView::new(view);
         let mut frame = TestWindow::new(400, 300).frame();
         for spec in ["j", "l"] {
-            let key = cherry_keys::parse_key(spec).expect("a valid key");
+            let key = cherry::keys::parse_key(spec).expect("a valid key");
             editor.handle_key(view, key, clock::now());
         }
         let area = Rect::new(0.0, 0.0, 400.0, 300.0);
@@ -1834,7 +1834,7 @@ mod tests {
         let area = Rect::new(0.0, 0.0, 400.0, 300.0);
         let mut selection_after = |keys: &[&str]| {
             for spec in keys {
-                let key = cherry_keys::parse_key(spec).expect("a valid key");
+                let key = cherry::keys::parse_key(spec).expect("a valid key");
                 editor.handle_key(view, key, clock::now());
             }
             let mut frame = TestWindow::new(400, 300).frame();
@@ -2029,7 +2029,7 @@ mod tests {
         let id = view.view();
         editor.handle_key(
             id,
-            cherry_keys::parse_key("a").expect("a key"),
+            cherry::keys::parse_key("a").expect("a key"),
             clock::now(),
         );
         let composition = Composition {
@@ -2061,7 +2061,7 @@ mod tests {
     #[test]
     fn test_every_highlight_name_but_plain_variables_has_a_color_in_both_themes() {
         for theme in [Theme::dark(), Theme::light()] {
-            let uncolored: Vec<&str> = cherry_syntax::HIGHLIGHT_NAMES
+            let uncolored: Vec<&str> = cherry::syntax::HIGHLIGHT_NAMES
                 .iter()
                 .copied()
                 .filter(|name| theme.syntax.color(name).is_none())
@@ -2075,9 +2075,9 @@ mod tests {
     fn rust_editor(text: &str) -> (Editor, ViewId) {
         let mut editor = Editor::new(EditorOptions::default());
         let document = editor.open_document(text);
-        let language = cherry_syntax::Language::Rust;
+        let language = cherry::syntax::Language::Rust;
         let source = editor.document(document).expect("just opened");
-        let highlighter = cherry_syntax::SyntaxHighlighter::new(language, source).expect("loads");
+        let highlighter = cherry::syntax::SyntaxHighlighter::new(language, source).expect("loads");
         editor.set_highlighter(document, Some(Box::new(highlighter)));
         let view = editor.new_view(document).expect("a view");
         (editor, view)
@@ -2095,7 +2095,7 @@ mod tests {
         assert_eq!(foreground(&cells, 0), Some(Color::Rgb(keyword)));
         assert_ne!(foreground(&cells, 3), Some(Color::Rgb(keyword)));
         for spec in ["/", "f", "n", "RET"] {
-            let key = cherry_keys::parse_key(spec).expect("a valid key");
+            let key = cherry::keys::parse_key(spec).expect("a valid key");
             editor.handle_key(view, key, clock::now());
         }
         let cells = cells_of(&mut editor, view, &theme);

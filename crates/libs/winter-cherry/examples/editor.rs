@@ -40,10 +40,10 @@ use misty::{
     Notifier, Size, StatusBar, StatusLine, SystemClipboard, TitleBar, TitleBarResponse, WhichKey,
     WhichKeyEntry, Widget, WindowId, WindowOptions,
 };
+use winter_cherry::cherry::syntax::{self, Language, SyntaxHighlighter};
 use winter_cherry::cherry::{
     Decoration, DecorationKind, DocumentId, Editor, EditorOptions, HostRequest, Mode, Sign,
 };
-use winter_cherry::cherry_syntax::{self, Language, SyntaxHighlighter};
 use winter_cherry::keys::from_cherry;
 use winter_cherry::{EditorClipboard, EditorResponse, EditorView};
 
@@ -407,7 +407,7 @@ fn highlight(editor: &mut Editor, document: DocumentId, path: &Path, notifier: &
         Ok(highlighter) => {
             editor.set_highlighter(document, Some(Box::new(highlighter)));
             // Fails only when the ids are taken, which nothing here does.
-            let _ = cherry_syntax::register_text_objects(editor);
+            let _ = syntax::register_text_objects(editor);
         }
         Err(error) => notifier.notify(Notice::error(format!("no highlighting: {error}"))),
     }

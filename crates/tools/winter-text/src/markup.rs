@@ -41,7 +41,7 @@ impl Session {
         }
         file.concealed = version;
         let text = self.lines(document).join("\n");
-        let hidden = cherry_markup::markdown_conceals(&text);
+        let hidden = cherry::markup::markdown_conceals(&text);
         self.editor.set_conceals(document, MARKERS, hidden);
     }
 }
