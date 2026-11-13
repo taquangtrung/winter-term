@@ -31,7 +31,7 @@ use winter_model::editor::EditPoint;
 use winter_model::editor::{
     menu_groups, Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus,
     FileEdit, JobReply, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptReply, SharedText,
-    TargetStyles, SAVE_ALL,
+    TargetStyles, SAVE_ALL, TOGGLE_SWATCHES,
 };
 use winter_model::input::Key;
 use winter_model::paint::{Frame as PaintFrame, IconKind, Row};
@@ -51,6 +51,7 @@ mod servers;
 mod session;
 pub mod settings;
 mod spelling;
+mod swatch;
 
 pub use inline::{InlineAsk, InlineCall, InlineTold};
 pub use keys::KEY_TABLES;
@@ -341,19 +342,22 @@ impl TextEditor {
     }
 
     /// Draws the view in `area` of `frame` in `font`, the highlighter's
-    /// styles drawn as `styles` gives them, by number.
+    /// styles drawn as `styles` gives them, by number, and the color
+    /// swatches' numbered past them.
     pub fn draw(
         &mut self,
         frame: &mut Frame,
         area: Rect,
         theme: &Theme,
         font: &Font,
-        styles: Vec<HighlightStyle>,
+        mut styles: Vec<HighlightStyle>,
     ) {
         session::with(|session| {
             session.git_shown(self.document);
             session.conceal_markup(self.document);
             session.check_spelling(self.document);
+            let swatches = session.lay_swatches(self.document, styles.len());
+            styles.extend(swatches);
         });
         let generation = diagnostics::generation();
         if self.problems_seen != Some(generation) {
@@ -563,12 +567,21 @@ impl Page for TextEditor {
     }
 
     /// Writes the file for the window's [`SAVE_ALL`] (a build about to
-    /// start); runs Viento's command of any other name, its words joined by
+    /// start); turns the color swatches off or on for [`TOGGLE_SWATCHES`];
+    /// runs Viento's command of any other name, its words joined by
     /// hyphens rather than underscores (`upcase_word` runs `upcase-word`).
     /// `None` for a command Viento does not have.
     fn run_command(&mut self, name: &str) -> Option<EditorOutcome> {
         if name == SAVE_ALL {
             return Some(self.write());
+        }
+        if name == TOGGLE_SWATCHES {
+            let state = match session::with(|session| session.toggle_swatches()) {
+                true => "on",
+                false => "off",
+            };
+            self.notice = Some(Notice::info(format!("Color swatches {state}")).unlogged());
+            return Some(EditorOutcome::Consumed);
         }
         if let Some(outcome) = self.run_lsp_command(name) {
             return Some(outcome);

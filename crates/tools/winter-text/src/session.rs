@@ -23,6 +23,7 @@ use super::git_changes::GitBase;
 use super::language::grammar_of;
 use super::servers::{Servers, Synced};
 use super::spelling::Spelling;
+use super::swatch::Swatched;
 
 // ========================================================================
 // Constants
@@ -53,6 +54,8 @@ pub(crate) struct Session {
     pub(crate) completions: HashMap<(ServerId, u64), CompletionTicket>,
     /// Where checking each prose document's spelling stands.
     pub(crate) spelling: HashMap<DocumentId, Spelling>,
+    /// Whether the colors files write are drawn on the colors they name.
+    pub(crate) swatches_on: bool,
 }
 
 /// The file a document came from.
@@ -76,6 +79,8 @@ pub(crate) struct OpenFile {
     shape: FileShape,
     /// What the file was when last read or written.
     stamp: FileStamp,
+    /// The color swatches laid on it, once they are.
+    pub(crate) swatched: Option<Swatched>,
     /// What the server serving it last had of it.
     pub(crate) synced: Option<Synced>,
     /// The views showing the document, oldest first.
@@ -98,6 +103,7 @@ impl Session {
             servers: Servers::default(),
             completions: HashMap::new(),
             spelling: HashMap::new(),
+            swatches_on: true,
         }
     }
 
@@ -244,6 +250,7 @@ impl Session {
                 problems: Vec::new(),
                 shape,
                 stamp,
+                swatched: None,
                 synced: None,
                 views: Vec::new(),
             },
