@@ -31,7 +31,7 @@ use misty::SystemClipboard;
 use winter_cherry::{clock, EditorClipboard};
 use winter_model::editor::Notice;
 use winter_model::input::{Key, KeyCode};
-use winter_model::textedit::modal::{EditMode, EditOutcome};
+use winter_model::modal::{EditMode, EditOutcome};
 
 // ========================================================================
 // Constants

@@ -3,7 +3,6 @@ members = [
     "crates/app/winter-term",
     "crates/base/winter-base",
     "crates/base/winter-keys",
-    "crates/base/winter-textedit",
     "crates/base/winter-model",
     "crates/tools/winter-dir",
     "crates/tools/winter-docker",
@@ -65,7 +64,6 @@ winter-base = { version = "0.1.0", path = "crates/base/winter-base" }
 winter-emulator = { version = "0.1.0", path = "crates/base/winter-emulator" }
 winter-keys = { version = "0.1.0", path = "crates/base/winter-keys" }
 winter-model = { version = "0.1.0", path = "crates/base/winter-model" }
-winter-textedit = { version = "0.1.0", path = "crates/base/winter-textedit" }
 # The GUI toolkit Winter is moving onto (local branch only: misty is not
 # published yet).
 misty = { version = "0.1.0", path = "../misty/crates/misty" }

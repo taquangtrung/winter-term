@@ -2,7 +2,7 @@
 
 use crate::window::test_support::*;
 use winter_model::input::{FindChar, TextObject, TextObjectSpec, VisualKind};
-use winter_model::textedit::modal::shared;
+use winter_model::registers;
 
 use super::*;
 
@@ -103,7 +103,7 @@ fn test_shift_y_yanks_from_the_cursor_not_the_whole_line() {
         id,
     );
 
-    assert_eq!(shared::register_text('r').as_deref(), Some("pha"));
+    assert_eq!(registers::register_text('r').as_deref(), Some("pha"));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn test_the_yank_operator_takes_a_word_a_paragraph_and_a_line() {
     let (mut app, id) = app_with_paragraphs(0);
     let yank = |app: &mut App, action: input::Action| -> Option<String> {
         app.handle_action(action, id);
-        shared::register_text('r')
+        registers::register_text('r')
     };
 
     assert_eq!(
@@ -1426,7 +1426,7 @@ fn test_named_register_yank_and_paste_in_app() {
 
     // Yank into register 'a'
     app.handle_action(input::Action::YankSelectionRegister('a'), id);
-    assert_eq!(shared::register_text('a').as_deref(), Some("\"hello\""));
+    assert_eq!(registers::register_text('a').as_deref(), Some("\"hello\""));
     assert_eq!(app.open_tabs.mode(&id), Some(Mode::Normal));
 }
 

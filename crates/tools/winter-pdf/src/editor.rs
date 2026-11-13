@@ -16,7 +16,7 @@ use winter_model::input::{table, Key, KeyCode, Mods};
 use winter_model::paint::{Frame, IconKind, Point, Row};
 use winter_model::path::abbreviate_home;
 use winter_model::picture::{Content, Tile};
-use winter_model::textedit::search::Search;
+use winter_model::search::Search;
 
 use super::caret::{Effect, Operator};
 use super::keys::{COMMON_KEYS, CURSOR_KEYS, WINDOW_KEYS};

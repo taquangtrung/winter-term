@@ -10,8 +10,8 @@ use winter_model::button::ButtonGroup;
 use winter_model::editor::{PickPlacement, PromptMode, PromptReply, PromptRequest, SearchReport};
 use winter_model::input::{Key, KeyCode, Mods};
 use winter_model::layout::TabId;
-use winter_model::textedit::modal::EditOutcome;
-use winter_model::textedit::recall::{Answers, Recall};
+use winter_model::modal::EditOutcome;
+use winter_model::recall::{Answers, Recall};
 
 use crate::window::input::overlay::Overlay;
 use crate::window::{App, SEARCH_DEBOUNCE_MILLIS};

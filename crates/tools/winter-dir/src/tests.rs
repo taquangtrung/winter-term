@@ -6,8 +6,8 @@ use std::fs;
 use winter_model::editor::FileOps;
 use winter_model::input::table;
 use winter_model::input::KeyCode;
+use winter_model::modal::EditMode;
 use winter_model::paint::{GutterLane, GutterMark, IconKind};
-use winter_model::textedit::modal::EditMode;
 
 /// A temporary tree that removes itself on drop.
 struct TempTree(PathBuf);

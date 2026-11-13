@@ -34,9 +34,9 @@ use super::guard::Guarded;
 
 use super::input::table::KeyHelp;
 use super::input::{Key, MacroStep};
+pub use super::modal::EditorStatus;
 use super::paint::{Caret, ColumnName, Frame, GutterLane, IconKind, Point, Row};
 use super::picture::{Picture, Tile};
-pub use super::textedit::modal::EditorStatus;
 
 pub use commands::*;
 pub use compare::{CompareRequest, DiffMerge, DiffRequest, DiffText, FileShape, GitViewRequest};

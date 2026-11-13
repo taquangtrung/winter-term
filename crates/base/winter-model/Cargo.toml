@@ -15,7 +15,7 @@ include = ["Cargo.toml", "src/**/*.rs", "builtin/*"]
 [features]
 # Helpers the app's tests build on: key constructors, and reaching the editor
 # a guard wraps.
-test-support = ["winter-textedit/test-support"]
+test-support = []
 
 [dependencies]
 kdl.workspace = true
@@ -29,4 +29,3 @@ winter-ext-api.workspace = true
 winter-keys.workspace = true
 misty.workspace = true
 winter-theme.workspace = true
-winter-textedit.workspace = true

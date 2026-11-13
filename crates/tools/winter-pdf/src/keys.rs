@@ -4,8 +4,8 @@
 use winter_model::editor::{EditorOutcome, Notice, Page, PromptMode, PromptRequest};
 use winter_model::input::table::{Binding, KeyTable, Listed, TableMatch};
 use winter_model::input::{format_key, table, Key, KeyCode, Mods};
-use winter_model::textedit::modal::EditMode;
-use winter_model::textedit::search::Search;
+use winter_model::modal::EditMode;
+use winter_model::search::Search;
 
 use super::caret::{Caret, Effect, FindKind, Motion, Operator, Pos, Visual};
 use super::document::Document;

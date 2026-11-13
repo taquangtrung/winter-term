@@ -1,5 +1,5 @@
 //! The Vim grammar both modal surfaces share: the terminal's Normal and Visual
-//! modes (`model::input`) and the text editor's (`model::textedit::modal`).
+//! modes (`model::input`) and the modal fields' (`model::modal`).
 //!
 //! Each surface keeps its own state machine, since one resolves keys into
 //! actions on a live grid and the other edits a buffer in place. What a key

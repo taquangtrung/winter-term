@@ -41,7 +41,7 @@ use std::time::{Duration, Instant, SystemTime};
 use winter_model::editor::{DropList, EditorOutcome, Notice, OpenTarget, PdfMark};
 use winter_model::input::Key;
 use winter_model::picture::{Content, Pixels, Tile};
-use winter_model::textedit::search::Search;
+use winter_model::search::Search;
 
 use caret::{Caret, FindKind, Motion, Operator, Pos, Visual};
 use document::Document;

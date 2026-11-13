@@ -5,7 +5,7 @@ use winter_field::Rows;
 use winter_model::editor::{EditorOutcome, Notice, PromptRequest};
 use winter_model::input::table::{self, TableMatch};
 use winter_model::input::{Key, KeyCode, Mods};
-use winter_model::textedit::modal::{EditMode, EditOutcome};
+use winter_model::modal::{EditMode, EditOutcome};
 
 use super::keys::{Act, EDIT_KEYS};
 use super::tree::Row;

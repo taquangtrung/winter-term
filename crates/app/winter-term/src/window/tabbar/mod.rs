@@ -705,7 +705,7 @@ mod tests {
 
             fn status(&self) -> winter_model::editor::EditorStatus {
                 winter_model::editor::EditorStatus {
-                    mode: Some(winter_model::textedit::modal::EditMode::Normal),
+                    mode: Some(winter_model::modal::EditMode::Normal),
                     segments: Vec::new(),
                 }
             }

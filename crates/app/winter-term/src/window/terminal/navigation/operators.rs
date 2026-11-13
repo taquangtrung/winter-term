@@ -5,7 +5,7 @@
 use winter_model::input::{CursorMove, TextObject, TextObjectSpec, VisualKind};
 use winter_model::layout::TabId;
 use winter_model::mode::{Mode, ModeEvent};
-use winter_model::textedit::modal::shared;
+use winter_model::registers;
 
 use crate::window::terminal::prompt_edit::{
     prompt_add_surround_bytes, prompt_change_surround_bytes, prompt_delete_surround_bytes,
@@ -189,7 +189,7 @@ impl App {
             // The clipboard registers and the unnamed one mean the clipboard,
             // which is what a yank with no register named goes to as well.
             Some(reg) if !matches!(reg, '+' | '*' | '"') => {
-                shared::set_register_text(reg, text);
+                registers::set_register_text(reg, text);
                 self.set_unlogged_notice(format!("Yanked into register \"{reg}"));
             }
             _ => self.copy_selection(),

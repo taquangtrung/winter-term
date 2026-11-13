@@ -630,7 +630,7 @@ fn app_editing_beside_another(name: &str) -> (App, TabId, TabId, PathBuf) {
 }
 
 /// The mode tab `tab`'s editor is in.
-fn mode_of(app: &mut App, tab: TabId) -> Option<winter_model::textedit::modal::EditMode> {
+fn mode_of(app: &mut App, tab: TabId) -> Option<winter_model::modal::EditMode> {
     app.open_tabs
         .page_mut(&tab)
         .expect("an editor")

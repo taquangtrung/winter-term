@@ -6,7 +6,7 @@
 use winter_base::remote::{self, Kind, Remote, RemoteError};
 use winter_field::Field;
 use winter_model::input::Key;
-use winter_model::textedit::modal::EditOutcome;
+use winter_model::modal::EditOutcome;
 
 use crate::window::input::overlay::{Overlay, PasswordInput};
 use crate::window::App;

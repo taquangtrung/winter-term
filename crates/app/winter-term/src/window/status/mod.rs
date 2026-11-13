@@ -23,8 +23,8 @@ use crate::config::{StatusBarConfig, StatusSegmentKind};
 use crate::quota::{describe, describe_compact, Provider, Shown};
 use winter_model::editor::EditorStatus;
 use winter_model::layout::TabId;
+use winter_model::modal::EditMode;
 use winter_model::mode::Mode;
-use winter_model::textedit::modal::EditMode;
 use winter_terminal::session::Host;
 
 use crate::window::App;

@@ -301,7 +301,7 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
         buttons: None,
         query_buttons: None,
         field: winter_field::Field::line("hello"),
-        recall: winter_model::textedit::recall::Recall::default(),
+        recall: winter_model::recall::Recall::default(),
         tab: TabId(0),
         request: winter_model::editor::PromptRequest {
             initial: String::new(),
@@ -330,7 +330,7 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
         buttons: None,
         query_buttons: None,
         field: winter_field::Field::line("needle"),
-        recall: winter_model::textedit::recall::Recall::default(),
+        recall: winter_model::recall::Recall::default(),
         tab: TabId(3),
         request: winter_model::editor::PromptRequest {
             initial: String::new(),

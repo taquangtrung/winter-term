@@ -3,7 +3,7 @@
 use winter_model::input::{self, Action, CursorMove, InsertAt, VisualKind};
 use winter_model::layout::{Rect, TabId};
 use winter_model::mode::{Mode, ModeEvent};
-use winter_model::textedit::modal::shared;
+use winter_model::registers;
 
 use crate::window::commands::{command_listing, COMMANDS_PICKER};
 use crate::window::terminal::navigation::search::SearchFrom;
@@ -162,7 +162,7 @@ impl App {
                     if reg == '+' || reg == '*' || reg == '"' {
                         self.copy_selection();
                     } else {
-                        shared::set_register_text(reg, text);
+                        registers::set_register_text(reg, text);
                         self.set_unlogged_notice(format!("Yanked into register \"{reg}"));
                     }
                 }
@@ -175,7 +175,7 @@ impl App {
                 let text = if register == '+' || register == '*' {
                     self.clipboard_text()
                 } else {
-                    shared::register_text(register)
+                    registers::register_text(register)
                 };
                 if let Some(text) = text {
                     self.paste_text(&text);

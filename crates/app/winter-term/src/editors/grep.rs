@@ -32,9 +32,9 @@ use winter_model::editor::{
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
 use winter_model::input::{format_key, Key, KeyCode, Mods};
 use winter_model::list::{ListPlace, ListView};
+use winter_model::modal::{EditMode, EditOutcome};
 use winter_model::paint::{row_height, row_text, Caret, Frame, Point, Row, Span, Style};
 use winter_model::text_file;
-use winter_model::textedit::modal::{EditMode, EditOutcome};
 use winter_model::vim::nav::{VimKey, VimNav};
 
 // ========================================================================

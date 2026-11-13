@@ -2,8 +2,8 @@
 
 use std::path::PathBuf;
 
+pub use crate::search::{match_spans, SearchReport};
 use regex::{Regex, RegexBuilder};
-pub use winter_textedit::search::{match_spans, SearchReport};
 
 use crate::paint::{IconKind, StyleRun};
 

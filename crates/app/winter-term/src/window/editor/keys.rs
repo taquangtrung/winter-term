@@ -7,8 +7,8 @@ use misty::picker::{Resume, Row, RowKey};
 use winter_model::editor::{EditorOutcome, EditorRequest, FileEdit, PromptMode};
 use winter_model::input::{Key, KeyCode, Mods};
 use winter_model::layout::TabId;
+use winter_model::modal::EditMode;
 use winter_model::paint::Point;
-use winter_model::textedit::modal::EditMode;
 use winter_model::vim::nav::space_page;
 
 use crate::window::input::overlay::Overlay;

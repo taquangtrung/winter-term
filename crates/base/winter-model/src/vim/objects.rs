@@ -269,40 +269,6 @@ pub fn matching_bracket(rows: &impl TextRows, at: (usize, usize)) -> Option<(usi
     }
 }
 
-/// The row a paragraph motion lands on (`{`/`}`): the next blank row past the
-/// run the cursor is in, or the first or last row where there is none.
-pub(crate) fn paragraph_edge(rows: &impl TextRows, row: usize, forward: bool) -> usize {
-    let total = rows.row_count();
-    if total == 0 {
-        return 0;
-    }
-    let blank = |row: usize| rows.row_chars(row).iter().all(|c| c.is_whitespace());
-    let step = |row: usize| match forward {
-        true => (row + 1 < total).then(|| row + 1),
-        false => row.checked_sub(1),
-    };
-    let mut at = match step(row) {
-        Some(next) => next,
-        None => return row,
-    };
-    // Off the blanks the cursor may be sitting among, then across the text,
-    // which is what leaves the motion on the next boundary rather than on the
-    // row beside the one it started on.
-    while blank(at) {
-        match step(at) {
-            Some(next) => at = next,
-            None => return at,
-        }
-    }
-    while !blank(at) {
-        match step(at) {
-            Some(next) => at = next,
-            None => return at,
-        }
-    }
-    at
-}
-
 /// The inclusive row range a paragraph object covers (`ip`/`ap`): the run of
 /// rows around `row` that are all blank or all not, and for `around` the run
 /// that follows it, or the one before where nothing follows.
@@ -569,15 +535,6 @@ mod tests {
         assert_eq!(matching_bracket(&rows, (1, 0)), Some((1, 7)));
         // Past every bracket on the row there is nothing to match.
         assert_eq!(matching_bracket(&rows, (0, 8)), None);
-    }
-
-    #[test]
-    fn test_a_paragraph_motion_stops_on_the_blank_row_past_the_text() {
-        let rows = Lines::of(&["one", "two", "", "", "three", "four"]);
-        assert_eq!(paragraph_edge(&rows, 0, true), 2, "the blank below");
-        assert_eq!(paragraph_edge(&rows, 2, true), 5, "over the blanks");
-        assert_eq!(paragraph_edge(&rows, 5, false), 3, "the blank above");
-        assert_eq!(paragraph_edge(&rows, 0, false), 0, "nothing above the top");
     }
 
     #[test]

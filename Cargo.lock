@@ -7434,7 +7434,6 @@ dependencies = [
  "winter-emulator",
  "winter-ext-api",
  "winter-keys",
- "winter-textedit",
  "winter-theme",
 ]
 
@@ -7620,16 +7619,6 @@ dependencies = [
  "winter-spell",
  "winter-syntax",
  "winter-vcs",
-]
-
-[[package]]
-name = "winter-textedit"
-version = "0.1.0"
-dependencies = [
- "misty",
- "unicode-segmentation",
- "unicode-width 0.1.14",
- "winter-keys",
 ]
 
 [[package]]

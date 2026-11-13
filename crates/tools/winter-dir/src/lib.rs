@@ -49,13 +49,13 @@ use winter_model::input::table::KeyHelp;
 use winter_model::input::CursorMove;
 use winter_model::input::{Key, KeyCode, Mods};
 use winter_model::list::{ListPlace, ListView};
+use winter_model::modal::EditMode;
 use winter_model::paint::{
     row_height, row_text, Caret, ColumnName, Frame, GutterLane, GutterMark, Icon, Point, RowWindow,
     Span, Style,
 };
 use winter_model::path::{abbreviate_home, crumb_label, crumb_paths, normalize_path, parent_dir};
 use winter_model::spinner;
-use winter_model::textedit::modal::EditMode;
 use winter_model::vim::nav::VimNav;
 use winter_vcs::watch::TreeWatch;
 

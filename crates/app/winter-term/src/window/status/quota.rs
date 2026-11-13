@@ -4,7 +4,7 @@
 
 use crate::quota::{secret, Monitor, Provider};
 use winter_model::input::Key;
-use winter_model::textedit::modal::EditOutcome;
+use winter_model::modal::EditOutcome;
 
 use super::{provider_of, quota_providers};
 use crate::window::input::overlay::Overlay;

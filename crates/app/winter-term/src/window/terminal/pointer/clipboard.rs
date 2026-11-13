@@ -540,7 +540,7 @@ mod tests {
     use winter_model::editor::{Editor, EditorOutcome, Page, PromptRequest};
     use winter_model::input::Key;
     use winter_model::paint::{Frame, Span};
-    use winter_model::textedit::recall::Recall;
+    use winter_model::recall::Recall;
 
     use super::*;
     use crate::window::editor::{ActivePrompt, EditorKind};

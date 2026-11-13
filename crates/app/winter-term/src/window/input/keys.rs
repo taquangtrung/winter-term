@@ -10,8 +10,8 @@ use winit::keyboard::{Key, NamedKey, NativeKeyCode, PhysicalKey};
 
 use winter_model::input::{self, Action, KeyCode, Mods};
 use winter_model::layout::TabId;
+use winter_model::modal::EditOutcome;
 use winter_model::mode::{Mode, ModeEvent};
-use winter_model::textedit::modal::EditOutcome;
 
 use crate::window::editor::Closing;
 use crate::window::input::overlay::Overlay;

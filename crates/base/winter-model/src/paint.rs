@@ -13,7 +13,7 @@ use winter_emulator::RgbColor;
 /// never mistaken for one. The window draws it as a hairline down the
 /// cell's left edge, not as a font's glyph.
 pub const INDENT_GUIDE: char = '\u{FDD0}';
-pub use winter_textedit::place::{clamp_margin, Place, Shown};
+pub use crate::place::{clamp_margin, Place, Shown};
 
 use crate::editor::ScrollPosition;
 

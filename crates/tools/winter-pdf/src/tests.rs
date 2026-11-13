@@ -4,8 +4,8 @@
 use winter_model::editor::{CommandOutput, Editor, JobReply, JobRequest, Page, PromptReply};
 use winter_model::input::table;
 use winter_model::input::{format_key, KeyCode};
+use winter_model::modal::EditMode;
 use winter_model::paint::{Frame, Point};
-use winter_model::textedit::modal::EditMode;
 
 use super::caret::Pos;
 use super::keys::{COMMON_KEYS, CURSOR_KEYS, NORMAL_KEYS, SENTENCE_TOGGLE, WINDOW_KEYS};

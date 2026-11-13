@@ -24,9 +24,9 @@ use winter_model::editor::{
 };
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
 use winter_model::input::{format_sequence, Key, KeyCode, Keymap, Mods, MAX_SEQUENCE_LEN};
+use winter_model::modal::{EditMode, EditOutcome};
 use winter_model::paint::{Frame, Point, Row};
 use winter_model::picture::Tile;
-use winter_model::textedit::modal::{EditMode, EditOutcome};
 
 use super::web_page::{escape, PageView};
 

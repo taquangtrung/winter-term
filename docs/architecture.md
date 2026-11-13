@@ -38,6 +38,7 @@ crates/ext       extensions shipped with Winter, on the sdk alone
 | `tools` | `winter-pdf` | The PDF viewer: pages drawn with hayro, selection, SyncTeX. |
 | `tools` | `winter-terminal` | The terminal runtime: PTY sessions through the parser, the blocks programs emit, charts, and the image protocols. Its tab is still the app's. |
 | `tools` | `winter-text` | The text editor, with Vim and Emacs keys and language servers, and texts compared and merged. |
+| `libs` | `winter-field` | Winter's text fields (a prompt's answer, a search box, wdired's and grep's renames in place) as Cherry documents, with the keys that edit them. |
 | `libs` | `winter-cherry` | The link between misty and the Cherry editor, which know nothing of each other: Cherry's keymap bound to misty's command registry, and Cherry's modal editor drawn as a misty widget (`EditorView`). |
 | `libs` | `winter-lsp` | Language servers, and the store of problems found. |
 | `libs` | `winter-spell` | Hunspell dictionaries, prose tokens, suggestions, and the one dictionary every editor checks against. |
@@ -49,10 +50,9 @@ crates/ext       extensions shipped with Winter, on the sdk alone
 | `base` | `winter-base` | OS plumbing: per-user paths, atomic writes, helper processes, remote places. |
 | `base` | `winter-emulator` | Parser, scrollback, cell grid, VT screen. |
 | `base` | `winter-keys` | Keys independent of any window toolkit: chords in Emacs notation, multi-key sequences, key tables. |
-| `base` | `winter-model` | Modes, layout, key resolution, and the `Editor` trait. |
+| `base` | `winter-model` | Modes, layout, key resolution, the `Editor` trait, and the Vim vocabulary (motions, text objects, the grammar) the terminal's Normal mode and the lists share. |
 | `base` | `winter-proto` | TBP v1: wire types, codec, trust tiers. |
 | `base` | `winter-render` | wgpu text and chrome renderer. |
-| `base` | `winter-textedit` | Modal text editing: Emacs keys while typing, the Vim grammar, motions, and text objects. |
 | `sdk` | `winter-ext-api` | The API extensions are written against. |
 | `sdk` | `winter-ext-guest` | Builds an extension as a WebAssembly component. |
 | `ext` | `winter-copilot` | GitHub Copilot, shipped with Winter as a WebAssembly component. |

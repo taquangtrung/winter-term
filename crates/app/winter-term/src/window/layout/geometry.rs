@@ -376,7 +376,7 @@ mod tests {
             buttons: None,
             query_buttons: None,
             field: winter_field::Field::line("query"),
-            recall: winter_model::textedit::recall::Recall::default(),
+            recall: winter_model::recall::Recall::default(),
             tab: TabId(0),
             request: winter_model::editor::PromptRequest {
                 initial: String::new(),

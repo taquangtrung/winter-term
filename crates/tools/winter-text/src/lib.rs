@@ -34,8 +34,8 @@ use winter_model::editor::{
     TargetStyles, SAVE_ALL, TOGGLE_SWATCHES,
 };
 use winter_model::input::Key;
+use winter_model::modal::EditMode;
 use winter_model::paint::{Frame as PaintFrame, IconKind, Row};
-use winter_model::textedit::modal::EditMode;
 
 mod completing;
 mod conflict;

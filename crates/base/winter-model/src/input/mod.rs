@@ -16,6 +16,7 @@ mod pending;
 mod visual;
 mod when;
 
+pub use crate::vim::grammar::MacroStep;
 pub use actions::window_action_by_name;
 pub use actions::{EditAction, EditBinding, WindowAction};
 pub use chord::{format_key, format_sequence};
@@ -38,7 +39,6 @@ pub use when::{
     WHEN_PROPERTY,
 };
 pub use winter_keys::{table, Key, KeyCode, Mods};
-pub use winter_textedit::vim::grammar::MacroStep;
 
 use winter_keys::{chord, sequence};
 
