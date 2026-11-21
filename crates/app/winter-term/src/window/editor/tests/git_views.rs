@@ -325,13 +325,12 @@ fn test_git_status_prefers_visible_status_over_background_git_tab() {
     let git_second = app.layout().focused();
 
     // Add a background git tab in first pane
-    let _git_first = app.add_background_editor(
-        EditorKind::Git,
-        Box::new(winter_git::GitEditor::new(
-            app.focused_start_dir(),
-            git_editor_command(),
-        )),
-    );
+    let git_first = app.alloc_tab_id();
+    let editor = winter_git::GitEditor::new(app.focused_start_dir(), git_editor_command());
+    app.open_tabs
+        .insert_editor(git_first, EditorKind::Git, Box::new(editor));
+    let focused = app.layout().focused();
+    app.layout_mut().add_background_tab(focused, git_first);
 
     // first pane is focused on terminal, but has git_first in background.
     // second pane has git_second VISIBLE.

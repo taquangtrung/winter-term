@@ -194,6 +194,36 @@ pub(crate) const KEY_TABLES: &[&dyn Listed] = &[&KEYS];
 // Data Structures
 // ========================================================================
 
+/// Where a build has got to, as the Output view marks it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RunState {
+    /// It ended with an error, or never started.
+    Failed,
+    /// Nothing has run yet.
+    Idle,
+    /// It is running.
+    Running,
+    /// It was stopped.
+    Stopped,
+    /// It ran to its end without an error.
+    Succeeded,
+}
+
+/// One place a build's output points at, as the Problems view lists it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Problem {
+    /// The column, where the tool gave one, counted from 1.
+    pub column: Option<usize>,
+    /// How bad the tool said it is.
+    pub level: DiagnosticLevel,
+    /// The line, counted from 1.
+    pub line: usize,
+    /// What the tool said about it.
+    pub message: String,
+    /// The file.
+    pub path: PathBuf,
+}
+
 /// What a key of the editor's own does.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Act {
@@ -1034,6 +1064,65 @@ impl CompileEditor {
             )));
         }
         outcome
+    }
+
+    // --------------------------------------------------------------------
+    // What the panel views read
+    // --------------------------------------------------------------------
+
+    /// The task's name, as the Output view lists the build.
+    pub fn task_name(&self) -> &str {
+        &self.task.name
+    }
+
+    /// Where the build has got to.
+    pub fn run_state(&self) -> RunState {
+        match &self.phase {
+            Phase::Idle => RunState::Idle,
+            Phase::Running(_) => RunState::Running,
+            Phase::Done(done) => match &done.end {
+                End::Exited(status) if status.code == Some(0) => RunState::Succeeded,
+                End::Exited(_) | End::Failed(_) => RunState::Failed,
+                End::Stopped => RunState::Stopped,
+            },
+        }
+    }
+
+    /// How many lines of output there are, the one being written included.
+    pub fn output_len(&self) -> usize {
+        self.transcript.len()
+    }
+
+    /// Line `index` of the output, from the oldest still kept.
+    pub fn output_line(&self, index: usize) -> String {
+        self.transcript.text(index)
+    }
+
+    /// Every place the output points at, as the Problems view lists them:
+    /// a place printed on a line of its own takes its words from the line
+    /// heading it.
+    pub fn problems(&self) -> Vec<Problem> {
+        let dropped = self.transcript.dropped();
+        self.found
+            .iter()
+            .filter_map(|found| {
+                let location = &found.location;
+                let path = location.resolve()?;
+                let message = match (location.message.is_empty(), location.heading) {
+                    (true, Some(heading)) if heading >= dropped => {
+                        self.transcript.text(heading - dropped).trim().to_string()
+                    }
+                    _ => location.message.clone(),
+                };
+                Some(Problem {
+                    column: location.column,
+                    level: location.level,
+                    line: location.line,
+                    message,
+                    path,
+                })
+            })
+            .collect()
     }
 
     // --------------------------------------------------------------------

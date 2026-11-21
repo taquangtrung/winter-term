@@ -300,15 +300,11 @@ impl App {
     /// answered question and a pane with nothing to lose both come down to.
     /// Its editors' buffers are buried, and its shells end.
     pub(in crate::window) fn close_pane_now(&mut self, tab_id: TabId) {
-        // The last pane is the one holding every tab, as closing its last
-        // tab would end the window: a panel holding tabs is somewhere to go
-        // back to, and the main area keeps a launcher in its place.
+        // The last pane is the one holding every tab, which never closes:
+        // the main area always has a pane.
         let tabs = self.layout().tabs_in_pane(tab_id);
         if tabs.is_empty() || tabs.len() >= self.layout().members().len() {
             return;
-        }
-        if let Some(&last) = tabs.last() {
-            self.keep_main_area_of(&tabs, last);
         }
         let mut companions = Vec::new();
         for &tab in &tabs {
@@ -579,8 +575,10 @@ impl App {
         } else {
             (9.0, 20.0)
         };
-        // Panels are measured in the terminal font's cells.
-        self.tabs.layout.set_cell_size(cw, ch);
+        // Panels are measured in logical pixels, at the window's scale.
+        if let Some(renderer) = &self.renderer {
+            self.tabs.layout.set_scale(renderer.scale_factor() as f32);
+        }
 
         let rects = self.pane_rects();
 
@@ -647,7 +645,6 @@ impl RuntimeState {
 mod tests {
     use super::*;
     use crate::window::test_support::*;
-    use winter_model::layout::{Layout, PanelState, Region, Side};
 
     #[test]
     fn test_a_new_pane_takes_the_wrap_settings_from_the_config() {
@@ -705,99 +702,6 @@ mod tests {
                 .scroll_offset(),
             6,
             "the pane should stay where it was scrolled to"
-        );
-    }
-
-    #[test]
-    fn test_the_bottom_panel_opens_with_a_shell_hides_with_it_running_and_comes_back() {
-        let mut app = App::new();
-        let main = app.layout().focused();
-        app.open_tabs.insert_terminal(main, idle_terminal());
-        app.toggle_panel(Side::Bottom);
-        assert_eq!(app.layout().panel_state(Side::Bottom), PanelState::Shown);
-        let panel = app.layout().focused();
-        assert_eq!(
-            app.layout().region_of(panel),
-            Some(Region::Panel(Side::Bottom))
-        );
-        assert!(app.open_tabs.terminal(&panel).is_some(), "a shell in it");
-        app.toggle_panel(Side::Bottom);
-        assert_eq!(app.layout().panel_state(Side::Bottom), PanelState::Hidden);
-        assert_eq!(app.layout().focused(), main, "the keyboard goes back");
-        assert!(app.open_tabs.terminal(&panel).is_some(), "still running");
-        app.toggle_panel(Side::Bottom);
-        assert_eq!(app.layout().focused(), panel, "back, with the keyboard");
-        app.set_focus(main);
-        app.toggle_panel(Side::Bottom);
-        assert_eq!(
-            (
-                app.layout().panel_state(Side::Bottom),
-                app.layout().focused()
-            ),
-            (PanelState::Shown, panel),
-            "shown but without the keyboard: it is given the keyboard"
-        );
-    }
-
-    #[test]
-    fn test_an_empty_sidebar_opens_with_its_tool_files_on_the_left_outline_on_the_right() {
-        let mut app = App::new();
-        let main = app.layout().focused();
-        app.open_tabs.insert_terminal(main, idle_terminal());
-        let kind_in = |app: &App, side: Side| {
-            app.layout()
-                .panel_tab(side)
-                .and_then(|tab| app.open_tabs.page(&tab).map(|slot| slot.kind()))
-        };
-        app.toggle_panel(Side::Left);
-        assert_eq!(kind_in(&app, Side::Left), Some(EditorKind::Dir));
-        app.toggle_panel(Side::Right);
-        assert_eq!(kind_in(&app, Side::Right), Some(EditorKind::Outline));
-    }
-
-    #[test]
-    fn test_the_main_area_s_last_tab_leaves_a_launcher_when_it_moves_to_a_panel() {
-        let mut app = App::new();
-        let main = app.layout().focused();
-        app.open_tabs.insert_terminal(main, idle_terminal());
-        app.move_focused_tab_to(Region::Panel(Side::Bottom));
-        assert_eq!(
-            app.layout().region_of(main),
-            Some(Region::Panel(Side::Bottom))
-        );
-        let left = app.layout().main_members();
-        assert_eq!(left.len(), 1, "one tab took its place");
-        assert_eq!(
-            app.open_tabs.page(&left[0]).map(|slot| slot.kind()),
-            Some(EditorKind::Launcher)
-        );
-    }
-
-    #[test]
-    fn test_panels_stay_one_each_through_a_snapshot_and_a_toggle() {
-        let mut app = App::new();
-        let main = app.layout().focused();
-        app.open_tabs.insert_terminal(main, idle_terminal());
-        app.toggle_panel(Side::Bottom);
-        let panel = app.layout().focused();
-        // A reload's snapshot and restore, in the layout.
-        let mut restored = Layout::from_tree(app.layout().export_tree(), panel).expect("rebuilt");
-        restored.restore_panels(app.layout().export_panels());
-        restored.focus(panel);
-        *app.layout_mut() = restored;
-        assert_eq!(app.layout().focused(), panel);
-        app.toggle_panel(Side::Bottom);
-        assert_eq!(app.layout().panel_state(Side::Bottom), PanelState::Hidden);
-        assert_eq!(
-            app.layout().shown_tabs(),
-            [main],
-            "only the main pane shown"
-        );
-        app.toggle_panel(Side::Bottom);
-        assert_eq!(
-            app.layout().shown_tabs(),
-            [main, panel],
-            "the same panel, no other"
         );
     }
 
@@ -946,10 +850,13 @@ mod tests {
         app.open_tabs.insert_terminal(main, idle_terminal());
         app.split_pane(Direction::Vertical);
         let launcher = app.layout().focused();
-        let behind = app.add_background_editor(
+        let behind = app.alloc_tab_id();
+        app.open_tabs.insert_editor(
+            behind,
             EditorKind::Dir,
             Box::new(DirEditor::new(std::env::temp_dir())),
         );
+        app.layout_mut().add_background_tab(launcher, behind);
         app.after_tab_change();
         assert!(app.layout().contains(launcher), "still holding its pane");
         assert!(app.layout().is_pane_front(launcher));
@@ -973,52 +880,6 @@ mod tests {
         app.close_pane_now(message);
         assert!(!app.layout().contains(diff), "the diff went with it");
         assert!(app.host.commit_companions.is_empty());
-    }
-
-    /// An app showing one terminal pane beside a hidden bottom panel: the
-    /// pane's tab and the panel's.
-    fn pane_beside_a_hidden_panel() -> (App, TabId, TabId) {
-        let mut app = App::new();
-        let main = app.layout().focused();
-        app.open_tabs.insert_terminal(main, idle_terminal());
-        let panel = app.alloc_tab_id();
-        app.open_tabs.insert_terminal(panel, idle_terminal());
-        app.layout_mut().open_in_panel(Side::Bottom, panel, false);
-        app.split_pane_with_terminal(Direction::Vertical);
-        app.layout_mut().hide_panel(Side::Bottom);
-        (app, main, panel)
-    }
-
-    #[test]
-    fn test_the_main_area_s_last_pane_closing_leaves_a_launcher_beside_the_panels() {
-        let (mut app, main, panel) = pane_beside_a_hidden_panel();
-        let beside = app.layout().focused();
-        app.close_pane_now(beside);
-        assert!(!app.layout().contains(beside));
-        app.close_pane_now(main);
-        assert!(
-            !app.layout().contains(main),
-            "a panel is somewhere to go back to"
-        );
-        let left = app.layout().main_members();
-        assert_eq!(
-            left.iter()
-                .map(|tab| app.open_tabs.page(tab).map(|slot| slot.kind()))
-                .collect::<Vec<_>>(),
-            [Some(EditorKind::Launcher)],
-            "the main area keeps a launcher"
-        );
-        assert!(app.layout().contains(panel));
-    }
-
-    #[test]
-    fn test_closing_other_panes_asks_about_and_closes_the_same_tabs() {
-        // The question gathered every tab, a hidden panel's too, which the
-        // close then left alone.
-        let (app, main, panel) = pane_beside_a_hidden_panel();
-        let beside = app.layout().focused();
-        assert_eq!(app.other_panes_tabs(beside), [main]);
-        assert!(!app.other_panes_tabs(main).contains(&panel));
     }
 
     #[test]

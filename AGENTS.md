@@ -17,11 +17,16 @@ Winter uses one set of words from the UI to the code to the docs. Use them in ev
 | Buffer | An editor's contents, shared by every tab showing it and buried when its last tab closes. Never a kind of tab, never a terminal. |
 | Buried | A closed tab kept alive out of sight: an editor's buffer, or a terminal with a program running. |
 | Launcher | What a new split pane opens with, offering a terminal, a file, a directory, or git. |
+| Main area | The window's split tree of panes, where every tab lives. |
+| Panel | A sidebar or the bottom panel: outside the split tree, never split, showing views rather than tabs. |
+| Sidebar | The panel at the window's left or right, showing sidebar views (Files, Git, Outline, Todo). |
+| Bottom panel | The panel under the main area, showing bottom panel views (Output, Problems, Search). |
+| View | What a panel shows, one at a time: a list drawn by misty, never on the cell grid, built for its panel. Never a tab. A view belongs to a tool and shares its data, not its layout. |
 | Workspace | A project the window switches to and back from. |
 | Picker | A list on the picker framework (the command palette, the file picker), fed by **sources**, made of **rows** (never "candidates"), each with **actions**. One opening of a picker is a **picker session**. |
 | Tool | A feature with its own guide page, such as Dir, Git, or Compile. Never a kind of tab. |
 
-A design doc may add terms for what it plans (the panels design's main area, panel, sidebar, and bottom panel); use its words for that work, and add them here once built. Stored names kept for compatibility, such as `tool` in the status bar segment or `editor` as the text editor's kind in `keybindings.kdl`, stay as they are.
+A design doc may add terms for what it plans; use its words for that work, and add them here once built. Stored names kept for compatibility, such as `tool` in the status bar segment or `editor` as the text editor's kind in `keybindings.kdl`, stay as they are.
 
 When the user, or any text you are working from, uses a term loosely, work from what is meant and write the right term. If the difference matters, say once which term you used and why ("the saved list is the buffer; its tab is an editor"). Ask only when the meaning is unclear.
 

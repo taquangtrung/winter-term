@@ -193,17 +193,17 @@ struct Todos {
 
 /// One comment found.
 #[derive(Clone, Debug, Eq, PartialEq)]
-struct Todo {
+pub(crate) struct Todo {
     /// Which keyword it holds, as `keywords` writes it.
-    keyword: usize,
+    pub(crate) keyword: usize,
     /// Which line of its file it is on, counting from one.
-    line: usize,
+    pub(crate) line: usize,
     /// The file it is in.
-    path: PathBuf,
+    pub(crate) path: PathBuf,
     /// Its line as written.
     source: String,
     /// The words after its keyword, its marks dropped.
-    words: String,
+    pub(crate) words: String,
 }
 
 /// One row of the list.
@@ -619,7 +619,7 @@ impl HostedView for Todos {
 
 /// The comment `hit` is, by the first of `keywords` it holds as a whole
 /// word, or `None` for a line holding none.
-fn todo_of(hit: &SearchHit, keywords: &[String]) -> Option<Todo> {
+pub(crate) fn todo_of(hit: &SearchHit, keywords: &[String]) -> Option<Todo> {
     let (keyword, end) = keywords
         .iter()
         .enumerate()
@@ -680,7 +680,7 @@ fn rows(found: &[Todo], scope: usize) -> Vec<Line> {
 /// The color a keyword's badge is in: what says something is broken in the
 /// danger color, a shortcut taken in the warning one, a note muted, and
 /// the rest in the accent.
-fn tone(keyword: &str) -> ThemeToken {
+pub(crate) fn tone(keyword: &str) -> ThemeToken {
     match keyword {
         "BUG" | "FIXME" => ThemeToken::Danger,
         "HACK" | "XXX" => ThemeToken::Warning,

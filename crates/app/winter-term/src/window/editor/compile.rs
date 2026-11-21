@@ -2,11 +2,11 @@
 //! document a `.tex` file belongs to, the builds a save starts, and what
 //! the window does as one starts.
 //!
-//! Each task has a Compile tab of its own, found by the build it runs, so
-//! a test run never replaces a build still going; running a task again
-//! reuses its tab, the way Emacs reuses `*compilation*`. Builds start out
-//! of the way: the tab is shown in the pane beside the work, and the focus
-//! stays where it was.
+//! Each task has a Compile buffer of its own, found by the build it runs,
+//! so a test run never replaces a build still going; running a task again
+//! reuses its buffer, the way Emacs reuses `*compilation*`. Builds start
+//! out of the way: the buffer is buried, the bottom panel's Output view
+//! shows it, and the focus stays where it was.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -21,7 +21,7 @@ use crate::editors::compile::{
 use misty::picker::{Resume, Row, RowKey};
 use winter_base::project;
 use winter_model::editor::{BuildStart, SAVE_ALL};
-use winter_model::layout::{Region, Side, TabId};
+use winter_model::layout::TabId;
 
 use crate::window::picker::WindowOutcome;
 use crate::window::picker::sources::{Entry, Listing};
@@ -67,6 +67,9 @@ pub(in crate::window) struct Builds {
     /// The Compile tab whose build was started last: the one rerun and
     /// next-error mean.
     pub(in crate::window) newest: Option<TabId>,
+    /// The Compile tabs in the order their builds last started, the newest
+    /// last: the order Output lists them in, newest first.
+    started: Vec<TabId>,
 }
 
 /// The tasks a task list is offering, and the project they are for.
@@ -90,6 +93,7 @@ impl Builds {
     /// Forget the build of tab `tab`, which has closed.
     pub(in crate::window) fn forget(&mut self, tab: TabId) {
         self.by_tab.remove(&tab);
+        self.started.retain(|started| *started != tab);
         if self.newest == Some(tab) {
             self.newest = None;
         }
@@ -223,12 +227,12 @@ impl App {
     }
 
     /// Run the newest build again, from wherever the focus is; where none
-    /// has run, the focused project's default. A buried one comes back
-    /// where a new build would show, without taking the focus.
+    /// has run, the focused project's default. Output shows it, without
+    /// taking the focus.
     pub(in crate::window) fn recompile(&mut self) {
         if let Some(tab) = self.newest_build() {
-            self.show_without_focus(tab);
             self.run_compile_command(tab, RERUN_COMMAND);
+            self.show_build_output(tab);
             return;
         }
         let (root, file) = self.compile_context();
@@ -305,6 +309,8 @@ impl App {
         remember_compile_command(&build.root, &build.command);
         self.host.compile.by_tab.insert(tab, build);
         self.host.compile.newest = Some(tab);
+        self.host.compile.started.retain(|started| *started != tab);
+        self.host.compile.started.push(tab);
         self.dirty = true;
     }
 
@@ -348,48 +354,15 @@ impl App {
     }
 
     fn run_task(&mut self, root: &Path, task: Task) {
-        let build = task.build_start(root);
-        let tab = match self.tab_running(&build) {
-            Some(tab) => {
-                self.show_without_focus(tab);
-                tab
-            }
-            None => {
-                let editor =
-                    CompileEditor::new(root.to_path_buf(), task, self.config.compile.jump_to_error);
-                let tab = match self.region_for(EditorKind::Compile) {
-                    Region::Panel(side) => self.show_in_panel_without_focus(side, Box::new(editor)),
-                    Region::Main => self.show_beside_without_focus(Box::new(editor)),
-                };
-                self.host.compile.by_tab.insert(tab, build);
-                tab
-            }
-        };
+        let tab = self.build_tab(root, task);
         self.run_compile_command(tab, RERUN_COMMAND);
+        self.show_build_output(tab);
     }
 
-    /// Run `task` of the project at `root` without bringing its Compile tab
-    /// to the front: in the tab that ran it before, where it is, put back in
-    /// the strip behind the focused tab when it was buried, else in a new one
-    /// left there.
+    /// Run `task` of the project at `root` without showing it: Output lists
+    /// it, and how it ended is said in the status bar.
     fn run_task_quietly(&mut self, root: &Path, task: Task) {
-        let build = task.build_start(root);
-        let tab = match self.tab_running(&build) {
-            Some(tab) => {
-                if self.open_tabs.unbury(tab) {
-                    let focused = self.layout().focused();
-                    self.layout_mut().add_background_tab(focused, tab);
-                }
-                tab
-            }
-            None => {
-                let editor =
-                    CompileEditor::new(root.to_path_buf(), task, self.config.compile.jump_to_error);
-                let tab = self.add_background_editor(EditorKind::Compile, Box::new(editor));
-                self.host.compile.by_tab.insert(tab, build);
-                tab
-            }
-        };
+        let tab = self.build_tab(root, task);
         let command = self
             .host
             .compile
@@ -399,6 +372,23 @@ impl App {
             .unwrap_or_default();
         self.set_notice(format!("building: {command}"));
         self.run_compile_command(tab, RERUN_COMMAND);
+    }
+
+    /// The Compile tab that runs `task` of the project at `root`: the one
+    /// that ran it before, else a new one, buried.
+    fn build_tab(&mut self, root: &Path, task: Task) -> TabId {
+        let build = task.build_start(root);
+        if let Some(tab) = self.tab_running(&build) {
+            return tab;
+        }
+        let editor =
+            CompileEditor::new(root.to_path_buf(), task, self.config.compile.jump_to_error);
+        let tab = self.alloc_tab_id();
+        self.open_tabs
+            .insert_editor(tab, EditorKind::Compile, Box::new(editor));
+        self.open_tabs.bury(tab);
+        self.host.compile.by_tab.insert(tab, build);
+        tab
     }
 
     /// Have the Compile tab `tab` carry out `command`.
@@ -442,42 +432,16 @@ impl App {
     // Tabs
     // --------------------------------------------------------------------
 
-    /// Show `editor` in the panel on `side`, leaving focus where it was.
-    fn show_in_panel_without_focus(&mut self, side: Side, editor: Box<CompileEditor>) -> TabId {
-        let back = self.layout().focused();
-        let tab = self.show_editor_in_panel(side, EditorKind::Compile, editor);
-        self.set_focus(back);
-        tab
-    }
-
-    /// Show `editor` in a new tab in the pane beside the work, splitting
-    /// one off where there is only one, and leave the focus where it was.
-    fn show_beside_without_focus(&mut self, editor: Box<CompileEditor>) -> TabId {
-        let back = self.layout().focused();
-        self.prefer_other_pane();
-        let tab = self.show_editor_beside(EditorKind::Compile, editor);
-        self.set_focus(back);
-        tab
-    }
-
-    /// Bring `tab` to the front of its pane, leaving the focus where it was.
-    /// A buried one comes back where a new Compile tab would open: in its
-    /// panel, or in the pane beside the work.
-    fn show_without_focus(&mut self, tab: TabId) {
-        let back = self.layout().focused();
-        if back == tab {
-            return;
-        }
-        let region = self.region_for(EditorKind::Compile);
-        match self.open_tabs.buried().contains(&tab) {
-            true if let Region::Panel(side) = region => self.show_buried_in_panel(side, tab),
-            true => {
-                self.prefer_other_pane();
-                self.show_buried_beside(tab);
-            }
-            false => self.show_tab(tab),
-        }
-        self.set_focus(back);
+    /// Every Compile tab a build ran in, the one started last first.
+    pub(in crate::window) fn builds_newest_first(&self) -> Vec<TabId> {
+        self.host
+            .compile
+            .started
+            .iter()
+            .rev()
+            .copied()
+            .filter(|tab| self.is_compile_tab(*tab))
+            .collect()
     }
 
     /// The open Compile tab running `build`.

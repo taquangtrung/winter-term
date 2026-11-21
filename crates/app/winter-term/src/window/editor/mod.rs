@@ -50,7 +50,7 @@ use winter_model::editor::{
     CompareRequest, Editor, GitViewRequest, Notice, OpenTarget, Page, PdfMark,
 };
 use winter_model::guard::Guarded;
-use winter_model::layout::{Direction, Layout, Region, Side, TabId};
+use winter_model::layout::{Direction, Layout, Region, TabId};
 use winter_monitor::proc::ProcEditor;
 use winter_monitor::sys::SysEditor;
 use winter_pdf::PdfEditor;
@@ -62,6 +62,7 @@ pub(in crate::window) use self::prompt::{ActivePick, ActivePrompt};
 
 use super::commands::window_commands;
 use super::notices::now_seconds;
+use super::panels::ViewKind;
 use super::{App, SPLIT_RATIO};
 
 // ========================================================================
@@ -101,8 +102,6 @@ pub(in crate::window) enum EditorKind {
     /// A picker's rows, saved as a buffer of their own.
     List,
     Notifications,
-    /// The headings and symbols of the file being worked on, a sidebar tool.
-    Outline,
     Pdf,
     /// A Markdown document as it reads rendered.
     Preview,
@@ -115,6 +114,8 @@ pub(in crate::window) enum EditorKind {
     /// The comments holding a todo keyword (`TODO`, `FIXME`) across a
     /// project, a page of their own.
     Todo,
+    /// A panel's view, held in no pane.
+    View(ViewKind),
 }
 
 /// What the window knows of one built-in kind of editor besides its
@@ -145,7 +146,7 @@ type Reopen = fn(PathBuf, Option<usize>, &Config) -> Option<Box<dyn Editor>>;
 
 impl EditorKind {
     /// Every kind, for reading a stored name back.
-    const ALL: [EditorKind; 20] = [
+    const ALL: [EditorKind; 19] = [
         EditorKind::Compile,
         EditorKind::Dir,
         EditorKind::Docker,
@@ -159,7 +160,6 @@ impl EditorKind {
         EditorKind::Launcher,
         EditorKind::List,
         EditorKind::Notifications,
-        EditorKind::Outline,
         EditorKind::Pdf,
         EditorKind::Preview,
         EditorKind::Proc,
@@ -221,7 +221,6 @@ impl EditorKind {
             EditorKind::Launcher => KindInfo::new("launcher", "New Pane")
                 .with_reopen(|path, _, _| path.is_dir().then(|| boxed(LauncherEditor::new(path)))),
             EditorKind::Notifications => KindInfo::new("notifications", "Notifications"),
-            EditorKind::Outline => KindInfo::new("outline", "Outline"),
             EditorKind::Settings => KindInfo::new("settings", "Settings"),
             EditorKind::Extensions => KindInfo::new("extensions", "Extensions"),
             EditorKind::Pdf => KindInfo::new("pdf", "PDF")
@@ -243,6 +242,7 @@ impl EditorKind {
             }
             .with_reopen(|path, line, _| TextEditor::restored(path, line).ok().map(boxed)),
             EditorKind::Todo => KindInfo::new("todo", "Todo"),
+            EditorKind::View(kind) => KindInfo::new(kind.name(), kind.title()),
         };
         Some(info)
     }
@@ -559,36 +559,11 @@ impl App {
         self.layout_mut().balance();
     }
 
-    /// Show `editor` in the panel on `side`, as a tab after the one it
-    /// shows, showing the panel and focusing the tab.
-    pub(in crate::window) fn show_editor_in_panel(
-        &mut self,
-        side: Side,
-        kind: EditorKind,
-        editor: Box<dyn Editor>,
-    ) -> TabId {
-        let tab_id = self.alloc_tab_id();
-        self.open_tabs.insert_editor(tab_id, kind, editor);
-        self.place_in_panel(side, tab_id);
-        tab_id
-    }
-
-    /// Show the buried buffer of tab `tab` in the panel on `side`, as
-    /// [`Self::show_editor_in_panel`] shows a new editor.
-    pub(in crate::window) fn show_buried_in_panel(&mut self, side: Side, tab: TabId) {
-        self.open_tabs.unbury(tab);
-        self.place_in_panel(side, tab);
-        self.resume_editor(tab);
-    }
-
-    /// Put tab `tab` in the panel on `side`, showing it.
-    fn place_in_panel(&mut self, side: Side, tab_id: TabId) {
-        self.layout_mut().open_in_panel(side, tab_id, true);
-        self.after_tab_change();
-        if self.renderer.is_some() {
-            self.resize_all_panes();
-        }
-        self.dirty = true;
+    /// Put tab `tab` beside the main tab that last had the keyboard, showing
+    /// and focusing it: every tab lives in the main area.
+    fn place_in_main_area(&mut self, tab: TabId) {
+        self.focus_main_area();
+        self.layout_mut().add_tab(tab);
     }
 
     /// Show the `kind` tab matching `predicate` in the focused pane when it
@@ -956,7 +931,7 @@ impl App {
             self.open_path_editor(target);
             return;
         }
-        if self.layout().shown_tabs().len() > 1 {
+        if self.layout().main_shown_tabs().len() > 1 {
             self.prefer_other_pane();
             self.open_path_editor(target);
             return;
@@ -1200,26 +1175,10 @@ impl App {
         tab_id
     }
 
-    /// Put `editor` into the focused pane's strip as a new tab, after the one
-    /// it shows, without showing it or taking the focus.
-    pub(in crate::window) fn add_background_editor(
-        &mut self,
-        kind: EditorKind,
-        editor: Box<dyn Editor>,
-    ) -> TabId {
-        let tab_id = self.alloc_tab_id();
-        self.open_tabs.insert_editor(tab_id, kind, editor);
-        let focused = self.layout().focused();
-        self.layout_mut().add_background_tab(focused, tab_id);
-        self.dirty = true;
-        tab_id
-    }
-
-    /// Put `editor` into the layout as tab `tab_id`, where its kind opens
-    /// (see `App::place_tab`).
+    /// Put `editor` into the layout as tab `tab_id`, in the main area.
     fn insert_editor_tab(&mut self, tab_id: TabId, kind: EditorKind, editor: Box<dyn Editor>) {
         self.open_tabs.insert_editor(tab_id, kind, editor);
-        self.place_tab(tab_id, kind);
+        self.place_in_main_area(tab_id);
         self.after_tab_change();
         // Extensions hear of the file at once.
         self.watch_for_extensions();
@@ -1272,7 +1231,6 @@ impl App {
                 self.chrome.notification_entries(),
                 now_seconds(),
             )),
-            EditorKind::Outline => Box::new(crate::editors::outline::OutlinePage::new()),
             EditorKind::Proc => Box::new(ProcEditor::new()),
             EditorKind::Settings => Box::new(SettingsEditor::new(self.build_settings_page())),
             EditorKind::Sys => Box::new(SysEditor::new()),
@@ -1291,7 +1249,8 @@ impl App {
             | EditorKind::List
             | EditorKind::Pdf
             | EditorKind::Preview
-            | EditorKind::Text => return None,
+            | EditorKind::Text
+            | EditorKind::View(_) => return None,
         };
         Some(page)
     }
@@ -1309,7 +1268,7 @@ impl App {
     pub(in crate::window) fn show_page(&mut self, kind: EditorKind, page: Box<dyn Page>) -> TabId {
         let tab_id = self.alloc_tab_id();
         self.open_tabs.insert_page(tab_id, kind, page);
-        self.place_tab(tab_id, kind);
+        self.place_in_main_area(tab_id);
         self.after_tab_change();
         tab_id
     }

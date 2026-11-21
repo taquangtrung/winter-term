@@ -106,8 +106,8 @@ struct PresentList;
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "kebab-case", deny_unknown_fields)]
 pub(super) struct KdlCompile {
-    /// Retired with the dock: a build opens where builds were last moved
-    /// (the bottom panel at first). Read and ignored.
+    /// Retired with the dock: a build shows in the bottom panel's Output
+    /// view. Read and ignored.
     #[serde(default, rename = "dock")]
     _dock: de::IgnoredAny,
     pub(crate) jump_to_error: Option<bool>,

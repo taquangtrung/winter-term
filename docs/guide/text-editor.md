@@ -156,7 +156,7 @@ Markup markers (`**`, `\textbf{`, a heading's `#`s) are hidden and their text dr
 
 ## Outline
 
-`C-S-o` lists the file's headings, sections, or blocks, each with its line number, in Markdown, LaTeX, HTML, XML, reStructuredText, JSON, YAML, TOML, INI, KDL, nginx, SSH configuration, and Swift files. In code it lists the functions, types, and modules the file defines. The cursor follows the entry you pick and goes back if you cancel. `Sidebar: Outline` keeps the same list in a sidebar (see [Panels](basics.md#sidebars)).
+`C-S-o` lists the file's headings, sections, or blocks, each with its line number, in Markdown, LaTeX, HTML, XML, reStructuredText, JSON, YAML, TOML, INI, KDL, nginx, SSH configuration, and Swift files. In code it lists the functions, types, and modules the file defines. The cursor follows the entry you pick and goes back if you cancel. `Sidebar: Outline` keeps the same list in a sidebar (see [Sidebars](basics.md#sidebars)).
 
 ## Spelling
 

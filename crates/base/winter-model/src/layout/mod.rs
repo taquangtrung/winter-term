@@ -1,15 +1,18 @@
 //! The window's layout: a main area holding a binary tree of splits whose
 //! leaves are panes, each a strip of tabs with one of them shown, and three
-//! panels around it (see [`panels`]). Pure geometry and tree surgery,
-//! independent of any renderer.
+//! panels around it, each showing views rather than tabs (see [`panels`]).
+//! Pure geometry and tree surgery, independent of any renderer.
 
 use misty::Rect;
 
 pub mod panels;
 mod tree;
 
-use panels::{Fitted, Panels};
-pub use panels::{MIN_SIDEBAR_COLS, PanelState, PanelTree, Region, Side};
+use panels::Fitted;
+pub use panels::{
+    BOTTOM_HEIGHT, BottomPanelKind, Dock, DockSnapshot, Edge, MAX_PANEL_SIZE, Panel, PanelState,
+    Panels, Region, SIDEBAR_WIDTH, SidebarKind,
+};
 
 use tree::{
     Node, Pane, balance_node, close_in, collect_pane_refs, collect_panes, distance, divider_hit_in,
@@ -25,28 +28,25 @@ use tree::{
 /// A pointer within this distance triggers the resize cursor and starts a drag.
 pub const DIVIDER_HIT_MARGIN: f32 = 1.5;
 
-/// The cell, in pixels, panels are measured in until the window says (see
-/// [`Layout::set_cell_size`]).
-const DEFAULT_CELL: (f32, f32) = (8.0, 16.0);
-
-/// The largest a panel is let grow to, in cells.
-const MAX_PANEL_CELLS: f32 = 400.0;
+/// Physical pixels to a logical one until the window says (see
+/// [`Layout::set_scale`]).
+const DEFAULT_SCALE: f32 = 1.0;
 
 // ========================================================================
 // Data Structures
 // ========================================================================
 
 /// The window's layout: the main area's split tree of panes, the panels
-/// around it, and which tab has focus.
+/// around it, and which tab or view has focus.
 ///
 /// Every tab is a `TabId`, a terminal or an editor alike, allocated by the owner
-/// so ids stay unique for the life of the window. Only the shown tab of each
-/// pane is laid out; the rest wait in their pane's strip.
+/// so ids stay unique for the life of the window; a panel's views are named
+/// the same way. Only the shown tab of each pane is laid out; the rest wait
+/// in their pane's strip.
 #[derive(Clone, Debug)]
 pub struct Layout {
-    /// The cell panels are measured in, in pixels (width, height).
-    cell: (f32, f32),
-    /// The shown tab of the focused pane or panel.
+    /// The shown tab of the focused pane, or the shown view of the focused
+    /// panel.
     focused: TabId,
     /// The main-area tab that last had focus, for focus to come back to
     /// from a panel.
@@ -55,17 +55,19 @@ pub struct Layout {
     panels: Panels,
     /// The main area's split tree.
     root: Node,
+    /// Physical pixels to a logical one, which panels are measured in.
+    scale: f32,
     /// When true, `rects()` returns only the focused pane at the full viewport;
     /// cleared when the user calls `toggle_zoom()` again.
     zoomed: bool,
 }
 
-/// A pane as laid out: where it sits and what its strip holds.
+/// A pane or a panel as laid out: where it sits and what its strip holds.
 #[derive(Clone, Debug, PartialEq)]
 pub struct PaneArea {
-    /// The shown tab.
+    /// The shown tab, or a panel's shown view.
     pub active: TabId,
-    /// Every tab, in strip order.
+    /// Every tab in strip order, or a panel's views in its switcher's.
     pub members: Vec<TabId>,
     /// The whole pane, strip included.
     pub rect: Rect,
@@ -146,30 +148,29 @@ impl Layout {
     /// its panels empty.
     pub fn with_root(root: TabId) -> Self {
         Self {
-            cell: DEFAULT_CELL,
             focused: root,
             main_return: root,
             panels: Panels::new(),
             root: Node::Leaf(Pane::new(root)),
+            scale: DEFAULT_SCALE,
             zoomed: false,
         }
     }
 
     /// Rebuild a `Layout`'s main area from a [`LayoutTree`] snapshot, e.g.
-    /// on session restore, its panels empty (see [`Layout::restore_panels`]).
-    /// Panes the snapshot left empty are dropped; `None` when that leaves
-    /// nothing at all.
+    /// on session restore, its panels empty. Panes the snapshot left empty
+    /// are dropped; `None` when that leaves nothing at all.
     pub fn from_tree(tree: LayoutTree, focused: TabId) -> Option<Self> {
         let root = layout_tree_to_node(tree)?;
         let mut first = Vec::new();
         collect_pane_refs(&root, &mut first);
         let first = first[0].active;
         let mut layout = Self {
-            cell: DEFAULT_CELL,
             focused: first,
             main_return: first,
             panels: Panels::new(),
             root,
+            scale: DEFAULT_SCALE,
             zoomed: false,
         };
         layout.focus(focused);
@@ -177,51 +178,32 @@ impl Layout {
     }
 
     /// Export the main area's split tree as a [`LayoutTree`] for session
-    /// persistence; the panels go by [`Layout::export_panels`].
+    /// persistence; the panels go by [`Dock::snapshot`].
     pub fn export_tree(&self) -> LayoutTree {
         node_to_layout_tree(&self.root)
     }
 
-    /// Every panel as a snapshot, left, right, then bottom.
-    pub fn export_panels(&self) -> Vec<PanelTree> {
-        Side::ALL
-            .into_iter()
-            .map(|side| {
-                let panel = self.panels.get(side);
-                PanelTree {
-                    pane: panel.pane.as_ref().map(|pane| PaneTree {
-                        active: pane.active,
-                        members: pane.members.clone(),
-                    }),
-                    shown: panel.shown,
-                    side,
-                    size: panel.size,
-                }
-            })
-            .collect()
-    }
-
-    /// Put back the panels of `snapshots`, leaving out any tab the main area
-    /// holds already. A panel the snapshots leave out stays as it is.
-    pub fn restore_panels(&mut self, snapshots: Vec<PanelTree>) {
-        for snapshot in snapshots {
-            let pane = snapshot.pane.and_then(|mut pane| {
-                pane.members
-                    .retain(|tab| find_pane(&self.root, *tab).is_none());
-                Pane::from_tree(pane)
-            });
-            let panel = self.panels.get_mut(snapshot.side);
-            panel.shown = snapshot.shown && pane.is_some();
-            panel.pane = pane;
-            panel.size = snapshot.size.max(snapshot.side.min_size());
+    /// Take the panels out, leaving three empty ones: they belong to the
+    /// window, and go from one workspace's layout to the next. With a view
+    /// focused, focus goes to the main area.
+    pub fn take_panels(&mut self) -> Panels {
+        if self.panels.panel_of(self.focused).is_some() {
+            let back = self.main_return();
+            self.set_focus(back);
         }
+        std::mem::replace(&mut self.panels, Panels::new())
     }
 
-    /// Lay panels out in cells of `width` by `height` pixels: the size of
-    /// the terminal font, which panels are measured in.
-    pub fn set_cell_size(&mut self, width: f32, height: f32) {
-        if width > 0.0 && height > 0.0 {
-            self.cell = (width, height);
+    /// Put `panels`, taken from another layout, in place of these.
+    pub fn put_panels(&mut self, panels: Panels) {
+        self.panels = panels;
+    }
+
+    /// Measure panels at `scale` physical pixels to a logical one: the
+    /// window's scale factor.
+    pub fn set_scale(&mut self, scale: f32) {
+        if scale > 0.0 {
+            self.scale = scale;
         }
     }
 
@@ -229,41 +211,35 @@ impl Layout {
     // Queries
     // --------------------------------------------------------------------
 
-    /// The tab that has focus: the shown tab of a pane or a panel.
+    /// What has focus: the shown tab of a pane, or a panel's shown view.
     pub fn focused(&self) -> TabId {
         self.focused
     }
 
-    /// The shown tab of every pane of the main area, in tree order, then of
-    /// every panel the user has shown, left, right, then bottom: the tabs a
-    /// frame draws, unless the window is too small for a panel.
+    /// The shown tab of every pane of the main area, in tree order, then the
+    /// shown view of every panel the user has shown, left, right, then
+    /// bottom: what a frame draws, unless the window is too small for a
+    /// panel.
     pub fn shown_tabs(&self) -> Vec<TabId> {
         let mut out = self.main_shown_tabs();
-        out.extend(
-            self.panels
-                .panes()
-                .filter(|(side, _)| self.panels.get(*side).state() == PanelState::Shown)
-                .map(|(_, pane)| pane.active),
-        );
+        out.extend(Panel::ALL.into_iter().filter_map(|panel| {
+            let base = self.panels.base(panel);
+            base.shown.then_some(base.active).flatten()
+        }));
         out
     }
 
-    /// Every tab of every pane and panel, shown or not, in tree then strip
-    /// order, the panels' after.
+    /// Every tab, shown or not, in tree then strip order. A panel's views
+    /// are no tabs, and are left out.
     pub fn members(&self) -> Vec<TabId> {
-        self.pane_list()
-            .iter()
-            .flat_map(|pane| pane.members.iter().copied())
-            .collect()
+        self.main_members()
     }
 
-    /// Every pane's tabs in strip order, one list per pane in tree order,
-    /// then one per panel holding tabs, hidden ones included.
+    /// Every pane's tabs in strip order, one list per pane in tree order.
     pub fn pane_members(&self) -> Vec<Vec<TabId>> {
-        self.pane_list()
-            .iter()
-            .map(|pane| pane.members.clone())
-            .collect()
+        let mut panes = Vec::new();
+        collect_pane_refs(&self.root, &mut panes);
+        panes.iter().map(|pane| pane.members.clone()).collect()
     }
 
     /// Every tab of the main area, in tree then strip order.
@@ -276,36 +252,46 @@ impl Layout {
             .collect()
     }
 
-    /// Whether any pane or panel holds `tab`.
+    /// Whether a pane holds the tab `tab`, or a panel the view `tab`.
     pub fn contains(&self, tab: TabId) -> bool {
-        self.pane_of(tab).is_some()
+        self.region_of(tab).is_some()
     }
 
-    /// Where `tab` sits, if anywhere.
+    /// Where `tab` sits, if anywhere: a tab in the main area, a view in a
+    /// panel.
     pub fn region_of(&self, tab: TabId) -> Option<Region> {
         if find_pane(&self.root, tab).is_some() {
             return Some(Region::Main);
         }
-        self.panels.side_of(tab).map(Region::Panel)
+        self.panels.panel_of(tab).map(Region::Panel)
     }
 
-    /// Every tab of the pane or panel holding `tab`, in strip order.
+    /// The panel holding the view `tab`, if one does.
+    pub fn panel_of(&self, tab: TabId) -> Option<Panel> {
+        self.panels.panel_of(tab)
+    }
+
+    /// Every tab of the pane holding `tab`, in strip order; empty for a
+    /// view, which is no tab.
     pub fn tabs_in_pane(&self, tab: TabId) -> Vec<TabId> {
-        self.pane_of(tab)
+        find_pane(&self.root, tab)
             .map(|pane| pane.members.clone())
             .unwrap_or_default()
     }
 
-    /// Whether `tab` is the tab its pane or panel shows, whether or not it
-    /// is in sight (a zoom or a hidden panel hides some).
+    /// Whether `tab` is the tab its pane shows, or the view its panel shows,
+    /// whether or not it is in sight (a zoom or a hidden panel hides some).
     pub fn is_pane_front(&self, tab: TabId) -> bool {
-        self.pane_of(tab).is_some_and(|pane| pane.active == tab)
+        match self.panels.panel_of(tab) {
+            Some(panel) => self.panels.base(panel).active == Some(tab),
+            None => find_pane(&self.root, tab).is_some_and(|pane| pane.active == tab),
+        }
     }
 
-    /// The tabs of the pane or panel holding `tab`, most recently shown
-    /// first.
+    /// The tabs of the pane holding `tab`, most recently shown first; empty
+    /// for a view.
     pub fn recent_in_pane(&self, tab: TabId) -> Vec<TabId> {
-        self.pane_of(tab)
+        find_pane(&self.root, tab)
             .map(|pane| pane.recent.clone())
             .unwrap_or_default()
     }
@@ -319,8 +305,9 @@ impl Layout {
         }
     }
 
-    /// Each laid-out pane's shown tab paired with its whole area within
-    /// `viewport`. When zoomed, only the focused tab, at the full viewport.
+    /// Each laid-out pane's shown tab, and each panel's shown view, paired
+    /// with its whole area within `viewport`. When zoomed, only the focused
+    /// tab, at the full viewport.
     pub fn rects(&self, viewport: Rect) -> Vec<(TabId, Rect)> {
         self.panes(viewport)
             .into_iter()
@@ -332,16 +319,17 @@ impl Layout {
     /// then the panels that fit (see [`Panels::fit`]). When zoomed, only the
     /// focused tab's, at the full viewport.
     pub fn panes(&self, viewport: Rect) -> Vec<PaneArea> {
-        let fitted = self.panels.fit(viewport, self.cell);
+        let fitted = self.panels.fit(viewport, self.scale);
         let mut out = Vec::new();
         collect_panes(&self.root, fitted.main, &mut out);
-        for (side, rect) in fitted.panels {
-            if let Some(pane) = &self.panels.get(side).pane {
+        for (panel, rect) in fitted.panels {
+            let base = self.panels.base(panel);
+            if let Some(active) = base.active {
                 out.push(PaneArea {
-                    active: pane.active,
-                    members: pane.members.clone(),
+                    active,
+                    members: base.views.clone(),
                     rect,
-                    region: Region::Panel(side),
+                    region: Region::Panel(panel),
                 });
             }
         }
@@ -361,11 +349,11 @@ impl Layout {
         if self.zoomed {
             return None;
         }
-        let fitted = self.panels.fit(viewport, self.cell);
-        if let Some(side) = panel_edge_at(&fitted, px, py, DIVIDER_HIT_MARGIN) {
-            return Some(match side {
-                Side::Bottom => Direction::Horizontal,
-                Side::Left | Side::Right => Direction::Vertical,
+        let fitted = self.panels.fit(viewport, self.scale);
+        if let Some(panel) = panel_edge_at(&fitted, px, py, DIVIDER_HIT_MARGIN) {
+            return Some(match panel {
+                Panel::Bottom => Direction::Horizontal,
+                Panel::Sidebar(_) => Direction::Vertical,
             });
         }
         if self.main_shown_tabs().len() <= 1 {
@@ -385,9 +373,9 @@ impl Layout {
 
     /// Find the divider at `(start_x, start_y)` and move it by `(dx, dy)`:
     /// a split's ratio, or a panel's size, which follows the pointer to the
-    /// nearest whole cell. Call once per mouse-move event with the delta
-    /// from the previous cursor position. Returns `true` when a divider was
-    /// found and moved. No-op when zoomed.
+    /// nearest whole logical pixel. Call once per mouse-move event with the
+    /// delta from the previous cursor position. Returns `true` when a
+    /// divider was found and moved. No-op when zoomed.
     pub fn drag_divider(
         &mut self,
         start_x: f32,
@@ -399,30 +387,31 @@ impl Layout {
         if self.zoomed {
             return false;
         }
-        let fitted = self.panels.fit(viewport, self.cell);
-        // A panel's edge snaps to a cell, so the pointer may be up to half
-        // a cell from it between two moves.
-        let reach = DIVIDER_HIT_MARGIN.max(self.cell.0.max(self.cell.1) / 2.0 + 1.0);
-        if let Some(side) = panel_edge_at(&fitted, start_x, start_y, reach) {
+        let fitted = self.panels.fit(viewport, self.scale);
+        // A panel's edge snaps to a logical pixel, so the pointer may be up
+        // to half of one from it between two moves.
+        let reach = DIVIDER_HIT_MARGIN.max(self.scale / 2.0 + 1.0);
+        if let Some(panel) = panel_edge_at(&fitted, start_x, start_y, reach) {
             let (x, y) = (start_x + dx, start_y + dy);
-            let cells = match side {
-                Side::Left => (x - viewport.x) / self.cell.0,
-                Side::Right => (viewport.x + viewport.width - x) / self.cell.0,
-                Side::Bottom => (viewport.y + viewport.height - y) / self.cell.1,
+            let physical = match panel {
+                Panel::Sidebar(Edge::Left) => x - viewport.x,
+                Panel::Sidebar(Edge::Right) => viewport.x + viewport.width - x,
+                Panel::Bottom => viewport.y + viewport.height - y,
             };
-            let size = cells
+            let size = (physical / self.scale)
                 .round()
-                .clamp(f32::from(side.min_size()), MAX_PANEL_CELLS);
-            self.panels.get_mut(side).size = size as u16;
+                .clamp(panel.min_size(), MAX_PANEL_SIZE);
+            self.panels.base_mut(panel).size = size;
             return true;
         }
         drag_in(&mut self.root, fitted.main, start_x, start_y, dx, dy)
     }
 
     /// Toggle the focused tab between filling the whole window and the
-    /// normal layout. A panel's tab zooms as a pane's does.
+    /// normal layout. A panel's view does not zoom; nor does a zoom stay on
+    /// once focus is in a panel.
     pub fn toggle_zoom(&mut self) {
-        self.zoomed = !self.zoomed;
+        self.zoomed = !self.zoomed && self.panels.panel_of(self.focused).is_none();
     }
 
     /// Split the focused pane in two, placing a new pane holding only the
@@ -464,10 +453,15 @@ impl Layout {
     // Tabs
     // --------------------------------------------------------------------
 
-    /// Add `new_id` to the focused pane or panel, right after the tab it is
-    /// showing, and show and focus it.
+    /// Add `new_id` to the focused pane, right after the tab it is showing,
+    /// and show and focus it. With a panel focused, it goes to the main pane
+    /// that last had focus.
     pub fn add_tab(&mut self, new_id: TabId) {
-        if let Some(pane) = self.pane_of_mut(self.focused) {
+        let target = match self.panels.panel_of(self.focused) {
+            Some(_) => self.main_return(),
+            None => self.focused,
+        };
+        if let Some(pane) = self.pane_of_mut(target) {
             let at = pane.position(pane.active) + 1;
             pane.members.insert(at, new_id);
             pane.show(new_id);
@@ -475,8 +469,8 @@ impl Layout {
         self.set_focus(new_id);
     }
 
-    /// Add `new_id` to the pane or panel holding `beside`, after the tab it
-    /// shows, without showing it or moving the focus: a tab started in the
+    /// Add `new_id` to the pane holding `beside`, after the tab it shows,
+    /// without showing it or moving the focus: a tab started in the
     /// background, there in the strip to go to.
     pub fn add_background_tab(&mut self, beside: TabId, new_id: TabId) {
         if let Some(pane) = self.pane_of_mut(beside) {
@@ -486,25 +480,13 @@ impl Layout {
         }
     }
 
-    /// Remove one tab. A main-area pane left empty collapses its parent split
-    /// into the sibling, and the main area's last tab cannot be closed; a
-    /// panel left empty is hidden. Returns whether anything changed.
+    /// Remove one tab. A pane left empty collapses its parent split into the
+    /// sibling, and the main area's last tab cannot be closed; a panel's
+    /// view never closes. Returns whether anything changed.
     ///
     /// A pane that loses its shown tab shows the one shown before it, and
-    /// focus follows when the closed tab had it; out of an emptied panel it
-    /// goes to the main pane it came from.
+    /// focus follows when the closed tab had it.
     pub fn close(&mut self, tab: TabId) -> bool {
-        if let Some(side) = self.panels.side_of(tab) {
-            self.take_tab(tab);
-            if self.focused == tab {
-                let next = match self.panels.get(side).pane.as_ref() {
-                    Some(pane) => pane.active,
-                    None => self.main_return(),
-                };
-                self.set_focus(next);
-            }
-            return true;
-        }
         let Some(pane) = find_pane_mut(&mut self.root, tab) else {
             return false;
         };
@@ -526,22 +508,28 @@ impl Layout {
         true
     }
 
-    /// Show and focus `tab`, wherever it is; a hidden panel holding it is
-    /// shown. Returns whether it exists.
+    /// Show and focus `tab`, wherever it is: a tab in its pane, a view in
+    /// its panel, the panel shown and a zoom ended. Returns whether it
+    /// exists.
     pub fn focus(&mut self, tab: TabId) -> bool {
+        if let Some(panel) = self.panels.panel_of(tab) {
+            let base = self.panels.base_mut(panel);
+            base.active = Some(tab);
+            base.shown = true;
+            self.zoomed = false;
+            self.set_focus(tab);
+            return true;
+        }
         let Some(pane) = self.pane_of_mut(tab) else {
             return false;
         };
         pane.show(tab);
-        if let Some(side) = self.panels.side_of(tab) {
-            self.panels.get_mut(side).shown = true;
-        }
         self.set_focus(tab);
         true
     }
 
-    /// Add `new_id` to the pane or panel holding `beside`, and optionally
-    /// show and focus it, showing its panel.
+    /// Add `new_id` to the pane holding `beside`, and optionally show and
+    /// focus it.
     pub fn add_tab_beside(&mut self, beside: TabId, new_id: TabId, show: bool) {
         if let Some(pane) = self.pane_of_mut(beside) {
             let at = pane.position(pane.active) + 1;
@@ -553,16 +541,20 @@ impl Layout {
             }
         }
         if show {
-            if let Some(side) = self.panels.side_of(new_id) {
-                self.panels.get_mut(side).shown = true;
-            }
             self.set_focus(new_id);
         }
     }
 
     /// Show the next (`forward`) or previous tab of the focused pane by strip
-    /// position, without wrapping around. Returns whether the shown tab changed.
+    /// position, or the next or previous view of the focused panel, without
+    /// wrapping around. Returns whether the shown tab or view changed.
     pub fn cycle_tab(&mut self, forward: bool) -> bool {
+        if let Some(panel) = self.panels.panel_of(self.focused) {
+            return match self.panels.base(panel).step(forward) {
+                Some(view) => self.focus(view),
+                None => false,
+            };
+        }
         let members = self.tabs_in_pane(self.focused);
         let count = members.len();
         if count <= 1 {
@@ -594,15 +586,15 @@ impl Layout {
         true
     }
 
-    /// Whether `a` and `b` belong to the same pane or panel.
+    /// Whether `a` and `b` belong to the same pane.
     pub fn same_pane(&self, a: TabId, b: TabId) -> bool {
         self.pane_of(a)
             .is_some_and(|pane| pane.members.contains(&b))
     }
 
     /// Move `tab` to where `target` sits in its strip. If `target` is in the
-    /// same pane, reorders within the strip. If `target` is in another pane
-    /// or a panel, moves `tab` there, to `target`'s position. If `tab` was
+    /// same pane, reorders within the strip. If `target` is in another pane,
+    /// moves `tab` there, to `target`'s position. If `tab` was
     /// the sole member of a main pane, that pane's split collapses; the main
     /// area's last tab stays.
     pub fn move_tab_to(&mut self, tab: TabId, target: TabId) -> bool {
@@ -624,10 +616,10 @@ impl Layout {
         self.transfer_tab_to_pane(tab, target, Some(to))
     }
 
-    /// Move `tab` into the pane or panel holding `target_pane_tab`, placing
+    /// Move `tab` into the pane holding `target_pane_tab`, placing
     /// it at the end of that strip.
     pub fn move_tab_to_pane(&mut self, tab: TabId, target_pane_tab: TabId) -> bool {
-        if self.pane_of(tab).is_none() || !self.contains(target_pane_tab) {
+        if self.pane_of(tab).is_none() || self.pane_of(target_pane_tab).is_none() {
             return false;
         }
         if self.same_pane(tab, target_pane_tab) {
@@ -652,7 +644,7 @@ impl Layout {
         target_tab: TabId,
         insert_at: Option<usize>,
     ) -> bool {
-        if !self.contains(target_tab) {
+        if self.pane_of(target_tab).is_none() {
             return false;
         }
         let collapses = find_pane(&self.root, tab).is_some_and(|pane| pane.members.len() == 1);
@@ -667,9 +659,6 @@ impl Layout {
             .min(to_pane.members.len());
         to_pane.members.insert(pos, tab);
         to_pane.show(tab);
-        if let Some(side) = self.panels.side_of(tab) {
-            self.panels.get_mut(side).shown = true;
-        }
         self.set_focus(tab);
         if collapses {
             self.balance();
@@ -679,7 +668,7 @@ impl Layout {
 
     /// Split `target_pane_tab`'s pane to make `tab` a new pane in `direction`.
     /// Returns `true` if a new pane was created; `false` if either tab was
-    /// not found, if the target is in a panel (which does not split), or if
+    /// not found, if the target is a panel's view, or if
     /// `tab` was the only tab of the target pane.
     pub fn split_tab_to_new_pane(
         &mut self,
@@ -721,125 +710,122 @@ impl Layout {
     // Panels
     // --------------------------------------------------------------------
 
-    /// Whether the panel on `side` holds tabs, and whether it is shown.
-    pub fn panel_state(&self, side: Side) -> PanelState {
-        self.panels.get(side).state()
+    /// Whether `panel` holds views, and whether it is shown.
+    pub fn panel_state(&self, panel: Panel) -> PanelState {
+        self.panels.base(panel).state()
     }
 
-    /// The tab the panel on `side` shows, while it holds any.
-    pub fn panel_tab(&self, side: Side) -> Option<TabId> {
-        self.panels.get(side).pane.as_ref().map(|pane| pane.active)
+    /// The sidebar on `edge`.
+    pub fn sidebar(&self, edge: Edge) -> &Dock<SidebarKind> {
+        self.panels.sidebar(edge)
     }
 
-    /// The panel on `side`'s width (a sidebar) or height, in cells.
-    pub fn panel_size(&self, side: Side) -> u16 {
-        self.panels.get(side).size
+    /// The bottom panel.
+    pub fn bottom_panel(&self) -> &Dock<BottomPanelKind> {
+        &self.panels.bottom
     }
 
-    /// Show the panel on `side` and focus the tab it shows; a zoom ends.
-    /// Returns `false`, doing nothing, for an empty panel.
-    pub fn show_panel(&mut self, side: Side) -> bool {
-        let Some(tab) = self.panel_tab(side) else {
-            return false;
-        };
-        self.panels.get_mut(side).shown = true;
-        self.zoomed = false;
-        self.set_focus(tab);
-        true
+    /// The sidebar holding a view of `kind`, if one does.
+    pub fn sidebar_of(&self, kind: SidebarKind) -> Option<Edge> {
+        self.panels.sidebar_of(kind)
     }
 
-    /// Hide the panel on `side`, its tabs kept; with focus in it, focus goes
-    /// back to the main pane it came from.
-    pub fn hide_panel(&mut self, side: Side) {
-        self.panels.get_mut(side).shown = false;
-        if self.panels.side_of(self.focused) == Some(side) {
+    /// Show `panel` and focus the view it shows; a zoom ends. Returns
+    /// `false`, doing nothing, for an empty panel.
+    pub fn show_panel(&mut self, panel: Panel) -> bool {
+        match self.panels.base(panel).active {
+            Some(view) => self.focus(view),
+            None => false,
+        }
+    }
+
+    /// Hide `panel`, its views kept; with focus in it, focus goes back to the
+    /// main pane it came from.
+    pub fn hide_panel(&mut self, panel: Panel) {
+        self.panels.base_mut(panel).shown = false;
+        if self.panels.panel_of(self.focused) == Some(panel) {
             let back = self.main_return();
             self.set_focus(back);
         }
     }
 
-    /// Put `tab`, held by no pane, in the panel on `side` after the tab it
-    /// shows, showing the panel and the tab, and focusing it when `focus`.
-    pub fn open_in_panel(&mut self, side: Side, tab: TabId, focus: bool) {
-        let panel = self.panels.get_mut(side);
-        match &mut panel.pane {
-            Some(pane) => {
-                let at = pane.position(pane.active) + 1;
-                pane.members.insert(at, tab);
-                pane.show(tab);
+    /// Show or hide `panel`, leaving the focus where it is unless it was in
+    /// the panel hidden. An empty panel stays hidden.
+    pub fn set_panel_shown(&mut self, panel: Panel, shown: bool) {
+        match shown {
+            true => {
+                let base = self.panels.base_mut(panel);
+                base.shown = base.active.is_some();
             }
-            None => panel.pane = Some(Pane::new(tab)),
-        }
-        panel.shown = true;
-        if focus {
-            self.zoomed = false;
-            self.set_focus(tab);
+            false => self.hide_panel(panel),
         }
     }
 
-    /// Move `tab` into `region`: a panel, after the tab it shows, or the
-    /// main area, beside the main tab that last had focus; showing and
-    /// focusing it there. Returns `false` when it is there already, is not
-    /// held, or is the main area's last tab, which never leaves it.
-    pub fn move_to_region(&mut self, tab: TabId, region: Region) -> bool {
-        let Some(from) = self.region_of(tab) else {
-            return false;
-        };
-        if from == region {
+    /// Set `panel`'s width (a sidebar) or height, in logical pixels, within
+    /// its least and [`MAX_PANEL_SIZE`].
+    pub fn set_panel_size(&mut self, panel: Panel, size: f32) {
+        self.panels.base_mut(panel).size = size.clamp(panel.min_size(), MAX_PANEL_SIZE);
+    }
+
+    /// Add the view `tab` of `kind` to the sidebar on `edge` and show it
+    /// there, focusing it when `focus`. Returns `false`, changing nothing,
+    /// when either sidebar holds a view of `kind` already, a view sitting in
+    /// one sidebar at a time.
+    pub fn add_sidebar_view(
+        &mut self,
+        edge: Edge,
+        kind: SidebarKind,
+        tab: TabId,
+        focus: bool,
+    ) -> bool {
+        if self.panels.sidebar_of(kind).is_some() || self.contains(tab) {
             return false;
         }
-        let back = self.main_return();
-        if !self.take_tab(tab) {
-            return false;
-        }
-        match region {
-            Region::Panel(side) => self.open_in_panel(side, tab, true),
-            Region::Main => {
-                if let Some(pane) = find_pane_mut(&mut self.root, back) {
-                    let at = pane.position(pane.active) + 1;
-                    pane.members.insert(at, tab);
-                    pane.show(tab);
-                }
-                self.set_focus(tab);
-            }
+        self.panels.sidebar_mut(edge).add(kind, tab);
+        if focus {
+            self.focus(tab);
         }
         true
     }
 
-    /// Put `tabs`, held by no pane, at the start of the panel on `side`'s
-    /// strip, in their order, leaving the tab it shows in front (the first
-    /// of them, for a panel that was empty) and the focus where it is.
-    pub fn put_in_panel_front(&mut self, side: Side, tabs: &[TabId]) {
-        let Some(&first) = tabs.first() else {
-            return;
+    /// Move the view of `kind` to the sidebar on `edge`, showing and
+    /// focusing it there. Returns `false` when no sidebar holds one, or it
+    /// is there already.
+    pub fn move_sidebar_view(&mut self, kind: SidebarKind, edge: Edge) -> bool {
+        let Some(from) = self.panels.sidebar_of(kind) else {
+            return false;
         };
-        let panel = self.panels.get_mut(side);
-        let pane = panel.pane.get_or_insert_with(|| Pane::new(first));
-        let mut members: Vec<TabId> = tabs.to_vec();
-        members.extend(pane.members.iter().filter(|tab| !tabs.contains(tab)));
-        pane.members = members;
-        for tab in tabs {
-            if !pane.recent.contains(tab) {
-                pane.recent.push(*tab);
-            }
+        if from == edge {
+            return false;
         }
+        let Some(tab) = self.panels.sidebar_mut(from).remove(kind) else {
+            return false;
+        };
+        self.panels.sidebar_mut(edge).add(kind, tab);
+        self.focus(tab);
+        true
     }
 
-    /// Show or hide the panel on `side`, leaving the focus where it is
-    /// unless it was in the panel hidden. An empty panel stays hidden.
-    pub fn set_panel_shown(&mut self, side: Side, shown: bool) {
-        match shown {
-            true => {
-                let panel = self.panels.get_mut(side);
-                panel.shown = panel.pane.is_some();
-            }
-            false => self.hide_panel(side),
+    /// Add the view `tab` of `kind` to the bottom panel and show it there,
+    /// focusing it when `focus`. Returns `false`, changing nothing, when the
+    /// bottom panel holds a view of `kind` already.
+    pub fn add_bottom_view(&mut self, kind: BottomPanelKind, tab: TabId, focus: bool) -> bool {
+        if self.contains(tab) || !self.panels.bottom.add(kind, tab) {
+            return false;
         }
+        if focus {
+            self.focus(tab);
+        }
+        true
     }
 
-    /// Bring `tab` to the front of its pane or panel without moving the
-    /// focus. Returns whether it is held.
+    /// Bring `tab` to the front of its pane, or the view `tab` to the front
+    /// of its panel, without moving the focus. Returns whether it is held.
     pub fn bring_to_front(&mut self, tab: TabId) -> bool {
+        if let Some(panel) = self.panels.panel_of(tab) {
+            self.panels.base_mut(panel).active = Some(tab);
+            return true;
+        }
         match self.pane_of_mut(tab) {
             Some(pane) => {
                 pane.show(tab);
@@ -847,12 +833,6 @@ impl Layout {
             }
             None => false,
         }
-    }
-
-    /// Set the panel on `side`'s width (a sidebar) or height, in cells, no
-    /// smaller than its least.
-    pub fn set_panel_size(&mut self, side: Side, size: u16) {
-        self.panels.get_mut(side).size = size.max(side.min_size());
     }
 
     // --------------------------------------------------------------------
@@ -955,14 +935,6 @@ impl Layout {
     // Helpers
     // --------------------------------------------------------------------
 
-    /// Every pane in tree order, then every panel holding tabs.
-    fn pane_list(&self) -> Vec<&Pane> {
-        let mut out = Vec::new();
-        collect_pane_refs(&self.root, &mut out);
-        out.extend(self.panels.panes().map(|(_, pane)| pane));
-        out
-    }
-
     /// The shown tab of every pane of the main area, in tree order.
     pub fn main_shown_tabs(&self) -> Vec<TabId> {
         let mut panes = Vec::new();
@@ -970,38 +942,20 @@ impl Layout {
         panes.iter().map(|pane| pane.active).collect()
     }
 
-    /// The pane or panel holding `tab`.
+    /// The pane holding `tab`.
     fn pane_of(&self, tab: TabId) -> Option<&Pane> {
-        find_pane(&self.root, tab).or_else(|| {
-            let side = self.panels.side_of(tab)?;
-            self.panels.get(side).pane.as_ref()
-        })
+        find_pane(&self.root, tab)
     }
 
-    /// The pane or panel holding `tab`, mutably.
+    /// The pane holding `tab`, mutably.
     fn pane_of_mut(&mut self, tab: TabId) -> Option<&mut Pane> {
-        if find_pane(&self.root, tab).is_some() {
-            return find_pane_mut(&mut self.root, tab);
-        }
-        let side = self.panels.side_of(tab)?;
-        self.panels.get_mut(side).pane.as_mut()
+        find_pane_mut(&mut self.root, tab)
     }
 
-    /// Take `tab` out of wherever it is: a main pane left empty collapses,
-    /// a panel left empty is hidden. Returns `false`, changing nothing, for
-    /// a tab not held or the main area's last tab.
+    /// Take `tab` out of its pane: a pane left empty collapses. Returns
+    /// `false`, changing nothing, for a tab not held or the main area's last
+    /// tab.
     fn take_tab(&mut self, tab: TabId) -> bool {
-        if let Some(side) = self.panels.side_of(tab) {
-            let panel = self.panels.get_mut(side);
-            match &mut panel.pane {
-                Some(pane) if pane.members.len() > 1 => pane.remove(tab),
-                _ => {
-                    panel.pane = None;
-                    panel.shown = false;
-                }
-            }
-            return true;
-        }
         match find_pane_mut(&mut self.root, tab) {
             Some(pane) if pane.members.len() > 1 => {
                 pane.remove(tab);
@@ -1097,16 +1051,16 @@ fn overlap_y(a: Rect, b: Rect) -> f32 {
 
 /// The panel of `fitted` whose edge toward the main area `(px, py)` is
 /// within `reach` pixels of, along that edge.
-fn panel_edge_at(fitted: &Fitted, px: f32, py: f32, reach: f32) -> Option<Side> {
-    fitted.panels.iter().find_map(|&(side, rect)| {
+fn panel_edge_at(fitted: &Fitted, px: f32, py: f32, reach: f32) -> Option<Panel> {
+    fitted.panels.iter().find_map(|&(panel, rect)| {
         let along_y = py >= rect.y && py <= rect.y + rect.height;
         let along_x = px >= rect.x && px <= rect.x + rect.width;
-        let near = match side {
-            Side::Left => along_y && (px - (rect.x + rect.width)).abs() <= reach,
-            Side::Right => along_y && (px - rect.x).abs() <= reach,
-            Side::Bottom => along_x && (py - rect.y).abs() <= reach,
+        let near = match panel {
+            Panel::Sidebar(Edge::Left) => along_y && (px - (rect.x + rect.width)).abs() <= reach,
+            Panel::Sidebar(Edge::Right) => along_y && (px - rect.x).abs() <= reach,
+            Panel::Bottom => along_x && (py - rect.y).abs() <= reach,
         };
-        near.then_some(side)
+        near.then_some(panel)
     })
 }
 
@@ -1127,12 +1081,13 @@ mod tests {
         y: 0.0,
     };
 
-    /// A layout of one main tab, `TabId(0)`, laid out in 10 by 20 cells.
+    /// A layout of one main tab, `TabId(0)`, at scale 1.
     fn with_panels() -> Layout {
-        let mut layout = Layout::with_root(TabId(0));
-        layout.set_cell_size(10.0, 20.0);
-        layout
+        Layout::with_root(TabId(0))
     }
+
+    const LEFT: Panel = Panel::Sidebar(Edge::Left);
+    const RIGHT: Panel = Panel::Sidebar(Edge::Right);
 
     /// Where `tab` is laid out in [`WIDE`], and in which region.
     fn placed(layout: &Layout, tab: TabId) -> Option<(Region, Rect)> {
@@ -1163,19 +1118,15 @@ mod tests {
     fn test_panels_sit_around_the_main_area_and_keep_their_size_through_a_balance() {
         let mut layout = with_panels();
         layout.split(Direction::Vertical, 0.3, TabId(1));
-        layout.open_in_panel(Side::Bottom, TabId(2), true);
-        layout.open_in_panel(Side::Left, TabId(3), false);
+        layout.add_bottom_view(BottomPanelKind::Output, TabId(2), true);
+        layout.add_sidebar_view(Edge::Left, SidebarKind::Files, TabId(3), false);
         assert_eq!(layout.focused(), TabId(2));
         let (region, bottom) = placed(&layout, TabId(2)).expect("laid out");
-        assert_eq!(region, Region::Panel(Side::Bottom));
+        assert_eq!(region, Region::Panel(Panel::Bottom));
         let (_, left) = placed(&layout, TabId(3)).expect("laid out");
-        assert_eq!(
-            left,
-            Rect::new(0.0, 0.0, 320.0, 800.0),
-            "full height, 32 cells"
-        );
-        assert_eq!(bottom.x, 320.0, "between the sidebars");
-        assert_eq!(bottom.height, 280.0, "14 rows");
+        assert_eq!(left, Rect::new(0.0, 0.0, 260.0, 800.0), "full height");
+        assert_eq!(bottom.x, 260.0, "between the sidebars");
+        assert_eq!(bottom.height, BOTTOM_HEIGHT);
         layout.balance();
         let (_, main_a) = placed(&layout, TabId(0)).expect("laid out");
         let (_, main_b) = placed(&layout, TabId(1)).expect("laid out");
@@ -1187,62 +1138,86 @@ mod tests {
     }
 
     #[test]
-    fn test_a_hidden_panel_keeps_its_tabs_and_comes_back_when_one_is_focused() {
+    fn test_views_are_no_tabs_new_tabs_go_to_the_main_area_and_views_never_close() {
         let mut layout = with_panels();
-        layout.open_in_panel(Side::Bottom, TabId(1), true);
+        layout.add_bottom_view(BottomPanelKind::Output, TabId(1), true);
         layout.add_tab(TabId(2));
         assert_eq!(
-            layout.tabs_in_pane(TabId(1)),
-            [TabId(1), TabId(2)],
-            "a new tab joins it"
+            layout.region_of(TabId(2)),
+            Some(Region::Main),
+            "beside the main tab"
         );
-        layout.hide_panel(Side::Bottom);
-        assert_eq!(layout.panel_state(Side::Bottom), PanelState::Hidden);
+        assert_eq!(
+            layout.members(),
+            [TabId(0), TabId(2)],
+            "the view is no member"
+        );
+        assert!(layout.tabs_in_pane(TabId(1)).is_empty());
+        assert!(!layout.close(TabId(1)), "a view never closes");
+        assert!(layout.contains(TabId(1)));
+        assert!(
+            !layout.move_tab_to(TabId(2), TabId(1)),
+            "nothing moves into a panel"
+        );
+    }
+
+    #[test]
+    fn test_a_hidden_panel_keeps_its_views_and_comes_back_when_one_is_focused() {
+        let mut layout = with_panels();
+        layout.add_bottom_view(BottomPanelKind::Output, TabId(1), true);
+        layout.hide_panel(Panel::Bottom);
+        assert_eq!(layout.panel_state(Panel::Bottom), PanelState::Hidden);
         assert_eq!(layout.focused(), TabId(0), "back where focus was");
         assert_eq!(
             layout.rects(WIDE),
             [(TabId(0), WIDE)],
             "the main area takes it all"
         );
-        assert_eq!(
-            layout.members(),
-            [TabId(0), TabId(1), TabId(2)],
-            "nothing closed"
-        );
         layout.focus(TabId(1));
-        assert_eq!(layout.panel_state(Side::Bottom), PanelState::Shown);
-        layout.hide_panel(Side::Bottom);
-        assert!(layout.show_panel(Side::Bottom));
-        assert_eq!(layout.focused(), TabId(1), "the tab it shows");
-    }
-
-    #[test]
-    fn test_a_panel_s_last_tab_closing_empties_it_and_focus_goes_back_to_the_main_area() {
-        let mut layout = with_panels();
-        layout.split(Direction::Vertical, 0.5, TabId(1));
-        layout.focus(TabId(0));
-        layout.open_in_panel(Side::Right, TabId(2), true);
-        assert!(layout.close(TabId(2)));
-        assert_eq!(layout.panel_state(Side::Right), PanelState::Empty);
-        assert_eq!(layout.focused(), TabId(0), "the main pane it came from");
-        assert!(!layout.show_panel(Side::Right), "nothing to show");
-    }
-
-    #[test]
-    fn test_tabs_move_between_the_main_area_and_a_panel_but_its_last_tab_stays() {
-        let mut layout = with_panels();
+        assert_eq!(layout.panel_state(Panel::Bottom), PanelState::Shown);
+        layout.hide_panel(Panel::Bottom);
+        assert!(layout.show_panel(Panel::Bottom));
+        assert_eq!(layout.focused(), TabId(1), "the view it shows");
         assert!(
-            !layout.move_to_region(TabId(0), Region::Panel(Side::Left)),
-            "the main area keeps a tab"
+            !layout.show_panel(RIGHT),
+            "an empty panel has nothing to show"
         );
-        layout.add_tab(TabId(1));
-        assert!(layout.move_to_region(TabId(1), Region::Panel(Side::Left)));
-        assert_eq!(layout.region_of(TabId(1)), Some(Region::Panel(Side::Left)));
+    }
+
+    #[test]
+    fn test_a_sidebar_view_sits_in_one_sidebar_and_moves_between_them() {
+        let mut layout = with_panels();
+        assert!(layout.add_sidebar_view(Edge::Left, SidebarKind::Files, TabId(1), true));
+        assert!(
+            !layout.add_sidebar_view(Edge::Right, SidebarKind::Files, TabId(2), true),
+            "one Files view"
+        );
+        assert!(layout.add_sidebar_view(Edge::Left, SidebarKind::Git, TabId(3), true));
+        assert!(layout.move_sidebar_view(SidebarKind::Files, Edge::Right));
+        assert_eq!(layout.sidebar_of(SidebarKind::Files), Some(Edge::Right));
         assert_eq!(layout.focused(), TabId(1));
-        assert!(layout.move_to_region(TabId(1), Region::Main));
-        assert_eq!(layout.region_of(TabId(1)), Some(Region::Main));
-        assert_eq!(layout.panel_state(Side::Left), PanelState::Empty);
-        assert_eq!(layout.tabs_in_pane(TabId(0)), [TabId(0), TabId(1)]);
+        assert_eq!(layout.sidebar(Edge::Left).kinds(), [SidebarKind::Git]);
+        assert_eq!(
+            layout.panel_state(LEFT),
+            PanelState::Shown,
+            "Git still there"
+        );
+    }
+
+    #[test]
+    fn test_next_and_previous_tab_step_through_a_panel_s_views_without_wrapping() {
+        let mut layout = with_panels();
+        layout.add_bottom_view(BottomPanelKind::Output, TabId(1), false);
+        layout.add_bottom_view(BottomPanelKind::Problems, TabId(2), false);
+        layout.focus(TabId(1));
+        assert!(!layout.cycle_tab(false), "stops at the first");
+        assert!(layout.cycle_tab(true));
+        assert_eq!(layout.focused(), TabId(2));
+        assert_eq!(
+            layout.bottom_panel().active_kind(),
+            Some(BottomPanelKind::Problems)
+        );
+        assert!(!layout.cycle_tab(true), "stops at the last");
     }
 
     #[test]
@@ -1250,14 +1225,9 @@ mod tests {
         let mut layout = with_panels();
         layout.split(Direction::Vertical, 0.5, TabId(1));
         layout.focus(TabId(0));
-        layout.open_in_panel(Side::Bottom, TabId(2), true);
+        layout.add_bottom_view(BottomPanelKind::Output, TabId(2), true);
         layout.split(Direction::Horizontal, 0.5, TabId(3));
         assert_eq!(layout.region_of(TabId(3)), Some(Region::Main));
-        assert_eq!(
-            layout.tabs_in_pane(TabId(2)),
-            [TabId(2)],
-            "the panel did not split"
-        );
         let (_, beside) = placed(&layout, TabId(3)).expect("laid out");
         let (_, split_from) = placed(&layout, TabId(0)).expect("laid out");
         assert_eq!(beside.x, split_from.x, "under the pane split from");
@@ -1268,7 +1238,7 @@ mod tests {
         let mut layout = with_panels();
         layout.split(Direction::Horizontal, 0.5, TabId(1));
         layout.focus(TabId(0));
-        layout.open_in_panel(Side::Left, TabId(2), true);
+        layout.add_sidebar_view(Edge::Left, SidebarKind::Files, TabId(2), true);
         // From the left sidebar, both main panes lie to the right; the top
         // one had focus last.
         assert!(layout.focus_in_direction(FocusDir::Right, WIDE));
@@ -1282,42 +1252,57 @@ mod tests {
     #[test]
     fn test_pane_numbers_count_the_main_area_only() {
         let mut layout = with_panels();
-        layout.open_in_panel(Side::Left, TabId(1), true);
+        layout.add_sidebar_view(Edge::Left, SidebarKind::Files, TabId(1), true);
         assert!(!layout.focus_by_index(1), "the panel is no pane number");
         assert!(layout.focus_by_index(0));
         assert_eq!(layout.focused(), TabId(0));
     }
 
     #[test]
-    fn test_panels_come_back_from_a_snapshot() {
+    fn test_a_view_does_not_zoom() {
         let mut layout = with_panels();
-        layout.open_in_panel(Side::Right, TabId(1), false);
-        layout.set_panel_size(Side::Right, 40);
-        layout.open_in_panel(Side::Bottom, TabId(2), false);
-        layout.hide_panel(Side::Bottom);
-        let mut restored = Layout::from_tree(layout.export_tree(), TabId(0)).expect("a tree");
-        restored.restore_panels(layout.export_panels());
-        assert_eq!(restored.panel_state(Side::Right), PanelState::Shown);
-        assert_eq!(restored.panel_size(Side::Right), 40);
-        assert_eq!(restored.panel_state(Side::Bottom), PanelState::Hidden);
-        assert_eq!(restored.members(), layout.members());
+        layout.add_bottom_view(BottomPanelKind::Output, TabId(1), true);
+        layout.toggle_zoom();
+        assert!(!layout.is_zoomed());
     }
 
     #[test]
-    fn test_dragging_a_panel_s_edge_sets_its_size_in_whole_cells() {
+    fn test_panels_go_from_one_layout_to_the_next_and_focus_stays_in_a_main_area() {
         let mut layout = with_panels();
-        layout.open_in_panel(Side::Left, TabId(1), false);
+        layout.add_sidebar_view(Edge::Right, SidebarKind::Outline, TabId(1), true);
+        layout.set_panel_size(RIGHT, 300.0);
+        let panels = layout.take_panels();
+        assert_eq!(layout.focused(), TabId(0), "focus left the panel taken");
+        assert_eq!(layout.panel_state(RIGHT), PanelState::Empty);
+        let mut next = Layout::with_root(TabId(5));
+        next.put_panels(panels);
         assert_eq!(
-            layout.divider_at(320.0, 400.0, WIDE),
+            next.sidebar(Edge::Right).tab_of(SidebarKind::Outline),
+            Some(TabId(1))
+        );
+        assert_eq!(next.sidebar(Edge::Right).size(), 300.0);
+    }
+
+    #[test]
+    fn test_dragging_a_panel_s_edge_sets_its_size_in_logical_pixels() {
+        let mut layout = with_panels();
+        layout.set_scale(2.0);
+        layout.add_sidebar_view(Edge::Left, SidebarKind::Files, TabId(1), false);
+        assert_eq!(
+            layout.divider_at(520.0, 400.0, WIDE),
             Some(Direction::Vertical)
         );
-        assert!(layout.drag_divider(320.0, 400.0, 47.0, 0.0, WIDE));
-        assert_eq!(layout.panel_size(Side::Left), 37, "367px is 36.7 cells");
-        // The edge is now at 370px, 3px from the pointer: still held.
-        assert!(layout.drag_divider(367.0, 400.0, -300.0, 0.0, WIDE));
+        assert!(layout.drag_divider(520.0, 400.0, 47.0, 0.0, WIDE));
         assert_eq!(
-            layout.panel_size(Side::Left),
-            MIN_SIDEBAR_COLS,
+            layout.sidebar(Edge::Left).size(),
+            284.0,
+            "567px at scale 2 is 283.5"
+        );
+        // The edge is now at 568px, 1px from the pointer: still held.
+        assert!(layout.drag_divider(567.0, 400.0, -500.0, 0.0, WIDE));
+        assert_eq!(
+            layout.sidebar(Edge::Left).size(),
+            LEFT.min_size(),
             "no smaller than its least"
         );
     }

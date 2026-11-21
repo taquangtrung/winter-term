@@ -46,6 +46,7 @@ mod macro_record;
 mod menus;
 pub(in crate::window) mod misty_theme;
 mod notices;
+mod panels;
 mod picker;
 mod recent;
 pub(crate) mod runtime;
@@ -95,6 +96,10 @@ pub(crate) const PICKER_KEY_TABLES: &[&dyn winter_model::input::table::Listed] =
 /// The keys every picker answers, for the Keys editor's one list.
 pub(crate) const PICKER_FRAMEWORK_KEY_TABLES: &[&dyn winter_model::input::table::Listed] =
     picker::keys::KEY_TABLES;
+
+/// The keys the panels' views answer, for the Keys editor's one list.
+pub(crate) const PANEL_KEY_TABLES: &[&dyn winter_model::input::table::Listed] =
+    panels::views::KEY_TABLES;
 use self::recent::RecentLists;
 use self::runtime::jobs::Jobs;
 use self::runtime::lifecycle::ConfigWatch;

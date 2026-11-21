@@ -8,7 +8,7 @@ How to use Winter day to day, one page per tool. For what Winter is and how to i
 - [Modes](modes.md): Insert, Normal, and Visual in a terminal.
 - [Keys](keys.md): every built-in key, and how to rebind keys in `keybindings.kdl`.
 - [Pickers](pickers.md): the command palette, finding files, project search, and the other lists.
-- [Terminal](terminal.md): the bottom panel, shell integration, rich blocks, and the multiplexer.
+- [Terminal](terminal.md): shell integration, rich blocks, and the multiplexer.
 
 ## Tools
 

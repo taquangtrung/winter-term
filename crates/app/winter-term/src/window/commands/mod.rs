@@ -16,9 +16,8 @@ use winter_field::Field;
 use winter_lsp::servers::INSTALL_COMMAND_TITLE;
 use winter_model::editor::{FORWARDED_COMMANDS, LSP_COMMANDS, PROBLEM_COMMANDS, WRITING_COMMANDS};
 use winter_model::input::{self, Keymap, window_action_by_name};
-use winter_model::layout::{Direction, FocusDir, Region, Side, TabId};
+use winter_model::layout::{BottomPanelKind, Direction, Edge, FocusDir, Panel, SidebarKind, TabId};
 
-use crate::window::layout::panels::SidebarTool;
 use winter_model::mode::Mode;
 use winter_model::paint::IconKind;
 
@@ -51,49 +50,47 @@ pub(crate) const BUILTIN: &[Builtin] = &[
     window(
         "toggle_bottom_panel",
         "View: Toggle Bottom Panel",
-        |app, _| app.toggle_panel(Side::Bottom),
+        |app, _| app.toggle_panel(Panel::Bottom),
     ),
     window(
         "toggle_left_sidebar",
         "View: Toggle Left Sidebar",
-        |app, _| app.toggle_panel(Side::Left),
+        |app, _| app.toggle_panel(Panel::Sidebar(Edge::Left)),
     ),
     window(
         "toggle_right_sidebar",
         "View: Toggle Right Sidebar",
-        |app, _| app.toggle_panel(Side::Right),
+        |app, _| app.toggle_panel(Panel::Sidebar(Edge::Right)),
     ),
     window("sidebar_files", "Sidebar: Files", |app, _| {
-        app.open_sidebar_tool(SidebarTool::Files)
+        app.open_sidebar_view(SidebarKind::Files)
     }),
     window("sidebar_git", "Sidebar: Git", |app, _| {
-        app.open_sidebar_tool(SidebarTool::Git)
+        app.open_sidebar_view(SidebarKind::Git)
     }),
     window("sidebar_outline", "Sidebar: Outline", |app, _| {
-        app.open_sidebar_tool(SidebarTool::Outline)
+        app.open_sidebar_view(SidebarKind::Outline)
     }),
     window("sidebar_todo", "Sidebar: Todo", |app, _| {
-        app.open_sidebar_tool(SidebarTool::Todo)
+        app.open_sidebar_view(SidebarKind::Todo)
+    }),
+    window("bottom_panel_output", "Bottom Panel: Output", |app, _| {
+        app.open_bottom_view(BottomPanelKind::Output, true);
     }),
     window(
-        "move_tab_to_left_sidebar",
-        "View: Move Tab to Left Sidebar",
-        |app, _| app.move_focused_tab_to(Region::Panel(Side::Left)),
+        "bottom_panel_problems",
+        "Bottom Panel: Problems",
+        |app, _| {
+            app.open_bottom_view(BottomPanelKind::Problems, true);
+        },
     ),
+    window("bottom_panel_search", "Bottom Panel: Search", |app, _| {
+        app.open_bottom_view(BottomPanelKind::Search, true);
+    }),
     window(
-        "move_tab_to_right_sidebar",
-        "View: Move Tab to Right Sidebar",
-        |app, _| app.move_focused_tab_to(Region::Panel(Side::Right)),
-    ),
-    window(
-        "move_tab_to_bottom_panel",
-        "View: Move Tab to Bottom Panel",
-        |app, _| app.move_focused_tab_to(Region::Panel(Side::Bottom)),
-    ),
-    window(
-        "move_tab_to_main_area",
-        "View: Move Tab to Main Area",
-        |app, _| app.move_focused_tab_to(Region::Main),
+        "move_view_to_other_sidebar",
+        "View: Move View to the Other Sidebar",
+        |app, _| app.move_view_to_other_sidebar(),
     ),
     window("close_other_tabs", "Tab: Close Others", |app, focused| {
         app.close_other_tabs(focused)

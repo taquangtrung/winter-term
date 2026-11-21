@@ -1,6 +1,6 @@
 # Todo
 
-The Todo page lists the comments across the project that hold a todo keyword, under the file each is in. Open it with `Project: List Todos`.
+The Todo page lists the comments across the project that hold a todo keyword, under the file each is in. Open it with `Project: List Todos`. `Sidebar: Todo` keeps the same comments in a sidebar (see [Sidebars](basics.md#sidebars)).
 
 | Key | Action |
 |---|---|

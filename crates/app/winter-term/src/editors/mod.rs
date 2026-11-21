@@ -44,7 +44,6 @@ pub mod keys;
 pub mod launcher;
 pub mod list;
 pub mod notifications;
-pub mod outline;
 pub mod preview;
 pub mod settings;
 pub mod todo;
@@ -170,7 +169,7 @@ const KEY_TABLE_GROUPS: &[&[&dyn Listed]] = &[
     winter_monitor::sys::KEY_TABLES,
     winter_docker::KEY_TABLES,
     notifications::KEY_TABLES,
-    outline::KEY_TABLES,
+    crate::window::PANEL_KEY_TABLES,
     list::KEY_TABLES,
     EXTENSIONS_KEY_TABLES,
     launcher::KEY_TABLES,

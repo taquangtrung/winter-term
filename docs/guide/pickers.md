@@ -18,7 +18,7 @@ The query is words separated by spaces, matched in any order: `pick rs` finds `s
 | `Enter` | Run the selected row |
 | `F4` or `C-Enter` | Show the row's other actions |
 | `F6` | Show or hide the preview beside the list |
-| `C-S-s` | Save the rows to a list of their own |
+| `C-S-s` | Keep the rows in the bottom panel's Search view; `t` there opens them as a list |
 | `C-n` `C-p`, `Down` `Up` | Move the selection |
 | `M-p` `M-n` | An earlier, a later query |
 | `Esc` or `C-g` | Close |

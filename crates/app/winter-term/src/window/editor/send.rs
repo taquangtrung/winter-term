@@ -3,7 +3,7 @@
 //! the keyboard throughout, so a script is walked through without leaving
 //! it.
 
-use winter_model::layout::{Direction, Side, TabId};
+use winter_model::layout::{Direction, TabId};
 
 use crate::window::App;
 
@@ -21,8 +21,7 @@ const RUN: &str = "\r";
 impl App {
     /// Type `text` into a terminal beside the editor tab `from`, and run
     /// it: the one last sent to while it is still shown, else the first
-    /// shown, else the bottom panel's brought back, else a new one split beside
-    /// `from`, in its directory.
+    /// shown, else a new one split beside `from`, in its directory.
     pub(in crate::window) fn send_to_terminal(&mut self, from: TabId, text: &str) {
         let Some(target) = self.terminal_to_send_to(from) else {
             return;
@@ -54,15 +53,6 @@ impl App {
         }
         if let Some(first) = shown.first() {
             return Some(*first);
-        }
-        if let Some(panel) = self
-            .layout()
-            .panel_tab(Side::Bottom)
-            .filter(|tab| is_terminal(self, tab))
-        {
-            self.layout_mut().show_panel(Side::Bottom);
-            self.layout_mut().focus(from);
-            return Some(panel);
         }
         let cwd = self.focused_start_cwd();
         let opened = self.split_pane_at(Direction::Vertical, cwd)?;

@@ -16,7 +16,7 @@ All window keys work from any tab: split, zoom, close, and `M-h/j/k/l` to move b
 
 ## Panels
 
-Around the panes sit three panels: a left sidebar, a right sidebar, and a bottom panel. Each holds a strip of tabs, like a pane but without their numbers, and never splits, and stays put while the panes beside it split, zoom, and close.
+Around the panes sit three panels: a left sidebar, a right sidebar, and a bottom panel. A panel shows views, one at a time, chosen from the switcher along its top. A view is a list built for its panel; it is no tab, and tabs stay among the panes.
 
 | Key | Panel |
 |---|---|
@@ -24,33 +24,36 @@ Around the panes sit three panels: a left sidebar, a right sidebar, and a bottom
 | `C-S-l` | Right sidebar |
 | `C-S-j` | Bottom panel |
 
-- A panel's key shows it and moves the keyboard there; pressed again in the panel, it hides it. Hidden, its tabs keep running.
+- A panel's key shows it and moves the keyboard there; pressed again in the panel, it hides it. It shows the view it last showed.
 - `M-h/j/k/l` moves into a panel and back out, to the pane you came from.
+- In a view, `j`/`k` move, `RET` opens, `l`/`h` open and close a folder or group, `r` looks again, and `t` opens the view's tool among the panes.
+- What a view opens, a file or a line, opens in the pane you last worked in.
+- The switcher's `+` button lists the panel's views. Next and previous tab move between them; closing one hides the panel.
 - Drag a panel's edge to resize it. When the window is too small, the right sidebar gives way first, then the left, then the bottom panel; they come back as the window grows.
-- Closing the last tab among the panes leaves a launcher there while a panel still holds tabs.
-- A [workspace](workspaces.md) switch changes the terminals and files in the panels; pages stay where they are.
+- A [workspace](workspaces.md) switch points the views at the new project; the panels stay as they are.
 
 ### Sidebars
 
-A sidebar holds tools, one shown at a time:
-
-| Command | Tool |
+| Command | View |
 |---|---|
-| `Sidebar: Files` | The project's folder as a tree ([Dir](dir.md)) |
-| `Sidebar: Git` | The project's [git](git.md) status |
-| `Sidebar: Outline` | The headings and symbols of the file you work on; `RET` or a click goes there |
-| `Sidebar: Todo` | The project's TODO comments ([Todo](todo.md)) |
+| `Sidebar: Files` | The project's folders as a tree; see [Dir](dir.md) for the full listing |
+| `Sidebar: Git` | The branch and the changed files; `s` stages and `u` unstages the file under the cursor ([Git](git.md)) |
+| `Sidebar: Outline` | The headings and symbols of the file you work on |
+| `Sidebar: Todo` | The project's TODO comments, by file ([Todo](todo.md)) |
 
-- An empty sidebar opens with the tool it last showed: Files on the left and Outline on the right at first.
-- The new tab key or button in a sidebar offers the tools. Other tabs, terminals and files, stay among the panes.
-- A file opened from a tool, from Files say, opens in the pane you last worked in.
-- `View: Move Tab to Left Sidebar` and `…to Right Sidebar` move a tool from one sidebar to the other.
+- A view sits in one sidebar at a time: Outline starts on the right, the rest on the left. `View: Move View to the Other Sidebar` moves the focused one across.
+- An empty sidebar opens with Files on the left and Outline on the right.
 
 ### The bottom panel
 
-The bottom panel holds any tab. Empty, it opens with a shell where you were working; builds open there too.
+| Command | View |
+|---|---|
+| `Bottom Panel: Output` | The builds run, newest first, and the end of the one under the cursor ([Compile](compile.md)) |
+| `Bottom Panel: Problems` | The errors and warnings the builds found, by file |
+| `Bottom Panel: Search` | Saved picker rows and project searches; `]` and `[` step through older and newer sets |
 
-- `View: Move Tab to Bottom Panel` and `…to Main Area` move a tab; dragging a tab onto the panel does too. A page or a tool's tab, such as a build, then opens where it was moved next time.
+- Empty, the bottom panel opens with Output.
+- A shell has no place here: open one among the panes.
 
 ## Buffers
 

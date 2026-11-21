@@ -1,9 +1,10 @@
 # Compile
 
-Compile (`C-S-b`, or `Compile: Run a Task…`) runs a build in its own tab and turns every place its output points at into a link.
+Compile (`C-S-b`, or `Compile: Run a Task…`) runs a build and turns every place its output points at into a link.
 
 - With one task, `C-S-b` runs it at once; with several, it lists them, the last one run first. `Compile: Run a Command…` asks for any command.
-- The build shows in the [bottom panel](basics.md#panels), and your focus stays where it was. Move a build's tab to the main area (`View: Move Tab to Main Area`) and later builds open beside your work instead.
+- The build shows in the bottom panel's Output view, and your focus stays where it was; its errors and warnings go to the Problems view (see [Panels](basics.md#the-bottom-panel)).
+- `t` or `RET` on a build in Output shows the whole of it in a tab among the panes, with the keys below.
 - Open files are saved before a build starts.
 - When a build fails, a card says how many errors and warnings it had, and its first error opens. `compile { jump-to-error #false }` stops the jump.
 - `Compile: Run the Last Build Again` reruns the newest build from anywhere.

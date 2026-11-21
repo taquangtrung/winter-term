@@ -4,9 +4,8 @@
 use std::collections::HashMap;
 use std::time::Instant;
 
-use winter_model::layout::{FocusDir, Layout, Region, Side, TabId};
+use winter_model::layout::{FocusDir, Layout, Region, TabId};
 
-use crate::window::layout::panels::SidebarTool;
 use winter_terminal::session::Terminal;
 
 use crate::window::editor::{Closing, EditorKind};
@@ -37,12 +36,7 @@ pub(in crate::window) struct TabsState {
     pub(in crate::window) layout: Layout,
     /// What each tab is called, by the user and by its program.
     pub(in crate::window) labels: HashMap<TabId, TabLabel>,
-    /// The region each kind of tab was last moved to, by its kind's name:
-    /// where a new tab of that kind opens (see `App::region_for`).
-    pub(in crate::window) placement: HashMap<String, Region>,
-    /// The tool each sidebar last showed: what it opens with when empty.
-    pub(in crate::window) sidebar_tools: HashMap<Side, SidebarTool>,
-    /// The tab the Outline page last read the outline of, and when.
+    /// The tab the Outline view last read the outline of, and when.
     pub(in crate::window) outline_read: Option<(TabId, Instant)>,
     /// The focused pane's recency order, frozen while the recency commands
     /// step through it, so repeated steps walk usage history instead of
@@ -86,8 +80,6 @@ impl Default for TabsState {
             closed: Vec::new(),
             layout: Layout::new(),
             labels: HashMap::new(),
-            placement: HashMap::new(),
-            sidebar_tools: HashMap::new(),
             outline_read: None,
             recent_walk: None,
             strip_hover: StripHit::None,
@@ -153,11 +145,6 @@ impl App {
 
     /// Open a new terminal tab beside the focused one and show it.
     pub(in crate::window) fn new_tab(&mut self) {
-        // A sidebar holds only its tools: its new tab offers those.
-        if self.sidebar_focused() {
-            self.open_sidebar_tool_picker();
-            return;
-        }
         // Open the new tab where the focused tab was being used rather than
         // at the process default (usually `$HOME`): beside an editor that is the
         // directory the editor is looking at, not a shell's own.
@@ -290,7 +277,6 @@ impl App {
     /// resize, and title update.
     pub(in crate::window) fn push_new_tab(&mut self, id: TabId, terminal: Terminal) {
         self.open_tabs.insert_terminal(id, terminal);
-        self.leave_sidebar();
         self.layout_mut().add_tab(id);
         self.after_tab_change();
     }
@@ -458,18 +444,7 @@ impl App {
 
     /// Move `pane` to where `target` sits on its strip or across panes.
     pub(in crate::window) fn move_tab_to(&mut self, tab: TabId, target: TabId) {
-        let to = self.layout().region_of(target);
-        let across = self.layout().region_of(tab) != to;
-        if across && to.is_some_and(|to| self.refuses(tab, to)) {
-            return;
-        }
-        if across {
-            self.keep_main_area(tab);
-        }
         if self.layout_mut().move_tab_to(tab, target) {
-            if across {
-                self.remember_region(tab);
-            }
             self.merge_views_in_pane(tab);
             self.after_tab_change();
         }
@@ -477,18 +452,7 @@ impl App {
 
     /// Move `tab` into the pane holding `target_pane_tab`, at the end of that pane.
     pub(in crate::window) fn move_tab_to_pane(&mut self, tab: TabId, target_pane_tab: TabId) {
-        let to = self.layout().region_of(target_pane_tab);
-        let across = self.layout().region_of(tab) != to;
-        if across && to.is_some_and(|to| self.refuses(tab, to)) {
-            return;
-        }
-        if across {
-            self.keep_main_area(tab);
-        }
         if self.layout_mut().move_tab_to_pane(tab, target_pane_tab) {
-            if across {
-                self.remember_region(tab);
-            }
             self.merge_views_in_pane(tab);
             self.after_tab_change();
         }
@@ -550,6 +514,12 @@ impl App {
     /// Unwritten edits in an editor tab are asked about first, and the tab
     /// closes on the answer rather than here.
     pub(in crate::window) fn close_tab(&mut self, tab: TabId) {
+        // A panel's view never closes: closing it hides its panel.
+        if let Some(panel) = self.layout().panel_of(tab) {
+            self.layout_mut().hide_panel(panel);
+            self.after_tab_change();
+            return;
+        }
         if self.ask_before_closing_tab(tab) {
             return;
         }
@@ -621,14 +591,13 @@ impl App {
     /// with `Closing::Forget`, and a terminal's shell ends. A pane left with no
     /// tabs merges back into its sibling.
     pub(in crate::window) fn close_tab_now(&mut self, tab: TabId, closing: Closing) {
-        if !self.layout().contains(tab) {
+        if self.layout().region_of(tab) != Some(Region::Main) {
             return;
         }
         if self.layout().members().len() <= 1 {
             self.runtime.exit.requested = true;
             return;
         }
-        self.keep_main_area(tab);
         let pane_gone = self.layout().tabs_in_pane(tab).len() <= 1;
         self.remember_closed(tab, closing);
         let commit_repo = self.open_tabs.page(&tab).and_then(|slot| {
@@ -704,6 +673,7 @@ impl App {
         self.tabs.labels.remove(&tab);
         self.retain_image_blocks(|img| img.tab_id != tab);
         self.host.compile.forget(tab);
+        self.forget_build_problems(tab);
         if self.host.token_inspect == Some(tab) {
             self.host.token_inspect = None;
         }

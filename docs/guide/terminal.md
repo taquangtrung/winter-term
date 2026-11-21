@@ -1,9 +1,5 @@
 # Terminal
 
-## The bottom panel
-
-`C-S-j` opens the bottom panel with a shell where you were working, and hides it again (its shells keep running). See [Panels](basics.md#panels).
-
 ## Shell integration
 
 Blocks, exit codes, folding, and the working directory come from marks your shell emits. Add one line to your shell's rc file:

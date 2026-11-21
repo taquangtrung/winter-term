@@ -1,7 +1,10 @@
 //! The window's editor tests: builds, tasks, and SyncTeX.
 
+use winter_model::layout::{BottomPanelKind, Edge, Panel, PanelState, SidebarKind};
+
 use super::*;
-use crate::window::layout::panels::SidebarTool;
+use crate::window::panels::views::outline::OutlineView;
+use crate::window::panels::views::{PanelPage, PanelView};
 
 #[cfg(unix)]
 #[test]
@@ -68,43 +71,20 @@ fn test_the_task_list_comes_before_any_tab_and_a_choice_runs_beside_the_work() {
     assert_eq!(compile_tabs(&app).len(), 1);
     let compile_tab = compile_tabs(&app)[0];
     assert!(
-        app.layout().region_of(compile_tab) == Some(Region::Panel(Side::Bottom)),
-        "the build shows in the bottom panel by default"
+        app.open_tabs.buried().contains(&compile_tab),
+        "the build opens no tab"
     );
+    assert_eq!(
+        app.layout().bottom_panel().active_kind(),
+        Some(BottomPanelKind::Output),
+        "Output shows it"
+    );
+    assert_eq!(app.layout().panel_state(Panel::Bottom), PanelState::Shown);
     assert_eq!(
         app.layout().focused(),
         working,
         "the focus stays on the work"
     );
-    assert_eq!(
-        app.layout().shown_tabs().len(),
-        2,
-        "the build shows in the bottom panel"
-    );
-    tick_until_idle(&mut app);
-    let _ = std::fs::remove_dir_all(&dir);
-}
-
-#[cfg(unix)]
-#[test]
-fn test_a_build_moved_to_the_main_area_runs_beside_the_work_next_time() {
-    let dir = task_project("main-area", &[("first", "true"), ("second", "true")]);
-    let mut app = App::new();
-    app.tabs
-        .placement
-        .insert(EditorKind::Compile.name().to_string(), Region::Main);
-    app.show_editor(EditorKind::Dir, Box::new(LocatedEditor(dir.clone())));
-    let working = app.layout().focused();
-    app.compile_task();
-    choose_palette_entry(&mut app, 0);
-
-    let compile_tab = compile_tabs(&app)[0];
-    assert!(
-        app.layout().region_of(compile_tab) == Some(Region::Main),
-        "beside the work, as builds were last moved"
-    );
-    assert_eq!(app.layout().focused(), working);
-    assert_eq!(app.layout().shown_tabs().len(), 2);
     tick_until_idle(&mut app);
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -141,20 +121,15 @@ fn test_one_task_runs_at_once_in_a_tab_left_behind_the_work() {
 
 #[cfg(unix)]
 #[test]
-fn test_a_task_whose_compile_buffer_is_buried_runs_there_and_shows_it_again() {
+fn test_a_task_runs_again_in_its_buffer_and_output_shows_it_in_the_main_area_when_asked() {
     let dir = task_project("buried", &[("first", "true"), ("second", "true")]);
     let mut app = App::new();
-    app.tabs
-        .placement
-        .insert(EditorKind::Compile.name().to_string(), Region::Main);
     app.show_editor(EditorKind::Dir, Box::new(LocatedEditor(dir.clone())));
     let working = app.layout().focused();
     app.compile_task();
     choose_palette_entry(&mut app, 0);
     tick_until_idle(&mut app);
     let compile_tab = compile_tabs(&app)[0];
-    app.close_editor(compile_tab);
-    assert_eq!(app.open_tabs.buried(), [compile_tab]);
 
     app.compile_task();
     choose_palette_entry(&mut app, 0);
@@ -163,9 +138,21 @@ fn test_a_task_whose_compile_buffer_is_buried_runs_there_and_shows_it_again() {
         [compile_tab],
         "the same buffer, not a new one"
     );
-    assert!(app.layout().contains(compile_tab), "shown again");
+    assert!(
+        !app.layout().contains(compile_tab),
+        "still out of the panes"
+    );
     assert_eq!(app.layout().focused(), working, "without taking the focus");
     tick_until_idle(&mut app);
+
+    // Output's `t` shows the build it is on in the main area.
+    let output = app.open_bottom_view(BottomPanelKind::Output, true);
+    if let Some(slot) = app.open_tabs.page_mut(&output) {
+        slot.page.on_key(&Key::plain(KeyCode::Char('t')));
+    }
+    app.sync_panel_views();
+    assert_eq!(app.layout().region_of(compile_tab), Some(Region::Main));
+    assert_eq!(app.layout().focused(), compile_tab);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -222,7 +209,7 @@ fn test_a_place_opened_from_the_compile_tab_opens_beside_it() {
     app.recompile();
     tick_until_idle(&mut app);
     let compile = compile_tabs(&app)[0];
-    app.set_focus(compile);
+    app.show_build_in_main_area(compile);
     app.open_beside(compile, OpenTarget::at(dir.join("a.c"), 1, Some(3)));
     let shown = app.layout().shown_tabs();
     assert!(
@@ -308,71 +295,34 @@ fn test_pdf_editor_run_command_synctex_backward() {
 }
 
 #[test]
-fn test_a_kind_moved_to_the_bottom_panel_opens_there_next_time() {
-    let mut app = App::new();
-    let main = app.layout().focused();
-    let first = app.show_editor(
-        EditorKind::Docker,
-        Box::new(LocatedEditor(PathBuf::from("/"))),
-    );
-    app.move_focused_tab_to(Region::Panel(Side::Bottom));
-    assert_eq!(
-        app.layout().region_of(first),
-        Some(Region::Panel(Side::Bottom))
-    );
-    app.set_focus(main);
-    let second = app.show_editor(
-        EditorKind::Docker,
-        Box::new(LocatedEditor(PathBuf::from("/"))),
-    );
-    assert_eq!(
-        app.layout().region_of(second),
-        Some(Region::Panel(Side::Bottom))
-    );
-    let text = app.show_editor(
-        EditorKind::Diff,
-        Box::new(LocatedEditor(PathBuf::from("/"))),
-    );
-    assert_eq!(
-        app.layout().region_of(text),
-        Some(Region::Main),
-        "another kind opens in the main area, even from a panel"
-    );
-}
-
-#[test]
-fn test_a_sidebar_takes_only_its_tools() {
+fn test_nothing_moves_into_a_panel() {
     let mut app = App::new();
     let main = app.layout().focused();
     let diff = app.show_editor(
         EditorKind::Diff,
         Box::new(LocatedEditor(PathBuf::from("/"))),
     );
-    app.move_focused_tab_to(Region::Panel(Side::Left));
-    assert_eq!(app.layout().region_of(diff), Some(Region::Main), "refused");
     app.move_tab_to_pane(diff, main);
-    app.toggle_panel(Side::Left);
+    app.toggle_panel(Panel::Sidebar(Edge::Left));
     let files = app.layout().focused();
     app.move_tab_to_pane(diff, files);
+    app.move_tab_to(diff, files);
     assert_eq!(
         app.layout().region_of(diff),
         Some(Region::Main),
-        "dropped there, refused too"
+        "dropped there, refused"
     );
 }
 
 #[test]
-fn test_the_new_tab_key_in_a_sidebar_offers_the_sidebar_tools() {
+fn test_the_new_tab_key_in_a_panel_opens_a_terminal_in_the_main_area() {
     let mut app = App::new();
-    app.toggle_panel(Side::Right);
+    app.toggle_panel(Panel::Sidebar(Edge::Right));
     let before = app.layout().members().len();
     app.new_tab();
-    assert!(app.is_picker_open("sidebar_tools"));
-    assert_eq!(
-        app.layout().members().len(),
-        before,
-        "no terminal in the sidebar"
-    );
+    let opened = app.layout().focused();
+    assert_eq!(app.layout().members().len(), before + 1);
+    assert_eq!(app.layout().region_of(opened), Some(Region::Main));
 }
 
 /// An editor with an outline of two entries, at its indexes 0 and 4, that
@@ -415,24 +365,26 @@ fn test_the_outline_follows_the_file_worked_on_and_takes_it_to_an_entry() {
     let jumped = std::rc::Rc::new(std::cell::Cell::new(None));
     let mut app = App::new();
     let text = app.show_editor(EditorKind::Text, Box::new(Outlined(jumped.clone())));
-    app.open_sidebar_tool(SidebarTool::Outline);
+    app.open_sidebar_view(SidebarKind::Outline);
     let outline = app.layout().focused();
     assert_eq!(
         app.layout().region_of(outline),
-        Some(Region::Panel(Side::Right))
+        Some(Region::Panel(Panel::Sidebar(Edge::Right)))
     );
-    app.sync_outline();
-    let said = app
-        .open_tabs
-        .page(&outline)
-        .map(|slot| slot.page.status().segments.join(" "))
-        .unwrap_or_default();
-    assert_eq!(said, "notes.md: 2 entries");
+    app.sync_panel_views();
+    let labels = app.open_tabs.page_mut(&outline).and_then(|slot| {
+        slot.page
+            .with_kind_mut(|page: &mut PanelPage<OutlineView>| {
+                let rows = page.state_mut().list().rows();
+                rows.iter().map(|row| row.label.clone()).collect::<Vec<_>>()
+            })
+    });
+    assert_eq!(labels, Some(vec!["One".to_string(), "Two".to_string()]));
     if let Some(slot) = app.open_tabs.page_mut(&outline) {
         slot.page.on_key(&Key::plain(KeyCode::Char('G')));
         slot.page.on_key(&Key::plain(KeyCode::Enter));
     }
-    app.sync_outline();
+    app.sync_panel_views();
     assert_eq!(app.layout().focused(), text, "back to the file");
     assert_eq!(jumped.get(), Some(4), "at the second entry");
 }

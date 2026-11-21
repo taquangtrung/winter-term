@@ -22,14 +22,14 @@ use crate::session::Session;
 use crate::workspace::{self, Store, Workspace};
 use misty::picker::{Resume, Row, RowKey};
 use winter_base::project;
-use winter_model::layout::{Layout, PanelState, Side, TabId};
+use winter_model::layout::{Layout, TabId};
 use winter_model::path::abbreviate_home;
 
 use crate::window::picker::WindowOutcome;
 use crate::window::picker::outcome::WorkspaceRequest;
 use crate::window::picker::sources::{Entry, Listing};
 
-use crate::window::editor::{Closing, EditorKind};
+use crate::window::editor::Closing;
 use crate::window::{App, DEFAULT_COLS, DEFAULT_ROWS, content_rows};
 
 // ========================================================================
@@ -76,19 +76,6 @@ pub(in crate::window) struct WorkspaceState {
     /// The settings the window's workspace sets over `settings.kdl`, in
     /// force while it is the window's.
     pub(in crate::window) settings: BTreeMap<String, String>,
-    /// The page each panel of a workspace put aside was showing, by
-    /// workspace name: shown again when it is switched back to, as the
-    /// window's pages stay with the window rather than the workspace.
-    pub(in crate::window) shown_pages: HashMap<String, HashMap<Side, TabId>>,
-}
-
-/// The window's own part of its panels, kept across a workspace switch:
-/// each panel's pages, whether it is shown, and its size.
-struct WindowPanels {
-    /// Each panel's pages in strip order, and the one it showed, if a page.
-    pages: Vec<(Side, Vec<TabId>, Option<TabId>)>,
-    /// Each panel's shown state and size.
-    frame: Vec<(Side, bool, u16)>,
 }
 
 /// What a name typed into the workspace-name picker is for.
@@ -111,7 +98,6 @@ impl Default for WorkspaceState {
             store: Store::open(),
             switch_to: None,
             naming: None,
-            shown_pages: HashMap::new(),
             parked: HashMap::new(),
             settings: BTreeMap::new(),
         }
@@ -147,17 +133,10 @@ impl App {
             .as_ref()
             .and_then(|s| s.load(name))
             .ok_or_else(|| format!("no workspace named {name}"))?;
-        let window_panels = self.take_window_panels();
+        // The panels are the window's, and stay through the switch.
+        let panels = self.layout_mut().take_panels();
         match self.workspace.active.take() {
-            Some(left) => {
-                let shown = window_panels
-                    .pages
-                    .iter()
-                    .filter_map(|(side, _, shown)| Some((*side, (*shown)?)))
-                    .collect();
-                self.workspace.shown_pages.insert(left.clone(), shown);
-                self.park_layout(left);
-            }
+            Some(left) => self.park_layout(left),
             None => self.close_everything(),
         }
         self.enter_workspace(Some(target.name.clone()));
@@ -173,7 +152,8 @@ impl App {
                 self.open_fresh_workspace(&target);
             }
         }
-        self.put_back_window_panels(window_panels, name);
+        self.put_window_panels(panels);
+        self.retarget_views();
         self.after_tab_change();
         self.resize_all_panes();
         self.dirty = true;
@@ -260,70 +240,6 @@ impl App {
         if !closed {
             self.workspace.parked.remove(&name);
         }
-    }
-
-    /// Take the window's pages out of its panels, with each panel's shown
-    /// state and size: what stays with the window when the workspace goes.
-    fn take_window_panels(&mut self) -> WindowPanels {
-        let mut kept = WindowPanels {
-            pages: Vec::new(),
-            frame: Vec::new(),
-        };
-        for side in Side::ALL {
-            let layout = self.layout();
-            kept.frame.push((
-                side,
-                layout.panel_state(side) == PanelState::Shown,
-                layout.panel_size(side),
-            ));
-            let Some(front) = layout.panel_tab(side) else {
-                continue;
-            };
-            let pages: Vec<TabId> = layout
-                .tabs_in_pane(front)
-                .into_iter()
-                .filter(|tab| self.is_window_page(*tab))
-                .collect();
-            for page in &pages {
-                self.layout_mut().close(*page);
-            }
-            let shown = pages.contains(&front).then_some(front);
-            kept.pages.push((side, pages, shown));
-        }
-        kept
-    }
-
-    /// Put `kept`, the window's pages and its panels' shown state and size,
-    /// into the layout of the workspace `name` now in front: the pages at
-    /// the start of their panels, the page `name`'s panels last showed in
-    /// front again.
-    fn put_back_window_panels(&mut self, kept: WindowPanels, name: &str) {
-        let remembered = self.workspace.shown_pages.remove(name).unwrap_or_default();
-        for (side, pages, shown) in kept.pages {
-            self.layout_mut().put_in_panel_front(side, &pages);
-            let front = remembered.get(&side).copied().or(shown);
-            if let Some(page) = front.filter(|page| pages.contains(page)) {
-                self.layout_mut().bring_to_front(page);
-            }
-        }
-        for (side, shown, size) in kept.frame {
-            self.layout_mut().set_panel_size(side, size);
-            self.layout_mut().set_panel_shown(side, shown);
-        }
-        let focused = self.layout().focused();
-        if !self.layout().contains(focused) {
-            let back = self.layout().main_return();
-            self.layout_mut().focus(back);
-        }
-    }
-
-    /// Whether `tab` is one of the window's pages (Settings, Notifications,
-    /// an extension's view): Winter's own state, with no buffer, which stays
-    /// with the window across a workspace switch.
-    fn is_window_page(&self, tab: TabId) -> bool {
-        self.open_tabs.page(&tab).is_some_and(|slot| {
-            slot.kind() != EditorKind::Launcher && slot.page.as_editor().is_none()
-        })
     }
 
     /// Put the window's layout aside as the workspace `name`'s, its tabs left
@@ -713,8 +629,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::window::editor::PendingClose;
-    use crate::window::layout::panels::SidebarTool;
-    use winter_model::layout::{Direction, Region};
+    use winter_model::layout::{Direction, Edge, Panel, PanelState, Region, SidebarKind};
     use winter_model::settings_page::Scope;
 
     use super::*;
@@ -1065,43 +980,38 @@ mod tests {
     }
 
     #[test]
-    fn test_a_page_in_a_panel_stays_with_the_window_and_a_shell_there_goes_with_its_workspace() {
+    fn test_the_panels_stay_with_the_window_through_a_workspace_switch() {
         let mut scratch = Scratch::new("panels");
         scratch.add("a", scratch.folder("a"));
         scratch.add("b", scratch.folder("b"));
         scratch.app.workspace.active = Some("a".to_string());
         scratch.shell(true);
-        scratch.app.toggle_panel(Side::Bottom);
-        let a_shell = scratch.app.layout().focused();
-        scratch.app.open_sidebar_tool(SidebarTool::Todo);
-        let page = scratch.app.layout().focused();
-        scratch.app.layout_mut().set_panel_size(Side::Left, 40);
+        scratch.app.open_sidebar_view(SidebarKind::Todo);
+        let view = scratch.app.layout().focused();
+        let left = Panel::Sidebar(Edge::Left);
+        scratch.app.layout_mut().set_panel_size(left, 300.0);
 
         scratch.app.switch_workspace("b").expect("goes through");
         let layout = scratch.app.layout();
         assert_eq!(
-            layout.region_of(page),
-            Some(Region::Panel(Side::Left)),
-            "the page stays"
+            layout.region_of(view),
+            Some(Region::Panel(left)),
+            "the view stays"
         );
-        assert_eq!(layout.panel_state(Side::Left), PanelState::Shown);
-        assert_eq!(layout.panel_size(Side::Left), 40, "its size the window's");
-        assert!(!layout.contains(a_shell), "a's shell went with a");
+        assert_eq!(layout.panel_state(left), PanelState::Shown);
         assert_eq!(
-            layout.panel_state(Side::Bottom),
-            PanelState::Empty,
-            "b has nothing in its bottom panel"
+            layout.sidebar(Edge::Left).size(),
+            300.0,
+            "its size the window's"
         );
         assert_eq!(layout.region_of(layout.focused()), Some(Region::Main));
 
         scratch.app.switch_workspace("a").expect("goes through");
-        let layout = scratch.app.layout();
         assert_eq!(
-            layout.region_of(a_shell),
-            Some(Region::Panel(Side::Bottom)),
-            "back with a"
+            scratch.app.layout().sidebar(Edge::Left).views(),
+            [view],
+            "the one view, not two"
         );
-        assert_eq!(layout.tabs_in_pane(page), [page], "the one page, not two");
     }
 
     #[test]

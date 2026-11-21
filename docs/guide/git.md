@@ -2,6 +2,8 @@
 
 Git (`C-S-g`, or `Git: Status`) shows the repository the pane is in as foldable sections: the changes, the stashes, what the upstream has that you do not, and the recent commits. It refreshes itself when the repository changes, and opens in a neighboring pane so your work stays in view.
 
+`Sidebar: Git` keeps the branch and the changed files in a sidebar, where `s` stages and `u` unstages a file; `t` there opens this page (see [Sidebars](basics.md#sidebars)).
+
 ## Keys
 
 | Key | Action |

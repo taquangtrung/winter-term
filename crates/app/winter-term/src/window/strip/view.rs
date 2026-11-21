@@ -14,7 +14,7 @@ use misty::{
     Widget, draw_drop_target,
 };
 
-use winter_model::layout::{FocusDir, Region, TabId};
+use winter_model::layout::{FocusDir, Panel, Region, TabId};
 
 use super::{StripHit, TabDrop};
 use crate::window::App;
@@ -36,6 +36,10 @@ const FULL_WIDTH_TAB_LIMIT: usize = 3;
 /// How many logical pixels the minimum tab width drops per extra tab.
 const TAB_WIDTH_STEP: f32 = 30.0;
 
+/// Minimum tab width for sidebars, letting fitted entries stay as narrow as
+/// their icon and short view title.
+const SIDEBAR_MIN_TAB_WIDTH: f32 = 0.0;
+
 /// Top corner radius for the active tab, matching `Shape::MODERN`.
 const ACTIVE_TAB_RADIUS: f32 = 6.0;
 
@@ -48,6 +52,8 @@ const ACTIVE_TAB_RADIUS: f32 = 6.0;
 pub(in crate::window) struct PaneStrip {
     /// Where the strip sits, along its pane's top.
     rect: Rect,
+    /// Whether it is a pane's strip of tabs or a panel's switcher of views.
+    region: Region,
     /// Misty's strip.
     strip: TabStrip,
     /// Each Winter tab on the strip and misty's tab for it, in strip order.
@@ -82,14 +88,20 @@ pub(in crate::window) struct TabDragging {
 // ========================================================================
 
 impl PaneStrip {
-    /// An empty strip.
-    fn new() -> Self {
+    /// An empty strip for `region`: a panel's switcher has no close
+    /// buttons, its views never closing.
+    fn new(region: Region) -> Self {
+        let close = match region {
+            Region::Main => TabClose::Hovered,
+            Region::Panel(_) => TabClose::Never,
+        };
         Self {
             rect: Rect::new(0.0, 0.0, 0.0, 0.0),
+            region,
             // Title-fitted pill tabs with a rounded active tab and no vertical
             // cell borders, with close buttons shown under the pointer only.
             strip: TabStrip::new()
-                .with_close_buttons(TabClose::Hovered)
+                .with_close_buttons(close)
                 .with_tab_style(TabStyle::Filled)
                 .with_tab_width(TabWidth::Fit)
                 .with_min_tab_width(PREFERRED_MIN_TAB_WIDTH)
@@ -134,9 +146,16 @@ impl PaneStrip {
     }
 
     /// Bring the strip in step with `shown`, in order, `active` the tab
-    /// shown, the strip lit as the focused pane's when `focused`, and its
-    /// accent dimmed unless `window_focused`.
-    fn sync(&mut self, shown: &[StripTab], active: TabId, focused: bool, window_focused: bool) {
+    /// shown, sized for `region`, the strip lit as the focused pane's when
+    /// `focused`, and its accent dimmed unless `window_focused`.
+    fn sync(
+        &mut self,
+        shown: &[StripTab],
+        active: TabId,
+        region: Region,
+        focused: bool,
+        window_focused: bool,
+    ) {
         let gone: Vec<MistyTab> = self
             .tabs
             .iter()
@@ -178,7 +197,8 @@ impl PaneStrip {
         {
             self.strip.activate(id);
         }
-        self.strip.set_min_tab_width(min_tab_width(shown.len()));
+        self.strip
+            .set_min_tab_width(min_tab_width(shown.len(), region));
         self.strip.set_focused(focused);
         self.strip.set_window_active(window_focused);
     }
@@ -200,14 +220,16 @@ impl App {
         for (area, rect) in areas {
             let reuse = old
                 .iter()
-                .position(|strip| strip.has(area.active))
+                .position(|strip| strip.region == area.region && strip.has(area.active))
                 .or_else(|| {
-                    old.iter()
-                        .position(|strip| area.members.iter().any(|tab| strip.has(*tab)))
+                    old.iter().position(|strip| {
+                        strip.region == area.region
+                            && area.members.iter().any(|tab| strip.has(*tab))
+                    })
                 });
             let mut strip = match reuse {
                 Some(index) => old.swap_remove(index),
-                None => PaneStrip::new(),
+                None => PaneStrip::new(area.region),
             };
             let shown: Vec<StripTab> = area
                 .members
@@ -218,6 +240,7 @@ impl App {
             strip.sync(
                 &shown,
                 area.active,
+                area.region,
                 focused_pane == Some(area.active),
                 self.input.focus.window,
             );
@@ -237,7 +260,9 @@ impl App {
         let theme = misty_theme(self.renderer.as_ref());
         let dragging = self.chrome.tab_drag;
         for (index, pane) in self.chrome.strips.iter_mut().enumerate() {
+            // Nothing is dropped into a panel.
             let marker = dragging
+                .filter(|_| pane.region == Region::Main)
                 .filter(|drag| !pane.has(drag.tab) && pane.contains(drag.point.x, drag.point.y))
                 .map(|drag| drag.point);
             pane.strip.show_drop_marker(marker);
@@ -306,6 +331,9 @@ impl App {
         // What the answer names, read off the strip before the layout
         // changes under it.
         let pane = &self.chrome.strips[index];
+        if let Region::Panel(panel) = pane.region {
+            return self.act_on_switcher(index, panel, response, moved);
+        }
         let shown = pane.strip.active().and_then(|id| pane.winter(id));
         let named = match response {
             TabStripResponse::Activated(id)
@@ -370,6 +398,42 @@ impl App {
         !moved
     }
 
+    /// Carry out what the switcher of `panel`, strip `index`, answered: a
+    /// view chosen, or the button that offers the views. Its views never
+    /// close or move, so a drag only snaps back.
+    fn act_on_switcher(
+        &mut self,
+        index: usize,
+        panel: Panel,
+        response: TabStripResponse,
+        moved: bool,
+    ) -> bool {
+        let pane = &self.chrome.strips[index];
+        match response {
+            TabStripResponse::Activated(id) => {
+                if let Some(view) = pane.winter(id) {
+                    self.layout_mut().focus(view);
+                    self.after_tab_change();
+                }
+            }
+            TabStripResponse::NewTab => self.open_view_picker(panel),
+            TabStripResponse::Dragging(_) | TabStripResponse::DroppedOutside(_) => {
+                self.chrome.tab_drag = None;
+            }
+            TabStripResponse::Close(_) | TabStripResponse::Moved(_) => {}
+            TabStripResponse::Handled => {
+                if moved {
+                    return false;
+                }
+            }
+            TabStripResponse::Ignored => return false,
+            // A response misty adds later is none the switcher acts on.
+            _ => return false,
+        }
+        self.dirty = true;
+        !moved
+    }
+
     /// When the strips next need drawing for a spinner's turn.
     pub(in crate::window) fn strips_deadline(&mut self, cx: &mut EventCx<'_>) -> Option<Instant> {
         self.chrome
@@ -426,7 +490,7 @@ impl App {
 
     /// What the strip shows of `tab`, the `index`th on it in `region`: its
     /// title, led in the main area by its place, the number that switches to
-    /// it. A panel's tabs go unnumbered, the numbers being the panes'.
+    /// it. A panel's views go unnumbered, the numbers being the panes'.
     fn strip_tab(&self, tab: TabId, index: usize, region: Region) -> StripTab {
         StripTab {
             busy: self.busy.spinning.contains(&tab),
@@ -477,6 +541,9 @@ impl App {
             return None;
         }
         let (target, rect) = self.pane_at_pixel(x, y)?;
+        if self.layout().region_of(target) != Some(Region::Main) {
+            return None;
+        }
         let splits =
             self.layout().same_pane(drag.tab, target) || super::is_pane_edge_zone(x, y, &rect);
         let zone = match (splits, super::pane_drop_split_dir(x, y, &rect)) {
@@ -499,11 +566,17 @@ fn strip_id(index: usize) -> FocusId {
     FocusId::new("winter.strip").child(index as u64)
 }
 
-/// Minimum tab width for `tab_count` tabs, stepping down from the preferred
-/// width once more than a few tabs are open until reaching the hard floor.
-fn min_tab_width(tab_count: usize) -> f32 {
-    let extra = tab_count.saturating_sub(FULL_WIDTH_TAB_LIMIT) as f32;
-    (PREFERRED_MIN_TAB_WIDTH - extra * TAB_WIDTH_STEP).max(HARD_MIN_TAB_WIDTH)
+/// Minimum tab width for `tab_count` tabs in `region`: sidebars stay compact
+/// so fitted view titles fit side by side, while main panes and the bottom
+/// panel step down from the preferred width until reaching the hard floor.
+fn min_tab_width(tab_count: usize, region: Region) -> f32 {
+    match region {
+        Region::Panel(Panel::Sidebar(_)) => SIDEBAR_MIN_TAB_WIDTH,
+        Region::Main | Region::Panel(Panel::Bottom) => {
+            let extra = tab_count.saturating_sub(FULL_WIDTH_TAB_LIMIT) as f32;
+            (PREFERRED_MIN_TAB_WIDTH - extra * TAB_WIDTH_STEP).max(HARD_MIN_TAB_WIDTH)
+        }
+    }
 }
 
 /// How many pixels of a border running across `strip`'s top lie above it,
@@ -530,6 +603,8 @@ fn border_above(strip: Rect, separators: &[SolidFill]) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    use winter_model::layout::Edge;
+
     use super::*;
 
     /// The Winter tabs on the first strip, in order, and the one shown.
@@ -560,10 +635,10 @@ mod tests {
     }
 
     #[test]
-    fn test_a_panel_s_tabs_go_unnumbered_and_the_main_area_s_keep_their_number() {
+    fn test_a_panel_s_views_go_unnumbered_and_the_main_area_s_tabs_keep_their_number() {
         let mut app = App::new();
         let main = app.layout().focused();
-        app.toggle_panel(winter_model::layout::Side::Left);
+        app.toggle_panel(Panel::Sidebar(Edge::Left));
         let panel = app.layout().focused();
         assert_eq!(
             app.strip_tab(main, 0, Region::Main).title,
@@ -632,10 +707,32 @@ mod tests {
 
     #[test]
     fn test_min_tab_width_shrinks_with_more_tabs_down_to_hard_floor() {
-        assert_eq!(min_tab_width(1), PREFERRED_MIN_TAB_WIDTH);
-        assert_eq!(min_tab_width(FULL_WIDTH_TAB_LIMIT), PREFERRED_MIN_TAB_WIDTH);
-        assert!(min_tab_width(FULL_WIDTH_TAB_LIMIT + 1) < PREFERRED_MIN_TAB_WIDTH);
-        assert!(min_tab_width(FULL_WIDTH_TAB_LIMIT + 2) < min_tab_width(FULL_WIDTH_TAB_LIMIT + 1));
-        assert_eq!(min_tab_width(50), HARD_MIN_TAB_WIDTH);
+        assert_eq!(min_tab_width(1, Region::Main), PREFERRED_MIN_TAB_WIDTH);
+        assert_eq!(
+            min_tab_width(FULL_WIDTH_TAB_LIMIT, Region::Main),
+            PREFERRED_MIN_TAB_WIDTH
+        );
+        assert!(min_tab_width(FULL_WIDTH_TAB_LIMIT + 1, Region::Main) < PREFERRED_MIN_TAB_WIDTH);
+        assert!(
+            min_tab_width(FULL_WIDTH_TAB_LIMIT + 2, Region::Main)
+                < min_tab_width(FULL_WIDTH_TAB_LIMIT + 1, Region::Main)
+        );
+        assert_eq!(min_tab_width(50, Region::Main), HARD_MIN_TAB_WIDTH);
+        assert_eq!(
+            min_tab_width(1, Region::Panel(Panel::Bottom)),
+            PREFERRED_MIN_TAB_WIDTH
+        );
+    }
+
+    #[test]
+    fn test_sidebar_min_tab_width_stays_compact() {
+        assert_eq!(
+            min_tab_width(1, Region::Panel(Panel::Sidebar(Edge::Left))),
+            SIDEBAR_MIN_TAB_WIDTH
+        );
+        assert_eq!(
+            min_tab_width(4, Region::Panel(Panel::Sidebar(Edge::Right))),
+            SIDEBAR_MIN_TAB_WIDTH
+        );
     }
 }

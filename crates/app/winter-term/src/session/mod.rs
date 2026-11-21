@@ -6,14 +6,12 @@
 //! layout and reopens each pane at its last working directory (PTY children
 //! are spawned fresh, not reattached).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use winter_model::layout::{
-    Direction, Layout, LayoutTree, PaneTree, PanelTree, Region, Side, TabId,
-};
+use winter_model::layout::{Direction, Layout, LayoutTree, PaneTree, TabId};
 use winter_terminal::session::Terminal;
 
 // ========================================================================
@@ -67,19 +65,15 @@ pub struct Session {
     pub focused: usize,
     /// The split tree, its leaves the panes.
     pub layout: SessionTree,
-    /// The panels around the main area, with their tabs. Absent from files
-    /// written before panels, whose dock comes back as a split of the main
-    /// area.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    /// The panels around the main area and the views each shows. Absent
+    /// from files written before panels showed views.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docks: Option<DocksSession>,
+    /// The panels of a file written when they held tabs: read so their tabs
+    /// come back in the main area (see [`Session::take_docks`]), never
+    /// written.
+    #[serde(default, skip_serializing)]
     pub panels: Vec<PanelSession>,
-    /// The region each kind of tab was last moved to, by kind name: where a
-    /// new one opens.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub placement: BTreeMap<String, String>,
-    /// The tool each sidebar last showed, by side (`left`, `right`): what
-    /// it opens with when empty.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub sidebar_tools: BTreeMap<String, String>,
     /// Every terminal in the snapshot.
     #[serde(rename = "panes")]
     pub terminals: Vec<TerminalSession>,
@@ -89,7 +83,34 @@ pub struct Session {
     pub workspace: Option<String>,
 }
 
-/// One panel's snapshot: which, whether shown, how big, and its tabs.
+/// The three panels' snapshots.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DocksSession {
+    /// The bottom panel.
+    pub bottom: DockSession,
+    /// The left sidebar.
+    pub left: DockSession,
+    /// The right sidebar.
+    pub right: DockSession,
+}
+
+/// One panel's snapshot: its views, the one shown, whether it was shown,
+/// and its size.
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct DockSession {
+    /// The view shown, by name.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active: Option<String>,
+    /// Whether it was shown.
+    pub shown: bool,
+    /// Its width (a sidebar) or height, in logical pixels.
+    pub size: f32,
+    /// Its views by name (`files`, `output`), in the switcher's order.
+    pub views: Vec<String>,
+}
+
+/// One panel's snapshot in a file written when panels held tabs: which,
+/// and its tabs. Read, never written.
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct PanelSession {
     /// The tab the panel was showing, and every tab of it in strip order;
@@ -100,8 +121,6 @@ pub struct PanelSession {
     pub shown: bool,
     /// `left`, `right`, or `bottom`.
     pub side: String,
-    /// Its width (a sidebar) or height, in cells.
-    pub size: u16,
 }
 
 /// One editor tab's snapshot: which kind of editor, and where it was looking.
@@ -171,11 +190,6 @@ pub enum SessionTree {
     Split {
         /// Split direction, stored as text so the file stays readable.
         dir: String,
-        /// Whether this split was the dock's, in a file written before
-        /// panels: read so the dock comes back as the bottom panel (see
-        /// [`Session::take_panels`]), never written.
-        #[serde(default, skip_serializing)]
-        dock: bool,
         /// Fraction of the space given to the first child.
         ratio: f32,
         /// The child above or to the left.
@@ -218,12 +232,9 @@ impl Session {
         terminals: &HashMap<TabId, &Terminal>,
         editors: Vec<EditorSession>,
         workspace: Option<String>,
-        placement: &HashMap<String, Region>,
-        sidebar_tools: BTreeMap<String, String>,
+        docks: DocksSession,
     ) -> std::io::Result<()> {
-        let mut session = Self::capture(layout, terminals, editors, workspace)
-            .with_placement(placement)
-            .with_sidebar_tools(sidebar_tools);
+        let mut session = Self::capture(layout, terminals, editors, workspace).with_docks(docks);
         for entry in &mut session.terminals {
             let Some(tab) = terminals.get(&TabId(entry.id as u64)) else {
                 continue;
@@ -298,16 +309,6 @@ impl Session {
             terminals.contains_key(&id) || editors.iter().any(|editor| editor.id == id.0 as usize)
         };
         let tree = layout.export_tree().retain(&kept);
-        let panels = layout
-            .export_panels()
-            .into_iter()
-            .map(|mut panel| {
-                if let Some(pane) = &mut panel.pane {
-                    pane.members.retain(|tab| kept(*tab));
-                }
-                panel_to_session(&panel)
-            })
-            .collect();
         let terminal_sessions: Vec<TerminalSession> = terminals
             .iter()
             .map(|(id, terminal)| TerminalSession {
@@ -321,10 +322,9 @@ impl Session {
             version: SESSION_VERSION,
             editors,
             focused: layout.focused().0 as usize,
+            docks: None,
             layout: layout_tree_to_session(&tree),
-            panels,
-            placement: BTreeMap::new(),
-            sidebar_tools: BTreeMap::new(),
+            panels: Vec::new(),
             terminals: terminal_sessions,
             workspace,
         }
@@ -351,61 +351,49 @@ impl Session {
         self.focused = new_id(self.focused);
     }
 
-    /// This snapshot with `placement`, the region each kind of tab was last
-    /// moved to, recorded.
-    pub fn with_placement(mut self, placement: &HashMap<String, Region>) -> Self {
-        self.placement = placement
-            .iter()
-            .map(|(kind, region)| (kind.clone(), region_name(*region).to_string()))
-            .collect();
+    /// This snapshot with `docks`, the panels and their views, recorded.
+    pub fn with_docks(mut self, docks: DocksSession) -> Self {
+        self.docks = Some(docks);
         self
     }
 
-    /// This snapshot with `tools`, the tool each sidebar last showed by
-    /// side name, recorded.
-    pub fn with_sidebar_tools(mut self, tools: BTreeMap<String, String>) -> Self {
-        self.sidebar_tools = tools;
-        self
-    }
-
-    /// The panels of this snapshot, to lay out again around its main area.
-    /// A file written before panels had the dock's split at the root of its
-    /// tree instead: its lower side comes back as the bottom panel, shown,
-    /// and the rest as the main area.
-    pub fn take_panels(&mut self) -> Vec<PanelTree> {
-        if self.panels.is_empty()
-            && let SessionTree::Split {
-                dock: true,
-                first,
-                second,
-                ..
-            } = &self.layout
-            && let SessionTree::Pane { active, ids } = second.as_ref()
-        {
-            let bottom = PanelSession {
-                pane: Some(SessionTree::Pane {
-                    active: *active,
-                    ids: ids.clone(),
-                }),
-                shown: true,
-                side: region_name(Region::Panel(Side::Bottom)).to_string(),
-                size: Side::Bottom.default_size(),
+    /// The panels of this snapshot, and the tabs of a file written when
+    /// panels held them, to come back in the main area. Such a file's
+    /// sidebar tabs of a tool that is now a sidebar view (Dir, Git, the
+    /// Outline, Todo) become that view, their editors dropped.
+    pub fn take_docks(&mut self) -> (Option<DocksSession>, Vec<TabId>) {
+        let mut docks = self.docks.take();
+        let mut tabs = Vec::new();
+        for panel in std::mem::take(&mut self.panels) {
+            let Some(SessionTree::Pane { ids, .. }) = panel.pane else {
+                continue;
             };
-            self.layout = first.as_ref().clone();
-            self.panels.push(bottom);
+            let sidebar = match panel.side.as_str() {
+                "left" | "right" => Some(panel.side.as_str()),
+                _ => None,
+            };
+            for id in ids {
+                let view = sidebar.and_then(|_| {
+                    let editor = self.editors.iter().find(|editor| editor.id == id)?;
+                    legacy_view(&editor.kind)
+                });
+                match (sidebar, view) {
+                    (Some(side), Some(view)) => {
+                        self.editors.retain(|editor| editor.id != id);
+                        let held = docks.get_or_insert_with(DocksSession::default);
+                        let dock = match side {
+                            "left" => &mut held.left,
+                            _ => &mut held.right,
+                        };
+                        dock.views.push(view.to_string());
+                        dock.active.get_or_insert_with(|| view.to_string());
+                        dock.shown |= panel.shown;
+                    }
+                    _ => tabs.push(TabId(id as u64)),
+                }
+            }
         }
-        std::mem::take(&mut self.panels)
-            .iter()
-            .filter_map(panel_from_session)
-            .collect()
-    }
-
-    /// The region each kind of tab was last moved to, as saved.
-    pub fn placement(&self) -> HashMap<String, Region> {
-        self.placement
-            .iter()
-            .filter_map(|(kind, region)| Some((kind.clone(), region_from_name(region)?)))
-            .collect()
+        (docks, tabs)
     }
 
     /// Take the editor tabs out of this snapshot, to be opened again.
@@ -502,7 +490,6 @@ fn layout_tree_to_session(tree: &LayoutTree) -> SessionTree {
                 Direction::Horizontal => "h".to_string(),
                 Direction::Vertical => "v".to_string(),
             },
-            dock: false,
             ratio: *ratio,
             first: Box::new(layout_tree_to_session(first)),
             second: Box::new(layout_tree_to_session(second)),
@@ -552,54 +539,14 @@ fn session_to_layout_tree(tree: &SessionTree) -> LayoutTree {
     }
 }
 
-/// A panel's snapshot as the file keeps it.
-fn panel_to_session(panel: &PanelTree) -> PanelSession {
-    PanelSession {
-        pane: panel
-            .pane
-            .as_ref()
-            .filter(|pane| !pane.members.is_empty())
-            .map(|pane| layout_tree_to_session(&LayoutTree::Pane(pane.clone()))),
-        shown: panel.shown,
-        side: region_name(Region::Panel(panel.side)).to_string(),
-        size: panel.size,
-    }
-}
-
-/// A panel as the file kept it; `None` for one of a side no longer known.
-fn panel_from_session(panel: &PanelSession) -> Option<PanelTree> {
-    let Some(Region::Panel(side)) = region_from_name(&panel.side) else {
-        return None;
-    };
-    let pane = match panel.pane.as_ref().map(session_to_layout_tree) {
-        Some(LayoutTree::Pane(pane)) => Some(pane),
-        _ => None,
-    };
-    Some(PanelTree {
-        pane,
-        shown: panel.shown,
-        side,
-        size: panel.size,
-    })
-}
-
-/// What the file calls `region`.
-fn region_name(region: Region) -> &'static str {
-    match region {
-        Region::Main => "main",
-        Region::Panel(Side::Bottom) => "bottom",
-        Region::Panel(Side::Left) => "left",
-        Region::Panel(Side::Right) => "right",
-    }
-}
-
-/// The region the file's `name` stands for.
-fn region_from_name(name: &str) -> Option<Region> {
-    match name {
-        "main" => Some(Region::Main),
-        "bottom" => Some(Region::Panel(Side::Bottom)),
-        "left" => Some(Region::Panel(Side::Left)),
-        "right" => Some(Region::Panel(Side::Right)),
+/// The sidebar view a tool tab of `kind`, kept in a sidebar by a file
+/// written when sidebars held tabs, now is.
+fn legacy_view(kind: &str) -> Option<&'static str> {
+    match kind {
+        "dir" => Some("files"),
+        "git" => Some("git"),
+        "outline" => Some("outline"),
+        "todo" => Some("todo"),
         _ => None,
     }
 }
@@ -677,9 +624,8 @@ mod tests {
     fn test_session_round_trip() {
         let session = Session {
             version: SESSION_VERSION,
+            docks: None,
             panels: Vec::new(),
-            placement: BTreeMap::new(),
-            sidebar_tools: BTreeMap::new(),
             focused: 1,
             terminals: vec![
                 TerminalSession {
@@ -696,7 +642,6 @@ mod tests {
                 },
             ],
             layout: SessionTree::Split {
-                dock: false,
                 dir: "v".into(),
                 ratio: 0.5,
                 first: Box::new(SessionTree::Pane {
@@ -734,9 +679,8 @@ mod tests {
     fn test_renumbering_moves_every_tab_to_its_new_id_alike() {
         let mut session = Session {
             version: SESSION_VERSION,
+            docks: None,
             panels: Vec::new(),
-            placement: BTreeMap::new(),
-            sidebar_tools: BTreeMap::new(),
             editors: vec![EditorSession {
                 buried: false,
                 id: 2,
@@ -746,7 +690,6 @@ mod tests {
             }],
             focused: 2,
             layout: SessionTree::Split {
-                dock: false,
                 dir: "v".into(),
                 ratio: 0.5,
                 first: Box::new(SessionTree::Pane {
@@ -798,7 +741,6 @@ mod tests {
     #[test]
     fn test_layout_tree_round_trip() {
         let tree = SessionTree::Split {
-            dock: false,
             dir: "h".into(),
             ratio: 0.3,
             first: Box::new(SessionTree::Pane {
@@ -818,78 +760,61 @@ mod tests {
     }
 
     #[test]
-    fn test_panels_and_placement_come_back_from_a_saved_session() {
-        let mut layout = Layout::new();
-        layout.open_in_panel(Side::Bottom, TabId(2), true);
-        layout.set_panel_size(Side::Bottom, 20);
-        layout.open_in_panel(Side::Left, TabId(3), false);
-        layout.hide_panel(Side::Left);
-        let placement = HashMap::from([("compile".to_string(), Region::Panel(Side::Right))]);
-        let session =
-            Session::capture(&layout, &HashMap::new(), Vec::new(), None).with_placement(&placement);
+    fn test_the_panels_views_come_back_from_a_saved_session() {
+        let docks = DocksSession {
+            bottom: DockSession {
+                active: Some("problems".to_string()),
+                shown: true,
+                size: 240.0,
+                views: vec!["output".to_string(), "problems".to_string()],
+            },
+            ..DocksSession::default()
+        };
+        let session = Session::capture(&Layout::new(), &HashMap::new(), Vec::new(), None)
+            .with_docks(docks.clone());
         let json = serde_json::to_string(&session).expect("written");
         let mut read: Session = serde_json::from_str(&json).expect("read");
-        assert_eq!(read.placement(), placement);
-        let panels = read.take_panels();
-        // No terminal or editor backs these tabs, so the panels come back
-        // empty, but as they were shown and sized.
-        let bottom = panels
-            .iter()
-            .find(|panel| panel.side == Side::Bottom)
-            .expect("kept");
-        assert_eq!((bottom.shown, bottom.size), (true, 20));
-        assert!(bottom.pane.is_none(), "{bottom:?}");
+        assert_eq!(read.take_docks(), (Some(docks), Vec::new()));
     }
 
     #[test]
-    fn test_a_session_from_before_panels_brings_its_dock_back_as_the_bottom_panel() {
-        // A file of the time: its tree's root split marked as the dock's.
-        let mut layout = Layout::with_root(TabId(1));
-        layout.split(Direction::Horizontal, 0.7, TabId(2));
-        let saved = Session {
-            version: SESSION_VERSION,
-            editors: Vec::new(),
-            focused: 1,
-            layout: layout_tree_to_session(&layout.export_tree()),
-            panels: Vec::new(),
-            placement: BTreeMap::new(),
-            sidebar_tools: BTreeMap::new(),
-            terminals: Vec::new(),
-            workspace: None,
-        };
-        let mut value = serde_json::to_value(&saved).expect("a value");
-        let split = value["layout"].as_object_mut().expect("a split");
-        split.insert("dock".to_string(), serde_json::Value::Bool(true));
-        let mut session: Session = serde_json::from_str(&value.to_string()).expect("read");
-        let panels = session.take_panels();
-        let bottom = panels
-            .iter()
-            .find(|panel| panel.side == Side::Bottom)
-            .expect("the dock, as the bottom panel");
-        assert!(bottom.shown);
+    fn test_a_file_from_when_panels_held_tabs_brings_them_to_the_main_area_and_tools_become_views()
+    {
+        let json = r#"{
+            "version": 1,
+            "focused": 1,
+            "layout": {"t": "Group", "active": 1, "ids": [1]},
+            "panes": [
+                {"id": 1, "command": null, "cwd": null},
+                {"id": 2, "command": null, "cwd": null}
+            ],
+            "extensions": [
+                {"id": 3, "kind": "dir", "path": "/repo"},
+                {"id": 4, "kind": "compile", "path": "/repo"}
+            ],
+            "panels": [
+                {"side": "bottom", "shown": true, "size": 14,
+                 "pane": {"t": "Group", "active": 2, "ids": [2, 4]}},
+                {"side": "left", "shown": true, "size": 32,
+                 "pane": {"t": "Group", "active": 3, "ids": [3]}}
+            ],
+            "placement": {"compile": "bottom"},
+            "sidebar_tools": {"left": "files"}
+        }"#;
+        let mut session: Session = serde_json::from_str(json).expect("read");
+        let (docks, tabs) = session.take_docks();
         assert_eq!(
-            bottom.pane.as_ref().map(|pane| pane.members.clone()),
-            Some(vec![TabId(2)])
+            tabs,
+            [TabId(2), TabId(4)],
+            "the bottom panel's shell and build"
         );
-        let (tree, _, _) = session.into_parts();
-        let mut layout = Layout::from_tree(tree, TabId(1)).expect("a tree");
-        layout.restore_panels(panels);
-        assert_eq!(
-            layout.main_members(),
-            [TabId(1)],
-            "the main area without it"
+        let docks = docks.expect("the sidebar's tool as a view");
+        assert_eq!(docks.left.views, ["files"]);
+        assert!(docks.left.shown);
+        assert!(
+            session.editors.iter().all(|editor| editor.id != 3),
+            "the Dir tab it stood for is dropped"
         );
-        assert_eq!(
-            layout.region_of(TabId(2)),
-            Some(Region::Panel(Side::Bottom))
-        );
-        let rewritten = serde_json::to_string(&session_after_take(&layout)).expect("written");
-        assert!(!rewritten.contains("dock"), "the flag is never written");
-    }
-
-    /// The snapshot `layout` saves as.
-    fn session_after_take(layout: &Layout) -> Session {
-        Session::capture(layout, &HashMap::new(), Vec::new(), None)
     }
 
     // --------------------------------------------------------------------
@@ -946,8 +871,7 @@ mod tests {
                 &terminals,
                 Vec::new(),
                 None,
-                &HashMap::new(),
-                BTreeMap::new(),
+                DocksSession::default(),
             )
             .expect("handover saved");
             let (handover, announced) = handover_env();

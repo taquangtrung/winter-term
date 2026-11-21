@@ -3,7 +3,7 @@
 use portable_pty::CommandBuilder;
 
 use crate::session::Session;
-use winter_model::layout::{Layout, TabId};
+use winter_model::layout::{Layout, Panel, PanelState, TabId};
 use winter_terminal::session::{MUX_COMMAND_PREFIX, MUX_REMOTE_COMMAND_PREFIX, Terminal};
 
 use crate::window::appearance::terminal_presentation;
@@ -33,9 +33,7 @@ impl App {
         // taken over as they are, ahead of anything that would start a new one.
         let mut handovers = session.take_handovers();
         let editors = session.take_editors();
-        let panels = session.take_panels();
-        let placement = session.placement();
-        let sidebar_tools = session.sidebar_tools.clone();
+        let (docks, legacy_tabs) = session.take_docks();
         let (tree, focused, terminal_map) = session.into_parts();
 
         let (cols, rows) = if let Some(r) = &self.renderer {
@@ -156,19 +154,13 @@ impl App {
             (terminal_map.contains_key(&id) && !failed_ids.contains(&id)) || restored.contains(&id)
         };
         let mut layout = Layout::from_tree(tree.retain(&spawned), focused);
+        // The tabs a file kept in panels, when panels held tabs, come back
+        // in the main area beside the tab focused.
         if let Some(layout) = layout.as_mut() {
-            let panels = panels
-                .into_iter()
-                .map(|mut panel| {
-                    if let Some(pane) = &mut panel.pane {
-                        pane.members.retain(|tab| spawned(*tab));
-                    }
-                    panel
-                })
-                .collect();
-            layout.restore_panels(panels);
-            // The tab focused may be in a panel, which is laid out only now.
-            layout.focus(focused);
+            let beside = layout.main_return();
+            for tab in legacy_tabs.iter().copied().filter(|tab| spawned(*tab)) {
+                layout.add_background_tab(beside, tab);
+            }
         }
         // A terminal the layout does not place would run on unseen.
         for id in terminal_map.keys() {
@@ -206,8 +198,6 @@ impl App {
         let Some(layout) = layout else {
             return false;
         };
-        self.tabs.placement = placement;
-        self.restore_sidebar_tools(&sidebar_tools);
 
         // Replace the bootstrap pane that init_window laid out, with no shell
         // in it when a session was there to restore, and move the
@@ -221,7 +211,11 @@ impl App {
                 self.drop_tab_state(replaced);
             }
         }
+        // The panels are the window's: they stay through the new layout,
+        // and only a window with none yet takes the session's.
+        let panels = self.layout_mut().take_panels();
         self.tabs.layout = layout;
+        self.put_window_panels(panels);
         let max_id = terminal_map
             .keys()
             .chain(restored.iter())
@@ -230,6 +224,12 @@ impl App {
             .unwrap_or(0);
         if max_id >= self.next_tab_id {
             self.next_tab_id = max_id + 1;
+        }
+        let empty = Panel::ALL
+            .into_iter()
+            .all(|panel| self.layout().panel_state(panel) == PanelState::Empty);
+        if let Some(docks) = docks.filter(|_| empty) {
+            self.restore_docks(&docks);
         }
 
         self.resize_all_panes();

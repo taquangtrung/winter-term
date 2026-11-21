@@ -358,8 +358,7 @@ impl App {
             editors.extend(self.buried_sessions());
         }
         Session::capture(layout, &self.terminal_map_in(layout), editors, workspace)
-            .with_placement(&self.tabs.placement)
-            .with_sidebar_tools(self.sidebar_tool_names())
+            .with_docks(self.docks_session())
     }
 
     /// The terminals of the tabs in `layout`, by tab.
@@ -465,8 +464,7 @@ impl App {
             &self.terminal_map_in(&self.tabs.layout),
             self.editor_sessions(),
             self.workspace.active.clone(),
-            &self.tabs.placement,
-            self.sidebar_tool_names(),
+            self.docks_session(),
         );
         if let Err(e) = saved {
             self.take_back_handover();

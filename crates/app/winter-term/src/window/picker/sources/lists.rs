@@ -228,7 +228,7 @@ impl App {
         if !self.open_tabs.is_page(&tab) {
             match self.open_tabs.unbury(tab) {
                 true => {
-                    self.leave_sidebar();
+                    self.focus_main_area();
                     self.layout_mut().add_tab(tab);
                     self.after_tab_change();
                 }
@@ -236,7 +236,7 @@ impl App {
             }
             return;
         }
-        self.leave_sidebar();
+        self.focus_main_area();
         if !self.open_tabs.unbury(tab) {
             self.show_view_here(tab);
             return;

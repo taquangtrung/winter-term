@@ -13,9 +13,9 @@ use super::sources::{
     BrowserSource, Entry, FileSource, Listing, LocateSource, PdfSearch, ProjectSearch, TodoSearch,
     Typed,
 };
-use crate::editors::list::{ListEditor, place_line};
+use crate::editors::list::place_line;
 use crate::window::App;
-use crate::window::editor::EditorKind;
+use crate::window::panels::views::search::ResultSet;
 
 // ========================================================================
 // Constants
@@ -173,23 +173,29 @@ impl App {
         }
     }
 
-    /// Keep the lines a search found in a list of their own, each line
-    /// naming its place, for `Enter` to open there.
+    /// Keep the lines a search found as a result set of the Search view,
+    /// each line naming its place, for `Enter` to open there.
     pub(in crate::window) fn save_hits(&mut self, save: SaveHits) {
         let lines = save
             .hits
             .iter()
             .map(|hit| place_line(&hit.path, hit.line, &hit.text))
             .collect();
-        let editor = ListEditor::new(&save.name, &save.query, lines);
-        self.show_editor(EditorKind::List, Box::new(editor));
+        self.keep_search(ResultSet {
+            lines,
+            name: save.name,
+            query: save.query,
+        });
     }
 
-    /// Keep a picker's rows in a buffer of their own, named after the picker
-    /// and what they were filtered by.
+    /// Keep a picker's rows as a result set of the Search view, named after
+    /// the picker and what they were filtered by.
     pub(in crate::window) fn save_lines(&mut self, saved: SavedLines) {
-        let editor = ListEditor::new(&saved.name, &saved.query, saved.lines);
-        self.show_editor(EditorKind::List, Box::new(editor));
+        self.keep_search(ResultSet {
+            lines: saved.lines,
+            name: saved.name,
+            query: saved.query,
+        });
     }
 
     /// The mux sessions listed, each choosing `request` with its name; the
@@ -284,8 +290,12 @@ fn parse_mux_attach_query(query: &str) -> Option<(String, Option<String>)> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use winter_model::editor::SearchHit;
+    use winter_model::layout::{BottomPanelKind, TabId};
+
+    use super::*;
+    use crate::window::panels::views::search::SearchView;
+    use crate::window::panels::views::{PanelPage, PanelView};
 
     fn hits(root: &std::path::Path) -> Vec<SearchHit> {
         vec![SearchHit {
@@ -295,8 +305,19 @@ mod tests {
         }]
     }
 
+    /// The bottom panel's Search view, which has the keyboard.
+    fn search_view(app: &App) -> TabId {
+        let focused = app.layout().focused();
+        assert_eq!(
+            app.layout().bottom_panel().kind_of(focused),
+            Some(BottomPanelKind::Search),
+            "the Search view has the keyboard"
+        );
+        focused
+    }
+
     #[test]
-    fn test_saved_search_lines_open_in_a_list_named_by_the_search_and_its_query() {
+    fn test_saved_search_lines_go_to_the_search_view_named_by_the_search_and_its_query() {
         let mut app = App::new();
         let root = std::env::temp_dir();
         app.save_hits(SaveHits {
@@ -304,35 +325,36 @@ mod tests {
             name: "Project Search".to_string(),
             query: "found".to_string(),
         });
-        let focused = app.layout().focused();
-        let slot = app.open_tabs.page_mut(&focused).expect("shown");
-        assert_eq!(slot.kind(), EditorKind::List);
-        assert_eq!(slot.page.title(), "Project Search: found");
-        let frame = slot.page.content(5, 120, false);
-        let line = winter_model::paint::row_text(&frame.rows[0]);
-        assert!(
-            line.contains("a.rs:3") && line.ends_with("let found = 1;"),
-            "{line}"
-        );
+        let view = search_view(&app);
+        let slot = app.open_tabs.page_mut(&view).expect("held");
+        let (heading, row) = slot
+            .page
+            .with_kind_mut(|page: &mut PanelPage<SearchView>| {
+                let state = page.state_mut();
+                (state.heading(), state.list().selected_row().cloned())
+            })
+            .expect("the Search view");
+        assert_eq!(heading.as_deref(), Some("Project Search: found (1 of 1)"));
+        let row = row.expect("a line");
+        assert_eq!(row.label, "let found = 1;");
+        assert!(row.detail.is_some_and(|place| place.ends_with("a.rs:3")));
     }
 
     #[test]
-    fn test_rows_saved_as_lines_open_in_a_buffer_named_by_the_picker_and_its_filter() {
+    fn test_rows_saved_as_lines_go_to_the_search_view_as_their_own_set() {
         let mut app = App::new();
         app.save_lines(SavedLines {
             lines: vec!["cargo build".to_string(), "cargo test".to_string()],
             name: "Shell history".to_string(),
             query: "cargo".to_string(),
         });
-        let focused = app.layout().focused();
-        let slot = app.open_tabs.page(&focused).expect("shown");
-        assert_eq!(slot.kind(), EditorKind::List);
-        let editor = slot.page.as_editor().expect("a buffer");
-        assert_eq!(
-            crate::window::editor::buffers::buffer_label(slot.kind(), editor),
-            "Shell history: cargo",
-            "no kind put in front of the picker's name"
-        );
+        let view = search_view(&app);
+        let slot = app.open_tabs.page_mut(&view).expect("held");
+        let heading = slot
+            .page
+            .with_kind_mut(|page: &mut PanelPage<SearchView>| page.state_mut().heading())
+            .flatten();
+        assert_eq!(heading.as_deref(), Some("Shell history: cargo (1 of 1)"));
     }
 
     #[test]

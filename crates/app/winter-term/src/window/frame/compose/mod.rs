@@ -1095,13 +1095,17 @@ impl App {
         // sets the flag again and earns its own frame.
         self.dirty = false;
         self.runtime.last_frame_at = Some(Instant::now());
-        // Panels are measured in the terminal font's cells, whatever size
-        // the font is now.
-        if let Some((cw, ch)) = self.renderer.as_ref().map(|renderer| renderer.cell_size()) {
-            self.tabs.layout.set_cell_size(cw, ch);
+        // Panels are measured in logical pixels, at the window's scale.
+        if let Some(scale) = self
+            .renderer
+            .as_ref()
+            .map(|renderer| renderer.scale_factor())
+        {
+            self.tabs.layout.set_scale(scale as f32);
         }
-        // An Outline page shows the file being worked on as it is now.
-        self.sync_outline();
+        // The views show the window as it is now: the outline of the tab
+        // worked in, the builds.
+        self.sync_panel_views();
         // A dialog held back while another was up opens once that one has
         // been answered, which every answer repaints after.
         self.open_held_dialog();

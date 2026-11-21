@@ -298,7 +298,7 @@ pub(crate) fn place_line(path: &Path, line: usize, text: &str) -> String {
 
 /// The place `line` starts with, before the gap to the rest of it: a path
 /// on this machine, at the line a `:` and a number after it name.
-fn place_of(line: &str) -> Option<OpenTarget> {
+pub(crate) fn place_of(line: &str) -> Option<OpenTarget> {
     let field = line.split(FIELD_GAP).next().unwrap_or(line).trim();
     let exists = |path: &Path| path.is_absolute() && path.exists();
     let whole = expand_home(field);
