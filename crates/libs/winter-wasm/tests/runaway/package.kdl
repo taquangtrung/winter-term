@@ -1,0 +1,2 @@
+// The misbehaving test extension: it asks for nothing.
+package id="runaway" name="Runaway" version="0.1.0"

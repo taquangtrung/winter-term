@@ -1,0 +1,16 @@
+package id="example" name="Example Extension" version="0.1.0" {
+    description "An example Winter extension: counts words and flags TODO lines as problems."
+
+    // Filesystem permissions granted to the WASM sandbox
+    permissions {
+        read "~/Documents" "~/Notes"
+        write "~/Notes/Data"
+    }
+
+    // Configurable command display titles
+    commands {
+        "example.word_count" title="Example: Count Words in File"
+        "example.flag_todos" title="Example: Flag TODOs as Problems"
+        "example.todo_board" title="Example: Open TODO Board"
+    }
+}

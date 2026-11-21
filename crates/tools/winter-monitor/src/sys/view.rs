@@ -1,0 +1,604 @@
+//! How the system monitor lays a snapshot out: the machine in one line by
+//! the heading, then a responsive dashboard of cards using sparklines,
+//! vertical core bars, and compact capacity rows.
+
+use std::borrow::Cow;
+
+use misty::view::{Extent, Space, canvas, column, item, row, section, sparkline, text};
+use misty::{BoxStyle, Element, Rect, ThemeToken};
+
+use winter_model::system::{
+    CoreReading, CpuSample, DiskReading, GpuReading, MemoryReading, SystemSample,
+};
+
+use crate::units::{format_kb, format_percent};
+
+use super::usage::Usage;
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+/// A share at or past this reads as trouble, and at or past [`WARNING_PERCENT`]
+/// as something to watch.
+const CRITICAL_PERCENT: f64 = 90.0;
+const WARNING_PERCENT: f64 = 75.0;
+
+/// The ids of the cards, the sections `n` and `N` move between.
+pub const CPU: &str = "sys.cpu";
+pub const MEMORY: &str = "sys.memory";
+pub const GPU: &str = "sys.gpu";
+pub const DISKS: &str = "sys.disks";
+
+/// The cards' headings.
+const CPU_TITLE: &str = "CPU";
+const MEMORY_TITLE: &str = "Memory";
+const GPU_TITLE: &str = "GPU";
+const DISKS_TITLE: &str = "Disks";
+
+/// What the load in the CPU card means, for its tooltip.
+const LOAD_ABOUT: &str = "Load: how many processes are running or waiting to, on average over the last 1, 5, and \
+     15 minutes";
+
+/// Separates inline facts in headings and subtitles.
+const FACT_SEPARATOR: &str = " \u{b7} ";
+
+/// How many cores fit on one row of the vertical core bar chart before
+/// wrapping onto a second row.
+const MAX_CORES_PER_ROW: usize = 32;
+
+/// Height of the per-core vertical bar chart in text rows (single and wrapped).
+const CORE_CHART_ROWS: f32 = 3.0;
+const CORE_CHART_WRAPPED_ROWS: f32 = 4.5;
+
+/// Gap between vertical core bars and between wrapped core rows, in pixels.
+const CORE_BAR_GAP_PX: f32 = 2.0;
+
+/// Corner radius for vertical core bars, in pixels.
+const CORE_BAR_RADIUS_PX: f32 = 2.0;
+
+/// Minimum visible bar height so idle cores still show a baseline, in pixels.
+const MIN_BAR_HEIGHT_PX: f32 = 2.0;
+
+/// Height of the thin flat capacity bar in text rows, and its drawn
+/// thickness and corner radius in pixels.
+const FLAT_BAR_ROWS: f32 = 0.25;
+const FLAT_BAR_HEIGHT_PX: f32 = 2.0;
+const FLAT_BAR_RADIUS_PX: f32 = 1.0;
+
+/// Fixed column widths for compact single-line readings.
+const SHORT_LABEL_COLS: f32 = 6.0;
+const SHARE_COLS: f32 = 7.0;
+
+/// The room around a reading's line, in text columns across and rows
+/// down, as a page's items have.
+const READING_PADDING: (f32, f32) = (1.0, 0.2);
+
+/// Vertical gap between a reading's header and its thin capacity bar.
+const BLOCK_GAP_ROWS: f32 = 0.25;
+
+/// Gap between items in a horizontal reading row.
+const ROW_GAP_COLS: f32 = 1.0;
+
+/// Tenths of a percent in a percent.
+const TENTHS: f64 = 10.0;
+
+/// Tenths of a percent in a full 100%.
+const FULL_TENTHS: u32 = 1000;
+
+/// The share a bar fills for a whole.
+const WHOLE_PERCENT: f32 = 100.0;
+
+/// The readings a history line needs before it is drawn: a line takes two.
+const MIN_HISTORY: usize = 2;
+
+/// What the CPU and memory history lines are scaled to: a whole.
+pub const HISTORY_CEILING: f32 = WHOLE_PERCENT;
+
+/// Seconds in a minute, an hour and a day.
+const MINUTE: u64 = 60;
+const HOUR: u64 = 60 * MINUTE;
+const DAY: u64 = 24 * HOUR;
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// The recent history the cards trace: the processor's total load and the
+/// memory in use, as percentages, oldest first.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct History {
+    pub cpu: Vec<f32>,
+    pub memory: Vec<f32>,
+}
+
+// ========================================================================
+// Functions
+// ========================================================================
+
+/// The ids of the cards `sample` shows, in reading order: a GPU card only
+/// where there is a GPU.
+pub fn card_ids(sample: &SystemSample) -> Vec<&'static str> {
+    let mut ids = vec![CPU, MEMORY, DISKS];
+    if !sample.gpus.is_empty() {
+        ids.push(GPU);
+    }
+    ids
+}
+
+/// The machine in one line, for the heading: its name, its system, and how
+/// long it has been up.
+pub fn machine_line<'a, A: 'static>(sample: &SystemSample) -> Element<'a, A> {
+    let overview = &sample.overview;
+    let facts = [
+        overview.hostname.clone(),
+        format!("{} {} ({})", overview.os, overview.release, overview.arch),
+        format!("up {}", format_uptime(overview.uptime_secs)),
+    ];
+    text(facts.join(FACT_SEPARATOR))
+        .muted()
+        .proportional()
+        .into()
+}
+
+/// The dashboard for `sample`: its cards stacked in a single column so
+/// labels and amounts keep their room, with history lines from `history`.
+pub fn dashboard<'a, A: 'static>(
+    sample: &'a SystemSample,
+    usage: &'a Usage,
+    history: &'a History,
+) -> Element<'a, A> {
+    let mut cards = vec![
+        cpu_card(sample, usage, history),
+        memory_card(&sample.memory, history),
+        disk_card(&sample.disks),
+    ];
+    if !sample.gpus.is_empty() {
+        cards.push(gpu_card(&sample.gpus));
+    }
+    column(cards)
+}
+
+/// A duration as `3d 4h 5m`, leaving off the units that are zero at the front.
+pub fn format_uptime(seconds: u64) -> String {
+    let (days, hours, minutes) = (seconds / DAY, seconds % DAY / HOUR, seconds % HOUR / MINUTE);
+    let mut parts = Vec::new();
+    if days > 0 {
+        parts.push(format!("{days}d"));
+    }
+    if days > 0 || hours > 0 {
+        parts.push(format!("{hours}h"));
+    }
+    parts.push(format!("{minutes}m"));
+    parts.join(" ")
+}
+
+/// The machine's total with its model and load, its history, then a vertical
+/// bar chart of each core's load.
+fn cpu_card<'a, A: 'static>(
+    sample: &'a SystemSample,
+    usage: &'a Usage,
+    history: &'a History,
+) -> Element<'a, A> {
+    let cpu = &sample.cpu;
+    let mut card = section(CPU_TITLE);
+
+    if let Some(summary) = cpu_summary(cpu) {
+        let mut line = Element::from(text(summary).muted().proportional())
+            .padding(READING_PADDING.0, READING_PADDING.1);
+        if cpu.load.is_some() {
+            line = line.tooltip(LOAD_ABOUT);
+        }
+        card = card.item(line);
+    }
+
+    card = card
+        .item(headline_reading(
+            "sys.cpu.total",
+            "Total",
+            usage.total,
+            None,
+        ))
+        .item(history_line(&history.cpu, "sys.cpu.history"));
+
+    if !cpu.cores.is_empty() {
+        card = card.item(core_bars(&cpu.cores, &usage.cores));
+    }
+
+    Element::from(card).id(CPU)
+}
+
+/// Model, core count, and load averages for the CPU card's summary line.
+fn cpu_summary(cpu: &CpuSample) -> Option<String> {
+    let mut parts = Vec::new();
+    if !cpu.model.is_empty() {
+        parts.push(cpu.model.clone());
+    }
+    if !cpu.cores.is_empty() {
+        parts.push(counted_cores(cpu.cores.len()));
+    }
+    if let Some([one, five, fifteen]) = cpu.load {
+        let load = |hundredths: u32| format!("{:.2}", f64::from(hundredths) / 100.0);
+        parts.push(format!(
+            "load {} {} {}",
+            load(one),
+            load(five),
+            load(fifteen)
+        ));
+    }
+    (!parts.is_empty()).then(|| parts.join(FACT_SEPARATOR))
+}
+
+/// Physical memory and its history, and swap where there is any.
+fn memory_card<'a, A: 'static>(memory: &MemoryReading, history: &'a History) -> Element<'a, A> {
+    let used = memory.total_kb.saturating_sub(memory.available_kb);
+    let mut card = section(MEMORY_TITLE)
+        .item(headline_reading(
+            "sys.memory.ram",
+            "RAM",
+            tenths_of(used, memory.total_kb),
+            Some(amounts(used, memory.total_kb)),
+        ))
+        .item(history_line(&history.memory, "sys.memory.history"));
+    if memory.swap_total_kb > 0 {
+        card = card.item(compact_reading(
+            "sys.memory.swap",
+            "Swap",
+            tenths_of(memory.swap_used_kb, memory.swap_total_kb),
+            amounts(memory.swap_used_kb, memory.swap_total_kb),
+        ));
+    }
+    Element::from(card).id(MEMORY)
+}
+
+/// Each card's name, video memory, load, and temperature on a two-line block.
+fn gpu_card<'a, A: 'static>(gpus: &'a [GpuReading]) -> Element<'a, A> {
+    let rows = gpus.iter().enumerate().map(|(index, gpu)| {
+        let mut facts = vec![
+            amounts(gpu.mem_used_kb, gpu.mem_total_kb),
+            format!("load {}%", gpu.util_percent),
+        ];
+        if let Some(temp) = gpu.temp_c {
+            facts.push(format!("{temp}\u{b0}C"));
+        }
+        let tenths = tenths_of(gpu.mem_used_kb, gpu.mem_total_kb);
+        block_reading(
+            format!("sys.gpu.{index}"),
+            &gpu.name,
+            None,
+            tenths,
+            facts.join(FACT_SEPARATOR),
+        )
+    });
+    Element::from(section(GPU_TITLE).items(rows)).id(GPU)
+}
+
+/// Each mounted volume on a two-line block so mount paths and sizes keep
+/// their full text.
+fn disk_card<'a, A: 'static>(disks: &'a [DiskReading]) -> Element<'a, A> {
+    let card = match disks.is_empty() {
+        true => section(DISKS_TITLE).item(item("no local disk volumes found")),
+        false => section(DISKS_TITLE).items(disks.iter().map(|disk| {
+            let tenths = tenths_of(disk.used_kb, disk.total_kb);
+            block_reading(
+                format!("sys.disk.{}", disk.mount),
+                &disk.mount,
+                disk.fs_type.as_deref(),
+                tenths,
+                amounts(disk.used_kb, disk.total_kb),
+            )
+        })),
+    };
+    Element::from(card).id(DISKS)
+}
+
+/// A headline reading paired with a sparkline: label, optional facts, and
+/// right-aligned percentage without a redundant horizontal bar.
+fn headline_reading<'a, A: 'static>(
+    id: impl Into<Cow<'a, str>>,
+    label: &str,
+    tenths: u32,
+    facts: Option<String>,
+) -> Element<'a, A> {
+    let tone = tone(tenths);
+    let mut cells = vec![
+        Element::from(text(label.to_string()).proportional())
+            .width(Extent::Cells(SHORT_LABEL_COLS)),
+        Element::from(text(facts.unwrap_or_default()).muted().proportional()).grow(1.0),
+        share_cell(tenths, tone),
+    ];
+    row(cells.drain(..))
+        .gap(Space::Cells(ROW_GAP_COLS))
+        .padding(READING_PADDING.0, READING_PADDING.1)
+        .id(id)
+}
+
+/// A compact single-line reading for short labels (`Swap`) with a thin
+/// flat capacity bar underneath.
+fn compact_reading<'a, A: 'static>(
+    id: impl Into<Cow<'a, str>>,
+    label: &str,
+    tenths: u32,
+    facts: String,
+) -> Element<'a, A> {
+    let tone = tone(tenths);
+    let header = row([
+        Element::from(text(label.to_string()).proportional())
+            .width(Extent::Cells(SHORT_LABEL_COLS)),
+        Element::from(text(facts).muted().proportional()).grow(1.0),
+        share_cell(tenths, tone),
+    ])
+    .gap(Space::Cells(ROW_GAP_COLS));
+
+    column([header, flat_bar(share(tenths), tone)])
+        .gap(Space::Cells(BLOCK_GAP_ROWS))
+        .padding(READING_PADDING.0, READING_PADDING.1)
+        .id(id)
+}
+
+/// A compact capacity reading with label, details, and a thin flat bar
+/// underneath, so long names never truncate.
+fn block_reading<'a, A: 'static>(
+    id: impl Into<Cow<'a, str>>,
+    label: &str,
+    sublabel: Option<&str>,
+    tenths: u32,
+    facts: String,
+) -> Element<'a, A> {
+    let tone = tone(tenths);
+    let mut left = vec![text(label.to_string()).proportional().into()];
+    if let Some(sub) = sublabel {
+        left.push(text(sub.to_string()).muted().proportional().into());
+    }
+    let header = row([
+        row(left).gap(Space::Cells(ROW_GAP_COLS)).grow(1.0),
+        text(facts).muted().proportional().into(),
+        share_cell(tenths, tone),
+    ])
+    .gap(Space::Cells(ROW_GAP_COLS));
+
+    column([header, flat_bar(share(tenths), tone)])
+        .gap(Space::Cells(BLOCK_GAP_ROWS))
+        .padding(READING_PADDING.0, READING_PADDING.1)
+        .id(id)
+}
+
+/// A thin flat capacity bar that reads as a usage indicator rather than a
+/// scrollbar.
+fn flat_bar<'a, A: 'static>(fraction: f32, tone: ThemeToken) -> Element<'a, A> {
+    let fraction = fraction.clamp(0.0, 1.0);
+    let bar: Element<'a, A> = canvas(move |frame, area, theme| {
+        let y = (area.y + (area.height - FLAT_BAR_HEIGHT_PX) / 2.0).round();
+        let track = Rect::new(area.x, y, area.width, FLAT_BAR_HEIGHT_PX);
+        let style = |color: ThemeToken| BoxStyle {
+            border: None,
+            corner_radius: FLAT_BAR_RADIUS_PX,
+            fill: theme.color(color).into(),
+            shadow: None,
+        };
+        frame.draw_box(track, &style(ThemeToken::Hover));
+        let filled_width = (area.width * fraction).round();
+        if filled_width > 0.0 {
+            let filled = Rect::new(area.x, y, filled_width, FLAT_BAR_HEIGHT_PX);
+            frame.draw_box(filled, &style(tone));
+        }
+    })
+    .into();
+    bar.height(Extent::Cells(FLAT_BAR_ROWS))
+}
+
+/// Right-aligned percentage cell colored by load threshold.
+fn share_cell<'a, A: 'static>(tenths: u32, tone: ThemeToken) -> Element<'a, A> {
+    Element::from(text(format!("{:>5}%", format_percent(percent(tenths)))).color(tone))
+        .width(Extent::Cells(SHARE_COLS))
+}
+
+/// `count` cores, `1 core` for one.
+fn counted_cores(count: usize) -> String {
+    match count {
+        1 => "1 core".to_string(),
+        count => format!("{count} cores"),
+    }
+}
+
+/// `used` of `total` kilobytes, as `12.3G of 31.2G`.
+fn amounts(used: u64, total: u64) -> String {
+    format!("{} of {}", format_kb(used), format_kb(total))
+}
+
+/// A line of `history`, the recent shares of a whole, known as `id`:
+/// there from the first reading so the card keeps its shape, drawn once
+/// there are two readings to draw it between.
+fn history_line<'a, A: 'static>(history: &'a [f32], id: &'static str) -> Element<'a, A> {
+    let line = column([sparkline(history, HISTORY_CEILING, ThemeToken::Accent)])
+        .padding(READING_PADDING.0, READING_PADDING.1)
+        .id(id);
+    if history.len() < MIN_HISTORY {
+        return line;
+    }
+    let (low, high) = history
+        .iter()
+        .fold((f32::MAX, f32::MIN), |(low, high), &at| {
+            (low.min(at), high.max(at))
+        });
+    let now = history.last().copied().unwrap_or_default();
+    line.tooltip(format!(
+        "The last {} readings: now {}%, lowest {}%, highest {}%",
+        history.len(),
+        format_percent(f64::from(now)),
+        format_percent(f64::from(low)),
+        format_percent(f64::from(high))
+    ))
+}
+
+/// A vertical bar chart of every core's load, wrapping onto two rows when a
+/// machine has more than [`MAX_CORES_PER_ROW`] logical cores.
+fn core_bars<'a, A: 'static>(cores: &[CoreReading], usage: &[u32]) -> Element<'a, A> {
+    let shares: Vec<u32> = (0..cores.len())
+        .map(|index| usage.get(index).copied().unwrap_or(0).min(FULL_TENTHS))
+        .collect();
+    let rows = core_chart_rows(cores.len());
+    let tooltip = cores_summary(cores, &shares);
+    let chart: Element<'a, A> = canvas(move |frame, area, theme| {
+        draw_core_bars(frame, area, theme, &shares);
+    })
+    .into();
+
+    column([chart.height(Extent::Cells(rows))])
+        .padding(READING_PADDING.0, READING_PADDING.1)
+        .id("sys.cpu.cores")
+        .tooltip(tooltip)
+}
+
+/// Draw vertical bars for each core in `shares`, split into two rows when
+/// there are more than [`MAX_CORES_PER_ROW`] cores.
+fn draw_core_bars(frame: &mut misty::Frame, area: Rect, theme: &misty::Theme, shares: &[u32]) {
+    if shares.is_empty() || area.width <= 0.0 || area.height <= 0.0 {
+        return;
+    }
+    let row_count = if shares.len() > MAX_CORES_PER_ROW {
+        2
+    } else {
+        1
+    };
+    let per_row = shares.len().div_ceil(row_count);
+    let row_gap = if row_count > 1 { CORE_BAR_GAP_PX } else { 0.0 };
+    let row_height = ((area.height - row_gap) / row_count as f32).max(MIN_BAR_HEIGHT_PX);
+
+    let style = |color: ThemeToken| BoxStyle {
+        border: None,
+        corner_radius: CORE_BAR_RADIUS_PX,
+        fill: theme.color(color).into(),
+        shadow: None,
+    };
+
+    for (row_index, chunk) in shares.chunks(per_row).enumerate() {
+        let row_y = area.y + row_index as f32 * (row_height + row_gap);
+        let gaps = CORE_BAR_GAP_PX * chunk.len().saturating_sub(1) as f32;
+        let bar_width = ((area.width - gaps) / per_row as f32).max(1.0);
+        for (col_index, &tenths) in chunk.iter().enumerate() {
+            let x = area.x + col_index as f32 * (bar_width + CORE_BAR_GAP_PX);
+            let slot = Rect::new(x, row_y, bar_width, row_height);
+            frame.draw_box(slot, &style(ThemeToken::Hover));
+
+            let fill_height = (row_height * share(tenths))
+                .round()
+                .clamp(MIN_BAR_HEIGHT_PX, row_height);
+            let filled = Rect::new(x, row_y + row_height - fill_height, bar_width, fill_height);
+            frame.draw_box(filled, &style(tone(tenths)));
+        }
+    }
+}
+
+/// How many text rows tall the core bar chart is for `core_count` cores.
+fn core_chart_rows(core_count: usize) -> f32 {
+    if core_count > MAX_CORES_PER_ROW {
+        CORE_CHART_WRAPPED_ROWS
+    } else {
+        CORE_CHART_ROWS
+    }
+}
+
+/// Tooltip summarizing per-core load and the busiest core's frequency.
+fn cores_summary(cores: &[CoreReading], shares: &[u32]) -> String {
+    if shares.len() == 1 {
+        let busy = format_percent(percent(shares[0]));
+        return match cores[0].mhz {
+            0 => format!("Core 0: {busy}% busy"),
+            mhz => format!(
+                "Core 0: {busy}% busy, at {:.2} GHz",
+                f64::from(mhz) / 1000.0
+            ),
+        };
+    }
+    let sum: u64 = shares.iter().map(|&s| u64::from(s)).sum();
+    let avg = (sum / shares.len() as u64) as u32;
+    let (peak_idx, &peak_tenths) = shares
+        .iter()
+        .enumerate()
+        .max_by_key(|&(_, tenths)| tenths)
+        .unwrap_or((0, &0));
+    let peak_mhz = cores.get(peak_idx).map_or(0, |c| c.mhz);
+    let peak_clock = if peak_mhz > 0 {
+        format!(" ({:.2} GHz)", f64::from(peak_mhz) / 1000.0)
+    } else {
+        String::new()
+    };
+    format!(
+        "{}: avg {}%, peak Core {} at {}%{}",
+        counted_cores(cores.len()),
+        format_percent(percent(avg)),
+        peak_idx,
+        format_percent(percent(peak_tenths)),
+        peak_clock
+    )
+}
+
+/// The color a share reads in: the accent, then the warning color, then
+/// danger.
+fn tone(tenths: u32) -> ThemeToken {
+    match percent(tenths) {
+        p if p >= CRITICAL_PERCENT => ThemeToken::Danger,
+        p if p >= WARNING_PERCENT => ThemeToken::Warning,
+        _ => ThemeToken::Accent,
+    }
+}
+
+/// A share in tenths of a percent as a percentage.
+fn percent(tenths: u32) -> f64 {
+    f64::from(tenths) / TENTHS
+}
+
+/// A share in tenths of a percent as a meter's fraction.
+fn share(tenths: u32) -> f32 {
+    percent(tenths) as f32 / WHOLE_PERCENT
+}
+
+/// `part` of `whole` in tenths of a percent, none of it for an empty whole.
+pub fn tenths_of(part: u64, whole: u64) -> u32 {
+    if whole == 0 {
+        return 0;
+    }
+    (u128::from(part.min(whole)) * 1000 / u128::from(whole)) as u32
+}
+
+// ========================================================================
+// Tests
+// ========================================================================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_uptime_leaves_off_units_that_are_zero_at_the_front() {
+        assert_eq!(format_uptime(3 * DAY + 4 * HOUR + 5 * MINUTE), "3d 4h 5m");
+        assert_eq!(format_uptime(2 * HOUR + 7 * MINUTE), "2h 7m");
+        assert_eq!(format_uptime(59), "0m");
+        assert_eq!(format_uptime(DAY + 5 * MINUTE), "1d 0h 5m");
+    }
+
+    #[test]
+    fn test_a_share_turns_to_warning_at_seventy_five_and_danger_at_ninety() {
+        assert_eq!(tone(749), ThemeToken::Accent);
+        assert_eq!(tone(750), ThemeToken::Warning);
+        assert_eq!(tone(899), ThemeToken::Warning);
+        assert_eq!(tone(900), ThemeToken::Danger);
+    }
+
+    #[test]
+    fn test_an_empty_whole_is_no_share_rather_than_a_division_by_zero() {
+        assert_eq!(tenths_of(5, 0), 0);
+        assert_eq!(tenths_of(7, 3), 1000);
+    }
+
+    #[test]
+    fn test_core_chart_wraps_only_past_thirty_two_cores() {
+        assert_eq!(core_chart_rows(16), CORE_CHART_ROWS);
+        assert_eq!(core_chart_rows(MAX_CORES_PER_ROW), CORE_CHART_ROWS);
+        assert_eq!(
+            core_chart_rows(MAX_CORES_PER_ROW + 1),
+            CORE_CHART_WRAPPED_ROWS
+        );
+    }
+}

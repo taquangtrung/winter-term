@@ -1,0 +1,17 @@
+// The Copilot extension Winter ships: what it may reach beyond its own
+// directory, and its commands.
+package id="copilot" name="Copilot" {
+    description "GitHub Copilot's suggestions as ghost text, from its language server."
+
+    permissions {
+        // The one program it has Winter run.
+        run "copilot-language-server"
+    }
+
+    commands {
+        "copilot_sign_in" title="Copilot: Sign In"
+        "copilot_sign_out" title="Copilot: Sign Out"
+        "copilot_status" title="Copilot: Show Status"
+        "copilot_install" title="Copilot: Install Language Server"
+    }
+}
