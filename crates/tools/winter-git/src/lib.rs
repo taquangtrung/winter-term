@@ -1338,6 +1338,26 @@ impl GitEditor {
 }
 
 impl Page for GitEditor {
+    /// A view not shown lets go of its watch, which stops the platform's
+    /// notifications and the reads they would wake the window for; shown
+    /// again, it watches anew, and the resume reads what changed meanwhile.
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        if !shown {
+            self.watch.tree_watch = None;
+            self.watch.tree_watch_starting = None;
+            return EditorOutcome::Consumed;
+        }
+        let unwatched = self.watch.tree_watch.is_none() && self.watch.tree_watch_starting.is_none();
+        let is_status = !self.staged_only && !self.view_tab;
+        if let (true, true, Some(root)) = (unwatched, is_status, self.repo.root.as_ref()) {
+            self.watch.tree_watch_starting = Some(watch::TreeWatch::start_in_background(
+                root,
+                self.repo.git_dir.as_deref(),
+            ));
+        }
+        EditorOutcome::Consumed
+    }
+
     fn on_selected_rows_key(
         &mut self,
         key: &Key,
@@ -2033,25 +2053,6 @@ impl Editor for GitEditor {
             .root
             .as_deref()
             .map(winter_model::path::abbreviate_home)
-    }
-
-    /// A buried view lets go of its watch, which stops the platform's
-    /// notifications and the reads they would wake the window for; shown
-    /// again, it watches anew, and the resume reads what changed meanwhile.
-    fn set_shown(&mut self, shown: bool) {
-        if !shown {
-            self.watch.tree_watch = None;
-            self.watch.tree_watch_starting = None;
-            return;
-        }
-        let unwatched = self.watch.tree_watch.is_none() && self.watch.tree_watch_starting.is_none();
-        let is_status = !self.staged_only && !self.view_tab;
-        if let (true, true, Some(root)) = (unwatched, is_status, self.repo.root.as_ref()) {
-            self.watch.tree_watch_starting = Some(watch::TreeWatch::start_in_background(
-                root,
-                self.repo.git_dir.as_deref(),
-            ));
-        }
     }
 
     /// The repository, for the status view; the staged diff that sits beside

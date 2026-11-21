@@ -95,8 +95,8 @@ impl RefreshTimer {
         }
     }
 
-    /// Stop refreshing while no tab shows the editor, and refresh at once
-    /// when one does again.
+    /// Stop refreshing while the editor is not shown, and refresh at once
+    /// when it is again.
     pub fn set_hidden(&mut self, hidden: bool, now: Instant) {
         if self.hidden && !hidden {
             self.next = now;

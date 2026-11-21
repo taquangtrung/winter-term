@@ -1,14 +1,17 @@
 //! The Files view, a sidebar's: the project's folders as a tree, folders
 //! first, each opened in place. Opening a file shows it in the main area;
-//! `t` opens the project in Dir there.
+//! `t` opens the project in Dir there. In sight, the root and each open
+//! folder are watched as Dir watches them, and read again only when one
+//! changes; out of sight, nothing is read or watched.
 
-use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use misty::{Element, HostedView};
 
+use winter_dir::DirWatch;
+use winter_dir::tree::Folds;
 use winter_model::editor::{EditorOutcome, OpenTarget};
 
 use super::{ListAct, ListRow, PanelList, PanelView, list_view};
@@ -23,9 +26,6 @@ const TITLE: &str = "Files";
 /// What it says with nothing to list.
 const EMPTY: &str = "This folder is empty";
 
-/// How often the open folders are read again, for what changed on disk.
-const READ_EVERY: Duration = Duration::from_secs(2);
-
 /// The entries never listed: git's own folder.
 const HIDDEN: &[&str] = &[".git"];
 
@@ -38,13 +38,16 @@ const HIDDEN: &[&str] = &[".git"];
 pub(in crate::window) struct FilesView {
     /// Every entry listed, in the order the rows show them.
     entries: Vec<Entry>,
+    /// The folders open.
+    folds: Folds,
+    /// Whether the view is in sight, the only time it reads or watches.
+    shown: bool,
     list: PanelList,
-    /// The folders open, by path.
-    open: BTreeSet<PathBuf>,
-    /// When the open folders were last read.
-    read_at: Instant,
     /// The project's folder, the tree's root.
     root: PathBuf,
+    /// The notifications on the root and the open folders, `None` where the
+    /// platform cannot watch them: read again only when asked, then.
+    watch: Option<DirWatch>,
 }
 
 /// One entry listed.
@@ -61,26 +64,38 @@ struct Entry {
 // ========================================================================
 
 impl FilesView {
-    /// The tree of the project at `root`, its folders closed.
+    /// The tree of the project at `root`, its folders closed, read once it
+    /// comes into sight.
     pub(in crate::window) fn new(root: PathBuf) -> Self {
-        let mut view = Self {
+        Self {
             entries: Vec::new(),
+            folds: Folds::new(),
+            shown: false,
             list: PanelList::default(),
-            open: BTreeSet::new(),
-            read_at: Instant::now(),
             root,
-        };
-        view.read();
-        view
+            watch: None,
+        }
     }
 
     /// Show the project at `root` instead, its folders closed.
     pub(in crate::window) fn set_root(&mut self, root: PathBuf) {
         if root != self.root {
+            self.folds = Folds::new();
             self.root = root;
-            self.open.clear();
-            self.read();
+            match self.shown {
+                true => self.come_into_sight(),
+                false => {
+                    self.entries.clear();
+                    self.list.set_rows(Vec::new());
+                }
+            }
         }
+    }
+
+    /// Watch the root and the open folders, and read them.
+    fn come_into_sight(&mut self) {
+        self.watch = DirWatch::start(&self.root, &self.folds);
+        self.read();
     }
 
     /// Read the root and every open folder again, and list them.
@@ -95,14 +110,13 @@ impl FilesView {
             .map(|(key, entry)| self.entry_row(key, entry))
             .collect();
         self.list.set_rows(rows);
-        self.read_at = Instant::now();
     }
 
     /// List the entries of `dir`, `depth` deep, and those of each open
     /// folder among them under it.
     fn read_dir(&mut self, dir: &Path, depth: usize) {
         for entry in listed(dir) {
-            let open = entry.is_dir && self.open.contains(&entry.path);
+            let open = entry.is_dir && self.folds.is_expanded(&entry.path);
             let path = entry.path.clone();
             self.entries.push(Entry { depth, ..entry });
             if open {
@@ -121,7 +135,7 @@ impl FilesView {
         let relative = entry.path.strip_prefix(&self.root).unwrap_or(&entry.path);
         ListRow {
             depth: entry.depth,
-            fold: entry.is_dir.then(|| self.open.contains(&entry.path)),
+            fold: entry.is_dir.then(|| self.folds.is_expanded(&entry.path)),
             key,
             label: name,
             tooltip: Some(relative.to_string_lossy().to_string()),
@@ -142,28 +156,27 @@ impl FilesView {
         let Some(entry) = self.selected().cloned() else {
             return;
         };
-        match (entry.is_dir, open) {
-            (true, true) => {
-                self.open.insert(entry.path);
-            }
-            (true, false) if self.open.contains(&entry.path) => {
-                self.open.remove(&entry.path);
-            }
+        let target = match (entry.is_dir, open) {
+            (true, true) => entry.path,
+            (true, false) if self.folds.is_expanded(&entry.path) => entry.path,
             (_, false) => {
                 let Some(parent) = entry.path.parent().filter(|parent| *parent != self.root) else {
                     return;
                 };
-                let parent = parent.to_path_buf();
-                self.open.remove(&parent);
-                self.read();
-                if let Some(at) = self.entries.iter().position(|entry| entry.path == parent) {
-                    self.list.select_key(at, false);
-                }
-                return;
+                parent.to_path_buf()
             }
             (false, true) => return,
+        };
+        if self.folds.is_expanded(&target) != open {
+            self.folds.toggle(&target);
+        }
+        if let Some(watch) = self.watch.as_mut() {
+            watch.sync_folds(&self.folds);
         }
         self.read();
+        if let Some(at) = self.entries.iter().position(|entry| entry.path == target) {
+            self.list.select_key(at, false);
+        }
     }
 }
 
@@ -184,7 +197,7 @@ impl PanelView for FilesView {
         match act {
             ListAct::Open => match self.selected() {
                 Some(entry) if entry.is_dir => {
-                    let open = !self.open.contains(&entry.path);
+                    let open = !self.folds.is_expanded(&entry.path);
                     self.fold(open);
                 }
                 Some(entry) => {
@@ -203,12 +216,28 @@ impl PanelView for FilesView {
         EditorOutcome::Consumed
     }
 
+    /// Only when the watch has news, which wakes the window itself.
     fn next_tick(&self) -> Option<Instant> {
-        Some(self.read_at + READ_EVERY)
+        self.watch.as_ref()?.next_look(Instant::now())
+    }
+
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        self.shown = shown;
+        match shown {
+            true => self.come_into_sight(),
+            false => self.watch = None,
+        }
+        EditorOutcome::Consumed
     }
 
     fn on_tick(&mut self) -> EditorOutcome {
-        self.read();
+        if self
+            .watch
+            .as_mut()
+            .is_some_and(|watch| watch.changed(Instant::now()))
+        {
+            self.read();
+        }
         EditorOutcome::Consumed
     }
 }
@@ -267,8 +296,9 @@ mod tests {
 
     /// A project of a folder `src` holding `main.rs`, a file `README.md`, and
     /// git's folder.
-    fn project() -> Project {
-        let root = std::env::temp_dir().join(format!("winter-files-view-{}", std::process::id()));
+    fn project(tag: &str) -> Project {
+        let root =
+            std::env::temp_dir().join(format!("winter-files-view-{tag}-{}", std::process::id()));
         fs::create_dir_all(root.join("src")).expect("src");
         fs::create_dir_all(root.join(".git")).expect(".git");
         fs::write(root.join("src/main.rs"), "").expect("main.rs");
@@ -285,9 +315,48 @@ mod tests {
     }
 
     #[test]
-    fn test_folders_come_first_git_s_is_left_out_and_a_folder_opens_in_place() {
-        let root = project();
+    fn test_out_of_sight_the_tree_is_neither_read_nor_watched() {
+        let root = project("sight");
         let mut view = FilesView::new(root.0.clone());
+        assert!(view.list.rows.is_empty(), "nothing read before it is seen");
+        assert!(view.watch.is_none());
+        view.set_shown(true);
+        assert_eq!(labels(&view).len(), 2, "read once in sight");
+        view.set_shown(false);
+        assert!(view.watch.is_none(), "the watch let go");
+        assert_eq!(view.next_tick(), None);
+    }
+
+    #[test]
+    fn test_a_quiet_tree_asks_for_no_tick_and_a_new_file_is_read_in_when_watched() {
+        let root = project("watch");
+        let mut view = FilesView::new(root.0.clone());
+        view.set_shown(true);
+        if view.watch.is_none() {
+            // A platform that cannot watch asks for nothing at all.
+            assert_eq!(view.next_tick(), None);
+            return;
+        }
+        assert_eq!(view.next_tick(), None, "nothing changed, no tick");
+        fs::write(root.0.join("new.txt"), "").expect("new file");
+        let end = Instant::now() + std::time::Duration::from_secs(5);
+        while Instant::now() < end && !labels(&view).iter().any(|(_, name)| name == "new.txt") {
+            if view.next_tick().is_some_and(|at| at <= Instant::now()) {
+                view.on_tick();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert!(
+            labels(&view).iter().any(|(_, name)| name == "new.txt"),
+            "the change was read in"
+        );
+    }
+
+    #[test]
+    fn test_folders_come_first_git_s_is_left_out_and_a_folder_opens_in_place() {
+        let root = project("tree");
+        let mut view = FilesView::new(root.0.clone());
+        view.set_shown(true);
         assert_eq!(
             labels(&view),
             [(0, "src".to_string()), (0, "README.md".to_string())]

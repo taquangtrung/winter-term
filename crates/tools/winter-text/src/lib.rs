@@ -25,6 +25,7 @@ use cherry::misty::{ChangeNotes, EditorResponse, EditorView, clock};
 use cherry::{CommandError, DocumentId, Handled, HostRequest, Mode, NoticeLevel, ViewId};
 use misty::{EventCx, Font, Frame, Input, Rect, Theme};
 use winter_base::edit_wait::EditWaiter;
+use winter_base::watch::FileWatch;
 use winter_field::misty_key;
 use winter_lsp::diagnostics;
 use winter_lsp::protocol::TextEdit;
@@ -93,10 +94,6 @@ const OUTLINE_INDENT: &str = "  ";
 /// How many characters of an outline entry's title its label shows.
 const OUTLINE_TITLE_CHARS: usize = 100;
 
-/// How often a shown tab looks at its file on disk, to read again what
-/// another program wrote.
-const DISK_CHECK: Duration = Duration::from_secs(1);
-
 /// What a change bar in the gutter says under the pointer, of each kind.
 const CHANGE_ADDED: &str = "Added since the last commit";
 const CHANGE_DELETED: &str = "Lines deleted here since the last commit";
@@ -112,8 +109,12 @@ const UNSAVED: &str = "No write since last change (add ! to override)";
 /// A text tab: one view of a file open in the shared editor.
 #[derive(Debug)]
 pub struct TextEditor {
-    /// When the tab next looks at its file on disk (see [`DISK_CHECK`]).
-    disk_check_at: Instant,
+    /// Whether the tab is to look at its file on disk on its next tick: shown
+    /// again, it may have changed meanwhile.
+    disk_due: bool,
+    /// The watch on its file while the tab is shown, which says when another
+    /// program wrote it.
+    disk_watch: Option<FileWatch>,
     /// The document shown, the file's.
     document: DocumentId,
     /// Whether the tab was closed by finishing what git handed it (`C-c
@@ -218,7 +219,8 @@ impl TextEditor {
     pub fn new(path: PathBuf, line: Option<usize>) -> io::Result<Self> {
         let (document, view) = session::with(|session| session.open_view(&path))?;
         let mut editor = Self {
-            disk_check_at: Instant::now() + DISK_CHECK,
+            disk_due: false,
+            disk_watch: None,
             document,
             format_on_save: false,
             jump_origin: None,
@@ -232,7 +234,7 @@ impl TextEditor {
             notice: None,
             recall: git_files::MessageRecall::default(),
             path,
-            shown: true,
+            shown: false,
             view: RefCell::new(Some(view_of(view))),
             waiter: None,
             finished: false,
@@ -663,10 +665,9 @@ impl TextEditor {
         }
     }
 
-    /// Looks at the file on disk now (see [`session::Session::check_disk`]),
-    /// and again after [`DISK_CHECK`]; says what the user should know.
-    fn check_disk(&mut self, now: Instant) {
-        self.disk_check_at = now + DISK_CHECK;
+    /// Looks at the file on disk (see [`session::Session::check_disk`]);
+    /// says what the user should know.
+    fn check_disk(&mut self) {
         let name = name_of(&self.path);
         match session::with(|session| session.check_disk(self.document)) {
             DiskChange::ChangedUnderEdits => {
@@ -681,6 +682,16 @@ impl TextEditor {
                 )));
             }
             DiskChange::None | DiskChange::Reloaded => {}
+        }
+    }
+
+    /// When the tab next looks at its file on disk: at once when it is due,
+    /// else when the watch says it changed, never on a timer.
+    fn disk_next_look(&self) -> Option<Instant> {
+        let now = Instant::now();
+        match self.disk_due {
+            true => Some(now),
+            false => self.disk_watch.as_ref()?.next_look(now),
         }
     }
 
@@ -728,6 +739,21 @@ impl Drop for KeptView {
 }
 
 impl Page for TextEditor {
+    /// Shown, the editor watches its file, and looks at it at once: it may
+    /// have changed while out of sight. Not shown, it lets the watch go.
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        match (shown, self.shown) {
+            (true, false) => {
+                self.disk_watch = FileWatch::start(&self.path);
+                self.disk_due = true;
+            }
+            (false, _) => self.disk_watch = None,
+            (true, true) => {}
+        }
+        self.shown = shown;
+        EditorOutcome::Consumed
+    }
+
     fn title(&self) -> String {
         name_of(&self.path)
     }
@@ -824,7 +850,7 @@ impl Page for TextEditor {
         [
             deadline.map(clock::instant),
             flush,
-            self.shown.then_some(self.disk_check_at),
+            self.disk_next_look(),
             self.lsp_next_tick(),
             self.inline_next_tick(),
             git,
@@ -836,8 +862,12 @@ impl Page for TextEditor {
     }
 
     fn on_tick(&mut self, now: Instant) -> EditorOutcome {
-        if now >= self.disk_check_at {
-            self.check_disk(now);
+        let watched = self
+            .disk_watch
+            .as_mut()
+            .is_some_and(|watch| watch.changed(now));
+        if std::mem::take(&mut self.disk_due) || watched {
+            self.check_disk();
         }
         self.inline_tick(now);
         if let Some(outcome) = self.lsp_tick(now) {
@@ -1134,16 +1164,7 @@ impl Editor for TextEditor {
         if std::mem::replace(&mut self.focused_before, true) {
             self.leave_insert();
         }
-        self.check_disk(Instant::now());
-    }
-
-    /// Shown again, the tab looks at its file at once: it may have changed
-    /// while buried or behind another tab.
-    fn set_shown(&mut self, shown: bool) {
-        if shown && !self.shown {
-            self.disk_check_at = Instant::now();
-        }
-        self.shown = shown;
+        self.check_disk();
     }
 
     /// A program blocked on this edit hears that it is over: a rebase's
@@ -1447,15 +1468,69 @@ mod tests {
         let _ = std::fs::remove_file(&path);
     }
 
+    /// How long a test waits for the watch to see a write.
+    const WATCH_WAIT: Duration = Duration::from_secs(5);
+
+    /// Tick `editor` as the window would, when it asks, until its text holds
+    /// `wanted` or the wait runs out.
+    fn tick_until_read(editor: &mut TextEditor, wanted: &str) {
+        let end = Instant::now() + WATCH_WAIT;
+        while Instant::now() < end {
+            if editor.next_tick().is_some_and(|at| at <= Instant::now()) {
+                editor.on_tick(Instant::now());
+            }
+            if editor
+                .document()
+                .is_some_and(|(_, text)| text.contains(wanted))
+            {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Tick `editor` as the window would until it has something to say.
+    fn tick_until_told(editor: &mut TextEditor) -> Option<Notice> {
+        let end = Instant::now() + WATCH_WAIT;
+        while Instant::now() < end {
+            if editor.next_tick().is_some_and(|at| at <= Instant::now()) {
+                editor.on_tick(Instant::now());
+            }
+            if let Some(notice) = editor.take_notice() {
+                return Some(notice);
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        None
+    }
+
+    #[test]
+    fn test_a_shown_editor_watches_its_file_and_asks_for_no_disk_look_while_quiet() {
+        let path =
+            std::env::temp_dir().join(format!("winter-text-quiet-{}.txt", std::process::id()));
+        std::fs::write(&path, "one\n").expect("written");
+        let mut editor = TextEditor::new(path.clone(), None).expect("opens");
+        assert_eq!(editor.disk_next_look(), None, "not shown, nothing");
+        editor.set_shown(true);
+        assert!(editor.disk_next_look().is_some(), "shown, it looks once");
+        editor.on_tick(Instant::now());
+        assert_eq!(editor.disk_next_look(), None, "then only on a change");
+        editor.set_shown(false);
+        assert!(editor.disk_watch.is_none(), "the watch let go");
+        let _ = std::fs::remove_file(&path);
+    }
+
     #[test]
     fn test_a_file_changed_on_disk_is_read_again_keeping_the_cursor_on_its_line() {
         let path =
             std::env::temp_dir().join(format!("winter-text-reload-{}.txt", std::process::id()));
         std::fs::write(&path, "one\ntwo\nthree\n").expect("written");
         let mut editor = TextEditor::new(path.clone(), None).expect("opens");
+        editor.set_shown(true);
+        editor.on_tick(Instant::now());
         editor.move_to(2, 1);
         std::fs::write(&path, "one\ntwo, from elsewhere\nthree\n").expect("written");
-        editor.on_tick(Instant::now() + DISK_CHECK);
+        tick_until_read(&mut editor, "two, from elsewhere");
         let (_, text) = editor.document().expect("a document");
         assert_eq!(text, "one\ntwo, from elsewhere\nthree");
         assert_eq!(editor.cursor_line_column(), (2, 1), "still on \"three\"");
@@ -1469,16 +1544,17 @@ mod tests {
             std::env::temp_dir().join(format!("winter-text-under-{}.txt", std::process::id()));
         std::fs::write(&path, "one\n").expect("written");
         let mut editor = TextEditor::new(path.clone(), None).expect("opens");
+        editor.set_shown(true);
+        editor.on_tick(Instant::now());
         editor.on_key(&Key::plain(KeyCode::Char('A')));
         editor.on_key(&Key::plain(KeyCode::Char('!')));
         std::fs::write(&path, "one, from elsewhere\n").expect("written");
-        editor.on_tick(Instant::now() + DISK_CHECK);
+        let notice = tick_until_told(&mut editor).expect("told");
         let (_, text) = editor.document().expect("a document");
         assert_eq!(text, "one!", "the edit kept");
-        let notice = editor.take_notice().expect("told");
         assert_eq!(notice.severity, winter_model::notify::Severity::Warning);
         assert!(notice.text.contains("changed on disk"), "{}", notice.text);
-        editor.on_tick(Instant::now() + DISK_CHECK * 2);
+        editor.on_tick(Instant::now());
         assert!(
             editor.take_notice().is_none(),
             "once for each change on disk"

@@ -147,9 +147,13 @@ fn test_a_task_runs_again_in_its_buffer_and_output_shows_it_in_the_main_area_whe
 
     // Output's `t` shows the build it is on in the main area.
     let output = app.open_bottom_view(BottomPanelKind::Output, true);
+    // A frame finds it in sight, and feeds it the builds.
+    app.sync_shown();
+    app.sync_panel_views();
     if let Some(slot) = app.open_tabs.page_mut(&output) {
         slot.page.on_key(&Key::plain(KeyCode::Char('t')));
     }
+    app.sync_shown();
     app.sync_panel_views();
     assert_eq!(app.layout().region_of(compile_tab), Some(Region::Main));
     assert_eq!(app.layout().focused(), compile_tab);
@@ -371,6 +375,7 @@ fn test_the_outline_follows_the_file_worked_on_and_takes_it_to_an_entry() {
         app.layout().region_of(outline),
         Some(Region::Panel(Panel::Sidebar(Edge::Right)))
     );
+    app.sync_shown();
     app.sync_panel_views();
     let labels = app.open_tabs.page_mut(&outline).and_then(|slot| {
         slot.page
@@ -384,6 +389,7 @@ fn test_the_outline_follows_the_file_worked_on_and_takes_it_to_an_entry() {
         slot.page.on_key(&Key::plain(KeyCode::Char('G')));
         slot.page.on_key(&Key::plain(KeyCode::Enter));
     }
+    app.sync_shown();
     app.sync_panel_views();
     assert_eq!(app.layout().focused(), text, "back to the file");
     assert_eq!(jumped.get(), Some(4), "at the second entry");

@@ -361,15 +361,14 @@ impl OpenTabs {
         self.buffers.iter_mut().map(|(_, buffer)| buffer)
     }
 
-    /// Bury tab `id`: no pane shows it now. An editor's buffer stops
-    /// refreshing and lets go of what it can build again; a terminal's
-    /// program runs on, its output still read.
+    /// Bury tab `id`: no pane shows it now. An editor's buffer lets go of
+    /// what it can build again, and hears it is not shown at the next frame;
+    /// a terminal's program runs on, its output still read.
     pub(in crate::window) fn bury(&mut self, id: TabId) {
         if self.terminal_tab(&id).is_none() {
             let Some(editor) = self.buffer_editor_mut(&id) else {
                 return;
             };
-            editor.set_shown(false);
             editor.shed_caches();
         }
         self.buried.retain(|tab| *tab != id);
@@ -381,11 +380,7 @@ impl OpenTabs {
     pub(in crate::window) fn unbury(&mut self, id: TabId) -> bool {
         let before = self.buried.len();
         self.buried.retain(|tab| *tab != id);
-        let was_buried = self.buried.len() != before;
-        if was_buried && let Some(editor) = self.buffer_editor_mut(&id) {
-            editor.set_shown(true);
-        }
-        was_buried
+        self.buried.len() != before
     }
 
     /// The tabs buried: editors' buffers and terminals, the most recently

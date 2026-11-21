@@ -7380,6 +7380,7 @@ version = "0.1.0"
 dependencies = [
  "hayro",
  "regex",
+ "winter-base",
  "winter-model",
  "winter-spell",
  "winter-synctex",

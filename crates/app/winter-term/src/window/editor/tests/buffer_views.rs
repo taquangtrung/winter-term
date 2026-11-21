@@ -123,14 +123,32 @@ fn test_a_buffer_shown_again_is_ticked_again() {
 }
 
 #[test]
-fn test_a_buried_buffer_is_told_so_and_told_again_when_shown() {
+fn test_a_buffer_is_told_when_it_comes_into_sight_and_goes_behind_or_is_buried() {
     let heard = Rc::new(RefCell::new(Vec::new()));
     let mut app = App::new();
+    let main = app.layout().focused();
     let tab = app.show_editor(EditorKind::Proc, Box::new(ShownEditor(Rc::clone(&heard))));
+    app.sync_shown();
+    assert_eq!(heard.borrow().as_slice(), ["shown"]);
+    app.show_tab(main);
+    app.sync_shown();
+    assert_eq!(
+        heard.borrow().as_slice(),
+        ["shown", "hidden"],
+        "behind another tab"
+    );
+    app.show_tab(tab);
+    app.sync_shown();
     app.close_editor(tab);
-    assert_eq!(heard.borrow().as_slice(), ["hidden", "shed"]);
+    app.sync_shown();
+    assert_eq!(
+        heard.borrow().as_slice(),
+        ["shown", "hidden", "shown", "shed", "hidden"],
+        "buried"
+    );
     app.show_buffer(tab);
-    assert_eq!(heard.borrow().as_slice(), ["hidden", "shed", "shown"]);
+    app.sync_shown();
+    assert_eq!(heard.borrow().last().copied(), Some("shown"));
 }
 
 #[test]

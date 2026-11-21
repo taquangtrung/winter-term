@@ -1087,6 +1087,13 @@ impl Default for ProcEditor {
 // ========================================================================
 
 impl Page for ProcEditor {
+    /// Not shown, the list stops refreshing; shown again, it refreshes at
+    /// once.
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        self.timer.set_hidden(!shown, Instant::now());
+        EditorOutcome::Consumed
+    }
+
     fn title(&self) -> String {
         TITLE.to_string()
     }

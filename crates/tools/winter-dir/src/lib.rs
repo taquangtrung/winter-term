@@ -31,6 +31,7 @@ pub mod vcs;
 mod watch;
 
 pub use keys::KEY_TABLES;
+pub use watch::DirWatch;
 
 use std::collections::HashMap;
 use std::fs;
@@ -65,7 +66,6 @@ use marks::Marks;
 use source::{Listing, Opening, ReadPlan};
 use tree::{Folds, Row};
 use vcs::GitMarks;
-use watch::DirWatch;
 
 // ========================================================================
 // Constants
@@ -884,6 +884,15 @@ impl DirEditor {
 }
 
 impl Page for DirEditor {
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        if !shown {
+            self.watch = None;
+        } else if self.watch.is_none() {
+            self.watch = DirWatch::start(&self.root, &self.folds);
+        }
+        EditorOutcome::Consumed
+    }
+
     fn picks_rows(&self) -> bool {
         true
     }
@@ -1441,14 +1450,6 @@ impl Editor for DirEditor {
     fn restore_view(&mut self, state: Box<dyn std::any::Any>) {
         if let Ok(place) = state.downcast::<ListPlace<PathBuf>>() {
             self.list.restore_place(*place);
-        }
-    }
-
-    fn set_shown(&mut self, shown: bool) {
-        if !shown {
-            self.watch = None;
-        } else if self.watch.is_none() {
-            self.watch = DirWatch::start(&self.root, &self.folds);
         }
     }
 

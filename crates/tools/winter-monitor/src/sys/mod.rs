@@ -316,6 +316,16 @@ impl Default for SysEditor {
 // ========================================================================
 
 impl Page for SysEditor {
+    /// Not shown, the list stops refreshing; shown again, it refreshes at
+    /// once.
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        self.view
+            .state_mut()
+            .timer
+            .set_hidden(!shown, Instant::now());
+        EditorOutcome::Consumed
+    }
+
     fn title(&self) -> String {
         TITLE.to_string()
     }

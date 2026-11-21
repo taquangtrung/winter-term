@@ -402,8 +402,12 @@ impl PdfEditor {
                     self.reload = None;
                     self.reload_failures += 1;
                     match self.reload_failures < RELOAD_ATTEMPTS {
-                        // Forgetting what was read makes the next look a change.
-                        true => self.disk = None,
+                        // Forgetting what was read makes the next look a
+                        // change, and one is asked for: nothing else would.
+                        true => {
+                            self.disk = None;
+                            self.disk_due = true;
+                        }
                         false => {
                             self.reload_failures = 0;
                             self.notice = Some(Notice::error(format!(

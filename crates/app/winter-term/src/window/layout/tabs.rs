@@ -8,6 +8,7 @@ use winter_model::layout::{FocusDir, Layout, Region, TabId};
 
 use winter_terminal::session::Terminal;
 
+use crate::window::editor::buffers::BufferId;
 use crate::window::editor::{Closing, EditorKind};
 use crate::window::strip::StripHit;
 use crate::window::{App, DEFAULT_COLS, DEFAULT_ROWS};
@@ -38,12 +39,23 @@ pub(in crate::window) struct TabsState {
     pub(in crate::window) labels: HashMap<TabId, TabLabel>,
     /// The tab the Outline view last read the outline of, and when.
     pub(in crate::window) outline_read: Option<(TabId, Instant)>,
+    /// What was shown at the last frame, and a tab showing it: the only
+    /// pages, editors, and views that do work of their own.
+    pub(in crate::window) shown: HashMap<ShownKey, TabId>,
     /// The focused pane's recency order, frozen while the recency commands
     /// step through it, so repeated steps walk usage history instead of
     /// reshuffling it. `None` once a deliberate switch ends the walk.
     pub(in crate::window) recent_walk: Option<RecentWalk>,
     /// Pane-strip element currently under the cursor; drives hover highlights.
     pub(in crate::window) strip_hover: StripHit,
+}
+
+/// What the window tells is shown or not: a buffer, whichever tabs show it,
+/// or a page or view of its own.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub(in crate::window) enum ShownKey {
+    Buffer(BufferId),
+    Tab(TabId),
 }
 
 /// A tab closed, as reopening it brings it back: an editor whose buffer was
@@ -81,6 +93,7 @@ impl Default for TabsState {
             layout: Layout::new(),
             labels: HashMap::new(),
             outline_read: None,
+            shown: HashMap::new(),
             recent_walk: None,
             strip_hover: StripHit::None,
         }
@@ -433,6 +446,58 @@ impl App {
         self.set_focus(tab);
         self.tabs.recent_walk = Some(RecentWalk { at, ..walk });
         self.after_tab_change();
+    }
+
+    /// Tell each page, editor, and view that came into sight or went out of
+    /// it since the last frame (see [`Page::set_shown`]), and carry out what
+    /// that asks: shown means visible on screen, the front tab of a pane laid
+    /// out or the view a shown panel shows. A buffer is shown while any tab
+    /// of it is. Called once a frame.
+    ///
+    /// [`Page::set_shown`]: winter_model::editor::Page::set_shown
+    pub(in crate::window) fn sync_shown(&mut self) {
+        let viewport = self.viewport_rect();
+        let now: HashMap<ShownKey, TabId> = self
+            .layout()
+            .panes(viewport)
+            .into_iter()
+            .filter_map(|area| Some((self.shown_key(area.active)?, area.active)))
+            .collect();
+        let was = std::mem::replace(&mut self.tabs.shown, now.clone());
+        let gone = was
+            .iter()
+            .filter(|(key, _)| !now.contains_key(key))
+            .map(|(_, tab)| (*tab, false));
+        let came = now
+            .iter()
+            .filter(|(key, _)| !was.contains_key(key))
+            .map(|(_, tab)| (*tab, true));
+        let told: Vec<(TabId, bool)> = gone.chain(came).collect();
+        for (tab, shown) in told {
+            let outcome = self
+                .open_tabs
+                .page_mut(&tab)
+                .map(|slot| slot.page.set_shown(shown));
+            if let Some(outcome) = outcome {
+                self.act_on_editor_outcome(tab, outcome);
+            }
+        }
+    }
+
+    /// Whether `tab`, or the buffer it shows, was shown at the last frame.
+    pub(in crate::window) fn is_shown(&self, tab: TabId) -> bool {
+        self.shown_key(tab)
+            .is_some_and(|key| self.tabs.shown.contains_key(&key))
+    }
+
+    /// What telling `tab` it is shown reaches: its buffer, or the page or
+    /// view itself; `None` for a terminal, which is told nothing.
+    fn shown_key(&self, tab: TabId) -> Option<ShownKey> {
+        let slot = self.open_tabs.page(&tab)?;
+        Some(match slot.buffer {
+            Some(buffer) => ShownKey::Buffer(buffer),
+            None => ShownKey::Tab(tab),
+        })
     }
 
     /// Move the focused tab one place along its strip.

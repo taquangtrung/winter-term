@@ -19,6 +19,7 @@ test-support = []
 # engine and no native library, and its parser is memory-safe Rust.
 hayro = "0.8"
 regex.workspace = true
+winter-base.workspace = true
 winter-synctex.workspace = true
 winter-model.workspace = true
 winter-spell.workspace = true

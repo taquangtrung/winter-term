@@ -291,6 +291,13 @@ fn ticks_after(
 struct ShownEditor(Rc<RefCell<Vec<&'static str>>>);
 
 impl Page for ShownEditor {
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        self.0
+            .borrow_mut()
+            .push(if shown { "shown" } else { "hidden" });
+        EditorOutcome::Consumed
+    }
+
     fn title(&self) -> String {
         "Shown".to_string()
     }
@@ -305,12 +312,6 @@ impl Page for ShownEditor {
 }
 
 impl Editor for ShownEditor {
-    fn set_shown(&mut self, shown: bool) {
-        self.0
-            .borrow_mut()
-            .push(if shown { "shown" } else { "hidden" });
-    }
-
     fn shed_caches(&mut self) {
         self.0.borrow_mut().push("shed");
     }

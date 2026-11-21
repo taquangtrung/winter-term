@@ -751,6 +751,17 @@ pub trait Page: AsAny {
         EditorOutcome::Consumed
     }
 
+    /// Whether the page is shown: visible on screen, the front tab of a pane
+    /// in sight or the view a shown panel shows, not behind another tab,
+    /// zoomed out of sight, or buried. A page not shown sets up no watch,
+    /// reads nothing, and asks for no tick, though work already running (a
+    /// build, a search) goes on; shown again, it catches up once, and says
+    /// here what that asks of the window. The window tells it each time it
+    /// comes into sight or goes.
+    fn set_shown(&mut self, _shown: bool) -> EditorOutcome {
+        EditorOutcome::Consumed
+    }
+
     /// What to offer in a menu opened over the editor's rows, for the row the
     /// cursor is on: the host puts the cursor under the pointer before
     /// asking, so an editor answers for what was clicked.
@@ -921,11 +932,6 @@ pub trait Editor: Page {
 
     /// Load a view's state that [`Editor::save_view`] gave earlier.
     fn restore_view(&mut self, _state: Box<dyn Any>) {}
-
-    /// Whether any tab shows the editor. A buried one stops what it refreshes
-    /// on a timer (a process list, a file watch), and refreshes once when a
-    /// tab shows it again; work running (a build, a search) goes on.
-    fn set_shown(&mut self, _shown: bool) {}
 
     /// Drop what can be built again, as the editor's buffer is buried: what
     /// a buried buffer keeps should be its state, not its pictures.

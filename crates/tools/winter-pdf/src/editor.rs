@@ -6,6 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use winter_base::watch::FileWatch;
 use winter_model::background::POLL;
 use winter_model::editor::{
     Editor, EditorHint, EditorMenuItem, EditorOutcome, EditorStatus, JobReply, Notice, OpenTarget,
@@ -23,8 +24,8 @@ use super::keys::{COMMON_KEYS, CURSOR_KEYS, WINDOW_KEYS};
 use super::toolbar::Button;
 use super::{
     ASK_PAGE, ASK_SEARCH, ASK_SEARCH_BACK, ASK_ZOOM, Act, BackSync, Command, GLIDE_FRAME, MENU,
-    MENU_COPY, Mode, PdfEditor, PdfView, Pending, Prefix, TOOLBAR_ROWS, WATCH_INTERVAL, caret,
-    open_source, toolbar,
+    MENU_COPY, Mode, PdfEditor, PdfView, Pending, Prefix, SETTLE, TOOLBAR_ROWS, caret, open_source,
+    toolbar,
 };
 use winter_synctex::Source;
 
@@ -53,6 +54,22 @@ impl PdfEditor {
 }
 
 impl Page for PdfEditor {
+    /// Shown, the viewer watches its file and looks at it at once: it may
+    /// have been rebuilt meanwhile. Not shown, it stops drawing and lets the
+    /// watch go.
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        match (shown, self.hidden) {
+            (true, true) => {
+                self.disk_watch = FileWatch::start(&self.path);
+                self.disk_due = true;
+            }
+            (false, _) => self.disk_watch = None,
+            (true, false) => {}
+        }
+        self.hidden = !shown;
+        EditorOutcome::Consumed
+    }
+
     fn context_items(&self) -> Vec<EditorMenuItem> {
         let has_outline = self
             .document
@@ -466,6 +483,8 @@ impl Page for PdfEditor {
         EditorOutcome::Consumed
     }
 
+    /// Soon while a drawing or a reread is on its way; otherwise only when
+    /// the file changed, and again once it has had time to settle.
     fn next_tick(&self) -> Option<Instant> {
         if self.hidden {
             return None;
@@ -473,13 +492,21 @@ impl Page for PdfEditor {
         let now = Instant::now();
         let waiting = self.document.is_none() || !self.requested.is_empty();
         let busy = (self.worker.is_some() && waiting) || self.reload.is_some();
-        let next = match (self.glide.is_some(), busy) {
-            (true, _) => now + GLIDE_FRAME,
-            (false, true) => now + POLL,
-            (false, false) => now + WATCH_INTERVAL,
+        let work = match (self.glide.is_some(), busy) {
+            (true, _) => Some(now + GLIDE_FRAME),
+            (false, true) => Some(now + POLL),
+            (false, false) => None,
+        };
+        let disk = match (self.disk_due, self.changed.is_some()) {
+            (true, _) => Some(now),
+            (false, true) => Some(now + SETTLE),
+            (false, false) => self
+                .disk_watch
+                .as_ref()
+                .and_then(|watch| watch.next_look(now)),
         };
         let hover = self.hover.as_ref().and_then(|hover| hover.due);
-        Some(hover.map_or(next, |due| due.min(next)))
+        [work, disk, hover].into_iter().flatten().min()
     }
 
     fn on_tick(&mut self, now: Instant) -> EditorOutcome {
@@ -488,7 +515,13 @@ impl Page for PdfEditor {
         self.take_replies();
         self.fill_preview();
         self.take_reload();
-        self.watch_disk();
+        let watched = self
+            .disk_watch
+            .as_mut()
+            .is_some_and(|watch| watch.changed(now));
+        if std::mem::take(&mut self.disk_due) || watched || self.changed.is_some() {
+            self.watch_disk();
+        }
         EditorOutcome::Consumed
     }
 
@@ -594,12 +627,6 @@ impl Page for PdfEditor {
 }
 
 impl Editor for PdfEditor {
-    /// Soon while a drawing or a reread is on its way, and otherwise in
-    /// time for the next look at the file for a rebuild.
-    fn set_shown(&mut self, shown: bool) {
-        self.hidden = !shown;
-    }
-
     fn save_view(&self) -> Option<Box<dyn std::any::Any>> {
         Some(Box::new(PdfView {
             caret: self.caret.clone(),

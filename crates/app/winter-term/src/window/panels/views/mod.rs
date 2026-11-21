@@ -3,6 +3,9 @@
 //! is drawn by misty in the UI font, never on the cell grid, and is a page
 //! the window holds in no pane, named by the id its panel keeps.
 //!
+//! A view out of sight does no work of its own: no watch, no read, no tick.
+//! The window says when one comes into sight, and it catches up once then.
+//!
 //! Most views are a [`PanelList`] of rows, a cursor, and the panel keys
 //! (block `panel` of `keybindings.kdl`), wrapped as a page by
 //! [`PanelPage`]; a view says what its rows are and what opening one does
@@ -225,6 +228,13 @@ pub(in crate::window) trait PanelView: HostedView + 'static {
 
     /// Its tick has come: the work it waits to ask for.
     fn on_tick(&mut self) -> EditorOutcome {
+        EditorOutcome::Consumed
+    }
+
+    /// It came into sight, or went out of it (see [`Page::set_shown`]):
+    /// out of sight it does no work of its own, back in sight it catches up
+    /// once.
+    fn set_shown(&mut self, _shown: bool) -> EditorOutcome {
         EditorOutcome::Consumed
     }
 
@@ -488,6 +498,10 @@ impl<S: PanelView> Page for PanelPage<S> {
 
     fn on_tick(&mut self, _now: Instant) -> EditorOutcome {
         self.view.state_mut().on_tick()
+    }
+
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        self.view.state_mut().set_shown(shown)
     }
 
     fn keys(&self) -> Vec<KeyHelp> {

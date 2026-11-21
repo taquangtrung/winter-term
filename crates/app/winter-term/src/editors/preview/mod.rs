@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
 
+use winter_base::watch::FileWatch;
 use winter_model::editor::{
     Appearance, Editor, EditorMenuItem, EditorOutcome, EditorStatus, Notice, OpenTarget, Page,
     PromptReply, PromptRequest, ScrollPosition, SharedText, find_match, menu_groups, present,
@@ -36,9 +37,6 @@ pub(crate) use engine::WebPage;
 
 /// The one question the preview asks.
 const ASK_SEARCH: &str = "preview-search";
-
-/// How often the file is looked at on disk while no editor has it open.
-const DISK_CHECK: Duration = Duration::from_secs(1);
 
 /// What the preview says of a file it cannot read.
 const EMPTY: &str = "Nothing to show";
@@ -117,8 +115,12 @@ pub(crate) const KEY_TABLES: &[&dyn Listed] = &[&KEYS];
 
 /// A Markdown document, rendered, and where it is read from.
 pub struct PreviewEditor {
-    /// When the file is next looked at on disk.
-    check_at: Instant,
+    /// Whether the file is to be read on the next tick: shown again, it may
+    /// have changed meanwhile.
+    disk_due: bool,
+    /// The watch on the file while the preview is shown and no editor hands
+    /// it the text, which says when it was written.
+    disk_watch: Option<FileWatch>,
     /// Whether the page is laid out in a dark color scheme.
     dark: bool,
     /// When an editor last handed the text over: while one does, the disk
@@ -197,17 +199,18 @@ enum Act {
 // ========================================================================
 
 impl PreviewEditor {
-    /// A preview of the Markdown file at `path`, read from disk until an
-    /// editor holding it hands its text over.
+    /// A preview of the Markdown file at `path`, read from disk once shown,
+    /// until an editor holding it hands its text over.
     pub fn new(path: PathBuf) -> Self {
-        let mut preview = Self {
-            check_at: Instant::now(),
+        Self {
+            disk_due: false,
+            disk_watch: None,
             dark: true,
             fed: false,
             follow: true,
             generation: 0,
             grid: (0, 0),
-            hidden: false,
+            hidden: true,
             html: None,
             laid_out_in: Duration::ZERO,
             markdown: String::new(),
@@ -229,9 +232,7 @@ impl PreviewEditor {
             stale: false,
             stylesheet: String::new(),
             tiles: Vec::new(),
-        };
-        preview.read_disk();
-        preview
+        }
     }
 
     /// Whether `path` is a Markdown file a preview shows.
@@ -512,6 +513,21 @@ impl PreviewEditor {
 }
 
 impl Page for PreviewEditor {
+    /// Shown, the preview watches its file and reads it at once: it may
+    /// have changed while out of sight. Not shown, it lets the watch go.
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        match (shown, self.hidden) {
+            (true, true) => {
+                self.disk_watch = FileWatch::start(&self.path);
+                self.disk_due = true;
+            }
+            (false, _) => self.disk_watch = None,
+            (true, false) => {}
+        }
+        self.hidden = !shown;
+        EditorOutcome::Consumed
+    }
+
     /// The source the page under the pointer came from, following the file
     /// as it is written, and finding in the page.
     fn context_items(&self) -> Vec<EditorMenuItem> {
@@ -709,13 +725,24 @@ impl Page for PreviewEditor {
     }
 
     fn next_tick(&self) -> Option<Instant> {
-        let disk = (!self.fed && !self.hidden).then_some(self.check_at);
+        let now = Instant::now();
+        let disk = match (self.fed, self.disk_due) {
+            (true, _) => None,
+            (false, true) => Some(now),
+            (false, false) => self
+                .disk_watch
+                .as_ref()
+                .and_then(|watch| watch.next_look(now)),
+        };
         [disk, self.settle_at].into_iter().flatten().min()
     }
 
     fn on_tick(&mut self, now: Instant) -> EditorOutcome {
-        if !self.fed && now >= self.check_at {
-            self.check_at = now + DISK_CHECK;
+        let watched = self
+            .disk_watch
+            .as_mut()
+            .is_some_and(|watch| watch.changed(now));
+        if !self.fed && (std::mem::take(&mut self.disk_due) || watched) {
             self.read_disk();
         }
         EditorOutcome::Consumed
@@ -739,13 +766,6 @@ impl Editor for PreviewEditor {
         if let Ok(scroll) = state.downcast::<f32>() {
             self.scroll = *scroll;
         }
-    }
-
-    fn set_shown(&mut self, shown: bool) {
-        if self.hidden && shown {
-            self.check_at = Instant::now();
-        }
-        self.hidden = !shown;
     }
 
     fn holds_file(&self, path: &Path) -> bool {
@@ -804,6 +824,26 @@ mod tests {
         });
         preview.content(15, 40, false);
         preview.set_pane_size((400.0, 300.0));
+    }
+
+    #[test]
+    fn test_a_shown_preview_at_rest_asks_for_no_tick_and_a_hidden_one_lets_its_watch_go() {
+        let path =
+            std::env::temp_dir().join(format!("winter-preview-quiet-{}.md", std::process::id()));
+        std::fs::write(&path, "# Notes\n").expect("written");
+        let mut preview = PreviewEditor::new(path.clone());
+        assert_eq!(preview.next_tick(), None, "not shown, nothing read");
+        preview.set_shown(true);
+        assert!(
+            preview.next_tick().is_some(),
+            "shown, it reads its file once"
+        );
+        preview.on_tick(Instant::now());
+        assert_eq!(preview.markdown, "# Notes\n");
+        assert_eq!(preview.next_tick(), None, "then only when the file changes");
+        preview.set_shown(false);
+        assert!(preview.disk_watch.is_none());
+        let _ = std::fs::remove_file(&path);
     }
 
     #[test]

@@ -1,11 +1,30 @@
 //! What the file watchers share: telling a change from a look, and waiting
 //! a burst of changes out so it is read twice at most, once just after it
-//! starts and once after it has gone quiet.
+//! starts and once after it has gone quiet; and [`FileWatch`], the watch on
+//! one file an editor or a viewer keeps while it is shown.
 
+use std::ffi::OsString;
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
-use notify::EventKind;
 use notify::event::{AccessKind, AccessMode};
+use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+
+use crate::wake::wake_window;
+
+// ========================================================================
+// Constants
+// ========================================================================
+
+/// How a watched file waits a burst out: read soon after it starts, so the
+/// write it is part of has finished, and again once the file is quiet.
+const FILE_PACE: Pace = Pace {
+    lead: Duration::from_millis(100),
+    max_wait: Duration::from_secs(2),
+    quiet: Duration::from_millis(300),
+};
 
 // ========================================================================
 // Data Structures
@@ -31,6 +50,20 @@ pub struct Pace {
     /// How long the tree must be quiet after a burst's last change before
     /// it is read again.
     pub quiet: Duration,
+}
+
+/// The platform's notifications on one file, waited out as [`Debounce`]
+/// waits them. The file's folder is what is watched, so a save that writes a
+/// new file over the old one (a rename, as most editors and builds save) is
+/// seen as well as one written in place. The watcher's thread wakes the
+/// window when there is news, so a quiet file costs nothing.
+pub struct FileWatch {
+    changes: Debounce,
+    events: mpsc::Receiver<()>,
+    news: Arc<AtomicBool>,
+    /// Kept for as long as the file is watched: dropped, the notifications
+    /// stop.
+    _watcher: RecommendedWatcher,
 }
 
 /// One run of changes, from its first until it has gone quiet.
@@ -129,6 +162,79 @@ impl Debounce {
 }
 
 // ========================================================================
+// FileWatch
+// ========================================================================
+
+impl FileWatch {
+    /// Watch the file at `path`. `None` for a file on another machine, one
+    /// with no folder, or where the platform cannot watch: what holds it
+    /// then reads it again only when asked.
+    pub fn start(path: &Path) -> Option<Self> {
+        if crate::remote::parse(path).is_some() {
+            return None;
+        }
+        let folder = path
+            .parent()
+            .filter(|folder| !folder.as_os_str().is_empty())?;
+        let name: OsString = path.file_name()?.to_os_string();
+        let (tx, events) = mpsc::channel();
+        let news = Arc::new(AtomicBool::new(false));
+        let flag = Arc::clone(&news);
+        let mut watcher =
+            notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                let Ok(event) = result else {
+                    return;
+                };
+                let about_it = event
+                    .paths
+                    .iter()
+                    .any(|changed| changed.file_name() == Some(name.as_os_str()));
+                if about_it && is_content_change(&event.kind) && tx.send(()).is_ok() {
+                    flag.store(true, Ordering::Release);
+                    wake_window();
+                }
+            })
+            .ok()?;
+        watcher.watch(folder, RecursiveMode::NonRecursive).ok()?;
+        Some(Self {
+            changes: Debounce::new(FILE_PACE),
+            events,
+            news,
+            _watcher: watcher,
+        })
+    }
+
+    /// When the holder should next call [`Self::changed`]: at once when the
+    /// watcher has news, when a burst's next read falls due, and never while
+    /// nothing has changed, since the watcher wakes the window itself.
+    pub fn next_look(&self, now: Instant) -> Option<Instant> {
+        if self.news.load(Ordering::Acquire) {
+            return Some(now);
+        }
+        self.changes.due_at()
+    }
+
+    /// Whether the file is to be read again at `now`: the changes that
+    /// arrived since the last call are taken in, and a read falls due as the
+    /// burst they belong to says.
+    pub fn changed(&mut self, now: Instant) -> bool {
+        // Cleared before the channel is read, so a change sent while it is
+        // being read leaves the flag set for the next look.
+        self.news.store(false, Ordering::Release);
+        while let Ok(()) = self.events.try_recv() {
+            self.changes.take_change(now);
+        }
+        self.changes.take_due(now)
+    }
+}
+
+impl std::fmt::Debug for FileWatch {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FileWatch").finish_non_exhaustive()
+    }
+}
+
+// ========================================================================
 // Functions
 // ========================================================================
 
@@ -165,6 +271,42 @@ mod tests {
         max_wait: Duration::from_secs(2),
         quiet: Duration::from_millis(300),
     };
+
+    #[test]
+    fn test_a_file_watch_asks_nothing_while_quiet_and_sees_a_save_over_it() {
+        let folder = std::env::temp_dir().join(format!("winter-file-watch-{}", std::process::id()));
+        std::fs::create_dir_all(&folder).expect("folder");
+        let file = folder.join("watched.txt");
+        std::fs::write(&file, "one").expect("file");
+        let Some(mut watch) = FileWatch::start(&file) else {
+            // A platform that cannot watch has nothing to test.
+            let _ = std::fs::remove_dir_all(&folder);
+            return;
+        };
+        assert_eq!(
+            watch.next_look(Instant::now()),
+            None,
+            "quiet, nothing asked"
+        );
+        std::fs::write(folder.join("other.txt"), "x").expect("another file");
+        // A save that writes a new file and renames it over the old one.
+        let staged = folder.join("watched.txt.tmp");
+        std::fs::write(&staged, "two").expect("staged");
+        std::fs::rename(&staged, &file).expect("renamed over");
+        let end = Instant::now() + Duration::from_secs(5);
+        let mut seen = false;
+        while Instant::now() < end && !seen {
+            if watch
+                .next_look(Instant::now())
+                .is_some_and(|at| at <= Instant::now())
+            {
+                seen = watch.changed(Instant::now());
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(seen, "the save over it was seen");
+        let _ = std::fs::remove_dir_all(&folder);
+    }
 
     #[test]
     fn test_a_burst_is_read_after_its_lead_and_again_once_quiet() {

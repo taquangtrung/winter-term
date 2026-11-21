@@ -16,6 +16,7 @@ Winter uses one set of words from the UI to the code to the docs. Use them in ev
 | Editor | A page whose contents are a buffer: a file, a directory, a repository, a build, a picker's rows saved as a list. The one that edits files is the **text editor**. |
 | Buffer | An editor's contents, shared by every tab showing it and buried when its last tab closes. Never a kind of tab, never a terminal. |
 | Buried | A closed tab kept alive out of sight: an editor's buffer, or a terminal with a program running. |
+| Shown | Visible on screen: the front tab of a pane in sight, or the view a shown panel shows. A tab behind another in its strip, zoomed out of sight, or buried is not shown. A panel is shown when the user has it open. |
 | Launcher | What a new split pane opens with, offering a terminal, a file, a directory, or git. |
 | Main area | The window's split tree of panes, where every tab lives. |
 | Panel | A sidebar or the bottom panel: outside the split tree, never split, showing views rather than tabs. |
@@ -52,3 +53,14 @@ misty gives cut text its full wording as a tooltip, and drops a tooltip that onl
 - **Case follows what it is.** A tooltip naming a command is in Title Case, as the command is (`Zoom In`); one describing something is a sentence, with no closing period (`Changed since the last commit`).
 - **Never only in a tooltip.** Keyboard users never see tooltips, so anything they need must also show on screen or be reachable another way.
 - **Use the shared hooks.** `Element::tooltip` or `item(..).tooltip(..)` on pages, `Page::status_tooltip` and `Page::gutter_tooltip` for editors, `Sign::with_note` in Cherry. Do not draw a tooltip by hand.
+
+## Passive and lazy
+
+Winter does no work nobody can see the result of. A quiet window costs nothing.
+
+- **Passive: never poll.** React to events: file notifications (`FileWatch` in `winter-base` for one file, Dir's `DirWatch` for a folder, the shared `TreeWatch` over a repository), a job's answer, a key. A timer that reads something again to see whether it changed is a bug; use a watch, and debounce its bursts as those two do.
+- **Lazy: nothing not shown.** A page, editor, or panel view that is not shown sets up no watch, reads nothing, and asks for no tick. The window tells it each time it is shown or stops being shown (`Page::set_shown`, once a frame from `sync_shown`), and it catches up once when shown again. Work already running, such as a build or a search, goes on.
+- **Cheap to make.** A constructor stores what it is given; the first read and the first watch wait until it is first shown.
+- **Feed only what is shown.** What the window hands a view each frame (an outline, a build's lines) goes only to views shown.
+- **The exceptions are live by nature.** The Process and System monitors refresh on a timer while shown, and a job in flight is checked until it answers (`background::POLL`). A new exception needs the same reason.
+- **Test it.** Anything that watches or ticks has a test that its `next_tick` is `None` while nothing changed and while not shown.

@@ -38,6 +38,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant, SystemTime};
 
+use winter_base::watch::FileWatch;
 use winter_model::editor::{DropList, EditorOutcome, Notice, OpenTarget, PdfMark};
 use winter_model::input::Key;
 use winter_model::picture::{Content, Pixels, Tile};
@@ -121,8 +122,9 @@ const CROP_MARGIN: f32 = 6.0;
 /// long enough that a pointer passing over is let be.
 const HOVER_DELAY: Duration = Duration::from_millis(100);
 
-/// How often the file is looked at for a rebuild.
-const WATCH_INTERVAL: Duration = Duration::from_millis(500);
+/// How long a file seen changing is left before it is looked at again, to
+/// tell a rebuild that is done from one still being written.
+const SETTLE: Duration = Duration::from_millis(500);
 
 /// How many times a rebuilt file that will not open is read again before
 /// the viewer gives up on it until it changes again: a build may still be
@@ -360,6 +362,12 @@ pub struct PdfEditor {
     cropped: bool,
     /// The file as last read, which a rebuild is told apart from.
     disk: Option<Stamp>,
+    /// Whether the file is to be looked at on the next tick: shown again, it
+    /// may have been rebuilt meanwhile.
+    disk_due: bool,
+    /// The watch on the file while the viewer is shown, which says when a
+    /// build wrote it.
+    disk_watch: Option<FileWatch>,
     /// The document, once the thread has opened it.
     document: Option<Document>,
     /// Where a drag with the pointer started.
@@ -403,8 +411,8 @@ pub struct PdfEditor {
     outer: (f32, f32),
     /// The pixels drawn over the pages.
     overlays: Overlays,
-    /// Whether no tab shows the viewer, its buffer buried: the file is not
-    /// watched until one does.
+    /// Whether the viewer is not shown: the file is not watched, and nothing
+    /// is drawn, until it is.
     hidden: bool,
     /// Each page drawn and kept, at whatever scale it was drawn.
     pages: HashMap<usize, DrawnPage>,
@@ -881,6 +889,8 @@ impl PdfEditor {
             changed: None,
             cropped: false,
             disk: stamp(&path),
+            disk_due: false,
+            disk_watch: None,
             document: None,
             drag_origin: None,
             failed: HashSet::new(),
@@ -910,7 +920,7 @@ impl PdfEditor {
                 spelling: Overlay::new(SPELLING_COLOR),
                 url: Overlay::new(URL_COLOR),
             },
-            hidden: false,
+            hidden: true,
             pages: HashMap::new(),
             wanted_at: HashMap::new(),
             pane: (0.0, 0.0),

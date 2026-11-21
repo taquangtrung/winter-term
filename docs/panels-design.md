@@ -55,6 +55,7 @@ A view in a sidebar sits in one sidebar at a time. `Sidebar: Files` and the rest
 - Each panel has a key that shows it and focuses it, or hides it when it already has focus: `C-S-h` (`View: Toggle Left Sidebar`), `C-S-l` (`View: Toggle Right Sidebar`), and `C-S-j` (`View: Toggle Bottom Panel`). On macOS the bottom panel keeps `s-j`.
 - A panel shows the view it last showed: at first Files on the left, Outline on the right, and Output at the bottom.
 - Hiding a panel that has focus sends focus back to the main pane it came from. A hidden view keeps its state.
+- A view not shown, its panel hidden or another view shown, does no work: it watches nothing and reads nothing, and catches up once when it is shown again.
 
 ### Size
 

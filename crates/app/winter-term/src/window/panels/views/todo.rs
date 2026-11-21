@@ -1,10 +1,10 @@
 //! The Todo view, a sidebar's: the project's TODO comments, under the file
 //! each is in, every file open at first. Opening a comment shows its line
-//! in the main area; `t` opens the Todo page there.
+//! in the main area; `t` opens the Todo page there. It looks only in sight,
+//! once each time it comes into sight.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::time::Instant;
 
 use misty::{Element, HostedView};
 
@@ -38,11 +38,11 @@ pub(in crate::window) struct TodoView {
     closed: BTreeSet<PathBuf>,
     /// The comments found, a file at a time, in line order.
     found: Vec<Todo>,
+    /// Whether the view is in sight, the only time it looks.
+    shown: bool,
     /// The words searched for.
     keywords: Vec<String>,
     list: PanelList,
-    /// Whether a search is to be asked for on the next tick.
-    look: bool,
     /// The project searched.
     root: PathBuf,
     /// Whether a search is out.
@@ -55,33 +55,37 @@ pub(in crate::window) struct TodoView {
 
 impl TodoView {
     /// The comments of the project at `root` holding one of `keywords`,
-    /// looked for on the first tick.
+    /// looked for once it comes into sight.
     pub(in crate::window) fn new(root: PathBuf, keywords: &[String]) -> Self {
         Self {
             closed: BTreeSet::new(),
             found: Vec::new(),
+            shown: false,
             keywords: keywords.to_vec(),
             list: PanelList::default(),
-            look: true,
             root,
             searching: false,
         }
     }
 
-    /// Show the project at `root` instead.
-    pub(in crate::window) fn set_root(&mut self, root: PathBuf) {
-        if root != self.root {
-            self.root = root;
-            self.found.clear();
-            self.closed.clear();
-            self.list.set_rows(Vec::new());
-            self.look = true;
+    /// Show the project at `root` instead: what that asks of the window
+    /// while in sight.
+    pub(in crate::window) fn set_root(&mut self, root: PathBuf) -> EditorOutcome {
+        if root == self.root {
+            return EditorOutcome::Consumed;
+        }
+        self.root = root;
+        self.found.clear();
+        self.closed.clear();
+        self.list.set_rows(Vec::new());
+        match self.shown {
+            true => self.search(),
+            false => EditorOutcome::Consumed,
         }
     }
 
     /// Ask the window to look for the comments, unless it is looking now.
     fn search(&mut self) -> EditorOutcome {
-        self.look = false;
         if self.searching || self.keywords.is_empty() {
             return EditorOutcome::Consumed;
         }
@@ -224,12 +228,13 @@ impl PanelView for TodoView {
         EditorOutcome::Consumed
     }
 
-    fn next_tick(&self) -> Option<Instant> {
-        self.look.then(Instant::now)
-    }
-
-    fn on_tick(&mut self) -> EditorOutcome {
-        self.search()
+    /// Looks once each time it comes into sight.
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        self.shown = shown;
+        match shown {
+            true => self.search(),
+            false => EditorOutcome::Consumed,
+        }
     }
 }
 

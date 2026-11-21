@@ -225,8 +225,9 @@ impl App {
     // What the window feeds the views
     // --------------------------------------------------------------------
 
-    /// Feed every view what it shows of the window, and carry out what a
-    /// view asked of it: called once a frame.
+    /// Feed the views shown what they show of the window, and carry out what
+    /// a view asked of it: called once a frame, after [`Self::sync_shown`]. A
+    /// view not shown is fed nothing.
     pub(in crate::window) fn sync_panel_views(&mut self) {
         self.sync_outline();
         self.sync_builds();
@@ -264,7 +265,10 @@ impl App {
     /// entry the view was told to go to. Read again when the tab changes,
     /// else at most every [`OUTLINE_EVERY`].
     fn sync_outline(&mut self) {
-        let Some(outline) = self.sidebar_view(SidebarKind::Outline) else {
+        let Some(outline) = self
+            .sidebar_view(SidebarKind::Outline)
+            .filter(|tab| self.is_shown(*tab))
+        else {
             return;
         };
         let source = self.layout().main_return();
@@ -307,11 +311,12 @@ impl App {
     /// Hand Output the builds and the end of the one its cursor is on, and
     /// Problems what each build has found.
     fn sync_builds(&mut self) {
-        let output = self.layout().bottom_panel().tab_of(BottomPanelKind::Output);
-        let problems = self
-            .layout()
-            .bottom_panel()
-            .tab_of(BottomPanelKind::Problems);
+        let in_sight = |kind| {
+            let tab = self.layout().bottom_panel().tab_of(kind)?;
+            self.is_shown(tab).then_some(tab)
+        };
+        let output = in_sight(BottomPanelKind::Output);
+        let problems = in_sight(BottomPanelKind::Problems);
         if output.is_none() && problems.is_none() {
             return;
         }
@@ -454,11 +459,16 @@ impl App {
         if let Some(tab) = files {
             self.view_mut(tab, |view: &mut FilesView| view.set_root(root.clone()));
         }
-        if let Some(tab) = git {
-            self.view_mut(tab, |view: &mut GitView| view.set_start(root.clone()));
-        }
-        if let Some(tab) = todo {
-            self.view_mut(tab, |view: &mut TodoView| view.set_root(root.clone()));
+        let git = git.and_then(|tab| {
+            let outcome = self.view_mut(tab, |view: &mut GitView| view.set_start(root.clone()))?;
+            Some((tab, outcome))
+        });
+        let todo = todo.and_then(|tab| {
+            let outcome = self.view_mut(tab, |view: &mut TodoView| view.set_root(root.clone()))?;
+            Some((tab, outcome))
+        });
+        for (tab, outcome) in [git, todo].into_iter().flatten() {
+            self.act_on_editor_outcome(tab, outcome);
         }
         self.tabs.outline_read = None;
     }
@@ -729,6 +739,21 @@ mod tests {
             Some(SidebarKind::Git),
             "Files is on the right"
         );
+    }
+
+    #[test]
+    fn test_a_view_is_shown_only_while_its_panel_shows_it() {
+        let mut app = app_with_tabs(1);
+        app.open_sidebar_view(SidebarKind::Files);
+        let files = app.layout().focused();
+        app.open_sidebar_view(SidebarKind::Git);
+        let git = app.layout().focused();
+        app.sync_shown();
+        assert!(app.is_shown(git), "the view shown");
+        assert!(!app.is_shown(files), "the one behind it is not");
+        app.layout_mut().hide_panel(Panel::Sidebar(Edge::Left));
+        app.sync_shown();
+        assert!(!app.is_shown(git), "a hidden panel's view is not shown");
     }
 
     #[test]

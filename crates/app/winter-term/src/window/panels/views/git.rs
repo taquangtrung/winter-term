@@ -1,19 +1,24 @@
 //! The Git view, a sidebar's: the branch, then the files git reports,
 //! under Unmerged, Untracked, Unstaged, and Staged. `s` stages the file the
 //! cursor is on and `u` unstages it; opening a file shows it in the main
-//! area, and `t` opens the Git tool there.
+//! area, and `t` opens the Git tool there. In sight, the repository is
+//! watched as the Git tool watches it, the same watch shared, and git is
+//! asked again only when something in it changes; out of sight, git is
+//! asked nothing.
 
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use misty::view::{Space, column, text};
 use misty::{Element, HostedView, ThemeToken};
 
+use winter_model::background::Background;
 use winter_model::editor::{EditorOutcome, JobReply, Notice, OpenTarget};
 use winter_model::input::Key;
 use winter_model::input::table::{self, Binding, KeyTable};
 use winter_vcs::exec::{self, Git, Pathspec, TAG_ROOT, TAG_STATUS};
 use winter_vcs::parse::{FileStatus, Section, Status, parse_status};
+use winter_vcs::watch::TreeWatch;
 
 use super::{ListAct, ListRow, PanelList, PanelView, list_view};
 
@@ -54,9 +59,6 @@ const CLEAN: &str = "Nothing changed";
 /// What a detached head is called in place of a branch.
 const DETACHED: &str = "(detached)";
 
-/// How often git is asked again, for what changed.
-const ASK_EVERY: Duration = Duration::from_secs(3);
-
 /// The tags of the view's own requests, apart from the Git tool's.
 const TAG_STAGE: &str = "panel-stage";
 const TAG_UNSTAGE: &str = "panel-unstage";
@@ -78,14 +80,22 @@ pub(in crate::window) enum GitAct {
 /// The project's git status.
 #[derive(Debug)]
 pub(in crate::window) struct GitView {
-    /// When git was last asked for the status.
-    asked_at: Option<Instant>,
+    /// Whether the view is in sight, the only time it asks git or watches.
+    shown: bool,
     list: PanelList,
     notice: Option<Notice>,
+    /// Whether a read of the status is out, so a change meanwhile waits for
+    /// its answer.
+    reading: bool,
     /// What git said, once it has.
     repo: Repo,
     /// Where the view started looking for a repository.
     start: PathBuf,
+    /// The repository's notifications, `None` until set up, or where the
+    /// platform cannot watch it: read again only when asked, then.
+    watch: Option<TreeWatch>,
+    /// The watch being set up on a thread of its own.
+    watch_starting: Option<Background<Option<TreeWatch>>>,
 }
 
 /// What git has said of the repository.
@@ -102,6 +112,8 @@ enum Repo {
 /// A repository found, and its status.
 #[derive(Debug)]
 struct Found {
+    /// Where git keeps its own files, when git said.
+    git_dir: Option<PathBuf>,
     root: PathBuf,
     status: Option<Status>,
 }
@@ -111,32 +123,60 @@ struct Found {
 // ========================================================================
 
 impl GitView {
-    /// The status of the repository `start` is in, asked for on the first
-    /// tick.
+    /// The status of the repository `start` is in, asked for once it comes
+    /// into sight.
     pub(in crate::window) fn new(start: PathBuf) -> Self {
         Self {
-            asked_at: None,
+            shown: false,
             list: PanelList::default(),
             notice: None,
+            reading: false,
             repo: Repo::Asking,
             start,
+            watch: None,
+            watch_starting: None,
         }
     }
 
-    /// Show the repository `start` is in instead.
-    pub(in crate::window) fn set_start(&mut self, start: PathBuf) {
-        if start != self.start {
-            *self = Self::new(start);
+    /// Show the repository `start` is in instead: what that asks of the
+    /// window while in sight.
+    pub(in crate::window) fn set_start(&mut self, start: PathBuf) -> EditorOutcome {
+        if start == self.start {
+            return EditorOutcome::Consumed;
         }
+        let shown = self.shown;
+        *self = Self::new(start);
+        self.set_shown(shown)
     }
 
     /// Ask git for what it is next owed: where the repository is, then its
     /// status.
     fn ask(&mut self) -> EditorOutcome {
-        self.asked_at = Some(Instant::now());
         match &self.repo {
             Repo::Asking | Repo::Missing => EditorOutcome::Job(exec::repo_root(&self.start)),
-            Repo::Found(found) => EditorOutcome::Job(exec::status(&found.root)),
+            Repo::Found(found) => {
+                self.reading = true;
+                EditorOutcome::Job(exec::status(&found.root))
+            }
+        }
+    }
+
+    /// Set the repository's watch up on a thread of its own, while in sight
+    /// and none is running.
+    fn start_watch(&mut self) {
+        let unwatched = self.watch.is_none() && self.watch_starting.is_none();
+        if let (true, true, Repo::Found(found)) = (self.shown, unwatched, &self.repo) {
+            self.watch_starting = Some(TreeWatch::start_in_background(
+                &found.root,
+                found.git_dir.as_deref(),
+            ));
+        }
+    }
+
+    /// Take the watch over once its thread has set it up.
+    fn adopt_started_watch(&mut self) {
+        if let Some(starting) = self.watch_starting.take_if(|starting| starting.is_done()) {
+            self.watch = starting.poll().flatten();
         }
     }
 
@@ -237,10 +277,17 @@ impl PanelView for GitView {
         };
         match output.tag {
             TAG_ROOT => {
-                let root = output.stdout.lines().next().map(PathBuf::from);
+                let mut lines = output.stdout.lines();
+                let root = lines.next().map(PathBuf::from);
+                let git_dir = lines.next().map(PathBuf::from);
                 match root.filter(|_| output.succeeded()) {
                     Some(root) => {
-                        self.repo = Repo::Found(Found { root, status: None });
+                        self.repo = Repo::Found(Found {
+                            git_dir,
+                            root,
+                            status: None,
+                        });
+                        self.start_watch();
                         return self.ask();
                     }
                     None => {
@@ -249,11 +296,14 @@ impl PanelView for GitView {
                     }
                 }
             }
-            TAG_STATUS if output.succeeded() => {
-                let status = parse_status(&output.stdout);
-                self.list_status(&status);
-                if let Repo::Found(found) = &mut self.repo {
-                    found.status = Some(status);
+            TAG_STATUS => {
+                self.reading = false;
+                if output.succeeded() {
+                    let status = parse_status(&output.stdout);
+                    self.list_status(&status);
+                    if let Repo::Found(found) = &mut self.repo {
+                        found.status = Some(status);
+                    }
                 }
             }
             TAG_STAGE | TAG_UNSTAGE => {
@@ -267,15 +317,47 @@ impl PanelView for GitView {
         EditorOutcome::Consumed
     }
 
+    /// Never out of sight; in sight, only when the watch has news, which
+    /// wakes the window itself.
     fn next_tick(&self) -> Option<Instant> {
-        match self.asked_at {
-            Some(at) => Some(at + ASK_EVERY),
-            None => Some(Instant::now()),
+        let now = Instant::now();
+        if !self.shown || self.reading {
+            return None;
+        }
+        match (&self.watch, &self.watch_starting) {
+            (Some(watch), _) => watch.next_look(now),
+            // Taken over once its thread has answered, which wakes the window.
+            (None, Some(starting)) => starting.is_done().then_some(now),
+            (None, None) => None,
+        }
+    }
+
+    /// In sight, the watch set up and what changed meanwhile read; out of
+    /// sight, the watch let go.
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        self.shown = shown;
+        if !shown {
+            self.watch = None;
+            self.watch_starting = None;
+            return EditorOutcome::Consumed;
+        }
+        self.start_watch();
+        match self.reading {
+            true => EditorOutcome::Consumed,
+            false => self.ask(),
         }
     }
 
     fn on_tick(&mut self) -> EditorOutcome {
-        self.ask()
+        self.adopt_started_watch();
+        let changed = match (self.watch.as_mut(), self.reading) {
+            (Some(watch), false) => watch.changed(Instant::now()).is_some(),
+            (Some(_), true) | (None, _) => false,
+        };
+        match changed {
+            true => self.ask(),
+            false => EditorOutcome::Consumed,
+        }
     }
 
     fn take_notice(&mut self) -> Option<Notice> {
@@ -375,8 +457,26 @@ mod tests {
     }
 
     #[test]
+    fn test_git_is_asked_nothing_out_of_sight_and_nothing_on_a_timer_in_it() {
+        let mut view = GitView::new(PathBuf::from("/repo"));
+        assert_eq!(view.next_tick(), None, "out of sight, nothing");
+        let asked = view.set_shown(true);
+        assert!(matches!(asked, EditorOutcome::Job(_)), "in sight, it asks");
+        view.on_job(reply(TAG_ROOT, "/nowhere-repo\n/nowhere-repo/.git\n"));
+        view.watch_starting = None;
+        view.on_job(reply(TAG_STATUS, "# branch.head main\n"));
+        assert_eq!(view.next_tick(), None, "no timer: only a change asks again");
+        view.set_shown(false);
+        assert!(
+            view.watch.is_none() && view.watch_starting.is_none(),
+            "let go"
+        );
+    }
+
+    #[test]
     fn test_files_are_listed_under_their_sections_and_s_stages_from_the_root() {
         let mut view = GitView::new(PathBuf::from("/repo/src"));
+        view.shown = true;
         let asked = view.on_job(reply(TAG_ROOT, "/repo\n/repo/.git\n"));
         assert!(
             matches!(&asked, EditorOutcome::Job(_)),

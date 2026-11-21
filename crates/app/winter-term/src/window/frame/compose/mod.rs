@@ -1103,8 +1103,10 @@ impl App {
         {
             self.tabs.layout.set_scale(scale as f32);
         }
-        // The views show the window as it is now: the outline of the tab
-        // worked in, the builds.
+        // What came into sight or went since the last frame hears so; the
+        // views shown then show the window as it is now: the outline of the
+        // tab worked in, the builds.
+        self.sync_shown();
         self.sync_panel_views();
         // A dialog held back while another was up opens once that one has
         // been answered, which every answer repaints after.

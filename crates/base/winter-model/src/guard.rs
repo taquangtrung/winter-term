@@ -524,6 +524,10 @@ impl<H: Held> Page for Guarded<H> {
         self.write(|editor| editor.on_resume())
     }
 
+    fn set_shown(&mut self, shown: bool) -> EditorOutcome {
+        self.write(|editor| editor.set_shown(shown))
+    }
+
     fn on_window_focus(&mut self) {
         self.write(|editor| editor.on_window_focus())
     }
@@ -616,10 +620,6 @@ impl Editor for Guarded<Box<dyn Editor>> {
 
     fn restore_view(&mut self, state: Box<dyn Any>) {
         self.write_editor_once(|editor| editor.restore_view(state), ());
-    }
-
-    fn set_shown(&mut self, shown: bool) {
-        self.write_editor(|editor| editor.set_shown(shown));
     }
 
     fn shed_caches(&mut self) {

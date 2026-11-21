@@ -1275,11 +1275,27 @@ fn tick_until(pdf: &mut PdfEditor, what: &str, done: impl Fn(&PdfEditor) -> bool
 }
 
 #[test]
+fn test_a_shown_viewer_at_rest_asks_for_no_tick_and_a_hidden_one_lets_its_watch_go() {
+    let mut pdf = long_reader();
+    assert_eq!(pdf.next_tick(), None, "not shown, nothing");
+    pdf.set_shown(true);
+    assert!(
+        pdf.next_tick().is_some(),
+        "shown, it looks at its file once"
+    );
+    pdf.on_tick(Instant::now());
+    assert_eq!(pdf.next_tick(), None, "then only when the file changes");
+    pdf.set_shown(false);
+    assert!(pdf.disk_watch.is_none());
+}
+
+#[test]
 fn test_a_rebuilt_pdf_is_read_again_keeping_the_page_being_read() {
     let path = std::env::temp_dir().join(format!("winter-reload-{}.pdf", std::process::id()));
     fs::write(&path, pdf_of(4)).expect("a scratch PDF");
     let mut pdf = PdfEditor::new(path.clone());
     pdf.set_pane_size(PANE);
+    pdf.set_shown(true);
     tick_until(&mut pdf, "opened", |pdf| pdf.document.is_some());
     pdf.go_to_page(2);
     let page = page_of(&pdf);
@@ -1599,7 +1615,8 @@ fn test_a_scroll_glides_to_where_it_lands_and_scrolls_in_a_row_add_up() {
     assert!(pdf.glide.is_none(), "landed, it stops");
     assert!(
         pdf.next_tick()
-            .is_some_and(|at| at > Instant::now() + GLIDE_FRAME)
+            .is_none_or(|at| at > Instant::now() + GLIDE_FRAME),
+        "no more glide frames"
     );
 }
 
