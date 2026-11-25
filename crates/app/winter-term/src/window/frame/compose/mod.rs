@@ -1,6 +1,7 @@
 //! Frame composition: the panes, the chrome, and the canvas's images, put
 //! together for one frame.
 
+use std::collections::HashMap;
 use std::time::Instant;
 
 use crate::render::renderer::{GpuRenderer, GridStrip, PaneView};
@@ -9,7 +10,7 @@ use crate::render::{
     PickerPlacement, PickerView, StatusSearch, ToolbarColumn, ToolbarView, WhichKeyView, cell_box,
     grid_area,
 };
-use misty::Rect;
+use misty::{Rect, ScrollbarFade, ScrollbarShow};
 use winter_emulator::{CursorShape, Grid};
 use winter_model::editor::{PickPlacement, ScrollPosition};
 use winter_model::input::PendingPrefix;
@@ -495,24 +496,24 @@ impl LitScrollbars {
 /// showed of the tab.
 #[derive(Debug)]
 pub(in crate::window) struct ScrollbarState {
-    /// When it shows while scrollbars show only around scrolling.
-    fade: misty::ScrollbarFade,
+    /// When it shows while scrollbars auto-hide.
+    fade: ScrollbarFade,
     /// How far the tab was scrolled back.
     offset: usize,
-    /// Whether it was held in full: under the pointer, or scrolled back.
+    /// Whether it was held in full: focused or under the pointer.
     pinned: bool,
 }
 
 /// Lays each pane's scrollbar opacity on `views`, as `show` says at `now`:
-/// in full while the pointer is over it or the tab is scrolled back from
-/// its live bottom, else shown for a moment after the tab scrolled and then
-/// faded out. `fades` keeps each tab's between frames, by the panes in
-/// `rects`.
+/// in full while the tab is focused or hovered, else shown for a moment
+/// after focus/hover leaves or the tab scrolls, and then faded out.
 fn fade_scrollbars(
-    fades: &mut std::collections::HashMap<TabId, ScrollbarState>,
+    fades: &mut HashMap<TabId, ScrollbarState>,
     rects: &[(TabId, Rect)],
     views: &mut [PaneView<'_>],
-    show: misty::ScrollbarShow,
+    hovered_pane: Option<TabId>,
+    window_focused: bool,
+    show: ScrollbarShow,
     now: Instant,
 ) {
     fades.retain(|tab, _| rects.iter().any(|(id, _)| id == tab));
@@ -521,21 +522,28 @@ fn fade_scrollbars(
         let Some(view) = views.iter_mut().find(|view| view.rect == pane) else {
             continue;
         };
-        let pinned = view.scrollbar_hover || view.scroll_offset > 0;
+        let pinned = (view.focused && window_focused)
+            || hovered_pane == Some(*tab)
+            || view.scrollbar_hover;
         let state = fades.entry(*tab).or_insert_with(|| ScrollbarState {
-            fade: misty::ScrollbarFade::new(),
+            fade: ScrollbarFade::new(),
             offset: view.scroll_offset,
             pinned,
         });
-        // A scroll shows it; let go, it holds a moment before fading.
-        if state.offset != view.scroll_offset || (state.pinned && !pinned) {
+        if pinned || view.scrollback_len == 0 {
+            // Held in full or nothing to scroll: keep the fade timer idle.
+            state.fade = ScrollbarFade::new();
+        } else if state.offset != view.scroll_offset || state.pinned {
+            // Left unattended or scrolled while unattended: hold, then fade.
             state.fade.wake(now);
         }
         state.offset = view.scroll_offset;
         state.pinned = pinned;
-        view.scrollbar_opacity = match (show, pinned) {
-            (misty::ScrollbarShow::Auto, true) => 1.0,
-            _ => state.fade.opacity(show, now),
+        view.scrollbar_opacity = match show {
+            ScrollbarShow::Always => 1.0,
+            ScrollbarShow::Never => 0.0,
+            ScrollbarShow::Auto if pinned => 1.0,
+            ScrollbarShow::Auto => state.fade.opacity(show, now),
         };
     }
 }
@@ -1230,7 +1238,12 @@ impl App {
             view.pane = pane_rect_of(&bounds, prompt.tab);
         }
         let overlays = self.build_pane_overlays(&rects, renderer.theme());
-        let hovered_pane = self.hovered_pane(&bounds);
+        let hovered_pane = self
+            .input
+            .pointer
+            .in_window
+            .then(|| self.hovered_pane(&bounds))
+            .flatten();
         let search = self.status_search();
         // Built only for a bar that shows: building it reads the disk.
         // Misty's status bar draws it over the frame.
@@ -1355,6 +1368,8 @@ impl App {
             &mut self.chrome.scrollbar_fades,
             &rects,
             &mut views,
+            hovered_pane,
+            self.input.focus.window,
             self.config.scrollbar,
             Instant::now(),
         );

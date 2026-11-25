@@ -681,7 +681,7 @@ fn test_scout_draws_the_rows_it_shows_in_their_syntax_colors() {
 }
 
 #[test]
-fn test_an_auto_scrollbar_shows_on_a_scroll_holds_while_scrolled_back_and_fades() {
+fn test_auto_scrollbar_shows_when_focused_or_hovered_and_fades_when_left() {
     let grid = Grid::new(10, 20);
     let paint = EditorPaint {
         caret_cell: None,
@@ -700,14 +700,14 @@ fn test_an_auto_scrollbar_shows_on_a_scroll_holds_while_scrolled_back_and_fades(
     };
     let rect = Rect::new(0.0, 0.0, 100.0, 200.0);
     let config = crate::config::Config::default();
-    let view = || {
-        editor_pane_view(
+    let make_view = |focused: bool, offset: usize, scrollback: usize| {
+        let mut view = editor_pane_view(
             &paint,
             &grid,
             Vec::new(),
             rect,
             rect,
-            true,
+            focused,
             true,
             &config,
             true,
@@ -716,44 +716,147 @@ fn test_an_auto_scrollbar_shows_on_a_scroll_holds_while_scrolled_back_and_fades(
             &[],
             &[],
             None,
-            true,
+            focused,
             false,
-        )
+        );
+        view.scroll_offset = offset;
+        view.scrollback_len = scrollback;
+        view
     };
     let rects = [(TabId(1), rect)];
     let mut fades = std::collections::HashMap::new();
     let auto = misty::ScrollbarShow::Auto;
-    let opacity = |fades: &mut std::collections::HashMap<TabId, ScrollbarState>,
-                   offset: usize,
-                   now: Instant| {
-        let mut views = [view()];
-        views[0].scroll_offset = offset;
-        fade_scrollbars(fades, &rects, &mut views, auto, now);
+    let step = |fades: &mut std::collections::HashMap<TabId, ScrollbarState>,
+                focused: bool,
+                hovered: Option<TabId>,
+                window_focused: bool,
+                offset: usize,
+                scrollback: usize,
+                now: Instant| {
+        let mut views = [make_view(focused, offset, scrollback)];
+        fade_scrollbars(
+            fades,
+            &rects,
+            &mut views,
+            hovered,
+            window_focused,
+            auto,
+            now,
+        );
         views[0].scrollbar_opacity
     };
+
     let start = Instant::now();
-    assert_eq!(opacity(&mut fades, 0, start), 0.0, "hidden at rest");
-    assert_eq!(opacity(&mut fades, 3, start), 1.0, "scrolled back: shown");
-    let later = start + std::time::Duration::from_secs(10);
+    // Unfocused and unhovered starts hidden, even when scrolled back (as an
+    // editor is at line 1).
     assert_eq!(
-        opacity(&mut fades, 3, later),
+        step(&mut fades, false, None, true, 5, 20, start),
+        0.0,
+        "hidden at rest when unfocused and unhovered"
+    );
+    assert!(
+        fades[&TabId(1)].fade.next_frame(auto, start).is_none(),
+        "no fade tick at rest"
+    );
+
+    // Focusing the tab shows its scrollbar with no fade tick.
+    assert_eq!(
+        step(&mut fades, true, None, true, 5, 20, start),
         1.0,
-        "held while scrolled back"
+        "shown while focused"
+    );
+    assert!(
+        fades[&TabId(1)].fade.next_frame(auto, start).is_none(),
+        "no fade tick while focused"
+    );
+
+    // Losing focus holds for a moment, schedules fade frames, then hides.
+    assert_eq!(
+        step(&mut fades, false, None, true, 5, 20, start),
+        1.0,
+        "held briefly after losing focus"
+    );
+    assert!(
+        fades[&TabId(1)].fade.next_frame(auto, start).is_some(),
+        "schedules fade frames after losing focus"
+    );
+    let gone = start + std::time::Duration::from_secs(3);
+    assert_eq!(
+        step(&mut fades, false, None, true, 5, 20, gone),
+        0.0,
+        "faded out completely after delay"
+    );
+    assert!(
+        fades[&TabId(1)].fade.next_frame(auto, gone).is_none(),
+        "no fade tick once hidden"
+    );
+
+    // Hovering an unfocused tab shows its scrollbar; leaving fades it out.
+    assert_eq!(
+        step(&mut fades, false, Some(TabId(1)), true, 5, 20, gone),
+        1.0,
+        "shown while hovered"
     );
     assert_eq!(
-        opacity(&mut fades, 0, later),
+        step(&mut fades, false, None, true, 5, 20, gone),
         1.0,
-        "back at the bottom: a moment more"
+        "held briefly after pointer leaves"
     );
-    let gone = later + std::time::Duration::from_secs(3);
-    assert_eq!(opacity(&mut fades, 0, gone), 0.0, "then faded out");
-    let mut views = [view()];
+    let gone2 = gone + std::time::Duration::from_secs(3);
+    assert_eq!(
+        step(&mut fades, false, None, true, 5, 20, gone2),
+        0.0,
+        "faded out after pointer leaves"
+    );
+
+    // Window losing focus fades the active tab's scrollbar too.
+    assert_eq!(
+        step(&mut fades, true, None, true, 5, 20, gone2),
+        1.0,
+        "shown while window and tab focused"
+    );
+    assert_eq!(
+        step(&mut fades, true, None, false, 5, 20, gone2),
+        1.0,
+        "held briefly after window loses focus"
+    );
+    let gone3 = gone2 + std::time::Duration::from_secs(3);
+    assert_eq!(
+        step(&mut fades, true, None, false, 5, 20, gone3),
+        0.0,
+        "faded out after window loses focus"
+    );
+
+    // A pane with nothing to scroll never schedules fade frames.
+    assert_eq!(step(&mut fades, true, None, true, 0, 0, gone3), 1.0);
+    assert_eq!(step(&mut fades, false, None, true, 0, 0, gone3), 0.0);
+    assert!(
+        fades[&TabId(1)].fade.next_frame(auto, gone3).is_none(),
+        "no fade tick when there is no scrollback"
+    );
+
+    // Always and Never settings override focus/hover.
+    let mut views = [make_view(false, 5, 20)];
     fade_scrollbars(
         &mut fades,
         &rects,
         &mut views,
+        None,
+        true,
         misty::ScrollbarShow::Always,
-        gone,
+        gone3,
     );
     assert_eq!(views[0].scrollbar_opacity, 1.0);
+
+    let mut views = [make_view(true, 5, 20)];
+    fade_scrollbars(
+        &mut fades,
+        &rects,
+        &mut views,
+        Some(TabId(1)),
+        true,
+        misty::ScrollbarShow::Never,
+        gone3,
+    );
+    assert_eq!(views[0].scrollbar_opacity, 0.0);
 }

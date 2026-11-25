@@ -49,10 +49,7 @@ const CHORD_SEPARATOR: &str = " / ";
 
 /// What the filter shows before anything is typed, by where the keys are.
 const FILTER_PLACEHOLDER: &str = "type a command's name, id, or keybinding, or record keys";
-const FILTER_PLACEHOLDER_NORMAL: &str = "press i to filter by a command's name, id, or keybinding";
-
-/// What stands before the filter's text.
-const FILTER_LABEL: &str = "Filter";
+const FILTER_PLACEHOLDER_NORMAL: &str = "filter by a command's name, id, or keybinding";
 
 /// What the filter says while keys are recorded, and before any are.
 const RECORD_LABEL: &str = "Recording keys";
@@ -103,13 +100,13 @@ const ID_COLS: f32 = 30.0;
 /// What marks the place typing goes in the filter and the capture line.
 const CARET: &str = "\u{258f}";
 
-/// The rows of the pane a page key moves by: a half of those shown, each
-/// command's row about this many of the pane's text rows tall.
-const ROWS_PER_COMMAND: usize = 2;
+/// How many of the pane's text rows one command's row takes: a line of
+/// key caps, the padding round it, and the gap to the next.
+const CELLS_PER_COMMAND: f32 = 1.75;
 
-/// The pane's text rows the page's heading, filter, capture line, and
-/// table heading take, around the commands.
-const CHROME_ROWS: usize = 10;
+/// The pane's text rows the page's heading, filter, capture line, table
+/// heading, and footer take, around the commands.
+const CHROME_ROWS: usize = 12;
 
 /// The editor's own keys in the list.
 const KEYS: KeyTable<Command> = KeyTable {
@@ -583,7 +580,7 @@ impl Keys {
 
     /// How many commands a page key moves by.
     fn half_page(&self) -> isize {
-        (self.rows / ROWS_PER_COMMAND / 2).max(1) as isize
+        (self.fits() / 2).max(1) as isize
     }
 
     /// Start capturing keys of `kind` for the selected command.
@@ -847,9 +844,13 @@ impl Keys {
     /// commands fit it and how far a page key moves.
     fn set_rows(&mut self, rows: usize) {
         self.rows = rows;
-        self.window
-            .set_fits(rows.saturating_sub(CHROME_ROWS) / ROWS_PER_COMMAND);
+        self.window.set_fits(self.fits());
         self.follow();
+    }
+
+    /// How many commands fit the pane, one row each.
+    fn fits(&self) -> usize {
+        (self.rows.saturating_sub(CHROME_ROWS) as f32 / CELLS_PER_COMMAND) as usize
     }
 
     /// Keep the selected command among those built, as a key or a click
@@ -929,18 +930,19 @@ impl Keys {
             .collect()
     }
 
-    /// The filter line: its label, then what is typed with the caret while
-    /// the keys are in it, or what to type; lined with the accent while
-    /// typed into, and a click puts the keys in it.
+    /// The filter line: what is typed with the caret while the keys are in
+    /// it, or what to type, led by a label only while keys are recorded;
+    /// lined with the accent while typed into, and a click puts the keys
+    /// in it.
     fn filter_view(&self) -> Element<'_, Self> {
         let typing = self.focus == Focus::Filter && self.capture.is_none();
-        let label = match self.recording.is_some() {
-            false => FILTER_LABEL.to_string(),
-            true => match table::menu_typed(&KEYS, Command::Record) {
+        let label = self
+            .recording
+            .as_ref()
+            .map(|_| match table::menu_typed(&KEYS, Command::Record) {
                 Some((keys, _)) => format!("{RECORD_LABEL} ({} to stop)", format_sequence(&keys)),
                 None => RECORD_LABEL.to_string(),
-            },
-        };
+            });
         let typed = self.filter.text();
         let shown: Text<'_> = match (typed.is_empty(), typing) {
             (true, _) => {
@@ -969,7 +971,12 @@ impl Keys {
             }
         };
 
-        row([text(label).muted().proportional().into(), shown.into()])
+        let mut parts: Vec<Element<'_, Self>> = Vec::new();
+        if let Some(label) = label {
+            parts.push(text(label).muted().proportional().into());
+        }
+        parts.push(shown.into());
+        row(parts)
             .padding(1.0, 0.25)
             .corners(misty::view::Corners::Control)
             .border(match typing {
@@ -1030,28 +1037,14 @@ impl Keys {
 
     /// The table row of shown command `at`: its name, its keys as key caps
     /// (in the warning color where another command of its block has them
-    /// too), its source, and its id, what the filter matched lit; the
-    /// selected one marked and saying its details. A click selects it, a
-    /// double click runs it.
+    /// too), its source, and its id, what the filter matched lit, on one
+    /// line; the selected one marked, its details in the page's footer. A
+    /// click selects it, a double click runs it.
     fn row_view(&self, at: usize, shown: &ShownRow) -> Element<'_, Self> {
         let command = &self.commands[shown.index];
         let selected = at == self.selected;
         let contested = self.contested.contains(&shown.index);
-        let mut name = vec![
-            lit(&command.label, &shown.matched.label)
-                .proportional()
-                .into(),
-        ];
-        // A keyboard user, who sees no tooltip, reads them here; what the
-        // row offers is in its context menu.
-        if selected {
-            name.push(
-                text(self.details(shown.index))
-                    .muted()
-                    .proportional()
-                    .into(),
-            );
-        }
+        let name = lit(&command.label, &shown.matched.label).proportional();
         let chords: Vec<Element<'_, Self>> = match command.chord.is_empty() {
             true => vec![text(NO_CHORD).muted().proportional().into()],
             false => command
@@ -1071,7 +1064,7 @@ impl Keys {
                 .into(),
         };
         let line = table_row([
-            column(name).gap(Space::Cells(0.25)),
+            name.into(),
             row(chords).gap(Space::Cells(0.5)),
             source,
             lit(&command.action, &shown.matched.action)
@@ -1082,7 +1075,7 @@ impl Keys {
         .on_pointer_press(move |keys: &mut Self, press: Press| {
             keys.click(at, (press.clicks >= 2).then_some(Command::Run));
         });
-        // The selected row says its details already.
+        // The footer says the selected row's details.
         match selected {
             true => line
                 .background(ThemeToken::CursorLine)
@@ -1133,7 +1126,9 @@ impl Keys {
 
 impl HostedView for Keys {
     /// The heading and the count, the filter (and the capture line while
-    /// keys are captured), then the table of commands.
+    /// keys are captured), the table of commands, and the selected one's
+    /// details at the foot, where a keyboard user, who sees no tooltip,
+    /// reads them.
     fn view(&self) -> Element<'_, Self> {
         let mut table = vec![self.filter_view()];
         table.extend(self.capture_view());
@@ -1153,10 +1148,15 @@ impl HostedView for Keys {
         let table = column(table)
             .gap(Space::Cells(0.25))
             .on_scroll(move |keys: &mut Self, wheel| keys.window.wheel(&wheel, total));
-        page(HEADING)
+        let shown = page(HEADING)
             .action(text(self.total()).muted().proportional())
-            .content(table)
-            .into()
+            .content(table);
+        match self.shown.get(self.selected) {
+            Some(row) => shown
+                .footer(text(self.details(row.index)).muted().proportional())
+                .into(),
+            None => shown.into(),
+        }
     }
 }
 
@@ -1945,7 +1945,7 @@ mod tests {
     }
 
     #[test]
-    fn test_the_selected_row_says_its_details_for_a_keyboard_user() {
+    fn test_the_footer_says_the_selected_command_s_details_for_a_keyboard_user() {
         let mut keys = rebinding();
         let shown = shown_text(&mut keys);
         assert!(shown.contains(&format!("Runs {WINDOW_SCOPE}")), "{shown:?}");

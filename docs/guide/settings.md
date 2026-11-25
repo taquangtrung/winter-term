@@ -37,7 +37,7 @@ The page is in Normal mode until `i`, `RET`, or `/`, so letters never type into 
 | `gutter-side` | `"left"` or `"right"`: where an editor's gutter goes |
 | `terminal-gutter` | A column of exit statuses beside terminals |
 | `pane-border-width` | The line between panes |
-| `scrollbar` | `"auto"` shows scrollbars while you scroll or point at them, then fades them out; `"always"` or `"never"` |
+| `scrollbar` | `"auto"` shows a tab's scrollbar while focused, hovered, or scrolling, then fades it out; `"always"` or `"never"` |
 | `dim-inactive` | Dim panes without focus |
 | `restore-session` | Reopen the last layout on launch |
 | `scroll-margin` | Rows kept above and below the cursor (5) |

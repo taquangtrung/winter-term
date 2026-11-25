@@ -158,7 +158,7 @@ picker-word-at-point #true
 pane-border-width 1
 
 // When scrollbars show:
-//   "auto": while scrolling or pointing at them, then they fade out.
+//   "auto": while a tab is focused, hovered, or scrolling, then they fade out.
 //   "always": whenever there is anything to scroll.
 //   "never": never; the view still scrolls.
 scrollbar "auto"
