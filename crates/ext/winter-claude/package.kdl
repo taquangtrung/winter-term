@@ -1,0 +1,16 @@
+// The Claude extension Winter ships: what it may reach beyond its own
+// directory, and its commands.
+package id="claude" name="Claude" {
+    description "Claude Code's usage quota on the status bar."
+
+    permissions {
+        // Where Claude Code keeps its sign-in.
+        read "~/.claude"
+        // Anthropic's usage endpoint.
+        net "api.anthropic.com"
+    }
+
+    commands {
+        "claude.quota_refresh" title="Claude: Refresh Quota"
+    }
+}

@@ -1,0 +1,23 @@
+[package]
+name = "winter-zai"
+description = "Z.ai's usage quota on Winter's status bar, as a bundled extension."
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+publish = false
+
+# Like every extension, it depends on the extension API alone. It ships
+# built as a WebAssembly component, installed beside Winter:
+# `cargo rustc -p winter-zai --features wasm --release
+# --target wasm32-wasip2 --crate-type cdylib`.
+[dependencies]
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
+serde_json.workspace = true
+winter-ext-api.workspace = true
+winter-ext-guest = { workspace = true, optional = true }
+
+[features]
+wasm = ["dep:winter-ext-guest"]

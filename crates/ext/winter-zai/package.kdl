@@ -1,0 +1,15 @@
+// The Z.ai extension Winter ships: what it may reach beyond its own
+// directory, and its commands.
+package id="zai" name="Z.ai" {
+    description "Z.ai's usage quota on the status bar."
+
+    permissions {
+        // Z.ai's quota endpoint.
+        net "api.z.ai"
+    }
+
+    commands {
+        "zai.quota_refresh" title="Z.ai: Refresh Quota"
+        "zai.set_api_key" title="Z.ai: Set API Key"
+    }
+}

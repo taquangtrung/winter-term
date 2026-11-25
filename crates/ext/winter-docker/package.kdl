@@ -1,0 +1,14 @@
+// The Docker extension Winter ships: what it may reach beyond its own
+// directory, and its commands.
+package id="docker" name="Docker" {
+    description "Docker's containers, images, volumes, and networks, a key away from what can be done to each."
+
+    permissions {
+        // Every request goes through the docker command.
+        run "docker"
+    }
+
+    commands {
+        "docker.open" title="Docker: Containers, Images, Volumes, Networks"
+    }
+}

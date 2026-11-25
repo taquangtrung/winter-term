@@ -1,0 +1,10 @@
+// The Antigravity extension Winter ships: what it may reach beyond its own
+// directory.
+package id="antigravity" name="Antigravity" {
+    description "Antigravity's usage quota on the status bar, from the agy CLI."
+
+    permissions {
+        // Where the agy CLI writes its statusline.
+        read "~/.gemini/antigravity-cli"
+    }
+}

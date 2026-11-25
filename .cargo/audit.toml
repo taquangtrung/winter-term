@@ -1,0 +1,17 @@
+# Advisories that are acknowledged rather than fixable here.
+#
+# With this list in place CI runs `cargo audit --deny warnings`, so anything
+# NOT listed below fails the build. Without it the entries here would sit in
+# every run as passing noise, and a new advisory would arrive looking exactly
+# like them. Re-review this list whenever cosmic-text or the graphics stack is
+# upgraded.
+
+[advisories]
+ignore = [
+    # Font shaping, reached through cosmic-text. Moves when that crate moves.
+    "RUSTSEC-2026-0192", # ttf-parser
+
+    # Use-after-free in LruCache::pop if the value's Drop panics. Reached
+    # through the graphics stack; none of our own types are cached in it.
+    "RUSTSEC-2026-0253", # lru
+]
