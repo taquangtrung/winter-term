@@ -16,6 +16,7 @@ use misty::{
 
 use winter_model::layout::{FocusDir, Panel, Region, TabId};
 
+use super::sidebar::{SidebarBar, SidebarResponse};
 use super::{StripHit, TabDrop};
 use crate::control::AgentState;
 use crate::window::App;
@@ -48,33 +49,41 @@ pub(in crate::window) const STRIP_HEIGHT_RATIO: f32 = 1.6;
 // Data Structures
 // ========================================================================
 
-/// One pane's strip: misty's widget, the Winter tab behind each of its
-/// tabs, and where it was laid out.
+/// One pane's strip: misty's tab strip or a sidebar's flat icon switcher,
+/// the Winter tab behind each entry, and where it was laid out.
 pub(in crate::window) struct PaneStrip {
+    /// How this strip is drawn and interacted with.
+    kind: StripKind,
     /// Where the strip sits, along its pane's top.
     rect: Rect,
     /// Whether it is a pane's strip of tabs or a panel's switcher of views.
     region: Region,
-    /// Misty's strip.
-    strip: TabStrip,
     /// Each Winter tab on the strip and misty's tab for it, in strip order.
     tabs: Vec<(TabId, MistyTab)>,
 }
 
+/// Which widget backs a [`PaneStrip`].
+enum StripKind {
+    /// Flat icon switcher for a sidebar panel.
+    Sidebar(SidebarBar),
+    /// Standard tab strip for main panes and the bottom panel.
+    Tabs(Box<TabStrip>),
+}
+
 /// What a strip shows of one tab.
-struct StripTab {
+pub(super) struct StripTab {
     /// Whether an agent in it waits for the user, unseen since it started.
-    attention: bool,
+    pub(super) attention: bool,
     /// Whether it is busy long enough to show a spinner.
-    busy: bool,
+    pub(super) busy: bool,
     /// The bundled icon naming what it holds.
-    icon: Option<String>,
+    pub(super) icon: Option<String>,
     /// Whether it holds unsaved changes.
-    modified: bool,
+    pub(super) modified: bool,
     /// Winter's tab.
-    tab: TabId,
+    pub(super) tab: TabId,
     /// Its place and title, with a rename's caret while one is typed.
-    title: String,
+    pub(super) title: String,
 }
 
 /// A tab dragged off its strip, and where the pointer is.
@@ -91,44 +100,46 @@ pub(in crate::window) struct TabDragging {
 // ========================================================================
 
 impl PaneStrip {
-    /// An empty strip for `region`: a panel's switcher has neither close
-    /// buttons nor a new-tab button, its views all there and never closing,
-    /// and a sidebar's shows each view as a square icon.
+    /// An empty strip for `region`: a sidebar gets a flat icon switcher,
+    /// while main panes and the bottom panel use misty's tab strip.
     fn new(region: Region) -> Self {
-        // Pill tabs of one width, the widest title's, so none stands out,
-        // with a rounded active tab and no vertical cell borders, with close
-        // buttons shown under the pointer only.
-        let strip = TabStrip::new()
-            .with_tab_style(TabStyle::Filled)
-            .with_tab_width(TabWidth::Equal)
-            .with_min_tab_width(PREFERRED_MIN_TAB_WIDTH)
-            .with_active_tab_radius(ACTIVE_TAB_RADIUS)
-            .with_active_tab_edges(false)
-            .with_tab_borders(false);
-        let strip = match region {
-            Region::Main => strip.with_close_buttons(TabClose::Hovered),
-            Region::Panel(_) => strip
-                .with_close_buttons(TabClose::Never)
-                .with_new_tab_button(false),
+        let kind = match region {
+            Region::Panel(Panel::Sidebar(_)) => StripKind::Sidebar(SidebarBar::new()),
+            Region::Main | Region::Panel(Panel::Bottom) => {
+                // Pill tabs of one width, the widest title's, so none stands out,
+                // with a rounded active tab and no vertical cell borders, with close
+                // buttons shown under the pointer only.
+                let strip = TabStrip::new()
+                    .with_tab_style(TabStyle::Filled)
+                    .with_tab_width(TabWidth::Equal)
+                    .with_min_tab_width(PREFERRED_MIN_TAB_WIDTH)
+                    .with_active_tab_radius(ACTIVE_TAB_RADIUS)
+                    .with_active_tab_edges(false)
+                    .with_tab_borders(false);
+                let mut strip = match region {
+                    Region::Main => strip.with_close_buttons(TabClose::Hovered),
+                    Region::Panel(_) => strip
+                        .with_close_buttons(TabClose::Never)
+                        .with_new_tab_button(false),
+                };
+                strip.set_height_ratio(Some(STRIP_HEIGHT_RATIO));
+                StripKind::Tabs(Box::new(strip))
+            }
         };
-        // A sidebar is narrow: its views go by icon, named in tooltips.
-        let strip = match region {
-            Region::Panel(Panel::Sidebar(_)) => strip.with_tab_width(TabWidth::Icon),
-            Region::Main | Region::Panel(Panel::Bottom) => strip,
-        };
-        let mut strip = strip;
-        strip.set_height_ratio(Some(STRIP_HEIGHT_RATIO));
         Self {
+            kind,
             rect: Rect::new(0.0, 0.0, 0.0, 0.0),
             region,
-            strip,
             tabs: Vec::new(),
         }
     }
 
     /// Whether Winter's `tab` is on the strip.
     fn has(&self, tab: TabId) -> bool {
-        self.tabs.iter().any(|(winter, _)| *winter == tab)
+        match &self.kind {
+            StripKind::Sidebar(bar) => bar.has(tab),
+            StripKind::Tabs(_) => self.tabs.iter().any(|(winter, _)| *winter == tab),
+        }
     }
 
     /// Winter's tab behind misty's `id`.
@@ -154,15 +165,26 @@ impl PaneStrip {
     }
 
     /// Where the active tab's accent line was drawn, over the border along
-    /// the strip's top; `None` when the strip is not the focused pane's.
+    /// the strip's top; `None` when the strip is not the focused pane's or
+    /// uses a bottom indicator.
     pub(in crate::window) fn accent_rect(&self) -> Option<Rect> {
-        self.strip.accent_rect()
+        match &self.kind {
+            StripKind::Sidebar(_) => None,
+            StripKind::Tabs(strip) => strip.accent_rect(),
+        }
     }
 
     /// Bring the strip in step with `shown`, in order, `active` the tab
     /// shown, the strip lit as the focused pane's when `focused`, and its
     /// accent dimmed unless `window_focused`.
     fn sync(&mut self, shown: &[StripTab], active: TabId, focused: bool, window_focused: bool) {
+        let strip = match &mut self.kind {
+            StripKind::Sidebar(bar) => {
+                bar.sync(shown, active, focused, window_focused);
+                return;
+            }
+            StripKind::Tabs(strip) => strip,
+        };
         let gone: Vec<MistyTab> = self
             .tabs
             .iter()
@@ -170,44 +192,54 @@ impl PaneStrip {
             .map(|(_, misty)| *misty)
             .collect();
         for id in gone {
-            self.strip.remove(id);
+            strip.remove(id);
         }
         self.tabs
             .retain(|(winter, _)| shown.iter().any(|tab| tab.tab == *winter));
         for (index, tab) in shown.iter().enumerate() {
-            let id = match self.misty(tab.tab) {
+            let existing = self
+                .tabs
+                .iter()
+                .find(|(winter, _)| *winter == tab.tab)
+                .map(|(_, misty)| *misty);
+            let id = match existing {
                 Some(id) => {
-                    self.strip.move_tab(id, index);
+                    strip.move_tab(id, index);
                     id
                 }
                 None => {
-                    let id = self.strip.insert(index, tab.title.as_str());
+                    let id = strip.insert(index, tab.title.as_str());
                     self.tabs.push((tab.tab, id));
                     id
                 }
             };
-            self.strip.set_title(id, tab.title.as_str());
-            self.strip.set_icon(id, tab.icon.clone());
-            self.strip.set_modified(id, tab.modified);
-            self.strip.set_attention(id, tab.attention);
-            self.strip.set_busy(id, tab.busy);
+            strip.set_title(id, tab.title.as_str());
+            strip.set_icon(id, tab.icon.clone());
+            strip.set_modified(id, tab.modified);
+            strip.set_attention(id, tab.attention);
+            strip.set_busy(id, tab.busy);
         }
         let names: Vec<String> = shown.iter().filter_map(|tab| tab.icon.clone()).collect();
-        crate::icons::add_to(self.strip.icons_mut(), &names);
+        crate::icons::add_to(strip.icons_mut(), &names);
         self.tabs.sort_by_key(|(winter, _)| {
             shown
                 .iter()
                 .position(|tab| tab.tab == *winter)
                 .unwrap_or(usize::MAX)
         });
-        if let Some(id) = self.misty(active)
-            && self.strip.active() != Some(id)
+        let active_id = self
+            .tabs
+            .iter()
+            .find(|(winter, _)| *winter == active)
+            .map(|(_, misty)| *misty);
+        if let Some(id) = active_id
+            && strip.active() != Some(id)
         {
-            self.strip.activate(id);
+            strip.activate(id);
         }
-        self.strip.set_min_tab_width(min_tab_width(shown.len()));
-        self.strip.set_focused(focused);
-        self.strip.set_window_active(window_focused);
+        strip.set_min_tab_width(min_tab_width(shown.len()));
+        strip.set_focused(focused);
+        strip.set_window_active(window_focused);
     }
 }
 
@@ -251,9 +283,9 @@ impl App {
                 self.input.focus.window,
             );
             // The accent takes over the border along the strip's top.
-            strip
-                .strip
-                .set_accent_overhang(border_above(rect, &self.chrome.drawn_separators));
+            if let StripKind::Tabs(tabs) = &mut strip.kind {
+                tabs.set_accent_overhang(border_above(rect, &self.chrome.drawn_separators));
+            }
             strip.rect = rect;
             strips.push(strip);
         }
@@ -271,11 +303,19 @@ impl App {
                 .filter(|_| pane.region == Region::Main)
                 .filter(|drag| !pane.has(drag.tab) && pane.contains(drag.point.x, drag.point.y))
                 .map(|drag| drag.point);
-            pane.strip.show_drop_marker(marker);
-            pane.strip.draw(frame, pane.rect, theme);
-            // Screen readers hear each strip's tabs and buttons, and click
-            // them through `strips_access_action`.
-            pane.strip.access(frame, strip_id(index));
+            match &mut pane.kind {
+                StripKind::Sidebar(bar) => {
+                    bar.draw(frame, pane.rect, theme);
+                    bar.access(frame, strip_id(index));
+                }
+                StripKind::Tabs(strip) => {
+                    strip.show_drop_marker(marker);
+                    strip.draw(frame, pane.rect, theme);
+                    // Screen readers hear each strip's tabs and buttons, and click
+                    // them through `strips_access_action`.
+                    strip.access(frame, strip_id(index));
+                }
+            }
         }
         let zone = dragging.and_then(|drag| self.drop_zone(drag));
         if let Some((pane, zone)) = zone {
@@ -304,34 +344,72 @@ impl App {
                 return false;
             }
         }
-        let mut answer = None;
+        let moved = matches!(input, Input::PointerMoved(_) | Input::PointerLeft);
+        let mut sidebar_answer = None;
+        let mut tab_answer = None;
         for (index, pane) in self.chrome.strips.iter_mut().enumerate() {
-            let response = pane.strip.handle(input, cx);
-            if response != TabStripResponse::Ignored && answer.is_none() {
-                answer = Some((index, response));
+            match &mut pane.kind {
+                StripKind::Sidebar(bar) => {
+                    let response = bar.handle(input, cx);
+                    if response != SidebarResponse::Ignored && sidebar_answer.is_none() {
+                        sidebar_answer = Some(response);
+                    }
+                }
+                StripKind::Tabs(strip) => {
+                    let response = strip.handle(input, cx);
+                    if response != TabStripResponse::Ignored && tab_answer.is_none() {
+                        tab_answer = Some((index, response));
+                    }
+                }
             }
         }
-        let Some((index, response)) = answer else {
+        if let Some(response) = sidebar_answer {
+            return self.act_on_sidebar(response, moved);
+        }
+        let Some((index, response)) = tab_answer else {
             return false;
         };
-        let moved = matches!(input, Input::PointerMoved(_));
         self.act_on_strip(index, response, moved)
     }
 
     /// Do what a screen reader's `action` on a strip asks, as a click there
     /// would; whether a strip took it.
     pub(in crate::window) fn strips_access_action(&mut self, action: AccessAction) -> bool {
-        let answer = self
-            .chrome
-            .strips
-            .iter_mut()
-            .enumerate()
-            .map(|(index, pane)| (index, pane.strip.access_action(strip_id(index), action)))
-            .find(|(_, response)| *response != TabStripResponse::Ignored);
-        match answer {
-            Some((index, response)) => self.act_on_strip(index, response, false),
-            None => false,
+        for (index, pane) in self.chrome.strips.iter_mut().enumerate() {
+            match &mut pane.kind {
+                StripKind::Sidebar(bar) => {
+                    let response = bar.access_action(strip_id(index), action);
+                    if response != SidebarResponse::Ignored {
+                        return self.act_on_sidebar(response, false);
+                    }
+                }
+                StripKind::Tabs(strip) => {
+                    let response = strip.access_action(strip_id(index), action);
+                    if response != TabStripResponse::Ignored {
+                        return self.act_on_strip(index, response, false);
+                    }
+                }
+            }
         }
+        false
+    }
+
+    /// Carry out what a sidebar icon switcher answered.
+    fn act_on_sidebar(&mut self, response: SidebarResponse, moved: bool) -> bool {
+        match response {
+            SidebarResponse::Activated(view) => {
+                self.layout_mut().focus(view);
+                self.after_tab_change();
+            }
+            SidebarResponse::Handled => {
+                if moved {
+                    return false;
+                }
+            }
+            SidebarResponse::Ignored => return false,
+        }
+        self.dirty = true;
+        !moved
     }
 
     /// Carry out what strip `index` answered, the pointer having `moved`
@@ -343,7 +421,10 @@ impl App {
         if let Region::Panel(_) = pane.region {
             return self.act_on_switcher(index, response, moved);
         }
-        let shown = pane.strip.active().and_then(|id| pane.winter(id));
+        let StripKind::Tabs(strip) = &pane.kind else {
+            return false;
+        };
+        let shown = strip.active().and_then(|id| pane.winter(id));
         let named = match response {
             TabStripResponse::Activated(id)
             | TabStripResponse::Close(id)
@@ -351,7 +432,7 @@ impl App {
             _ => None,
         };
         let place = match response {
-            TabStripResponse::Moved(id) => pane.strip.ids().position(|other| other == id),
+            TabStripResponse::Moved(id) => strip.ids().position(|other| other == id),
             _ => None,
         };
         match response {
@@ -440,7 +521,10 @@ impl App {
         self.chrome
             .strips
             .iter_mut()
-            .filter_map(|pane| pane.strip.about_to_wait(cx))
+            .filter_map(|pane| match &mut pane.kind {
+                StripKind::Sidebar(_) => None,
+                StripKind::Tabs(strip) => strip.about_to_wait(cx),
+            })
             .min()
     }
 
@@ -448,22 +532,29 @@ impl App {
     pub(in crate::window) fn strip_hit(&self, x: f32, y: f32) -> StripHit {
         let point = Point::new(x, y);
         for pane in &self.chrome.strips {
-            match pane.strip.hit_test(point) {
-                Some(TabStripHit::Close(id)) => {
-                    return pane.winter(id).map_or(StripHit::None, StripHit::Close);
+            match &pane.kind {
+                StripKind::Sidebar(bar) => {
+                    if let Some(tab) = bar.hit_tab(point) {
+                        return StripHit::Tab(tab);
+                    }
                 }
-                Some(TabStripHit::NewTab) => {
-                    let shown = pane.strip.active().and_then(|id| pane.winter(id));
-                    return shown.map_or(StripHit::None, StripHit::NewTab);
-                }
-                Some(TabStripHit::NextTab) => return StripHit::NextTab,
-                Some(TabStripHit::PrevTab) => return StripHit::PrevTab,
-                Some(TabStripHit::Tab(id)) => {
-                    return pane.winter(id).map_or(StripHit::None, StripHit::Tab);
-                }
-                None => {}
-                // A part misty adds later is no part Winter knows.
-                Some(_) => {}
+                StripKind::Tabs(strip) => match strip.hit_test(point) {
+                    Some(TabStripHit::Close(id)) => {
+                        return pane.winter(id).map_or(StripHit::None, StripHit::Close);
+                    }
+                    Some(TabStripHit::NewTab) => {
+                        let shown = strip.active().and_then(|id| pane.winter(id));
+                        return shown.map_or(StripHit::None, StripHit::NewTab);
+                    }
+                    Some(TabStripHit::NextTab) => return StripHit::NextTab,
+                    Some(TabStripHit::PrevTab) => return StripHit::PrevTab,
+                    Some(TabStripHit::Tab(id)) => {
+                        return pane.winter(id).map_or(StripHit::None, StripHit::Tab);
+                    }
+                    None => {}
+                    // A part misty adds later is no part Winter knows.
+                    Some(_) => {}
+                },
             }
         }
         StripHit::None
@@ -476,7 +567,10 @@ impl App {
         self.chrome
             .strips
             .iter()
-            .find_map(|pane| pane.strip.part_rect(point))
+            .find_map(|pane| match &pane.kind {
+                StripKind::Sidebar(bar) => bar.part_rect(point),
+                StripKind::Tabs(strip) => strip.part_rect(point),
+            })
     }
 
     /// Whether `tab`'s strip cut its title short in the last frame.
@@ -485,7 +579,10 @@ impl App {
             .strips
             .iter()
             .find(|pane| pane.has(tab))
-            .and_then(|pane| Some(pane.strip.title_cut(pane.misty(tab)?)))
+            .and_then(|pane| match &pane.kind {
+                StripKind::Sidebar(_) => Some(true),
+                StripKind::Tabs(strip) => Some(strip.title_cut(pane.misty(tab)?)),
+            })
             .unwrap_or(false)
     }
 
@@ -531,7 +628,10 @@ impl App {
             .iter()
             .find(|pane| pane.contains(point.x, point.y));
         let target = strip.and_then(|pane| {
-            let index = pane.strip.drop_index(point)?;
+            let StripKind::Tabs(tabs) = &pane.kind else {
+                return None;
+            };
+            let index = tabs.drop_index(point)?;
             let shown = pane.tabs.first()?.0;
             Some(TabDrop::Strip { index, pane: shown })
         });
@@ -609,8 +709,11 @@ mod tests {
     /// The Winter tabs on the first strip, in order, and the one shown.
     fn first_strip(app: &App) -> (Vec<TabId>, Option<TabId>) {
         let pane = &app.chrome.strips[0];
-        let order = pane.strip.ids().filter_map(|id| pane.winter(id)).collect();
-        let shown = pane.strip.active().and_then(|id| pane.winter(id));
+        let StripKind::Tabs(strip) = &pane.kind else {
+            panic!("expected tab strip");
+        };
+        let order = strip.ids().filter_map(|id| pane.winter(id)).collect();
+        let shown = strip.active().and_then(|id| pane.winter(id));
         (order, shown)
     }
 

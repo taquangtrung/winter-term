@@ -4,6 +4,7 @@
 //! and so wear a spinner, lives in [`busy`].
 
 pub(in crate::window) mod busy;
+mod sidebar;
 pub(in crate::window) mod view;
 
 use misty::{CellMetrics, Rect, TabStrip};

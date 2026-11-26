@@ -382,6 +382,7 @@ impl App {
                     self.input.clear_sequence();
                     self.input.keys.forwarded.clear();
                     self.chrome.tab_drag = None;
+                    self.on_cursor_left();
                 }
                 if self.input.focus.window != focused {
                     self.input.focus.window = focused;
