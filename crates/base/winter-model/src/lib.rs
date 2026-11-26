@@ -35,7 +35,7 @@ pub mod recall;
 pub mod registers;
 pub mod search;
 pub mod settings_page;
-pub mod spinner;
+pub use misty::spinner;
 pub mod system;
 pub mod text_file;
 pub mod units;

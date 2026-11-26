@@ -857,7 +857,7 @@ impl DirEditor {
                 show_details: self.show_details,
                 show_sizes: self.show_sizes,
                 size: self.dir_size(row),
-                spinner: self.size_spinner(row, now),
+                walking: self.is_walking(row),
                 git: self.git_marks.get(&row.entry.path),
             },
             now,

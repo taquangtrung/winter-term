@@ -19,6 +19,7 @@ pub use renderer::{
 };
 pub use tabbar::{ControlsSide, MenuStyle, Region};
 pub use theme::Themes;
+pub(crate) use theme::mix;
 pub use winter_model::view::{
     ButtonView, ColumnAlign, CompletionRow, CompletionView, DropListRow, DropListView, FindView,
     InfoView, InputView, NoticeKind, PanelView, PickerItem, PickerPlacement, PickerView,

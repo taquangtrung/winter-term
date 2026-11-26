@@ -132,6 +132,9 @@ pub enum IconKind {
         /// The program's name, as the tab's title gives it.
         name: String,
     },
+    /// Work under way, drawn as a busy tab wears it: turning, from the
+    /// window's font, never as a braille cell's dots.
+    Spinner,
     /// A terminal tab.
     Terminal,
     /// An icon by its full name, as an extension names one of Winter's

@@ -140,8 +140,8 @@ pub struct RowStyle {
     pub show_sizes: bool,
     /// The walked total for a directory, once it is known.
     pub size: Option<u64>,
-    /// The spinner frame a directory wears while its walk is under way.
-    pub spinner: Option<char>,
+    /// Whether the directory's walk is under way, which wears the spinner.
+    pub walking: bool,
 }
 
 /// One entry: its fold glyph, indented name, and the detail columns when they
@@ -180,8 +180,16 @@ pub fn entry_row(
         true => Some(details(row, now, style)),
         false => file_or_dir_size(row, style),
     };
+    let mut icons = vec![icon];
     if let Some(trailing) = trailing {
         let gap = DETAIL_COL.saturating_sub(label_len).max(1);
+        if is_walked_now(row, style) {
+            icons.push(Icon {
+                col: label_len + gap + DETAIL_SIZE_WIDTH - Icon::WIDTH,
+                kind: IconKind::Spinner,
+                row: 0,
+            });
+        }
         spans.push(Span::new(
             Style::Dim,
             format!("{}{}", " ".repeat(gap), trailing),
@@ -195,7 +203,13 @@ pub fn entry_row(
         })
     });
     let marks = vec![style.marked.then_some(GutterMark::Icon(MARKED)).or(git)];
-    (spans, vec![icon], marks)
+    (spans, icons, marks)
+}
+
+/// Whether `row` is a directory whose first walk is under way, its size
+/// column the spinner's.
+fn is_walked_now(row: &Row, style: RowStyle) -> bool {
+    style.show_sizes && style.walking && row.entry.is_dir() && style.size.is_none()
 }
 
 /// What leads `row`'s name: its indent, fold glyph, and the icon's columns
@@ -253,9 +267,8 @@ fn file_or_dir_size(row: &Row, style: RowStyle) -> Option<String> {
     }
     let size = match (row.entry.is_dir(), style.size) {
         (true, Some(bytes)) => format_size(bytes),
-        (true, None) => style
-            .spinner
-            .map_or_else(|| WALKING.to_string(), String::from),
+        (true, None) if style.walking => " ".repeat(Icon::WIDTH),
+        (true, None) => WALKING.to_string(),
         (false, _) => format_size(row.entry.meta.len),
     };
     Some(format!("{size:>DETAIL_SIZE_WIDTH$}"))
@@ -299,9 +312,8 @@ pub fn format_age(modified: SystemTime, now: SystemTime) -> String {
 fn details(row: &Row, now: SystemTime, style: RowStyle) -> String {
     let size = match (row.entry.is_dir(), style.size) {
         (true, Some(bytes)) => format_size(bytes),
-        (true, None) => style
-            .spinner
-            .map_or_else(|| NO_VALUE.to_string(), String::from),
+        (true, None) if style.walking => " ".repeat(Icon::WIDTH),
+        (true, None) => NO_VALUE.to_string(),
         (false, _) => format_size(row.entry.meta.len),
     };
     format!(

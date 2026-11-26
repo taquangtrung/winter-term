@@ -5,7 +5,9 @@
 //! (images, icons, pages) where they lie. The separators between the panes
 //! are drawn apart, after the pane strips, which they divide too.
 
-use crate::render::{ImagePlacement, PanePaint};
+use std::time::Instant;
+
+use crate::render::{ImagePlacement, PAGE_DIM_MIX, PanePaint, mix};
 use misty::{Cell, CellHighlight, CellSource, Cursor, Frame, GpuTexture, Point, Rect, Rgba};
 
 use crate::window::App;
@@ -68,6 +70,27 @@ impl App {
         let hits = renderer.hits();
         for placement in hits.pictures() {
             draw_placement(frame, placement, renderer.image_texture(placement.id));
+        }
+        self.draw_spinners(frame);
+    }
+
+    /// The editors' spinners over their rows, as a busy tab's is drawn, in
+    /// the dim of the words beside them, turning in step from when the first
+    /// showed.
+    fn draw_spinners(&mut self, frame: &mut Frame) {
+        if self.chrome.spinner_slots.is_empty() {
+            self.chrome.spinner_epoch = None;
+            return;
+        }
+        let Some(renderer) = &self.renderer else {
+            return;
+        };
+        let theme = renderer.theme();
+        // The cell grid's dim mixes in the background's share; this the text's.
+        let color = mix(theme.foreground, theme.background, 1.0 - PAGE_DIM_MIX);
+        let epoch = *self.chrome.spinner_epoch.get_or_insert_with(Instant::now);
+        for slot in &self.chrome.spinner_slots {
+            frame.draw_spinner(epoch, *slot, slot.y, color);
         }
     }
 }

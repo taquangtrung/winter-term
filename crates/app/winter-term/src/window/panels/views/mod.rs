@@ -681,6 +681,7 @@ impl RowIcon {
             IconKind::Gutter { .. } => "Mark",
             IconKind::Named { .. } => "Icon",
             IconKind::Program { .. } => "Program",
+            IconKind::Spinner => "Working",
             IconKind::Symbol { name } => name.strip_prefix(SYMBOL_PREFIX).unwrap_or(name),
             IconKind::Terminal => "Terminal",
         };
@@ -982,6 +983,8 @@ fn load_icon(icons: &mut IconSet, kind: &IconKind) {
         | IconKind::Git { .. }
         | IconKind::Gutter { .. }
         | IconKind::Program { .. }
+        // Drawn from the font, so never named, and never reaches here.
+        | IconKind::Spinner
         | IconKind::Terminal => icons.insert_colored(name, svg),
     }
 }

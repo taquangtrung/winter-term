@@ -1154,17 +1154,27 @@ fn test_only_the_directory_being_walked_spins() {
     editor.on_key(&alt_shift(KeyCode::Char('s')));
 
     let frame = editor.content(10, 80, false);
-    let size_of = |name: &str| {
+    let row_of = |name: &str| {
         frame
             .rows
             .iter()
-            .map(winter_model::paint::row_text)
-            .find(|text| text.contains(name))
-            .and_then(|text| text.trim_end().chars().last())
+            .position(|row| winter_model::paint::row_text(row).contains(name))
             .expect("the row is painted")
     };
-    assert!(('⠀'..='⣿').contains(&size_of("aaa/")), "walked");
-    assert_eq!(size_of("bbb/"), '…', "queued");
+    let spins = |row: usize| {
+        frame
+            .icons
+            .iter()
+            .any(|icon| icon.row == row && icon.kind == IconKind::Spinner)
+    };
+    // The spinner is drawn by the host as a busy tab's is, never as a
+    // braille cell, whose dots the grid draws large.
+    let walked = winter_model::paint::row_text(&frame.rows[row_of("aaa/")]);
+    assert!(spins(row_of("aaa/")), "walked");
+    assert!(!walked.contains(|c| ('⠀'..='⣿').contains(&c)), "{walked:?}");
+    assert!(!spins(row_of("bbb/")));
+    let queued = winter_model::paint::row_text(&frame.rows[row_of("bbb/")]);
+    assert!(queued.trim_end().ends_with('…'), "queued: {queued:?}");
     // With git's refresh ticked off, only the spinner still wants ticks.
     editor.on_tick(Instant::now());
     assert!(editor.next_tick().is_some(), "the spinner keeps turning");

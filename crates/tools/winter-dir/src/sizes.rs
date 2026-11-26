@@ -5,10 +5,8 @@
 //! reload), and shows its old value meanwhile.
 
 use std::path::{Path, PathBuf};
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use winter_model::editor::{DirTotal, EditorOutcome, JobRequest};
-use winter_model::spinner;
 
 use super::DirEditor;
 use super::tree::Row;
@@ -49,14 +47,10 @@ impl DirEditor {
         self.sizes.get(&row.entry.path).map(|entry| entry.bytes)
     }
 
-    /// The spinner frame for a directory row whose walk is under way at `now`,
-    /// and `None` for every other row.
-    pub(super) fn size_spinner(&self, row: &Row, now: SystemTime) -> Option<char> {
-        if self.sizing.as_ref() != Some(&row.entry.path) {
-            return None;
-        }
-        let elapsed = now.duration_since(UNIX_EPOCH).unwrap_or_default();
-        Some(spinner::glyph(spinner::frame_at(elapsed)))
+    /// Whether `row` is the directory whose walk is under way, which wears
+    /// the spinner.
+    pub(super) fn is_walking(&self, row: &Row) -> bool {
+        self.sizing.as_ref() == Some(&row.entry.path)
     }
 
     /// Turn directory sizes on or off. Turning them off asks for no more

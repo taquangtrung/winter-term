@@ -168,7 +168,7 @@ fn is_light(theme: &Theme) -> bool {
 }
 
 /// `share` of `front` over the rest of `back`, in misty's colors.
-fn mix(front: ThemeRgb, back: ThemeRgb, share: f32) -> Rgb {
+pub(crate) fn mix(front: ThemeRgb, back: ThemeRgb, share: f32) -> Rgb {
     let blend = |a: u8, b: u8| (f32::from(a) * share + f32::from(b) * (1.0 - share)).round() as u8;
     Rgb::new(
         blend(front.r, back.r),

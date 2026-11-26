@@ -381,6 +381,12 @@ pub(in crate::window) struct Chrome {
     /// Where each pane's gutter lanes were last drawn, whose tab, for a
     /// mark's tooltip.
     pub(in crate::window) gutter_strips: Vec<(TabId, misty::Rect)>,
+    /// Where the editors' spinners go this frame, each a row icon's square,
+    /// for misty to draw as it draws a busy tab's.
+    pub(in crate::window) spinner_slots: Vec<misty::Rect>,
+    /// When the editors' spinners started turning, so they turn in step;
+    /// `None` while none shows.
+    pub(in crate::window) spinner_epoch: Option<Instant>,
     /// The dialog the last frame worked out, for misty to draw.
     pub(in crate::window) drawn_dialog: Option<crate::render::InputView>,
     /// misty's dialog for `drawn_dialog`, kept between frames so the button

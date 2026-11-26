@@ -108,6 +108,7 @@ fn test_every_command_icon_names_an_editor_with_artwork() {
             | IconKind::Gutter { .. }
             | IconKind::Named { .. }
             | IconKind::Program { .. }
+            | IconKind::Spinner
             | IconKind::Symbol { .. }
             | IconKind::Terminal => None,
         })

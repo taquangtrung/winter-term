@@ -289,6 +289,8 @@ pub(crate) fn name_for(kind: &IconKind) -> Option<String> {
         IconKind::Symbol { name } => qualified(SYMBOL_SET, name),
         IconKind::Program { name } => program_icon(name),
         IconKind::Terminal => terminal_icon(),
+        // Drawn from the font as a busy tab's is, never as artwork.
+        IconKind::Spinner => return None,
         IconKind::Editor { kind } => editor_icon(kind),
         IconKind::Named { name } if in_set(name, EXTENSION_SET) => return Some(name.clone()),
         IconKind::Named { name } => name.clone(),

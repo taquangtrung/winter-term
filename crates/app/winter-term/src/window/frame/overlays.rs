@@ -6,7 +6,7 @@ use std::collections::HashMap;
 use crate::render::{ImagePlacement, Theme, text_area};
 use misty::Rect;
 use winter_model::layout::TabId;
-use winter_model::paint::{GUTTER_ICON_WIDTH, Icon};
+use winter_model::paint::{GUTTER_ICON_WIDTH, Icon, IconKind};
 
 use crate::window::App;
 use crate::window::terminal::navigation::reading::{
@@ -266,9 +266,24 @@ impl App {
             })
         });
         let mut placements = Vec::new();
+        self.chrome.spinner_slots.clear();
         for (tab, pane_rect, icons, slot_w) in content.chain(gutter) {
             let alpha = alpha_of(tab);
             for icon in icons {
+                if icon.kind == IconKind::Spinner {
+                    let slot = misty::Rect::new(
+                        pane_rect.x + icon.col as f32 * cw,
+                        pane_rect.y + icon.row as f32 * ch,
+                        slot_w,
+                        ch,
+                    );
+                    if slot.y + ch <= pane_rect.y + pane_rect.height
+                        && slot.x + slot_w <= pane_rect.x + pane_rect.width
+                    {
+                        self.chrome.spinner_slots.push(slot);
+                    }
+                    continue;
+                }
                 let Some(name) = crate::icons::name_for(&icon.kind) else {
                     continue;
                 };
