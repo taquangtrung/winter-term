@@ -37,10 +37,10 @@ const TAB_STRIP_SHADE_LIGHT: f32 = 0.08;
 const POPUP_BG_DARK: &str = "#252526";
 
 /// Default active background color for selected items on dark themes.
-const MENU_HOVER_DARK: &str = "#1b5ec4";
+const MENU_HOVER_DARK: &str = "#2b4466";
 
 /// Default active background color for selected items on light themes.
-const MENU_HOVER_LIGHT: &str = "#cfe2ff";
+const MENU_HOVER_LIGHT: &str = "#d6e2f0";
 
 /// How much of the text color tints the cursor's row.
 const CURSOR_LINE_TINT: f32 = 0.06;
