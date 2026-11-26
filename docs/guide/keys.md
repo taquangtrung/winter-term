@@ -156,7 +156,7 @@ These work in every mode.
 | `C-S-n` / `C-S-w` | New terminal, close tab |
 | `C-S-t` | Reopen the last closed tab |
 | `C-M-S-n` | New window |
-| `C-]` / `C-[` | Next, previous tab |
+| `C-]` / `C-[`, `C-PageDown` / `C-PageUp` | Next, previous tab |
 | `C-M-]` / `C-M-[` | Next, previous tab by recent use |
 | `C-M-S-]` / `C-M-S-[` | The same, among tabs of one kind |
 | `C-1` to `C-9` | Go to tab N |

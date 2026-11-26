@@ -87,10 +87,11 @@ commands {
     scroll_to_top "M-S-a" "M-S-,"
     scroll_to_bottom "M-S-e" "M-S-."
 
-    // Tabs: C-[ and C-] take the chords a terminal sends as Esc and GS.
-    next_tab "C-]"
+    // Tabs: C-[ and C-] take the chords a terminal sends as Esc and GS;
+    // C-PageUp and C-PageDown as browsers and terminals have them.
+    next_tab "C-]" "C-<next>"
     next_tab "s-S-]" platform="macos"
-    prev_tab "C-["
+    prev_tab "C-[" "C-<prior>"
     prev_tab "s-S-[" platform="macos"
     next_recent_tab "C-M-]"
     prev_recent_tab "C-M-["

@@ -1155,6 +1155,16 @@ mod tests {
     }
 
     #[test]
+    fn test_ctrl_page_down_and_up_step_through_the_tabs_as_browsers_do() {
+        let window = &default_bindings_for("linux")["window"];
+        assert_eq!(window.get("C-<next>").map(String::as_str), Some("next_tab"));
+        assert_eq!(
+            window.get("C-<prior>").map(String::as_str),
+            Some("prev_tab")
+        );
+    }
+
+    #[test]
     fn test_a_configured_ctrl_alt_chord_is_held_by_the_window_in_every_mode() {
         let mut bindings = HashMap::new();
         bindings.insert("C-M-[".to_string(), "prev_recent_tab".to_string());
