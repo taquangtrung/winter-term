@@ -188,6 +188,10 @@ commands {
     font_reset "C-0"
     font_reset "s-0" platform="macos"
     reload "C-M-S-r"
+    // Full screen: F11 as desktop apps have it on Linux and Windows. macOS
+    // has its own C-s-f, and keeps F11 to show the desktop.
+    toggle_fullscreen "F11" platform="linux"
+    toggle_fullscreen "F11" platform="windows"
 
     // Help: the keys of the focused tab, what a key runs, and the scopes and
     // theme rule of the token under the cursor.

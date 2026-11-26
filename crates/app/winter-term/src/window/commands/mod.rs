@@ -763,6 +763,15 @@ pub(crate) const BUILTIN: &[Builtin] = &[
         "Tab: Previous Recently Used of the Same Kind",
         |app, _| app.recently_used_tab_of_kind(true),
     ),
+    window(
+        "toggle_fullscreen",
+        "Window: Toggle Full Screen",
+        |app, _| {
+            if let Some(window) = &app.window {
+                window.toggle_fullscreen();
+            }
+        },
+    ),
     window("reload", "Window: Reload", |app, _| {
         app.runtime.exit.reload_pending = true
     }),

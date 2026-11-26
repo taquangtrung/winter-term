@@ -26,6 +26,7 @@ const LAYOUT_ITEMS: &[ItemDef] = &[
     leaf("split_vertical", "Split Right"),
     leaf("split_horizontal", "Split Down"),
     leaf("zoom_pane", "Zoom Pane"),
+    leaf("toggle_fullscreen", "Full Screen"),
     leaf("close_pane", "Close Pane"),
 ];
 
@@ -86,6 +87,7 @@ const CLASSIC_MENUS: &[MenuDef] = &[
         items: &[
             leaf("split_vertical", "Split Right"),
             leaf("split_horizontal", "Split Down"),
+            leaf("toggle_fullscreen", "Full Screen"),
             SEPARATOR,
             leaf("toggle_fold", "Toggle Fold"),
         ],

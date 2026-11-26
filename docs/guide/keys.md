@@ -164,6 +164,7 @@ These work in every mode.
 | `C-,` | Settings |
 | `C-=` / `C--` / `C-0` | Font bigger, smaller, reset |
 | `C-M-S-r` | Reload |
+| `F11` | Full screen (on macOS, the system's `C-s-f`) |
 | `C-S-d` | Dir |
 | `C-S-f` | Browse files |
 | `C-S-g` | Git |

@@ -73,6 +73,8 @@ enum Request {
     SetTitle(String),
     /// Let the background show the desktop through it.
     SetTransparent(bool),
+    /// Fill the screen with the window, or restore it.
+    ToggleFullscreen,
     /// Maximize the window, or restore it.
     ToggleMaximize,
 }
@@ -209,6 +211,11 @@ impl WindowHandle {
         }
     }
 
+    /// Fills the screen with the window, or restores it when it does.
+    pub(in crate::window) fn toggle_fullscreen(&self) {
+        self.ask(Request::ToggleFullscreen);
+    }
+
     /// Draws misty's widgets in `font` from the next frame.
     pub(in crate::window) fn set_font(&self, font: Font) {
         self.ask(Request::SetFont(font));
@@ -259,6 +266,7 @@ impl WindowHandle {
                 Request::SetTransparent(transparent) => {
                     cx.event_cx(id).set_transparent(transparent)
                 }
+                Request::ToggleFullscreen => cx.event_cx(id).toggle_fullscreen(),
                 Request::ToggleMaximize => cx.event_cx(id).toggle_maximize(),
             }
         }

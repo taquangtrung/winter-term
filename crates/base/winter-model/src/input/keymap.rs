@@ -1155,6 +1155,19 @@ mod tests {
     }
 
     #[test]
+    fn test_f11_fills_the_screen_except_on_macos_which_has_its_own_key() {
+        let f11 = |platform| default_bindings_for(platform)["window"].get("F11").cloned();
+        for platform in ["linux", "windows"] {
+            assert_eq!(
+                f11(platform).as_deref(),
+                Some("toggle_fullscreen"),
+                "{platform}"
+            );
+        }
+        assert_eq!(f11("macos"), None);
+    }
+
+    #[test]
     fn test_ctrl_page_down_and_up_step_through_the_tabs_as_browsers_do() {
         let window = &default_bindings_for("linux")["window"];
         assert_eq!(window.get("C-<next>").map(String::as_str), Some("next_tab"));
