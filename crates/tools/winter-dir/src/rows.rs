@@ -3,7 +3,9 @@
 
 use std::time::{Duration, SystemTime};
 
-use winter_model::paint::{self, ColumnAlign, ColumnName, GutterMark, Icon, IconKind, Span, Style};
+use winter_model::paint::{
+    self, ColumnAlign, ColumnName, GutterMark, Icon, IconKind, SPINNER_WIDTH, Span, Style,
+};
 use winter_model::units::format_size;
 
 use super::entry::{Entry, EntryKind, Meta};
@@ -29,11 +31,12 @@ const INDENT: usize = 2;
 /// The icon of an entry marked for an operation, in the gutter's mark lane.
 const MARKED: IconKind = IconKind::Gutter { mark: "marked" };
 
-/// Shown where a value does not apply, such as an unwalked directory's size.
+/// Shown where a value does not apply, such as a directory's size while
+/// sizes are off.
 const NO_VALUE: &str = "-";
 
-/// Shown for a directory waiting its turn to be walked; the one being walked
-/// wears the spinner instead.
+/// Shown for a directory waiting its turn to be walked, a size pending; the
+/// one being walked wears the spinner instead.
 const WALKING: &str = "…";
 
 /// Seconds in the units an age is reported in, largest first.
@@ -191,7 +194,7 @@ pub fn entry_row(
         let gap = start.saturating_sub(label_len).max(1);
         if is_walked_now(row, style) {
             icons.push(Icon {
-                col: label_len + gap + DETAIL_SIZE_WIDTH - Icon::WIDTH,
+                col: label_len + gap + DETAIL_SIZE_WIDTH - SPINNER_WIDTH,
                 kind: IconKind::Spinner,
                 row: 0,
             });
@@ -273,7 +276,7 @@ fn file_or_dir_size(row: &Row, style: RowStyle) -> Option<String> {
     }
     let size = match (row.entry.is_dir(), style.size) {
         (true, Some(bytes)) => format_size(bytes),
-        (true, None) if style.walking => " ".repeat(Icon::WIDTH),
+        (true, None) if style.walking => " ".repeat(SPINNER_WIDTH),
         (true, None) => WALKING.to_string(),
         (false, _) => format_size(row.entry.meta.len),
     };
@@ -318,7 +321,9 @@ pub fn format_age(modified: SystemTime, now: SystemTime) -> String {
 fn details(row: &Row, now: SystemTime, style: RowStyle) -> String {
     let size = match (row.entry.is_dir(), style.size) {
         (true, Some(bytes)) => format_size(bytes),
-        (true, None) if style.walking => " ".repeat(Icon::WIDTH),
+        (true, None) if style.walking => " ".repeat(SPINNER_WIDTH),
+        // Waiting its turn while sizes are on; not walked at all while off.
+        (true, None) if style.show_sizes => WALKING.to_string(),
         (true, None) => NO_VALUE.to_string(),
         (false, _) => format_size(row.entry.meta.len),
     };
@@ -522,6 +527,37 @@ mod tests {
             SystemTime::UNIX_EPOCH,
         ));
         assert!(walked.contains("2.0K"), "got {walked:?}");
+    }
+
+    #[test]
+    fn test_a_pending_size_is_an_ellipsis_and_the_spinner_ends_its_column() {
+        // A dash says a value does not apply, which a size waiting its turn
+        // does; and a right-aligned column's spinner sits where its last
+        // digit will, not half a cell short of it.
+        let dir = row("src", EntryKind::Dir, 0, false);
+        let width = 60;
+        let style = |show_sizes, walking| RowStyle {
+            show_details: true,
+            show_sizes,
+            walking,
+            width,
+            ..RowStyle::default()
+        };
+        let size_cell = |style: RowStyle| {
+            let painted = text(entry_row_only(&dir, style, SystemTime::UNIX_EPOCH));
+            let end = width - trailing_width(true) + DETAIL_SIZE_WIDTH;
+            painted.chars().nth(end - 1).expect("the size's last cell")
+        };
+        assert_eq!(size_cell(style(true, false)), '…', "pending");
+        assert_eq!(size_cell(style(false, false)), '-', "sizes off");
+
+        let (_, icons, _) = entry_row(&dir, None, style(true, true), SystemTime::UNIX_EPOCH);
+        let spinner = icons
+            .iter()
+            .find(|icon| icon.kind == IconKind::Spinner)
+            .expect("the walk spins");
+        let size_end = width - trailing_width(true) + DETAIL_SIZE_WIDTH;
+        assert_eq!(spinner.col + SPINNER_WIDTH, size_end);
     }
 
     #[test]

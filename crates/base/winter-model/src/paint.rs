@@ -90,6 +90,10 @@ impl Icon {
     pub const WIDTH: usize = 2;
 }
 
+/// Columns a [`IconKind::Spinner`] beside a row's text occupies: one, as the
+/// glyph it is drawn as does, so it lines up with the column it stands in.
+pub const SPINNER_WIDTH: usize = 1;
+
 /// Columns an icon in a gutter's [`GutterLane::Icon`] lane occupies: one,
 /// the artwork fitted to the cell's width, square, so a gutter takes as
 /// little of its pane as a mark can be read in.
