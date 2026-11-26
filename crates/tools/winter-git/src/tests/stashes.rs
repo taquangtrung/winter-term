@@ -10,7 +10,7 @@ fn test_stash_choices_run_the_matching_command() {
         ["stash", "pop"]
     );
     assert_eq!(
-        choose(&mut editor, 'z', 'd'),
+        choose(&mut editor, 'z', 'x'),
         EditorOutcome::Consumed,
         "no stash, nothing to drop"
     );
@@ -22,10 +22,10 @@ fn test_stash_choices_run_the_matching_command() {
 
 #[test]
 fn test_dropping_a_stash_from_the_menu_asks_first() {
-    // `z d` dropped the newest stash on the spot, while `x` on the same
+    // `z x` dropped the newest stash on the spot, while `x` on the same
     // stash asked: a stash dropped cannot be taken back.
     let mut editor = stash_editor_on(Item::StashHeading);
-    let EditorOutcome::Prompt(request) = choose(&mut editor, 'z', 'd') else {
+    let EditorOutcome::Prompt(request) = choose(&mut editor, 'z', 'x') else {
         panic!("the drop asks first");
     };
     assert!(request.label.contains("stash@{0}"), "{}", request.label);
@@ -44,7 +44,7 @@ fn test_the_stash_menu_stashes_parts_and_acts_on_the_stash_at_the_cursor() {
         ["stash", "push", "--staged"]
     );
     assert_eq!(
-        command_of(&choose(&mut editor, 'z', 'x')).args,
+        command_of(&choose(&mut editor, 'z', 'w')).args,
         ["stash", "push", "--keep-index"]
     );
     assert_eq!(

@@ -24,7 +24,7 @@ use super::usage::Usage;
 const CRITICAL_PERCENT: f64 = 90.0;
 const WARNING_PERCENT: f64 = 75.0;
 
-/// The ids of the cards, the sections `n` and `N` move between.
+/// The ids of the cards, the sections `]` and `[` move between.
 pub const CPU: &str = "sys.cpu";
 pub const MEMORY: &str = "sys.memory";
 pub const GPU: &str = "sys.gpu";

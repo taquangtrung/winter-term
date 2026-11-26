@@ -287,7 +287,7 @@ const KEYS: KeyTable<Act> = KeyTable {
         Binding {
             action: Act::CopyCommand,
             id: "copy_command",
-            keys: &["c"],
+            keys: &["Y"],
             label: "Copy Command",
         },
     ],

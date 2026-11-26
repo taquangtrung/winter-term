@@ -60,6 +60,8 @@ These keys open a menu; the next key picks from it, and a card shows the choices
 
 In a menu, `-` then a letter turns on a switch such as `--force-with-lease`.
 
+In every menu, `x` throws away, as it does outside one: it deletes a branch or tag, drops a stash, removes a remote or worktree, or aborts a merge, rebase, cherry-pick, revert, or bisect. `X` deletes a branch even when it is not merged.
+
 A commit, log, blame, or diff opens in a Git tab of its own. In it, `Enter` on a commit reads it, `y` copies the hash, and `q` goes back.
 
 While a merge, rebase, cherry-pick, revert, or bisect is under way, a `State:` line says how far it has come and which keys finish it.

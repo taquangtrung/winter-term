@@ -9,15 +9,15 @@ Docker (`Docker: Containers, Images, Volumes, Networks`) lists what the Docker d
 | `Enter` | Inspect |
 | `r` | Refresh now |
 | `/` | Find a row in the picker |
-| `y` / `i` | Copy the name, the id |
-| `D` | Remove (asks first) |
+| `y` / `Y` | Copy the name, the id |
+| `x` / `X` | Remove, remove even if in use (both ask first) |
 | `C` | Prune what is unused (asks first) |
-| `s` / `x` / `R` | Start, stop, restart a container |
+| `s` / `R` | Start or stop, restart a container |
 | `p` / `K` | Pause or unpause, kill a container (kill asks first) |
 | `e` / `a` / `L` | Open a shell in it, attach, follow its logs, in a new terminal tab |
 | `o` / `t` / `S` | Its last 500 log lines, its processes, its CPU and memory |
 | `P` / `H` | Pull an image again, read its layers |
 
-Output such as an inspect or a page of logs replaces the list: `Y` copies the line under the cursor, and `q` goes back.
+Output such as an inspect or a page of logs replaces the list: `y` copies the line under the cursor, and `q` goes back.
 
 The keys are rebound in the `docker.list` block of `keybindings.kdl`.

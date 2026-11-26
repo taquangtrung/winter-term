@@ -38,5 +38,5 @@ Usage bars and percentages turn amber at 75 percent and red at 90.
 |---|---|
 | `j` `k`, `C-e` `C-y` | Scroll |
 | `gg` / `G` | Top, bottom |
-| `n` / `N` | Next, previous card |
+| `]` / `[` | Next, previous card |
 | `r` / `p` | Refresh now, pause or resume |

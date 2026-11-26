@@ -12,7 +12,7 @@ Each text has its color: A red, B green, the third blue. The current region is m
 
 | Key | Action |
 |---|---|
-| `n` or `SPC` / `p` or `DEL` | Next, previous region |
+| `n` or `] c` / `p` or `[ c` | Next, previous region |
 | `J` | Jump to a region by number |
 | `j` `k` `C-d` `C-u` `gg` `G` | Scroll every text together |
 | `<` / `>` | Scroll sideways |

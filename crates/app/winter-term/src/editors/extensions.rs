@@ -117,13 +117,13 @@ const KEYS: KeyTable<Act> = KeyTable {
         Binding {
             action: Act::Revoke,
             id: "take_back",
-            keys: &["d"],
+            keys: &["x"],
             label: "Take the Grant Back",
         },
         Binding {
             action: Act::Remove,
             id: "remove_extension",
-            keys: &["D"],
+            keys: &["X"],
             label: "Remove the Extension",
         },
     ],
@@ -709,7 +709,7 @@ mod tests {
     fn test_a_grant_taken_back_can_be_granted_again_from_its_row() {
         let (_scratch, mut page) = installed("again");
         select(&mut page, |act| matches!(act, LineAct::Granted(_)));
-        page.on_key(&Key::plain(KeyCode::Char('d')));
+        page.on_key(&Key::plain(KeyCode::Char('x')));
         let notice = page.view.state_mut().notice.take();
         assert!(
             matches!(notice, Some(ExtensionsNotice::Changed(_))),

@@ -16,8 +16,8 @@ Winter runs only the exact file you approved. A file changed since, or copied in
 |---|---|
 | `j` / `k` | Next, previous row |
 | `RET` or a double click | Do what the row offers: install, grant, or add a directory |
-| `d` | Take a grant back |
-| `D` | Remove the extension |
+| `x` | Take a grant back |
+| `X` | Remove the extension |
 
 Each row also has a button for its action, and the selected permission, or one the pointer rests on, says what it allows. Changes take effect when Winter next starts.
 

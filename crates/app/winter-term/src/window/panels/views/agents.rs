@@ -86,7 +86,7 @@ pub(super) const KEYS: KeyTable<AgentAction> = KeyTable {
         Binding {
             action: AgentAction::Discard,
             id: "discard",
-            keys: &["D"],
+            keys: &["x"],
             label: "Discard the Agent",
         },
         Binding {

@@ -99,7 +99,7 @@ Every terminal, agents' among them, is also in `Sidebar: Terminals` ([Basics](ba
 | `h` / `l` | Fold the agent shut, or open |
 | `r` | Review its work |
 | `m` | Merge it |
-| `D` | Discard it |
+| `x` | Discard it |
 | `s` | Stop it |
 
 ## When Winter quits

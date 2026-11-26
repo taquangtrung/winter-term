@@ -111,11 +111,11 @@ impl Operation {
     /// carry on, and what to press to give up.
     pub fn keys(self) -> &'static str {
         match self {
-            Operation::Bisect => "b g good, b b bad, b r reset",
+            Operation::Bisect => "B g good, B b bad, B x reset",
             Operation::CherryPick => "A c continue, A x abort",
             Operation::Merge => "m c continue, m x abort",
             Operation::Rebase => "r c continue, r s skip, r x abort",
-            Operation::Revert => "V c continue, V x abort",
+            Operation::Revert => "_ c continue, _ x abort",
         }
     }
 

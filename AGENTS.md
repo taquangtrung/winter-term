@@ -71,6 +71,12 @@ A key runs its command only where that command works. Built-in keys live in `cra
 - **Bind in the command's context.** A command that works only in some files or tabs binds with a `when` condition naming them (`lang == latex`, `focus == git`), never everywhere. Several of one kind join with `|` (`lang == latex|bibtex`); other either-or is two lines.
 - **Share a key across contexts, not over them.** Commands may share a key when their contexts never overlap, as SyncTeX forward (LaTeX, BibTeX) and Markdown: Preview Beside (Markdown) share `F6` and `F7`. Outside them the key stays free.
 - **Global only if it works everywhere.** A key bound without a condition must do something useful wherever it is pressed.
+- **One meaning per key.** A key means the same in every tool and every menu:
+  - `x` / `X` throws away what the cursor is on, and asks first: discards a change, deletes a file, a branch, or a container, ends a process, aborts an operation in progress. `X` is the harder form: for good, by force, unmerged. Never `d` or `D` for this; `d` is a diff.
+  - `y` / `Y` copies: the short form, then the long one.
+  - `]` / `[` steps to the next or previous thing of a kind (an entry, a card); `n` / `N` repeats a search.
+  - `M-S-r` (and `C-r`) reads again what the tab shows.
+  - In a menu, its own letter again runs its default, as `Z z` stashes everything, and `l` lists.
 - **Test it.** A conditional binding has a test that its key runs the command in its context and nothing outside it, as `when.rs` does for `F6`.
 
 ## Pages

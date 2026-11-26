@@ -59,7 +59,7 @@ const READING: &str = "reading the machine…";
 /// How many readings the history lines hold: two minutes' worth.
 const HISTORY_LEN: usize = 60;
 
-/// How far past a section's top the body must be for `N` to go back to
+/// How far past a section's top the body must be for `[` to go back to
 /// that section rather than the one before it, in pixels.
 const SECTION_SLACK: f32 = 1.0;
 
@@ -86,13 +86,13 @@ const KEYS: KeyTable<Act> = KeyTable {
         Binding {
             action: Act::NextSection,
             id: "next_section",
-            keys: &["n"],
+            keys: &["]"],
             label: "Next Section",
         },
         Binding {
             action: Act::PreviousSection,
             id: "previous_section",
-            keys: &["N"],
+            keys: &["["],
             label: "Previous Section",
         },
         Binding {

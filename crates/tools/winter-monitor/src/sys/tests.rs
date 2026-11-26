@@ -150,20 +150,20 @@ fn test_a_failed_snapshot_is_shown_and_retried() {
 }
 
 #[test]
-fn test_cards_are_jumped_between_with_n_and_back_with_capital_n() {
+fn test_cards_are_jumped_between_with_brackets() {
     let mut editor = loaded_editor();
     // A pane narrow enough to stack the cards and too short for them all,
     // so there is somewhere to go.
     let mut window = TestWindow::new(600, 150);
     window.set_reduced_motion(true);
     assert_eq!(offset(&mut editor, &window), 0.0);
-    editor.on_key(&press(KeyCode::Char('n')));
+    editor.on_key(&press(KeyCode::Char(']')));
     let first = offset(&mut editor, &window);
     assert!(first > 0.0, "down to the next card");
-    editor.on_key(&press(KeyCode::Char('n')));
+    editor.on_key(&press(KeyCode::Char(']')));
     let second = offset(&mut editor, &window);
     assert!(second > first, "{second} past {first}");
-    editor.on_key(&press(KeyCode::Char('N')));
+    editor.on_key(&press(KeyCode::Char('[')));
     assert_eq!(offset(&mut editor, &window), first);
 }
 

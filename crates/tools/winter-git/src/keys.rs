@@ -1043,12 +1043,12 @@ impl GitEditor {
             }
             (Popup::Branch, 'c') => self.ask(ASK_BRANCH_CREATE, "Create and checkout: "),
             (Popup::Branch, 'n') => self.ask(ASK_BRANCH_CREATE_HERE, "Create branch: "),
-            (Popup::Branch, 'd') => self.pick(
+            (Popup::Branch, 'x') => self.pick(
                 ASK_BRANCH_DELETE,
                 "Delete branch",
                 exec::Candidates::LocalBranches,
             ),
-            (Popup::Branch, 'D') => self.pick(
+            (Popup::Branch, 'X') => self.pick(
                 ASK_BRANCH_DELETE_FORCE,
                 "Delete unmerged branch",
                 exec::Candidates::LocalBranches,
@@ -1150,14 +1150,14 @@ impl GitEditor {
 
             (Popup::Stash, 'z') => self.ask(ASK_STASH, "Stash message (optional): "),
             (Popup::Stash, 'i') => EditorOutcome::Job(exec::stash_push_with(&root, "--staged")),
-            (Popup::Stash, 'x') => EditorOutcome::Job(exec::stash_push_with(&root, "--keep-index")),
+            (Popup::Stash, 'w') => EditorOutcome::Job(exec::stash_push_with(&root, "--keep-index")),
             (Popup::Stash, 'u') => {
                 EditorOutcome::Job(exec::stash_push_with(&root, "--include-untracked"))
             }
             // The stash at the cursor where there is one, as magit has it,
             // else the newest, as git does with none named.
-            // Dropping cannot be taken back, so it asks first, as `x` does.
-            (Popup::Stash, 'd') => {
+            // Dropping cannot be taken back, so it asks first, as discarding does.
+            (Popup::Stash, 'x') => {
                 let newest = self
                     .repo
                     .stashes
@@ -1185,12 +1185,12 @@ impl GitEditor {
             (Popup::Stash, 'l') => EditorOutcome::Job(exec::stash_list(&root)),
 
             (Popup::Tag, 't') => self.ask(ASK_TAG_CREATE, "Tag name: "),
-            (Popup::Tag, 'd') => self.pick(ASK_TAG_DELETE, "Delete tag", exec::Candidates::Tags),
+            (Popup::Tag, 'x') => self.pick(ASK_TAG_DELETE, "Delete tag", exec::Candidates::Tags),
             (Popup::Tag, 'l') => EditorOutcome::Job(exec::tag_list(&root)),
 
-            (Popup::Remote, 'v') => EditorOutcome::Job(exec::remote_list(&root)),
+            (Popup::Remote, 'l') => EditorOutcome::Job(exec::remote_list(&root)),
             (Popup::Remote, 'a') => self.ask(ASK_REMOTE_ADD, "Remote, as `name url`: "),
-            (Popup::Remote, 'd') => self.pick(
+            (Popup::Remote, 'x') => self.pick(
                 ASK_REMOTE_REMOVE,
                 "Remove remote",
                 exec::Candidates::Remotes,
@@ -1306,16 +1306,16 @@ impl GitEditor {
                 ASK_SUBMODULE_ADD,
                 "Submodule URL, then a path if not its name: ",
             ),
-            (Popup::Submodule, 'd') => self.ask(ASK_SUBMODULE_DEINIT, "Deinit submodule at: "),
+            (Popup::Submodule, 'x') => self.ask(ASK_SUBMODULE_DEINIT, "Deinit submodule at: "),
 
             (Popup::Worktree, 'l') => EditorOutcome::Job(exec::worktree_list(&root)),
             (Popup::Worktree, 'a') => self.ask(ASK_WORKTREE_ADD, "Worktree path: "),
-            (Popup::Worktree, 'd') => self.ask(ASK_WORKTREE_REMOVE, "Remove worktree: "),
+            (Popup::Worktree, 'x') => self.ask(ASK_WORKTREE_REMOVE, "Remove worktree: "),
 
             (Popup::Bisect, 's') => EditorOutcome::Job(exec::bisect(&root, "start")),
             (Popup::Bisect, 'g') => EditorOutcome::Job(exec::bisect(&root, "good")),
             (Popup::Bisect, 'b') => EditorOutcome::Job(exec::bisect(&root, "bad")),
-            (Popup::Bisect, 'r') => EditorOutcome::Job(exec::bisect(&root, "reset")),
+            (Popup::Bisect, 'x') => EditorOutcome::Job(exec::bisect(&root, "reset")),
 
             _ => EditorOutcome::Consumed,
         }

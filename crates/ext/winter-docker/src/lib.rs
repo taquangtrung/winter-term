@@ -69,12 +69,15 @@ const LOG_LINES: &str = "500";
 /// the `sh` every image has.
 const SHELL: &str = "command -v bash >/dev/null && exec bash || exec sh";
 
+/// The state docker lists a paused container in.
+const PAUSED: &str = "paused";
+
 /// The mark on a field too long for its column.
 const ELLIPSIS: char = '\u{2026}';
 
 /// Every action of the view: what it does, its id, the keys it starts on,
 /// and what the help list says of it.
-const ACTS: [(Act, &str, &[&str], &str); 28] = [
+const ACTS: [(Act, &str, &[&str], &str); 27] = [
     (Act::Down, "down", &["j", "<down>"], "Next row"),
     (Act::Up, "up", &["k", "<up>"], "Previous row"),
     (Act::First, "first", &["g g", "<home>"], "First row"),
@@ -94,17 +97,32 @@ const ACTS: [(Act, &str, &[&str], &str); 28] = [
     (Act::Inspect, "inspect", &["RET"], "Inspect"),
     (Act::Refresh, "refresh", &["r"], "Refresh Now"),
     (Act::Find, "find", &["/"], "Find a row"),
-    (Act::CopyName, "copy_name", &["y"], "Copy Name"),
-    (Act::CopyId, "copy_id", &["i"], "Copy ID"),
-    (Act::Remove, "remove", &["D"], "Remove"),
+    (
+        Act::Copy,
+        "copy",
+        &["y"],
+        "Copy the name, or the line of output",
+    ),
+    (Act::CopyId, "copy_id", &["Y"], "Copy ID"),
+    (Act::Remove, "remove", &["x"], "Remove"),
+    (
+        Act::ForceRemove,
+        "force_remove",
+        &["X"],
+        "Remove, even if in use",
+    ),
     (
         Act::Prune,
         "prune",
         &["C"],
         "Prune: remove every unused one",
     ),
-    (Act::Start, "start", &["s"], "Start a container"),
-    (Act::Stop, "stop", &["x"], "Stop a container"),
+    (
+        Act::StartStop,
+        "start_stop",
+        &["s"],
+        "Start / stop a container",
+    ),
     (Act::Restart, "restart", &["R"], "Restart a container"),
     (Act::Pause, "pause", &["p"], "Pause / unpause a container"),
     (Act::Kill, "kill", &["K"], "Kill a container"),
@@ -142,7 +160,6 @@ const ACTS: [(Act, &str, &[&str], &str); 28] = [
     (Act::Pull, "pull", &["P"], "Pull an image again"),
     (Act::History, "history", &["H"], "An image's layers"),
     (Act::Back, "back", &["q", "ESC"], "Back to the list"),
-    (Act::Copy, "copy_line", &["Y"], "Copy the line of output"),
 ];
 
 // ========================================================================
@@ -165,11 +182,11 @@ enum Act {
     Back,
     Copy,
     CopyId,
-    CopyName,
     Down,
     Find,
     First,
     FollowLogs,
+    ForceRemove,
     History,
     Inspect,
     Kill,
@@ -185,9 +202,8 @@ enum Act {
     Remove,
     Restart,
     Shell,
-    Start,
+    StartStop,
     Stats,
-    Stop,
     Up,
 }
 
@@ -626,7 +642,7 @@ fn run_act(host: &mut dyn Host, act: Act) {
             drop(state);
             list(host);
         }
-        Act::Copy => {
+        Act::Copy if state.output.is_some() => {
             if let Some(line) = state
                 .output
                 .as_ref()
@@ -672,6 +688,16 @@ fn run_act(host: &mut dyn Host, act: Act) {
     }
 }
 
+/// What `s` does to the container `item`: stops it while it has a process,
+/// running or paused, and starts it otherwise.
+fn start_or_stop(item: &Item) -> &'static str {
+    let paused = item.columns.get(1).map(String::as_str) == Some(PAUSED);
+    match item.running || paused {
+        true => "stop",
+        false => "start",
+    }
+}
+
 /// Do `act` to `item`, an object of `section`.
 fn act_on(host: &mut dyn Host, act: Act, section: Section, item: &Item) {
     let handle = item.handle.as_str();
@@ -679,7 +705,7 @@ fn act_on(host: &mut dyn Host, act: Act, section: Section, item: &Item) {
     let container = section == Section::Containers;
     let image = section == Section::Images;
     match act {
-        Act::CopyName => host.copy_text(handle),
+        Act::Copy => host.copy_text(handle),
         Act::CopyId => host.copy_text(&item.id),
         Act::Inspect => read(
             host,
@@ -690,6 +716,12 @@ fn act_on(host: &mut dyn Host, act: Act, section: Section, item: &Item) {
             host,
             words(&[object, "rm", handle]),
             format!("remove {object} {handle}"),
+            "Remove",
+        ),
+        Act::ForceRemove => confirm(
+            host,
+            words(&[object, "rm", "--force", handle]),
+            format!("remove {object} {handle}, even if in use"),
             "Remove",
         ),
         Act::Prune => {
@@ -705,13 +737,15 @@ fn act_on(host: &mut dyn Host, act: Act, section: Section, item: &Item) {
                 "Remove All",
             );
         }
-        Act::Start if container => act_with(host, &["start", handle], format!("start {handle}")),
-        Act::Stop if container => act_with(host, &["stop", handle], format!("stop {handle}")),
+        Act::StartStop if container => {
+            let verb = start_or_stop(item);
+            act_with(host, &[verb, handle], format!("{verb} {handle}"));
+        }
         Act::Restart if container => {
             act_with(host, &["restart", handle], format!("restart {handle}"))
         }
         Act::Pause if container => {
-            let paused = item.columns.get(1).map(String::as_str) == Some("paused");
+            let paused = item.columns.get(1).map(String::as_str) == Some(PAUSED);
             let verb = match paused {
                 true => "unpause",
                 false => "pause",
@@ -937,6 +971,16 @@ mod tests {
     fn test_a_long_field_is_cut_with_a_mark_and_a_short_one_padded() {
         assert_eq!(pad("abcdef", 4), "abc\u{2026} ");
         assert_eq!(pad("ab", 4), "ab   ");
+    }
+
+    #[test]
+    fn test_start_stop_stops_a_paused_container_as_a_running_one() {
+        let lines = format!("{TWO}c3\tcache\tredis\tpaused\tUp (Paused)\t\t\n");
+        let verbs: Vec<_> = parse::parse(Section::Containers, &lines)
+            .iter()
+            .map(start_or_stop)
+            .collect();
+        assert_eq!(verbs, ["stop", "start", "stop"]);
     }
 
     #[test]

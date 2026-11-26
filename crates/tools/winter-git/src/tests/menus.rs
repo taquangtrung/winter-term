@@ -239,7 +239,7 @@ fn test_deleting_a_branch_offers_only_the_ones_that_can_be_deleted() {
     // A branch on a remote is not this repository's to delete, so the
     // list stops at the local ones.
     let mut editor = loaded_editor();
-    let command = command_of(&choose(&mut editor, 'b', 'd'));
+    let command = command_of(&choose(&mut editor, 'b', 'x'));
     assert!(
         command.args.iter().any(|arg| arg == "refs/heads")
             && !command.args.iter().any(|arg| arg == "refs/remotes"),
@@ -253,7 +253,7 @@ fn test_a_question_with_nothing_to_choose_from_falls_back_to_typing() {
     // A repository with no tags still has a delete-tag key; it asks for
     // one to be spelled out rather than opening an empty list.
     let mut editor = loaded_editor();
-    choose(&mut editor, 't', 'd');
+    choose(&mut editor, 't', 'x');
     let outcome = editor.on_job(reply(exec::TAG_CANDIDATES, "\n"));
     assert!(
         matches!(outcome, EditorOutcome::Prompt(_)),
