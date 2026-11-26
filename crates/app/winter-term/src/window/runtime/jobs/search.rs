@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use winter_model::editor::{SearchHit, SearchRequest, SearchResult};
+use winter_model::editor::{DirTotal, SearchHit, SearchRequest, SearchResult};
 
 // ========================================================================
 // Constants
@@ -24,6 +24,11 @@ const SEARCH_MAX_FILE_BYTES: u64 = 1 << 20;
 /// The largest PDF listed for its text to be read: a book of scans is far
 /// past what its text is worth waiting for.
 const SEARCH_MAX_PDF_BYTES: u64 = 128 << 20;
+
+/// How many levels below the directory it totals a size walk reports the
+/// totals of: its children, and theirs, so stepping in twice shows sizes at
+/// once.
+const SIZE_INNER_LEVELS: usize = 2;
 
 /// How deep a walk goes, matching the size walk's own ceiling.
 const SEARCH_MAX_DEPTH: usize = 32;
@@ -45,9 +50,15 @@ const PATH_END: u8 = 0;
 // ========================================================================
 
 /// Total bytes under `dir`, skipping what cannot be read and links rather than
-/// following them, the way `du` does. Returns what it summed so far when
-/// cancelled, which the caller discards.
-pub(super) fn walk_size(dir: &Path, cancel: &AtomicBool, depth: usize) -> u64 {
+/// following them, the way `du` does, with the total of each directory down to
+/// [`SIZE_INNER_LEVELS`] below it added to `inner`. Returns what it summed so
+/// far when cancelled, which the caller discards.
+pub(super) fn walk_size(
+    dir: &Path,
+    cancel: &AtomicBool,
+    depth: usize,
+    inner: &mut Vec<DirTotal>,
+) -> u64 {
     const MAX_DEPTH: usize = 64;
     if depth >= MAX_DEPTH || cancel.load(Ordering::Relaxed) {
         return 0;
@@ -64,7 +75,14 @@ pub(super) fn walk_size(dir: &Path, cancel: &AtomicBool, depth: usize) -> u64 {
             continue;
         };
         if meta.is_dir() && !meta.file_type().is_symlink() {
-            total += walk_size(&entry.path(), cancel, depth + 1);
+            let bytes = walk_size(&entry.path(), cancel, depth + 1, inner);
+            if depth < SIZE_INNER_LEVELS {
+                inner.push(DirTotal {
+                    bytes,
+                    path: entry.path(),
+                });
+            }
+            total += bytes;
         } else {
             total += meta.len();
         }

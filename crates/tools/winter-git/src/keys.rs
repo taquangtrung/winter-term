@@ -341,6 +341,12 @@ pub(super) const STATUS_KEYS: KeyTable<Act> = KeyTable {
             keys: &["o"],
             label: "Reset HEAD to the cursor, mixed",
         },
+        Binding {
+            action: Act::Refresh,
+            id: "refresh",
+            keys: &["C-r", "M-S-r"],
+            label: "Read the status again",
+        },
     ],
     configurable: true,
     title: "Git",
@@ -437,6 +443,12 @@ pub(super) const OUTPUT_KEYS: KeyTable<Act> = KeyTable {
             keys: &["q", "ESC"],
             label: "Back to the status",
         },
+        Binding {
+            action: Act::Refresh,
+            id: "refresh",
+            keys: &["C-r", "M-S-r"],
+            label: "Read the output again",
+        },
     ],
     configurable: true,
     title: "Git: Output",
@@ -502,6 +514,8 @@ pub(super) enum Act {
     Push,
     QuickPull,
     QuickPush,
+    /// Read what the view shows again.
+    Refresh,
     ResetHere,
     Search,
     /// The next match when set, else the previous one.
@@ -636,6 +650,7 @@ impl GitEditor {
                 EditorOutcome::Consumed
             }
             Act::ResetHere => self.reset_at_point(ResetMode::Mixed),
+            Act::Refresh => self.reread(),
             // The search keys are read before this, and the rest are the
             // output view's.
             Act::Search
@@ -875,6 +890,7 @@ impl GitEditor {
                 self.view = None;
                 self.refresh()
             }
+            Act::Refresh => self.reread(),
             _ => EditorOutcome::Ignored,
         }
     }

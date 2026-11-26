@@ -102,7 +102,7 @@ Unread warnings and errors light the bell. Click it, or run `Notifications: Open
 ## Common keys in every editor
 
 - `gg` and `G` (or `M-S-,` and `M-S-.`) go to the top and bottom; `H` `M` `L` and `C-d` `C-u` `C-f` `C-b` work as in Vim.
-- `C-r` reads or runs again what the editor shows.
+- `M-S-r` (or `C-r`) reads again what the tab shows: a listing, the status, a file. In the text editor `M-S-r` reverts the file to what is on disk, asking first when you have unsaved edits; there `C-r` is redo. In Compile, `C-r` runs the build again.
 - `/` (or `?`) searches with a find box at the pane's top right; `n` and `N` step through matches. A lower-case query matches any case; a capital makes it exact.
 - `Help: Keys of This Tab` lists the keys of the tab in front.
 - A right click opens the editor's own menu, each entry showing its key.

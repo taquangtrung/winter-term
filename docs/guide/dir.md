@@ -22,7 +22,7 @@ Dir (`C-S-d`, or `Dir: Open Working Directory`) lists a directory as a foldable 
 | `,` | Show or hide size, age, and permissions |
 | `M-S-s` | Show directory sizes |
 | `s` | Sort by name, time, size |
-| `C-r` | Read the listing again |
+| `M-S-r` / `C-r` | Read the listing and its directory sizes again |
 | `m` / `u` | Mark, unmark |
 | `t` / `U` | Mark everything, unmark everything |
 | `_` / `+` | New file, new directory |

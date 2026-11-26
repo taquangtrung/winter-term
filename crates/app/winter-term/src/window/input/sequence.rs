@@ -584,6 +584,25 @@ mod tests {
     }
 
     #[test]
+    fn test_alt_shift_r_reverts_in_the_text_editor_and_nowhere_else() {
+        // Revert drops unsaved edits, so its key must not reach past the
+        // text editor: a terminal or another tool's tab runs nothing of it.
+        let (keymap, notice) = keymap_from_blocks(&HashMap::new());
+        assert_eq!(notice, None);
+        let key = input::table::keys("M-S-r").expect("a chord")[0];
+        assert_eq!(
+            keymap.resolve_sequence(&[key], Some("editor")),
+            SequenceStep::Editor("file_revert".to_string())
+        );
+        assert_eq!(keymap.resolve_sequence(&[key], None), SequenceStep::Miss);
+        assert_eq!(
+            keymap.resolve_sequence(&[key], Some("dir")),
+            SequenceStep::Miss
+        );
+        assert_eq!(keymap.global_action(&key), None);
+    }
+
+    #[test]
     fn test_the_text_editors_named_commands_bind_in_its_block() {
         // `problem_next "M-g M-n" in="editor"` was handed to Cherry, which
         // knows none of Winter's commands, then refused by the keymap, whose

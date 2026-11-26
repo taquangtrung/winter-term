@@ -281,7 +281,7 @@ pub(super) const KEYS: KeyTable<Act> = KeyTable {
         Binding {
             action: Act::Reload,
             id: "reload",
-            keys: &["C-r"],
+            keys: &["C-r", "M-S-r"],
             label: "Reload",
         },
         Binding {
@@ -896,7 +896,10 @@ impl DirEditor {
                 self.sort = self.sort.next();
                 self.reload();
             }
-            Act::Reload => self.reload(),
+            Act::Reload => {
+                self.mark_listed_sizes_changed();
+                self.reload();
+            }
             Act::Mark => self.toggle_mark(),
             Act::MarkAll => self.mark_all(),
             Act::Unmark => self.unmark_selected(),

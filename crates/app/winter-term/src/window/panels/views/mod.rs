@@ -91,7 +91,7 @@ const KEYS: KeyTable<ListAct> = KeyTable {
         Binding {
             action: ListAct::Refresh,
             id: "refresh",
-            keys: &["r"],
+            keys: &["r", "C-r", "M-S-r"],
             label: "Look Again",
         },
         Binding {

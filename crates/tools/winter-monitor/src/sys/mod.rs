@@ -74,7 +74,7 @@ const KEYS: KeyTable<Act> = KeyTable {
         Binding {
             action: Act::Refresh,
             id: "refresh",
-            keys: &["r", "C-r"],
+            keys: &["r", "C-r", "M-S-r"],
             label: "Refresh Now",
         },
         Binding {

@@ -1806,7 +1806,7 @@ impl Page for GitEditor {
                     menu_item(Act::Stage(true), LABEL_STAGE_ALL),
                     menu_item(Act::Unstage(true), LABEL_UNSTAGE_ALL),
                 ]),
-                group([menu_choice(Popup::Jump, 'r', LABEL_RELOAD)]),
+                group([menu_item(Act::Refresh, LABEL_RELOAD)]),
             ]),
             // The list of branches and tags answers keys of its own view,
             // which the status's menu entries do not name.
@@ -1818,7 +1818,7 @@ impl Page for GitEditor {
                     menu_item(Act::Pull, LABEL_PULL),
                     menu_item(Act::Fetch, LABEL_FETCH),
                 ]),
-                group([menu_choice(Popup::Jump, 'r', LABEL_RELOAD)]),
+                group([menu_item(Act::Refresh, LABEL_RELOAD)]),
             ]),
         }
     }

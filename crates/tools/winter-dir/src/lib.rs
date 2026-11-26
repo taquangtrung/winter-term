@@ -66,6 +66,7 @@ use winter_vcs::watch::TreeWatch;
 use entry::{Entry, EntryKind, Meta};
 use listing::SortKey;
 use marks::Marks;
+use sizes::SizeEntry;
 use source::{Listing, Opening, ReadPlan};
 use tree::{Folds, Row};
 use vcs::GitMarks;
@@ -221,9 +222,10 @@ pub struct DirEditor {
     show_hidden: bool,
     /// Whether directory sizes are shown, which each one has to be walked for.
     show_sizes: bool,
-    /// Totals already walked, kept across reloads since they rarely change and
-    /// re-walking on every keystroke would be the expensive mistake.
-    sizes: HashMap<PathBuf, u64>,
+    /// Totals already walked, kept across reloads and root changes since they
+    /// rarely change: re-walking on every keystroke, or on every step back
+    /// into a directory, would be the expensive mistake.
+    sizes: HashMap<PathBuf, SizeEntry>,
     /// Whether a listing has landed whose directories the next tick should
     /// ask sizes for: a read lands inside whatever asked for it, which has
     /// no way to answer with a walk of its own.
@@ -541,7 +543,7 @@ impl DirEditor {
         // The visible set changes wholesale, so a mark held over would count
         // toward an operation aimed at a listing it was never part of.
         self.marks.clear();
-        self.sizes.clear();
+        self.trim_sizes_around(&root);
         self.root = root;
         self.watch = DirWatch::start(&self.root, &self.folds);
         self.list.set_cursor(0);
@@ -969,6 +971,16 @@ impl Page for DirEditor {
         if reload_due {
             self.reload();
         }
+        // The sizes over what changed are walked again only once the changes
+        // stop, so a busy directory is not walked on every save.
+        let settled = self
+            .watch
+            .as_mut()
+            .map(|watch| watch.settled(now))
+            .unwrap_or_default();
+        if !settled.is_empty() {
+            self.mark_sizes_changed(&settled);
+        }
         self.look_at_repository(now);
         match self.git_due.filter(|due| *due <= now) {
             Some(_) => {
@@ -1023,9 +1035,9 @@ impl Page for DirEditor {
             | JobReply::Processes(_)
             | JobReply::Search(_)
             | JobReply::System(_) => return EditorOutcome::Consumed,
-            JobReply::DirSize { bytes, path } => {
+            JobReply::DirSize { bytes, inner, path } => {
                 self.sizing = None;
-                self.sizes.insert(path, bytes);
+                self.record_sizes(path, bytes, inner);
             }
             JobReply::FileOps(result) => {
                 self.notice = Some(match result {

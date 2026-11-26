@@ -13,6 +13,7 @@ Git (`C-S-g`, or `Git: Status`) shows the repository the pane is in as foldable 
 | `Tab` / `S-Tab` | Fold the section or file, show or hide every diff |
 | `Enter` | Open the file (at the hunk's line), or read a commit or stash |
 | `C-o` | Open the file in `$EDITOR` |
+| `M-S-r` / `C-r` / `g r` | Read the status, or the output showing, again |
 | `s` / `S` | Stage, stage everything |
 | `u` / `U` | Unstage, unstage everything |
 | `x` | Discard (asks first); on a stash, drop it |

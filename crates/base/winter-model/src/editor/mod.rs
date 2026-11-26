@@ -44,7 +44,8 @@ use super::picture::{Picture, Tile};
 pub use commands::*;
 pub use compare::{CompareRequest, DiffMerge, DiffRequest, DiffText, FileShape, GitViewRequest};
 pub use jobs::{
-    BuildStart, CommandOutput, CommandRequest, FileOps, JobReply, JobRequest, SpawnRequest,
+    BuildStart, CommandOutput, CommandRequest, DirTotal, FileOps, JobReply, JobRequest,
+    SpawnRequest,
 };
 pub use menu::{EditorMenuItem, MenuRun, menu_groups, menu_of, present};
 pub use popup::{

@@ -281,6 +281,9 @@ commands {
     save "s-s" in="editor" platform="macos"
     save "s-s" in="editor.insert" platform="macos"
     save "s-s" in="editor.visual" platform="macos"
+    // Read the file again, dropping unsaved edits after asking: VS Code's
+    // Revert File, on the key every tool reads its state again with.
+    file_revert "M-S-r" in="editor"
     toggle-wrap "M-z" in="editor"
     toggle-wrap "M-z" in="editor.insert"
     toggle-wrap "M-z" in="editor.visual"

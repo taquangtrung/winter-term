@@ -324,6 +324,7 @@ pub(crate) const BUILTIN: &[Builtin] = &[
     editor("editor_goto_offset", "Editor: Go to Offset…"),
     editor("editor_show_offset", "Editor: Display Current Offset"),
     editor("file_history", "File: Local History…"),
+    editor("file_revert", "File: Revert"),
     editor("cursor_add_next", "Cursors: Add at the Next Occurrence"),
     editor("cursor_add_all", "Cursors: Add at Every Occurrence"),
     editor("cursor_add_below", "Cursors: Add on the Line Below"),

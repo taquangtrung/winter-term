@@ -32,9 +32,9 @@ use winter_lsp::protocol::TextEdit;
 use winter_lsp::{Event, Incoming, Port};
 use winter_model::editor::EditPoint;
 use winter_model::editor::{
-    Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus, FileEdit,
-    JobReply, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptReply, SAVE_ALL,
-    ScrollPosition, SharedText, TOGGLE_SWATCHES, TargetStyles, menu_groups,
+    Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus, FILE_REVERT,
+    FileEdit, JobReply, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptReply, PromptRequest,
+    SAVE_ALL, ScrollPosition, SharedText, TOGGLE_SWATCHES, TargetStyles, menu_groups,
 };
 use winter_model::input::{Key, KeyContext};
 use winter_model::modal::EditMode;
@@ -78,6 +78,9 @@ pub use settings::history_dir;
 /// The text editor's commands the palette runs by name: none of Winter's
 /// own, as Cherry runs every editing command.
 pub const COMMANDS: &[EditorCommand] = &[];
+
+/// The question asked before a revert drops unsaved edits.
+const ASK_REVERT: &str = "text-revert";
 
 /// What a tab's title ends with while its file has edits not written.
 pub const DIRTY_MARK: &str = " [+]";
@@ -661,6 +664,34 @@ impl TextEditor {
         }
     }
 
+    /// Reads the file again for `File: Revert`, asking first where that
+    /// drops unsaved edits.
+    fn ask_revert(&mut self) -> EditorOutcome {
+        if !self.is_dirty() {
+            self.revert();
+            return EditorOutcome::Consumed;
+        }
+        let question = format!(
+            "{} has unsaved edits. Reverting drops them; an undo brings them back.",
+            name_of(&self.path)
+        );
+        EditorOutcome::Prompt(
+            PromptRequest::confirm(ASK_REVERT, &question)
+                .titled("Discard Unsaved Changes?", "Revert")
+                .destructive(),
+        )
+    }
+
+    /// Reads the file again over the text, saying why where it cannot.
+    fn revert(&mut self) {
+        if let Err(error) = session::with(|session| session.read_again(self.document)) {
+            self.notice = Some(TextNotice::ReadFailed(FileFailure {
+                error: error.to_string(),
+                path: self.path.clone(),
+            }));
+        }
+    }
+
     /// Looks at the file on disk (see [`session::Session::check_disk`]);
     /// says what the user should know.
     fn check_disk(&mut self) {
@@ -799,6 +830,9 @@ impl Page for TextEditor {
     fn run_command(&mut self, name: &str) -> Option<EditorOutcome> {
         if name == SAVE_ALL {
             return Some(self.write());
+        }
+        if name == FILE_REVERT {
+            return Some(self.ask_revert());
         }
         if name == TOGGLE_SWATCHES {
             let on = session::with(|session| session.toggle_swatches());
@@ -1035,6 +1069,12 @@ impl Page for TextEditor {
     }
 
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
+        if reply.tag == ASK_REVERT {
+            if reply.answer.is_some() {
+                self.revert();
+            }
+            return EditorOutcome::Consumed;
+        }
         self.on_conflict_prompt(&reply)
             .or_else(|| self.on_lsp_prompt(&reply))
             .unwrap_or(EditorOutcome::Ignored)
@@ -1548,6 +1588,67 @@ mod tests {
         assert_eq!(text, "one\ntwo, from elsewhere\nthree");
         assert_eq!(editor.cursor_line_column(), (2, 1), "still on \"three\"");
         assert!(editor.take_notice().is_none(), "a reload says nothing");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_revert_asks_before_dropping_unsaved_edits_and_reads_the_file_on_yes() {
+        // A revert pressed out of habit over an hour's typing loses it all
+        // unless it asks; a no keeps every edit.
+        let path =
+            std::env::temp_dir().join(format!("winter-text-revert-{}.txt", std::process::id()));
+        std::fs::write(&path, "one\n").expect("written");
+        let mut editor = TextEditor::new(path.clone(), None).expect("opens");
+        editor.on_key(&Key::plain(KeyCode::Char('A')));
+        editor.on_key(&Key::plain(KeyCode::Char('!')));
+        editor.on_key(&Key::plain(KeyCode::Escape));
+
+        let asked = editor.run_command(FILE_REVERT);
+        let Some(EditorOutcome::Prompt(question)) = asked else {
+            panic!("asks first: {asked:?}");
+        };
+        assert_eq!(question.tag, ASK_REVERT);
+        assert!(
+            question
+                .title
+                .as_ref()
+                .is_some_and(|title| title.destructive)
+        );
+        editor.on_prompt(PromptReply {
+            answer: None,
+            tag: ASK_REVERT,
+        });
+        assert_eq!(
+            editor.document().expect("a document").1,
+            "one!",
+            "a no keeps it"
+        );
+
+        editor.on_prompt(PromptReply {
+            answer: Some("y".to_string()),
+            tag: ASK_REVERT,
+        });
+        assert_eq!(editor.document().expect("a document").1, "one");
+        assert!(!editor.is_dirty(), "the text is the file's");
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn test_revert_of_a_saved_file_reads_it_without_asking() {
+        // Nothing is lost, so a question would only be in the way.
+        let path = std::env::temp_dir().join(format!(
+            "winter-text-revert-clean-{}.txt",
+            std::process::id()
+        ));
+        std::fs::write(&path, "one\n").expect("written");
+        let mut editor = TextEditor::new(path.clone(), None).expect("opens");
+        std::fs::write(&path, "two\n").expect("written");
+
+        assert_eq!(
+            editor.run_command(FILE_REVERT),
+            Some(EditorOutcome::Consumed)
+        );
+        assert_eq!(editor.document().expect("a document").1, "two");
         let _ = std::fs::remove_file(&path);
     }
 

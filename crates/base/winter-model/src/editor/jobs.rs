@@ -86,6 +86,9 @@ pub enum JobReply {
     DirSize {
         /// Bytes under the directory.
         bytes: u64,
+        /// The totals of the directories under it, a few levels down, which
+        /// the walk summed on its way: entering one shows its own at once.
+        inner: Vec<DirTotal>,
         /// The directory that was totalled.
         path: PathBuf,
     },
@@ -101,6 +104,15 @@ pub enum JobReply {
     /// What a [`JobRequest::FileOps`] did (`"copied 3"`), or where it stopped
     /// and why, with how many it had done by then.
     FileOps(Result<String, String>),
+}
+
+/// The bytes under one directory a size walk passed through.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DirTotal {
+    /// Bytes under the directory.
+    pub bytes: u64,
+    /// The directory.
+    pub path: PathBuf,
 }
 
 /// What running a program produced. A program that could not be started at all

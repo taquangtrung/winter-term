@@ -202,6 +202,7 @@ In a file with conflict markers, `M-n` and `M-p` step between conflicts. With th
 
 - Saving keeps the file's permissions, line endings, and final newline.
 - A file changed by another program is reloaded if you have no edits, your cursor staying on its line. With edits, they are kept, a notice says the file changed, and saving asks before overwriting.
+- `File: Revert` (`M-S-r`) reads the file again from disk. With unsaved edits it asks first; an undo brings them back.
 - Every save keeps a copy; `File: Local History…` lists them so you can compare and take changes back.
 - The editor refuses files that are binary, not UTF-8, or over four megabytes; open them in [Hex](viewers.md#hex).
 - `File: Open Scratchpad` opens a scratch file for notes.

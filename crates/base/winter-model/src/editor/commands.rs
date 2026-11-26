@@ -344,6 +344,9 @@ pub const EDITOR_JUMP_CHAR: &str = "editor_jump_char";
 /// List the copies of the file its saves kept, to compare one with it.
 pub const FILE_HISTORY: &str = "file_history";
 
+/// Read the file again from disk, over its unsaved edits.
+pub const FILE_REVERT: &str = "file_revert";
+
 /// Add a cursor at the next occurrence of the word under the cursor, or of
 /// the selection, after the cursor added last.
 pub const CURSOR_ADD_NEXT: &str = "cursor_add_next";
@@ -487,6 +490,7 @@ pub const FORWARDED_COMMANDS: &[&str] = &[
     EDITOR_GOTO_OFFSET,
     EDITOR_SHOW_OFFSET,
     FILE_HISTORY,
+    FILE_REVERT,
     CURSOR_ADD_NEXT,
     CURSOR_ADD_ALL,
     CURSOR_ADD_BELOW,

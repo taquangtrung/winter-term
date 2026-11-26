@@ -237,12 +237,22 @@ impl Session {
             self.note(document, on_disk);
             return DiskChange::ChangedUnderEdits;
         }
-        let path = file.path.clone();
-        let Ok(loaded) = text_file::load(&path) else {
+        if self.read_again(document).is_err() {
             // Unreadable as text now (binary, or too large): left as shown.
             self.note(document, on_disk);
             return DiskChange::None;
-        };
+        }
+        DiskChange::Reloaded
+    }
+
+    /// Reads `document` from its file again, over any unsaved edits, which
+    /// an undo brings back: the text as it is on disk, counted saved.
+    pub(crate) fn read_again(&mut self, document: DocumentId) -> io::Result<()> {
+        let file = self
+            .files
+            .get(&document)
+            .ok_or_else(|| io::Error::other("the document has no file"))?;
+        let loaded = text_file::load(&file.path)?;
         self.editor
             .reload_document(document, &loaded.lines.join("\n"));
         self.files.entry(document).and_modify(|open| {
@@ -250,7 +260,7 @@ impl Session {
             open.stamp = loaded.stamp;
             open.noted = None;
         });
-        DiskChange::Reloaded
+        Ok(())
     }
 
     /// Records that the file of `document`, as `on_disk`, has been said of.

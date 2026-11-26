@@ -3,8 +3,9 @@
 use super::*;
 use keys::{Act, EDIT_KEYS, KEYS};
 use notice::DirNotice;
+use sizes::{MAX_KEPT_SIZES, SizeEntry};
 use std::fs;
-use winter_model::editor::FileOps;
+use winter_model::editor::{DirTotal, FileOps};
 use winter_model::input::KeyCode;
 use winter_model::input::table;
 use winter_model::modal::EditMode;
@@ -955,6 +956,7 @@ fn test_toggling_sizes_asks_for_one_directory_at_a_time() {
 
     let next = editor.on_job(JobReply::DirSize {
         bytes: 10,
+        inner: Vec::new(),
         path: first,
     });
     assert_eq!(
@@ -964,6 +966,7 @@ fn test_toggling_sizes_asks_for_one_directory_at_a_time() {
 
     let done = editor.on_job(JobReply::DirSize {
         bytes: 20,
+        inner: Vec::new(),
         path: second,
     });
     assert_eq!(done, EditorOutcome::Consumed, "nothing left to walk");
@@ -997,29 +1000,147 @@ fn test_an_answer_arriving_after_sizes_were_turned_off_asks_for_nothing() {
 
     let outcome = editor.on_job(JobReply::DirSize {
         bytes: 1,
+        inner: Vec::new(),
         path: dir,
     });
     assert_eq!(outcome, EditorOutcome::Consumed);
 }
 
 #[test]
-fn test_a_walked_total_survives_a_reload_but_not_a_new_root() {
-    // Re-walking on every keystroke is the expensive mistake; carrying a
-    // total into a different directory is the wrong one.
+fn test_a_walked_total_survives_a_reload_and_a_round_trip_through_another_root() {
+    // Re-walking on every keystroke, or on every step back into a
+    // directory, is the expensive mistake: the total shows at once and asks
+    // for no new walk.
     let (tree, nested) = tree_with_nested_children("sizes-cache");
     let mut editor = DirEditor::new(tree.0.clone());
     editor.on_key(&alt_shift(KeyCode::Char('s')));
     editor.on_job(JobReply::DirSize {
         bytes: 64,
+        inner: Vec::new(),
         path: nested.clone(),
     });
-    assert_eq!(editor.sizes.get(&nested).copied(), Some(64));
 
     editor.on_key(&ctrl(KeyCode::Char('r')));
-    assert_eq!(editor.sizes.get(&nested).copied(), Some(64));
+    assert_eq!(editor.sizes.get(&nested).map(|entry| entry.bytes), Some(64));
+    // A reload is how a folder shown closed, which no watch reaches, catches up.
+    assert_eq!(editor.next_unsized(), Some(nested.clone()), "walked again");
+    editor.on_job(JobReply::DirSize {
+        bytes: 65,
+        inner: Vec::new(),
+        path: nested.clone(),
+    });
 
     editor.on_key(&press(KeyCode::Backspace));
-    assert!(editor.sizes.is_empty(), "a new root re-walks");
+    editor.go_back();
+    assert_eq!(editor.root, tree.0);
+    let row = editor
+        .entries()
+        .find(|row| row.entry.path == nested)
+        .expect("the directory is listed again");
+    assert_eq!(editor.dir_size(row), Some(65), "shown from the last walk");
+    assert_eq!(editor.next_unsized(), None, "and not walked again");
+}
+
+#[test]
+fn test_entering_a_walked_directory_shows_its_children_s_totals_at_once() {
+    // The walk of a directory summed each child on its way; walking them
+    // again on entering it would keep the rows blank for nothing.
+    let (tree, nested) = tree_with_nested_children("sizes-inner");
+    let child = nested.join("child-dir");
+    fs::create_dir_all(&child).expect("child dir");
+    let mut editor = DirEditor::new(tree.0.clone());
+    editor.on_key(&alt_shift(KeyCode::Char('s')));
+    editor.on_job(JobReply::DirSize {
+        bytes: 9,
+        inner: vec![DirTotal {
+            bytes: 7,
+            path: child.clone(),
+        }],
+        path: nested.clone(),
+    });
+
+    editor.move_root_to(nested);
+    let row = editor
+        .entries()
+        .find(|row| row.entry.path == child)
+        .expect("the child is listed");
+    assert_eq!(editor.dir_size(row), Some(7));
+    assert_eq!(editor.next_unsized(), None);
+}
+
+#[test]
+fn test_a_changed_total_is_walked_again_after_the_unwalked_ones() {
+    // A blank row is worse than an old number: the directories never walked
+    // fill in first, and an old total shows until its new walk lands.
+    let tree = TempTree::new("sizes-stale");
+    let old = tree.dir("aaa");
+    let unwalked = tree.dir("bbb");
+    let mut editor = DirEditor::new(tree.0.clone());
+    editor.sizes.insert(
+        old.clone(),
+        SizeEntry {
+            bytes: 5,
+            changed: true,
+        },
+    );
+
+    assert_eq!(editor.next_unsized(), Some(unwalked.clone()));
+    editor.record_sizes(unwalked, 1, Vec::new());
+    assert_eq!(editor.next_unsized(), Some(old.clone()));
+    editor.record_sizes(old, 6, Vec::new());
+    assert_eq!(editor.next_unsized(), None);
+}
+
+#[test]
+fn test_a_settled_change_re_walks_only_the_directories_holding_it() {
+    // Walking every directory on screen for one saved file is the waste;
+    // leaving the one holding it unwalked keeps a wrong total for good.
+    let tree = TempTree::new("sizes-changed");
+    let changed = tree.dir("aaa");
+    let untouched = tree.dir("bbb");
+    let mut editor = DirEditor::new(tree.0.clone());
+    editor.on_key(&alt_shift(KeyCode::Char('s')));
+    editor.record_sizes(changed.clone(), 1, Vec::new());
+    editor.record_sizes(untouched.clone(), 1, Vec::new());
+    editor.record_sizes(tree.0.clone(), 2, Vec::new());
+    editor.sizing = None;
+
+    editor.mark_sizes_changed(&[changed.join("inner").join("file.txt")]);
+    assert!(editor.sizes[&changed].changed);
+    assert!(editor.sizes[&tree.0].changed, "the root holds it too");
+    assert!(!editor.sizes[&untouched].changed);
+    assert_eq!(editor.next_unsized(), Some(changed.clone()));
+    assert_eq!(
+        editor.request_next_size(),
+        EditorOutcome::Job(JobRequest::DirSize(changed))
+    );
+    let row = editor
+        .entries()
+        .find(|row| row.entry.path == untouched)
+        .expect("listed");
+    assert_eq!(editor.dir_size(row), Some(1));
+}
+
+#[test]
+fn test_past_the_cap_a_new_root_keeps_only_the_totals_on_its_way() {
+    // Browsing a large tree for a day must not keep every total it saw, but
+    // the way back up keeps its sizes.
+    let (tree, nested) = tree_with_nested_children("sizes-trim");
+    let mut editor = DirEditor::new(tree.0.clone());
+    let sibling = tree.0.join("sibling");
+    let far = PathBuf::from("/far/away");
+    editor.record_sizes(nested.clone(), 1, Vec::new());
+    editor.record_sizes(sibling.clone(), 1, Vec::new());
+    editor.record_sizes(far.clone(), 1, Vec::new());
+    for index in 0..MAX_KEPT_SIZES {
+        editor.record_sizes(far.join(index.to_string()), 1, Vec::new());
+    }
+
+    editor.trim_sizes_around(&nested);
+    assert!(editor.sizes.contains_key(&nested), "the root itself");
+    assert!(editor.sizes.contains_key(&sibling), "a row of its parent");
+    assert!(!editor.sizes.contains_key(&far), "a directory elsewhere");
+    assert_eq!(editor.sizes.len(), 2);
 }
 
 #[test]
@@ -1056,10 +1177,12 @@ fn test_a_new_root_asks_for_its_own_sizes_once_listed() {
     let (tree, nested) = tree_with_nested_children("sizes-new-root");
     let mut editor = DirEditor::new(nested.clone());
     editor.on_key(&alt_shift(KeyCode::Char('s')));
-    for row in editor.rows.clone() {
+    let listed: Vec<PathBuf> = editor.entries().map(|row| row.entry.path.clone()).collect();
+    for path in listed {
         editor.on_job(JobReply::DirSize {
             bytes: 1,
-            path: row.entry.path,
+            inner: Vec::new(),
+            path,
         });
     }
 

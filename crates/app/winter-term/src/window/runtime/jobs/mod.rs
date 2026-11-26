@@ -326,6 +326,7 @@ fn refusal(request: &JobRequest, why: &str) -> JobReply {
         }),
         JobRequest::DirSize(path) => JobReply::DirSize {
             bytes: 0,
+            inner: Vec::new(),
             path: path.clone(),
         },
         JobRequest::FileOps(_) => JobReply::FileOps(Err(why.to_string())),
@@ -375,8 +376,9 @@ fn run(request: JobRequest, cancel: &AtomicBool, report: &dyn Fn(&str)) -> JobRe
     match request {
         JobRequest::Command(request) => JobReply::Command(run_command(request, cancel, report)),
         JobRequest::DirSize(path) => {
-            let bytes = walk_size(&path, cancel, 0);
-            JobReply::DirSize { bytes, path }
+            let mut inner = Vec::new();
+            let bytes = walk_size(&path, cancel, 0, &mut inner);
+            JobReply::DirSize { bytes, inner, path }
         }
         JobRequest::Processes => JobReply::Processes(collect::collect(cancel)),
         JobRequest::ReadFiles(paths) => JobReply::Files(read_files(&paths)),
@@ -876,6 +878,35 @@ mod tests {
         };
         assert_eq!(*bytes, 150, "nested files count toward the total");
         assert!(jobs.running.is_empty(), "and the job is no longer running");
+    }
+
+    #[test]
+    fn test_a_directory_walk_reports_the_totals_two_levels_under_it() {
+        // Entering a child or a grandchild shows its sizes from the walk
+        // already made; deeper ones would fill the reply for no step taken.
+        let tree = TempTree::new("walk-inner");
+        let child = tree.0.join("child");
+        let grandchild = child.join("grandchild");
+        let deeper = grandchild.join("deeper");
+        std::fs::create_dir_all(&deeper).expect("dirs");
+        std::fs::write(child.join("a.bin"), vec![0u8; 10]).expect("a");
+        std::fs::write(deeper.join("b.bin"), vec![0u8; 5]).expect("b");
+
+        let mut jobs = Jobs::new(Waker::default());
+        jobs.spawn(TabId(1), JobRequest::DirSize(tree.0.clone()));
+        let replies = wait_for_replies(&mut jobs, 1, ARRIVES);
+        let JobReply::DirSize { inner, .. } = &replies[0].1 else {
+            panic!("expected a directory total");
+        };
+        let total = |path: &PathBuf| {
+            inner
+                .iter()
+                .find(|total| total.path == *path)
+                .map(|total| total.bytes)
+        };
+        assert_eq!(total(&child), Some(15));
+        assert_eq!(total(&grandchild), Some(5));
+        assert_eq!(total(&deeper), None, "three levels down is not reported");
     }
 
     #[test]

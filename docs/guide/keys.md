@@ -198,7 +198,7 @@ These work in a panel's view; see [Panels](basics.md#panels) for the panels them
 | `gg` / `G` | First row, last row |
 | `RET` | Open the row |
 | `l` / `h` | Open, close a folder or group |
-| `r` | Look again |
+| `r` / `M-S-r` | Look again |
 | `t` | Open the view's tool among the panes |
 | `.` | Files: show or hide what git ignores |
 | `s` / `u` | Git: stage, unstage the file |

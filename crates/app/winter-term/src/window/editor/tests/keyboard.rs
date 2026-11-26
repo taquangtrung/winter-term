@@ -63,7 +63,7 @@ fn test_f1_h_lists_the_focused_editor_s_own_keys() {
         .iter()
         .find(|row| row.row.label == "Refresh Now")
         .expect("the editor's own key is listed");
-    assert_eq!(refresh.row.hint, "r / C-r");
+    assert_eq!(refresh.row.hint, "r / C-r / M-S-r");
 }
 
 #[test]
