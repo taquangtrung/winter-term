@@ -325,6 +325,11 @@ impl<'a> PageMut<'a> {
     pub(in crate::window) fn kind(&self) -> EditorKind {
         self.kind
     }
+
+    /// The icon a pane strip or breadcrumb draws for this editor.
+    pub(in crate::window) fn tab_icon(&self) -> IconKind {
+        tab_icon(self.kind, self.page)
+    }
 }
 
 // ========================================================================

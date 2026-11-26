@@ -7,6 +7,8 @@ use std::sync::Arc;
 use misty::StyledText;
 use winter_theme::{Rgb, Theme};
 
+use crate::paint::IconKind;
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -305,6 +307,8 @@ pub struct ToolbarColumn {
 pub struct ToolbarItem {
     /// What pressing it is told back as, for a button; `None` for the rest.
     pub button: Option<u16>,
+    /// Optional icon drawn before the item's text.
+    pub icon: Option<IconKind>,
     /// Whether it gives up characters, ending in an ellipsis, where the bar
     /// is short of room: a title, rather than a button that must stay whole.
     pub shrinks: bool,

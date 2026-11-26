@@ -399,6 +399,8 @@ pub(in crate::window) struct Chrome {
     pub(in crate::window) drawn_toolbars: Vec<crate::render::ToolbarView>,
     /// Where misty drew the toolbars' buttons, for the pointer.
     pub(in crate::window) toolbar_hits: Vec<frame::toolbar::ToolbarHits>,
+    /// Bundled icons cached for pane toolbars and breadcrumbs.
+    pub(in crate::window) toolbar_icons: misty::IconSet,
     /// The find card the last frame worked out, for misty to draw.
     pub(in crate::window) drawn_find: Option<crate::render::FindView>,
     /// Where misty drew the find card, for the pointer.

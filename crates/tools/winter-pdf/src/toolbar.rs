@@ -163,6 +163,7 @@ fn outline_item(state: &State) -> ToolbarItem {
     };
     ToolbarItem {
         button: state.has_outline.then(|| Button::Outline.id()),
+        icon: None,
         shrinks: true,
         text: format!("{OUTLINE_MARK} {title} {OPEN_MARK}"),
         tone,
@@ -173,12 +174,14 @@ fn outline_item(state: &State) -> ToolbarItem {
 fn right_items(state: &State) -> Vec<ToolbarItem> {
     let button = |button: Button, tone: ToolbarTone, text: String| ToolbarItem {
         button: Some(button.id()),
+        icon: None,
         shrinks: false,
         text,
         tone,
     };
     let separator = || ToolbarItem {
         button: None,
+        icon: None,
         shrinks: false,
         text: SEPARATOR.to_string(),
         tone: ToolbarTone::Dim,

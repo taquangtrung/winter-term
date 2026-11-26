@@ -7,7 +7,7 @@
 use crate::render::{ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView};
 use misty::Rect;
 use winter_model::layout::TabId;
-use winter_model::paint::{Gutter, GutterSide};
+use winter_model::paint::{Gutter, GutterSide, IconKind};
 
 use crate::window::terminal::command_marks;
 use crate::window::{APPROX_CELL_HEIGHT, APPROX_CELL_WIDTH, App};
@@ -113,11 +113,13 @@ impl App {
 // ========================================================================
 
 /// The breadcrumb row of tab `owner` over `rect`, drawn as a toolbar: each
-/// of `crumbs` a button, the last (where the editor is) the heaviest, a
-/// separator between two, and the names of its `columns` over them.
+/// of `crumbs` a button, ancestors muted and the last (where the editor is)
+/// in normal foreground with `icon`, a separator between two, and the names
+/// of its `columns` over them.
 pub(in crate::window) fn crumb_bar(
     owner: TabId,
     crumbs: &[String],
+    icon: Option<IconKind>,
     columns: Vec<ToolbarColumn>,
     rect: Rect,
 ) -> ToolbarView {
@@ -127,20 +129,26 @@ pub(in crate::window) fn crumb_bar(
         if index > 0 {
             left.push(ToolbarItem {
                 button: None,
+                icon: None,
                 shrinks: false,
                 text: CRUMB_SEPARATOR.to_string(),
                 tone: ToolbarTone::Dim,
             });
         }
+        let is_last = index == last;
         left.push(ToolbarItem {
             button: u16::try_from(index)
                 .ok()
                 .map(|index| CRUMB_BUTTON_BASE.saturating_add(index)),
+            icon: match is_last {
+                true => icon.clone(),
+                false => None,
+            },
             shrinks: true,
             text: crumb.clone(),
-            tone: match index == last {
-                true => ToolbarTone::Strong,
-                false => ToolbarTone::Normal,
+            tone: match is_last {
+                true => ToolbarTone::Normal,
+                false => ToolbarTone::Dim,
             },
         });
     }
@@ -331,6 +339,7 @@ mod tests {
         let bar = crumb_bar(
             TabId(1),
             &crumbs,
+            None,
             Vec::new(),
             Rect::new(0.0, 0.0, 400.0, 24.0),
         );
@@ -342,6 +351,38 @@ mod tests {
             .collect();
         assert_eq!(pressed, [Some(0), Some(1), Some(2)]);
         assert_eq!(crumb_of(3), None, "the editor's own button");
+    }
+
+    #[test]
+    fn test_crumb_bar_dims_ancestors_and_highlights_active_crumb() {
+        let crumbs = ["/".to_string(), "tmp".to_string(), "vt".to_string()];
+        let file_icon = IconKind::File {
+            name: "vt".to_string(),
+        };
+        let bar = crumb_bar(
+            TabId(1),
+            &crumbs,
+            Some(file_icon.clone()),
+            Vec::new(),
+            Rect::new(0.0, 0.0, 400.0, 24.0),
+        );
+        let tones: Vec<ToolbarTone> = bar
+            .left
+            .iter()
+            .filter(|item| item.button.is_some())
+            .map(|item| item.tone)
+            .collect();
+        assert_eq!(
+            tones,
+            [ToolbarTone::Dim, ToolbarTone::Dim, ToolbarTone::Normal]
+        );
+        let icons: Vec<Option<&IconKind>> = bar
+            .left
+            .iter()
+            .filter(|item| item.button.is_some())
+            .map(|item| item.icon.as_ref())
+            .collect();
+        assert_eq!(icons, [None, None, Some(&file_icon)]);
     }
 
     #[test]

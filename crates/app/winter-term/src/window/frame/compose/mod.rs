@@ -226,7 +226,13 @@ fn paint_editors(
                         text: name.text,
                     })
                     .collect();
-                Some(crumb_bar(*id, &slot.page.crumbs(), columns, row))
+                Some(crumb_bar(
+                    *id,
+                    &slot.page.crumbs(),
+                    Some(slot.tab_icon()),
+                    columns,
+                    row,
+                ))
             });
         paints.push(EditorPaint {
             caret_cell,
@@ -337,7 +343,7 @@ fn sticky_headers(
             let top = grid_area(App::layout_rect_to_pane(bands.content), cell_height).y;
             let row = Rect::new(whole.x, top, whole.width, cell_height);
             let command = block.command.replace('\n', " ");
-            Some((*id, crumb_bar(*id, &[command], Vec::new(), row)))
+            Some((*id, crumb_bar(*id, &[command], None, Vec::new(), row)))
         })
         .collect()
 }
