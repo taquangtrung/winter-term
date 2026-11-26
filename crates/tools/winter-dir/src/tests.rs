@@ -2055,10 +2055,14 @@ fn test_the_column_names_follow_the_columns_shown() {
             .collect()
     };
     assert!(names(&editor).is_empty(), "no columns, no names");
+    // The columns end at the pane's right edge, wherever the names end.
+    let width = 80;
+    editor.content(10, width, false);
 
     editor.show_sizes = true;
     let sizes = names(&editor);
     assert_eq!(sizes.len(), 1, "{sizes:?}");
+    assert_eq!(sizes[0].1.end, width, "the size alone at the edge");
     editor.show_sizes = false;
 
     // Each name spans its column as an entry paints it.
@@ -2066,7 +2070,7 @@ fn test_the_column_names_follow_the_columns_shown() {
     let details = names(&editor);
     let texts: Vec<&str> = details.iter().map(|(text, _)| text.as_str()).collect();
     assert_eq!(texts, ["Size", "Age", "Permissions"]);
-    assert_eq!(details[0], sizes[0], "the size column stays put");
+    assert_eq!(details[2].1.end, width, "the permissions at the edge");
     let first = editor.nav_count();
     let text = row_text(&editor.paint_row(first, std::time::SystemTime::now()).0);
     let chars: Vec<char> = text.chars().collect();

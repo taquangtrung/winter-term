@@ -237,6 +237,9 @@ pub struct DirEditor {
     sort: SortKey,
     /// The filesystem watcher keeping this directory listing up to date.
     watch: Option<DirWatch>,
+    /// How many columns the pane last showed, which the size and detail
+    /// columns end at.
+    width: usize,
 }
 
 // ========================================================================
@@ -292,6 +295,7 @@ impl DirEditor {
             sizing: None,
             sort: SortKey::default(),
             watch: None,
+            width: 0,
         };
         editor.watch = DirWatch::start(&editor.root, &editor.folds);
         editor.reload();
@@ -858,6 +862,7 @@ impl DirEditor {
                 show_sizes: self.show_sizes,
                 size: self.dir_size(row),
                 walking: self.is_walking(row),
+                width: self.width,
                 git: self.git_marks.get(&row.entry.path),
             },
             now,
@@ -1208,6 +1213,7 @@ impl Page for DirEditor {
         rows::column_names(rows::HeaderFlags {
             show_details: self.show_details,
             show_sizes: self.show_sizes,
+            width: self.width,
         })
     }
 
@@ -1220,6 +1226,7 @@ impl Page for DirEditor {
 
     fn content(&mut self, rows: usize, cols: usize, wrap: bool) -> Frame {
         let now = SystemTime::now();
+        self.width = cols;
         let visible = rows;
         // Remember the viewport for the half-page motions, which key handling
         // needs between paints.

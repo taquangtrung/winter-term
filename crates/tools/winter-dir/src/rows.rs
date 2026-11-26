@@ -29,9 +29,6 @@ const INDENT: usize = 2;
 /// The icon of an entry marked for an operation, in the gutter's mark lane.
 const MARKED: IconKind = IconKind::Gutter { mark: "marked" };
 
-/// Column the detail columns begin at.
-const DETAIL_COL: usize = 40;
-
 /// Shown where a value does not apply, such as an unwalked directory's size.
 const NO_VALUE: &str = "-";
 
@@ -74,6 +71,8 @@ pub struct HeaderFlags {
     pub show_details: bool,
     /// Whether directory sizes are being walked and shown.
     pub show_sizes: bool,
+    /// How many columns the pane shows, which the detail columns end at.
+    pub width: usize,
 }
 
 // ========================================================================
@@ -86,7 +85,9 @@ pub fn column_names(flags: HeaderFlags) -> Vec<ColumnName> {
     let HeaderFlags {
         show_details,
         show_sizes,
+        width,
     } = flags;
+    let start = width.saturating_sub(trailing_width(show_details));
     let name = |align, start: usize, width: usize, text: &str| ColumnName {
         align,
         cols: start..start + width,
@@ -96,13 +97,13 @@ pub fn column_names(flags: HeaderFlags) -> Vec<ColumnName> {
     if show_details || show_sizes {
         names.push(name(
             ColumnAlign::Right,
-            DETAIL_COL,
+            start,
             DETAIL_SIZE_WIDTH,
             HEADER_SIZE,
         ));
     }
     if show_details {
-        let age = DETAIL_COL + DETAIL_SIZE_WIDTH + DETAIL_GAP.len();
+        let age = start + DETAIL_SIZE_WIDTH + DETAIL_GAP.len();
         names.push(name(ColumnAlign::Right, age, DETAIL_AGE_WIDTH, HEADER_AGE));
         let permissions = age + DETAIL_AGE_WIDTH + DETAIL_GAP.len();
         names.push(name(
@@ -142,6 +143,8 @@ pub struct RowStyle {
     pub size: Option<u64>,
     /// Whether the directory's walk is under way, which wears the spinner.
     pub walking: bool,
+    /// How many columns the pane shows, which the detail columns end at.
+    pub width: usize,
 }
 
 /// One entry: its fold glyph, indented name, and the detail columns when they
@@ -182,7 +185,10 @@ pub fn entry_row(
     };
     let mut icons = vec![icon];
     if let Some(trailing) = trailing {
-        let gap = DETAIL_COL.saturating_sub(label_len).max(1);
+        // Against the pane's right edge, or one blank past a name too long
+        // to leave room.
+        let start = style.width.saturating_sub(trailing.chars().count());
+        let gap = start.saturating_sub(label_len).max(1);
         if is_walked_now(row, style) {
             icons.push(Icon {
                 col: label_len + gap + DETAIL_SIZE_WIDTH - Icon::WIDTH,
@@ -317,11 +323,25 @@ fn details(row: &Row, now: SystemTime, style: RowStyle) -> String {
         (false, _) => format_size(row.entry.meta.len),
     };
     format!(
-        "{:>8}  {:>5}  {}",
-        size,
+        "{size:>DETAIL_SIZE_WIDTH$}{DETAIL_GAP}{:>DETAIL_AGE_WIDTH$}{DETAIL_GAP}{:<DETAIL_PERMISSIONS_WIDTH$}",
         age_or_placeholder(&row.entry.meta, now),
         mode_or_placeholder(&row.entry.meta),
     )
+}
+
+/// How many columns the detail columns take: the size alone, or with the
+/// age and permissions when `show_details`.
+fn trailing_width(show_details: bool) -> usize {
+    match show_details {
+        true => {
+            DETAIL_SIZE_WIDTH
+                + DETAIL_GAP.len()
+                + DETAIL_AGE_WIDTH
+                + DETAIL_GAP.len()
+                + DETAIL_PERMISSIONS_WIDTH
+        }
+        false => DETAIL_SIZE_WIDTH,
+    }
 }
 
 fn age_or_placeholder(meta: &Meta, now: SystemTime) -> String {
@@ -548,14 +568,41 @@ mod tests {
     }
 
     #[test]
+    fn test_the_size_and_details_end_at_the_pane_s_right_edge() {
+        // At a fixed column they sat mid-pane in a wide one, far from the
+        // edge the eye looks to for a number.
+        let mut file = row("doc.txt", EntryKind::File, 0, false);
+        file.entry.meta.len = 2048;
+        let width = 60;
+        for show_details in [false, true] {
+            let painted = text(entry_row_only(
+                &file,
+                RowStyle {
+                    show_details,
+                    show_sizes: true,
+                    width,
+                    ..RowStyle::default()
+                },
+                SystemTime::UNIX_EPOCH,
+            ));
+            assert_eq!(painted.chars().count(), width, "{painted:?}");
+            let size_end = painted.find("2.0K").expect("the size") + "2.0K".len();
+            let expected = width - trailing_width(show_details) + DETAIL_SIZE_WIDTH;
+            assert_eq!(size_end, expected, "{painted:?}");
+        }
+    }
+
+    #[test]
     fn test_a_long_name_keeps_one_space_before_its_details() {
-        // The detail columns are placed by padding to a fixed column; a name
-        // past that column must still not run into its own size field.
-        let name = "a".repeat(DETAIL_COL + 10);
+        // The detail columns are placed against the pane's right edge; a
+        // name past where they start must still not run into its own size.
+        let width = 40;
+        let name = "a".repeat(width + 10);
         let painted = text(entry_row_only(
             &row(&name, EntryKind::File, 0, false),
             RowStyle {
                 show_details: true,
+                width,
                 ..RowStyle::default()
             },
             SystemTime::UNIX_EPOCH,
