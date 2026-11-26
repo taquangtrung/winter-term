@@ -20,9 +20,9 @@
 //! page hands its windows to the host (`Page::visit_viewports`), which tells
 //! them the window's [`ViewportSettings`] before each paint.
 
-use crate::editor::{
-    JumpStep, Page, ScrollPosition, SearchReport, find_match, row_search_report,
-};
+use std::ops::Range;
+
+use crate::editor::{JumpStep, Page, ScrollPosition, SearchReport, find_match, row_search_report};
 use crate::input::CursorMove;
 use crate::notice::SearchMiss;
 use crate::paint::{
@@ -191,6 +191,19 @@ impl Viewport {
     /// last paint, which `H`, `M`, and `L` go to.
     pub fn shown(&self) -> Shown {
         self.shown
+    }
+
+    /// Note that a view misty draws shows rows `rows` (a lazy column's
+    /// `on_shown`), for the motions that go by what shows: the paging keys
+    /// move by how many there are, and `H`, `M`, and `L` go to the top,
+    /// middle, and bottom of them.
+    pub fn set_shown(&mut self, rows: Range<usize>) {
+        self.rows = rows.len();
+        self.shown = Shown {
+            bottom: rows.end.saturating_sub(1),
+            middle: rows.start + rows.len().saturating_sub(1) / 2,
+            top: rows.start,
+        };
     }
 
     /// Start the window at the top of row `scroll`, as a paint or a jump
@@ -802,7 +815,10 @@ pub mod test_support {
             };
             configure_viewports(page, settings);
             let frame = page.content(rows, cols, true);
-            (frame.cursor_line.expect("a cursor band"), frame.cursor_line_alone)
+            (
+                frame.cursor_line.expect("a cursor band"),
+                frame.cursor_line_alone,
+            )
         };
         let press = |page: &mut dyn Page, code: char| {
             page.on_key(&key(KeyCode::Char(code)));
@@ -822,9 +838,17 @@ pub mod test_support {
         press(page, 'k');
         assert_eq!(band(page, true).0, start);
         press(page, 'j');
-        assert_eq!(band(page, true), (start + 1, true), "on, j bands the next screen row alone");
+        assert_eq!(
+            band(page, true),
+            (start + 1, true),
+            "on, j bands the next screen row alone"
+        );
         press(page, 'k');
-        assert_eq!(band(page, true), (start, true), "on, k bands the first again");
+        assert_eq!(
+            band(page, true),
+            (start, true),
+            "on, k bands the first again"
+        );
     }
 }
 
@@ -924,10 +948,18 @@ mod tests {
         assert_eq!(down(&mut view), (2, 4, true), "on to c");
         view.apply_motion(CursorMove::Up);
         assert_eq!(view.cursor(), 1);
-        assert_eq!(view.place(10, height).band_row, 3, "b's last screen row going up");
+        assert_eq!(
+            view.place(10, height).band_row,
+            3,
+            "b's last screen row going up"
+        );
         view.apply_motion(CursorMove::Top);
         view.apply_motion(CursorMove::Down);
-        assert_eq!(view.place(10, height).band_row, 1, "any other move lands on a first");
+        assert_eq!(
+            view.place(10, height).band_row,
+            1,
+            "any other move lands on a first"
+        );
     }
 
     #[test]

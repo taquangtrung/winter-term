@@ -267,7 +267,7 @@ impl HostedView for Machine {
             true => badge(PAUSED, ThemeToken::Warning),
             false => badge(LIVE, ThemeToken::Muted),
         };
-        let mut shown = page(TITLE).scroll_id(BODY);
+        let mut shown = page(TITLE);
         if let Some(sample) = &self.sample {
             shown = shown.action(machine_line(sample));
         }
@@ -280,13 +280,14 @@ impl HostedView for Machine {
             );
         }
         match &self.sample {
-            Some(sample) => shown.content(dashboard(sample, &self.usage, &self.history)),
-            None => shown.content(
+            Some(sample) => shown.scrolling(dashboard(sample, &self.usage, &self.history)),
+            None => shown.scrolling(
                 text(self.error.as_deref().unwrap_or(READING))
                     .muted()
                     .proportional(),
             ),
         }
+        .scroll_id(BODY)
         .into()
     }
 }

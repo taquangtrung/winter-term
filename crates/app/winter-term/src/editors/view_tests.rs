@@ -18,6 +18,13 @@ pub(crate) fn drawn(page: &mut dyn Page, window: &TestWindow) -> Frame {
     let cols = (bounds.width / cell.width) as usize;
     page.content(rows, cols, false);
     page.draw_view(&mut frame, bounds, &Theme::dark());
+    // An element that scrolls itself inside a scrolling page has no height
+    // to fill: every page drawn here is checked for one.
+    let nested = misty::testing::nested_scrolls(&frame);
+    assert!(
+        nested.is_empty(),
+        "scrolls inside a scrolling page: {nested:?}"
+    );
     frame
 }
 

@@ -22,21 +22,21 @@ pub mod parse;
 pub mod view;
 
 use std::collections::HashSet;
-use std::ops::Range;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use misty::layout::Align;
-use misty::view::{Extent, Space, Text, badge, column, divider, page, row, text};
+use misty::view::{
+    Extent, LazySource, Space, Text, badge, column, divider, lazy_column, page, row, text,
+};
 use misty::{
     AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, Theme, ThemeToken,
 };
-use misty::{WheelDelta, WheelInput};
 
 use winter_model::editor::refresh::RefreshTimer;
 use winter_model::editor::{
-    CommandOutput, EditorMenuItem, EditorOutcome, JobReply, JobRequest, Notice, OwnView,
-    PIXELS_PER_ROW, Page, PromptMode, PromptReply, PromptRequest, SearchReport, ViewSlot, menu_of,
+    CommandOutput, EditorMenuItem, EditorOutcome, JobReply, JobRequest, Notice, OwnView, Page,
+    PromptMode, PromptReply, PromptRequest, SearchReport, ViewSlot, menu_of,
 };
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed};
 use winter_model::input::{CursorMove, Key, format_key};
@@ -64,13 +64,8 @@ const ASK_FILTER: &str = "proc-filter";
 const ASK_RENICE: &str = "proc-renice-value";
 const ASK_SEARCH: &str = "proc-search";
 
-/// The pane's text rows the page's heading, the column headings, the
-/// padding, and the footer take, around the processes.
-const CHROME_ROWS: usize = 5;
-
-/// The rows the footer describing the selected process takes, and the pane
-/// height below which it is left out so the list keeps what room there is.
-const DETAIL_ROWS: usize = 5;
+/// The pane height below which the footer describing the selected process
+/// is left out, so the list keeps what room there is.
 const MIN_ROWS_FOR_DETAIL: usize = 20;
 
 /// What the list says with nothing to show once a snapshot is in.
@@ -386,8 +381,6 @@ pub struct ProcEditor {
     /// Whether the pane is tall enough for the card describing the
     /// selected process.
     detail: bool,
-    /// The list rows built and drawn: those around the cursor that fit.
-    shown: Range<usize>,
     /// When snapshots are asked for.
     timer: RefreshTimer,
     /// The page's view, which the monitor is the state of.
@@ -447,7 +440,6 @@ impl ProcEditor {
             sort,
             nav: VimNav::new(),
             detail: false,
-            shown: 0..0,
             timer: RefreshTimer::new(REFRESH_INTERVAL, STALL_TIMEOUT),
             view: ViewSlot::new(),
         }
@@ -1029,39 +1021,39 @@ impl ProcEditor {
         let room = self.name_width.saturating_sub(prefix.chars().count());
         (prefix, fit(&process.name, room))
     }
+}
 
-    /// Turn the list by `wheel`, the cursor staying where it is.
-    fn wheel(&mut self, wheel: &WheelInput) {
-        let lines = match wheel.delta {
-            WheelDelta::Lines(lines) => lines.y,
-            WheelDelta::Pixels(pixels) => pixels.y / PIXELS_PER_ROW,
-            // A kind of turn misty adds later scrolls nothing.
-            _ => 0.0,
-        };
-        self.list.view_mut().wheel(lines.round() as isize);
+impl LazySource<ProcEditor> for ProcEditor {
+    fn count(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn row(&self, index: usize) -> Element<'_, ProcEditor> {
+        self.process_view(index)
     }
 }
 
 impl HostedView for ProcEditor {
-    /// The summary over the column headings and the rows that fit, and the
-    /// selected process in the footer where the pane has room for it.
+    /// The summary over the column headings and the processes, misty
+    /// building those that show, and the selected process in the footer
+    /// where the pane has room for it.
     fn view(&self) -> Element<'_, Self> {
         let mut table = vec![self.heading_view(), divider()];
         if self.rows.is_empty() && self.loaded {
             table.push(text(NO_MATCH).muted().proportional().into());
         }
-        let shown = self.shown.start.min(self.rows.len())..self.shown.end.min(self.rows.len());
-        table.extend(shown.map(|at| self.process_view(at)));
-        let table = column(table)
-            .gap(Space::Cells(0.0))
-            .grow(1.0)
-            .on_scroll(|editor: &mut Self, wheel| editor.wheel(&wheel));
-        let mut shown = page(TITLE).content(table);
+        // The list's own keys go by the rows misty shows.
+        let rows = lazy_column(self, self.list.cursor())
+            .on_shown(|editor: &mut Self, shown| editor.list.view_mut().set_shown(shown));
+        table.push(rows.into());
+        let table = column(table).gap(Space::Cells(0.0));
+        let mut heading = page(TITLE);
+        for part in self.summary() {
+            heading = heading.action(part);
+        }
+        let mut shown = heading.filled(table);
         if let Some(detail) = self.detail.then(|| self.detail_view()).flatten() {
             shown = shown.footer(detail);
-        }
-        for part in self.summary() {
-            shown = shown.action(part);
         }
         shown.into()
     }
@@ -1100,17 +1092,10 @@ impl Page for ProcEditor {
     }
 
     /// Misty draws the page; the grid under it is empty, its height kept
-    /// to place the rows that fit round the cursor, and whether the footer
-    /// describing the selected process fits too.
+    /// for whether the footer describing the selected process fits.
     fn content(&mut self, rows: usize, cols: usize, _wrap: bool) -> Frame {
         self.cols = cols;
         self.detail = rows >= MIN_ROWS_FOR_DETAIL;
-        let footer = if self.detail { DETAIL_ROWS } else { 0 };
-        let viewport = rows.saturating_sub(CHROME_ROWS + footer).max(1);
-        self.list.view_mut().set_rows(viewport);
-        let placed = self.list.place(viewport, |_| 1);
-        let window = placed.window;
-        self.shown = window.start..window.start + window.count;
         Frame::new(vec![Row::new()])
     }
 

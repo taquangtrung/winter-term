@@ -57,7 +57,7 @@ pub use search::{
     JumpStep, JumpTarget, SearchHit, SearchReport, SearchRequest, SearchResult, TargetStyle,
     TargetStyles, contains_match, find_match, match_spans, row_search_report,
 };
-pub use view::{OwnView, PIXELS_PER_ROW, PageView, RowWindow, ViewSlot};
+pub use view::{OwnView, PageView, ViewSlot};
 
 // ========================================================================
 // Data Structures

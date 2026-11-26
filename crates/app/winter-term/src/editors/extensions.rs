@@ -547,7 +547,7 @@ impl HostedView for Shown {
             });
             sections.push(section(BUILT_IN_SECTION).items(rows).into());
         }
-        page(TITLE).content(column(sections)).into()
+        page(TITLE).scrolling(column(sections)).into()
     }
 }
 

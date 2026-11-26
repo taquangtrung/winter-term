@@ -339,6 +339,11 @@ fn drawn(editor: &mut ProcEditor, window: &TestWindow) -> misty::Frame {
         false,
     );
     editor.draw_view(&mut frame, bounds, &misty::Theme::dark());
+    let nested = misty::testing::nested_scrolls(&frame);
+    assert!(
+        nested.is_empty(),
+        "scrolls inside a scrolling page: {nested:?}"
+    );
     frame
 }
 

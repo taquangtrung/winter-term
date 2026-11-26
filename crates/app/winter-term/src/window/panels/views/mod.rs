@@ -24,13 +24,14 @@ pub(in crate::window) mod todo;
 use std::time::Instant;
 
 use misty::layout::Justify;
-use misty::view::{Corners, Extent, Press, Space, canvas, column, row, section_header, text};
+use misty::view::{
+    Corners, Extent, LazySource, Press, Space, canvas, column, lazy_column, row, section_header,
+    text,
+};
 use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, IconSet, Input};
 use misty::{Rect, Svg, Theme, ThemeToken};
 
-use winter_model::editor::{
-    EditorOutcome, EditorStatus, JobReply, Notice, Page, PageView, RowWindow,
-};
+use winter_model::editor::{EditorOutcome, EditorStatus, JobReply, Notice, Page, PageView};
 use winter_model::input::Key;
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
 use winter_model::paint::{Frame, IconKind, Row};
@@ -114,14 +115,6 @@ pub(crate) const KEY_TABLES: &[&dyn Listed] = &[
     &problems::KEYS,
 ];
 
-/// How many cell rows one row of a list takes: its words in the UI font and
-/// the space around them.
-const CELLS_PER_ROW: f32 = 1.5;
-
-/// How many cell rows a row's subtitle adds: one line in the cell grid's
-/// font.
-const CELLS_PER_SUBTITLE: f32 = 1.0;
-
 /// The space around a row's words, in logical pixels across and down.
 const ROW_PADDING_PX: (f32, f32) = (8.0, 3.0);
 
@@ -183,7 +176,8 @@ pub(in crate::window) enum ListAct {
     Up,
 }
 
-/// A view's rows, the cursor among them, and which are built.
+/// A view's rows and the cursor among them; misty builds the rows that
+/// show.
 #[derive(Debug, Default)]
 pub(in crate::window) struct PanelList {
     /// What a click asked, until the view takes it.
@@ -195,10 +189,11 @@ pub(in crate::window) struct PanelList {
     rows: Vec<ListRow>,
     /// The row the cursor is on, never a heading while any row is not one.
     selected: usize,
+    /// The view's title, which keeps its rows' ids apart from another
+    /// view's.
+    title: String,
     /// The keys of a sequence typed so far (`g` of `g g`).
     typed: Vec<Key>,
-    /// Which rows are built, around the cursor.
-    window: RowWindow,
 }
 
 /// One row of a view's list.
@@ -369,7 +364,6 @@ impl PanelList {
             .unwrap_or(self.selected)
             .min(self.rows.len().saturating_sub(1));
         self.settle(1);
-        self.follow();
     }
 
     /// Add `rows` at the end, as a stream of them grows: the cursor on the
@@ -382,7 +376,6 @@ impl PanelList {
         self.rows.extend(rows);
         if following {
             self.selected = self.rows.len().saturating_sub(1);
-            self.follow();
         }
     }
 
@@ -399,26 +392,12 @@ impl PanelList {
             .position(|row| row.key == key && row.heading == heading)
         {
             self.selected = at;
-            self.follow();
         }
-    }
-
-    /// Note that `rows` cell rows fit the panel.
-    fn set_fits(&mut self, rows: usize) {
-        // Rows with subtitles are taller; counting each so is the most that
-        // could need room.
-        let per_row = match self.rows.iter().any(|row| row.subtitle.is_some()) {
-            true => CELLS_PER_ROW + CELLS_PER_SUBTITLE,
-            false => CELLS_PER_ROW,
-        };
-        self.window.set_fits((rows as f32 / per_row) as usize);
-        self.follow();
     }
 
     /// A panel key, a sequence (`g g`) waited out: the act it names, which
     /// the list carries out itself where it only moves the cursor.
     fn on_key(&mut self, key: &Key) -> KeyResult {
-        self.window.release();
         self.typed.push(*key);
         match table::lookup(&KEYS, &self.typed) {
             TableMatch::Exact(act) => {
@@ -459,7 +438,6 @@ impl PanelList {
             | ListAct::OpenTool
             | ListAct::Refresh => return false,
         }
-        self.follow();
         true
     }
 
@@ -498,11 +476,6 @@ impl PanelList {
                 }
             }
         }
-    }
-
-    /// Keep the selected row among those built.
-    fn follow(&mut self) {
-        self.window.follow(self.selected, self.rows.len());
     }
 
     /// The row at `at` was pressed: select it, and ask to open it on a
@@ -553,7 +526,8 @@ enum KeyResult {
 
 impl<S: PanelView> PanelPage<S> {
     /// The page of `view`.
-    pub(in crate::window) fn new(view: S) -> Self {
+    pub(in crate::window) fn new(mut view: S) -> Self {
+        view.list_mut().title = view.title();
         Self {
             view: PageView::new(view),
         }
@@ -586,9 +560,7 @@ impl<S: PanelView> Page for PanelPage<S> {
     /// how many of the list's fit, its columns for how wide its words may
     /// be.
     fn content(&mut self, rows: usize, cols: usize, _wrap: bool) -> Frame {
-        let state = self.view.state_mut();
-        state.list_mut().set_fits(rows);
-        state.fit(rows, cols);
+        self.view.state_mut().fit(rows, cols);
         Frame::new(vec![Row::new()])
     }
 
@@ -766,17 +738,20 @@ pub(in crate::window) fn list_view<'a, S: PanelView>(
         return Element::from(text(empty).muted().proportional())
             .padding_px(ROW_PADDING_PX.0, ROW_PADDING_PX.1 * 2.0);
     }
-    let total = list.rows.len();
-    let built = list.window.range(total);
-    // Each row known by what it stands for, so its icons keep their own
-    // state as rows come and go; the view's title keeps two views' apart.
-    let title = state.title();
-    let rows = built.map(|at| {
-        let row = &list.rows[at];
-        row_view(list, at).id(format!("{title}/{}/{}", row.key, row.heading))
-    });
-    column(rows.collect::<Vec<_>>())
-        .on_scroll(move |state: &mut S, wheel| state.list_mut().window.wheel(&wheel, total))
+    lazy_column(list, list.selected).into()
+}
+
+impl<S: PanelView> LazySource<S> for PanelList {
+    fn count(&self) -> usize {
+        self.rows.len()
+    }
+
+    /// Row `at`, known by what it stands for, so its icons keep their own
+    /// state as rows come and go; the view's title keeps two views' apart.
+    fn row(&self, at: usize) -> Element<'_, S> {
+        let row = &self.rows[at];
+        row_view(self, at).id(format!("{}/{}/{}", self.title, row.key, row.heading))
+    }
 }
 
 /// The row at `at` of `list`, its parts in the list's columns.

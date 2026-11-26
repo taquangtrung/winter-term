@@ -26,8 +26,8 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
+use misty::ScrollStep;
 use misty::{AccessAction, EventCx, FocusId, Frame, HostedView, Input, Rect, Theme, ViewHost};
-use misty::{ScrollStep, WheelDelta, WheelInput};
 
 // ========================================================================
 // Constants
@@ -35,9 +35,6 @@ use misty::{ScrollStep, WheelDelta, WheelInput};
 
 /// The id every page view's ids are made under, a child of it each.
 const PAGE_VIEWS: FocusId = FocusId::new("winter.page");
-
-/// How many pixels of a smooth wheel scroll a [`RowWindow`] a row.
-pub const PIXELS_PER_ROW: f32 = 24.0;
 
 // ========================================================================
 // Globals
@@ -244,135 +241,5 @@ pub trait OwnView: HostedView {
         let due = host.about_to_wait(self, cx);
         self.view_slot().host = Some(host);
         due
-    }
-}
-
-// ========================================================================
-// RowWindow
-// ========================================================================
-
-/// The rows of a long list a page view builds: those from its top that fit
-/// the pane, so a view over hundreds of rows builds, lays out, and draws a
-/// screenful each frame rather than every row. The page moves the cursor
-/// with its keys and calls [`RowWindow::follow`] after, which scrolls the
-/// least that keeps the cursor in sight; the wheel scrolls the window away
-/// from it ([`RowWindow::wheel`]) until the next key.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct RowWindow {
-    /// How many rows fit the pane.
-    fits: usize,
-    /// Whether the wheel put the window where it is, away from the cursor.
-    held: bool,
-    /// The wheel's turn not yet a whole row, in rows.
-    pending: f32,
-    /// The first row built.
-    top: usize,
-}
-
-impl RowWindow {
-    /// Note how many rows fit the pane, at least one.
-    pub fn set_fits(&mut self, fits: usize) {
-        self.fits = fits.max(1);
-    }
-
-    /// The rows to build of `total`, from the top.
-    pub fn range(&self, total: usize) -> std::ops::Range<usize> {
-        let top = self.top.min(total.saturating_sub(1));
-        top..(top + self.fits.max(1)).min(total)
-    }
-
-    /// Scroll the least that shows row `cursor` of `total`, unless the
-    /// wheel holds the window; a key releases it ([`RowWindow::release`]).
-    pub fn follow(&mut self, cursor: usize, total: usize) {
-        let fits = self.fits.max(1);
-        if !self.held {
-            if cursor < self.top {
-                self.top = cursor;
-            } else if cursor >= self.top + fits {
-                self.top = cursor + 1 - fits;
-            }
-        }
-        self.top = self.top.min(total.saturating_sub(fits));
-    }
-
-    /// A key was pressed: the cursor decides where the window is again.
-    pub fn release(&mut self) {
-        (self.held, self.pending) = (false, 0.0);
-    }
-
-    /// Turn the window by `wheel` over `total` rows: a notch a row, a
-    /// smooth wheel's pixels a row each [`PIXELS_PER_ROW`]; positive turns
-    /// scroll toward the top. The window then stays until a key.
-    pub fn wheel(&mut self, wheel: &WheelInput, total: usize) {
-        let rows = match wheel.delta {
-            WheelDelta::Lines(lines) => lines.y,
-            WheelDelta::Pixels(pixels) => pixels.y / PIXELS_PER_ROW,
-            // A kind of turn misty adds later scrolls nothing.
-            _ => 0.0,
-        };
-        self.pending -= rows;
-        let whole = self.pending.trunc();
-        self.pending -= whole;
-        let last = total.saturating_sub(self.fits.max(1));
-        self.top = self.top.saturating_add_signed(whole as isize).min(last);
-        self.held = true;
-    }
-}
-
-// ========================================================================
-// Tests
-// ========================================================================
-
-#[cfg(test)]
-mod tests {
-    use misty::{Mods, Point};
-
-    use super::*;
-
-    fn window(fits: usize) -> RowWindow {
-        let mut window = RowWindow::default();
-        window.set_fits(fits);
-        window
-    }
-
-    fn wheel(delta: WheelDelta) -> WheelInput {
-        WheelInput {
-            delta,
-            mods: Mods::NONE,
-            position: Point::new(0.0, 0.0),
-        }
-    }
-
-    #[test]
-    fn test_the_window_scrolls_the_least_that_keeps_the_cursor_in_sight() {
-        let mut rows = window(10);
-        rows.follow(14, 100);
-        assert_eq!(rows.range(100), 5..15, "the cursor on the last row");
-        rows.follow(3, 100);
-        assert_eq!(rows.range(100), 3..13, "and on the first");
-        rows.follow(99, 100);
-        assert_eq!(rows.range(100), 90..100);
-        assert_eq!(window(10).range(4), 0..4, "a short list whole");
-    }
-
-    #[test]
-    fn test_the_wheel_holds_the_window_away_from_the_cursor_until_a_key() {
-        let mut rows = window(10);
-        rows.wheel(&wheel(WheelDelta::Lines(Point::new(0.0, -3.0))), 100);
-        rows.follow(0, 100);
-        assert_eq!(rows.range(100), 3..13, "held by the wheel");
-        rows.release();
-        rows.follow(0, 100);
-        assert_eq!(rows.range(100), 0..10, "back to the cursor");
-    }
-
-    #[test]
-    fn test_a_smooth_wheels_pixels_add_up_to_whole_rows() {
-        let mut rows = window(10);
-        let half = WheelDelta::Pixels(Point::new(0.0, -PIXELS_PER_ROW / 2.0));
-        rows.wheel(&wheel(half), 100);
-        assert_eq!(rows.range(100), 0..10, "half a row yet");
-        rows.wheel(&wheel(half), 100);
-        assert_eq!(rows.range(100), 1..11);
     }
 }

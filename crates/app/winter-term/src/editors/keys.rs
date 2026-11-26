@@ -29,7 +29,7 @@ use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Inp
 use misty::{Theme, ThemeToken};
 use winter_field::{Field, FieldNotice};
 use winter_model::editor::{
-    EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus, Notice, Page, PageView, RowWindow,
+    EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus, Notice, Page, PageView,
     menu_groups, present,
 };
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
@@ -100,13 +100,9 @@ const ID_COLS: f32 = 30.0;
 /// What marks the place typing goes in the filter and the capture line.
 const CARET: &str = "\u{258f}";
 
-/// How many of the pane's text rows one command's row takes: a line of
-/// key caps, the padding round it, and the gap to the next.
-const CELLS_PER_COMMAND: f32 = 1.75;
-
-/// The pane's text rows the page's heading, filter, capture line, table
-/// heading, and footer take, around the commands.
-const CHROME_ROWS: usize = 12;
+/// About how many of the pane's text rows a command's row takes, for how
+/// far a page key moves: misty lays the rows out and scrolls them itself.
+const ROWS_PER_COMMAND: usize = 2;
 
 /// The editor's own keys in the list.
 const KEYS: KeyTable<Command> = KeyTable {
@@ -317,8 +313,6 @@ pub struct Keys {
     typed: Vec<Key>,
     /// What a button asked of the window, until the window takes it.
     outcome: Option<EditorOutcome>,
-    /// The commands built and drawn: those around the cursor that fit.
-    window: RowWindow,
 }
 
 /// The keys pressed so far for command `index`'s new binding, and what
@@ -505,7 +499,6 @@ impl Keys {
         if let Some(row) = row {
             self.selected = row;
         }
-        self.follow();
     }
 
     /// The editor listing `commands`, sorted by name, the keys over the
@@ -532,7 +525,6 @@ impl Keys {
             selected: 0,
             shown,
             typed: Vec::new(),
-            window: RowWindow::default(),
         }
     }
 
@@ -580,7 +572,7 @@ impl Keys {
 
     /// How many commands a page key moves by.
     fn half_page(&self) -> isize {
-        (self.fits() / 2).max(1) as isize
+        (self.rows / ROWS_PER_COMMAND / 2).max(1) as isize
     }
 
     /// Start capturing keys of `kind` for the selected command.
@@ -837,39 +829,22 @@ impl Keys {
         if let Some(command) = command {
             self.outcome = Some(self.run(command));
         }
-        self.follow();
     }
 
-    /// Note that the pane shows `rows` text rows, which says how many
-    /// commands fit it and how far a page key moves.
+    /// Note that the pane shows `rows` text rows, which says how far a page
+    /// key moves.
     fn set_rows(&mut self, rows: usize) {
         self.rows = rows;
-        self.window.set_fits(self.fits());
-        self.follow();
-    }
-
-    /// How many commands fit the pane, one row each.
-    fn fits(&self) -> usize {
-        (self.rows.saturating_sub(CHROME_ROWS) as f32 / CELLS_PER_COMMAND) as usize
-    }
-
-    /// Keep the selected command among those built, as a key or a click
-    /// left it.
-    fn follow(&mut self) {
-        self.window.follow(self.selected, self.shown.len());
     }
 
     /// A key: to the capture while one is under way, else to the filter
     /// or over the list, as the focus is.
     fn on_key(&mut self, key: &Key) -> EditorOutcome {
-        self.window.release();
-        let outcome = match (self.capture.is_some(), self.focus) {
+        match (self.capture.is_some(), self.focus) {
             (true, _) => self.capture_key(key),
             (false, Focus::Filter) => self.filter_key(key),
             (false, Focus::List) => self.list_key(key),
-        };
-        self.follow();
-        outcome
+        }
     }
 
     fn take_notice(&mut self) -> Option<Notice> {
@@ -936,13 +911,15 @@ impl Keys {
     /// in it.
     fn filter_view(&self) -> Element<'_, Self> {
         let typing = self.focus == Focus::Filter && self.capture.is_none();
-        let label = self
-            .recording
-            .as_ref()
-            .map(|_| match table::menu_typed(&KEYS, Command::Record) {
-                Some((keys, _)) => format!("{RECORD_LABEL} ({} to stop)", format_sequence(&keys)),
-                None => RECORD_LABEL.to_string(),
-            });
+        let label =
+            self.recording
+                .as_ref()
+                .map(|_| match table::menu_typed(&KEYS, Command::Record) {
+                    Some((keys, _)) => {
+                        format!("{RECORD_LABEL} ({} to stop)", format_sequence(&keys))
+                    }
+                    None => RECORD_LABEL.to_string(),
+                });
         let typed = self.filter.text();
         let shown: Text<'_> = match (typed.is_empty(), typing) {
             (true, _) => {
@@ -1078,6 +1055,7 @@ impl Keys {
         // The footer says the selected row's details.
         match selected {
             true => line
+                .keep_in_view()
                 .background(ThemeToken::CursorLine)
                 .border(ThemeToken::Accent)
                 .corners(misty::view::Corners::Control),
@@ -1137,20 +1115,18 @@ impl HostedView for Keys {
         if self.shown.is_empty() && !self.commands.is_empty() {
             table.push(text(EMPTY_FILTERED).muted().proportional().into());
         }
-        let built = self.window.range(self.shown.len());
+        // Every command, the page scrolling them and keeping the selected
+        // one in view.
         table.extend(
-            self.shown[built.clone()]
+            self.shown
                 .iter()
-                .zip(built)
-                .map(|(shown, at)| self.row_view(at, shown)),
+                .enumerate()
+                .map(|(at, shown)| self.row_view(at, shown)),
         );
-        let total = self.shown.len();
-        let table = column(table)
-            .gap(Space::Cells(0.25))
-            .on_scroll(move |keys: &mut Self, wheel| keys.window.wheel(&wheel, total));
+        let table = column(table).gap(Space::Cells(0.25));
         let shown = page(HEADING)
             .action(text(self.total()).muted().proportional())
-            .content(table);
+            .scrolling(table);
         match self.shown.get(self.selected) {
             Some(row) => shown
                 .footer(text(self.details(row.index)).muted().proportional())
@@ -1814,19 +1790,29 @@ mod tests {
     }
 
     #[test]
-    fn test_only_the_commands_around_the_cursor_are_built() {
+    fn test_the_page_scrolls_the_selected_command_into_view() {
         let rows: Vec<CommandRow> = (0..200)
             .map(|at| row(&format!("command_{at:03}"), "", &format!("Command {at:03}")))
             .collect();
         let mut editor = Keys::from_rows(rows);
-        assert!(shown_text(&mut editor).contains("command_000"));
-        editor.on_key(&Key {
-            shift: true,
-            ..press(KeyCode::Char('G'))
+        let mut window = TestWindow::new(1400, 900);
+        // The scroll jumps rather than glides, so one frame shows where it
+        // went.
+        window.set_reduced_motion(true);
+        as_page(&mut editor, |page| {
+            let shown = text_of(&drawn(page, &window));
+            assert!(shown.contains("command_000"));
+            assert!(!shown.contains("command_199"), "the last out of sight");
+            page.on_key(&Key {
+                shift: true,
+                ..press(KeyCode::Char('G'))
+            });
+            drawn(page, &window);
+            page.view_about_to_wait(&mut window.cx());
+            let shown = text_of(&drawn(page, &window));
+            assert!(shown.contains("command_199"), "the last, selected, in view");
+            assert!(!shown.contains("command_000"), "the first scrolled away");
         });
-        let shown = shown_text(&mut editor);
-        assert!(shown.contains("command_199"), "the last, selected");
-        assert!(!shown.contains("command_000"), "the first out of sight");
     }
 
     #[test]

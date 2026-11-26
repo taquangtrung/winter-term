@@ -10,22 +10,23 @@
 //! a narrow pane). A click on a byte puts the cursor there; the keys are
 //! the viewer's own.
 
-use std::ops::Range;
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
 use misty::layout::Align;
-use misty::view::{Corners, Extent, badge, column, divider, item, page, row, section, text};
+use misty::view::{
+    Corners, Extent, LazySource, badge, column, divider, item, lazy_column, page, row, section,
+    text,
+};
 use misty::view::{Press, Space};
 use misty::{
     AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, Theme, ThemeToken,
 };
-use misty::{WheelDelta, WheelInput};
 
 use super::notice::HexNotice;
 use winter_model::editor::{
-    Editor, EditorMenuItem, EditorOutcome, EditorStatus, Notice, OwnView, PIXELS_PER_ROW, Page,
-    PromptMode, PromptReply, PromptRequest, ViewSlot, menu_groups, present,
+    Editor, EditorMenuItem, EditorOutcome, EditorStatus, Notice, OwnView, Page, PromptMode,
+    PromptReply, PromptRequest, ViewSlot, menu_groups, present,
 };
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
 use winter_model::input::{Key, KeyCode, Mods};
@@ -56,11 +57,6 @@ const BESIDE_COLS: usize = 130;
 
 /// How wide the inspector is beside the rows, in text columns.
 const INSPECTOR_COLS: f32 = 40.0;
-
-/// The pane's text rows the heading, the column headings, the padding, and
-/// the footer take around the rows; and the inspector under them.
-const CHROME_ROWS: usize = 9;
-const INSPECTOR_ROWS: usize = 18;
 
 /// What the inspector's byte and words mean, for their tooltips.
 const BYTE_ABOUT: &str = "The byte in hex and in decimal, then read as a signed number";
@@ -201,8 +197,6 @@ pub struct HexEditor {
     /// How wide a text column was drawn last, in pixels, so a click finds
     /// its byte.
     cell_px: f32,
-    /// The rows built and drawn: those around the cursor that fit.
-    shown: Range<usize>,
     /// The page's view, which the viewer is the state of.
     view: ViewSlot<HexEditor>,
 }
@@ -251,7 +245,6 @@ impl HexEditor {
             dirty: false,
             beside: false,
             cell_px: 0.0,
-            shown: 0..0,
             view: ViewSlot::new(),
         }
     }
@@ -415,17 +408,6 @@ impl HexEditor {
         column([card.into(), file.into()]).gap(Space::Cells(0.5))
     }
 
-    /// Turn the rows by `wheel`, the cursor staying where it is.
-    fn wheel(&mut self, wheel: &WheelInput) {
-        let lines = match wheel.delta {
-            WheelDelta::Lines(lines) => lines.y,
-            WheelDelta::Pixels(pixels) => pixels.y / PIXELS_PER_ROW,
-            // A kind of turn misty adds later scrolls nothing.
-            _ => 0.0,
-        };
-        self.list.view_mut().wheel(lines.round() as isize);
-    }
-
     /// An offset typed as a number, decimal or `0x` hex.
     fn parse_offset(text: &str) -> Option<usize> {
         let text = text.trim();
@@ -433,6 +415,16 @@ impl HexEditor {
             Some(hex) => usize::from_str_radix(hex, 16).ok(),
             None => text.parse().ok(),
         }
+    }
+}
+
+impl LazySource<HexEditor> for HexEditor {
+    fn count(&self) -> usize {
+        self.list_len()
+    }
+
+    fn row(&self, index: usize) -> Element<'_, HexEditor> {
+        self.row_view(index)
     }
 }
 
@@ -444,13 +436,11 @@ impl HostedView for HexEditor {
             row([text(HEADING).muted().into()]).padding(ROW_PAD_COLS as f32, 0.0),
             divider(),
         ];
-        let total = self.list_len();
-        let shown = self.shown.start.min(total)..self.shown.end.min(total);
-        rows.extend(shown.map(|index| self.row_view(index)));
-        let rows = column(rows)
-            .gap(Space::Cells(0.0))
-            .grow(1.0)
-            .on_scroll(|hex: &mut Self, wheel| hex.wheel(&wheel));
+        // The list's own keys go by the rows misty shows.
+        let lines = lazy_column(self, self.list.cursor())
+            .on_shown(|hex: &mut Self, shown| hex.list.view_mut().set_shown(shown));
+        rows.push(lines.into());
+        let rows = column(rows).gap(Space::Cells(0.0)).grow(1.0);
         let body = match self.beside {
             true => row([
                 rows,
@@ -458,7 +448,8 @@ impl HostedView for HexEditor {
                     .width(Extent::Cells(INSPECTOR_COLS))
                     .shrink(0.0),
             ])
-            .align(Align::Start)
+            // The rows take the whole height, the inspector at their top.
+            .align(Align::Stretch)
             .gap(Space::Cells(2.0)),
             false => column([rows, self.inspector()]).gap(Space::Cells(0.5)),
         };
@@ -471,7 +462,7 @@ impl HostedView for HexEditor {
             let modified = badge("modified", ThemeToken::Warning).tooltip(MODIFIED_ABOUT);
             shown = shown.action(modified);
         }
-        shown.content(body).into()
+        shown.filled(body).into()
     }
 }
 
@@ -513,16 +504,10 @@ impl Page for HexEditor {
         Some(IconKind::Editor { kind: "hex" })
     }
 
-    /// Misty draws the page; the grid under it is empty, its size kept to
-    /// place the rows that fit round the cursor and the inspector.
-    fn content(&mut self, rows: usize, cols: usize, _wrap: bool) -> Frame {
+    /// Misty draws the page; the grid under it is empty, its width kept for
+    /// whether the inspector goes beside the rows.
+    fn content(&mut self, _rows: usize, cols: usize, _wrap: bool) -> Frame {
         self.beside = cols >= BESIDE_COLS;
-        let under = if self.beside { 0 } else { INSPECTOR_ROWS };
-        let viewport = rows.saturating_sub(CHROME_ROWS + under).max(1);
-        self.list.view_mut().set_rows(viewport);
-        let placed = self.list.place(viewport, |_| 1);
-        let window = placed.window;
-        self.shown = window.start..window.start + window.count;
         Frame::new(vec![Row::new()])
     }
 

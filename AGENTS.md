@@ -73,6 +73,15 @@ A key runs its command only where that command works. Built-in keys live in `cra
 - **Global only if it works everywhere.** A key bound without a condition must do something useful wherever it is pressed.
 - **Test it.** A conditional binding has a test that its key runs the command in its context and nothing outside it, as `when.rs` does for `F6`.
 
+## Pages
+
+A page built on misty is one of two kinds, and says which. Neither guesses how many rows fit.
+
+- **Scrolling** (`page(..).scrolling(content)`) for content built in full: a form, sections, a table of a few hundred rows. misty scrolls it; a row the cursor is on takes `Element::keep_in_view`.
+- **Filled** (`page(..).filled(content)`) for a long list: the content holds a `lazy_column` over a `LazySource`, which builds only the rows that show. Its `on_shown` reports them, for the keys that go by the screen (`ListView`'s `Viewport::set_shown`).
+- **Never count rows that fit.** No estimate of a row's height or of the chrome around a list: misty measures what it lays out.
+- **Test it.** `view_tests::drawn` fails on an element that scrolls itself inside a scrolling page (`misty::testing::nested_scrolls`).
+
 ## Motions
 
 A motion means the same in every editor, because every cursor over rows moves through one API. The compiler holds most of it: `winter-model` keeps placing a window around a cursor and telling a window its settings to itself.

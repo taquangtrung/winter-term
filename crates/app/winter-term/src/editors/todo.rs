@@ -18,7 +18,7 @@ use misty::{Theme, ThemeToken};
 
 use winter_model::editor::{
     EditorOutcome, EditorStatus, JobReply, JobRequest, Notice, OpenTarget, Page, PageView,
-    RowWindow, SearchHit, SearchRequest, SearchResult,
+    SearchHit, SearchRequest, SearchResult,
 };
 use winter_model::input::Key;
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
@@ -47,11 +47,6 @@ const NO_WORDS: &str = "(no words)";
 /// punctuation a keyword is written with (`TODO:`, `TODO -`).
 const LEADING_MARKS: &[char] = &[':', '-', ' ', '\t'];
 const TRAILING_MARKS: &[&str] = &["*/", "-->", "#}", "%}", "--}}", "*)"];
-
-/// The rows a page key moves by: about this many of the pane's text rows
-/// make one row of the list, and the heading and footer take these.
-const ROWS_PER_ITEM: usize = 2;
-const CHROME_ROWS: usize = 8;
 
 /// The clicks in a row that open it.
 const DOUBLE_CLICK: u8 = 2;
@@ -187,8 +182,6 @@ struct Todos {
     selected: usize,
     /// The keys of a sequence typed so far (`g` of `g g`).
     typed: Vec<Key>,
-    /// Which rows are built, around the cursor.
-    window: RowWindow,
 }
 
 /// One comment found.
@@ -235,7 +228,6 @@ impl TodoPage {
                 searching: false,
                 selected: 0,
                 typed: Vec::new(),
-                window: RowWindow::default(),
             }),
         }
     }
@@ -246,14 +238,8 @@ impl Page for TodoPage {
         TITLE.to_string()
     }
 
-    /// Misty draws the page; the grid under it is empty, its rows kept for
-    /// how many comments fit.
-    fn content(&mut self, rows: usize, _cols: usize, _wrap: bool) -> Frame {
-        let todos = self.view.state_mut();
-        todos
-            .window
-            .set_fits(rows.saturating_sub(CHROME_ROWS) / ROWS_PER_ITEM);
-        todos.follow();
+    /// Misty draws the page; the grid under it is empty.
+    fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> Frame {
         Frame::new(vec![Row::new()])
     }
 
@@ -284,11 +270,7 @@ impl Page for TodoPage {
     }
 
     fn on_key(&mut self, key: &Key) -> EditorOutcome {
-        let todos = self.view.state_mut();
-        todos.window.release();
-        let outcome = todos.on_key(key);
-        todos.follow();
-        outcome
+        self.view.state_mut().on_key(key)
     }
 
     fn on_job(&mut self, reply: JobReply) -> EditorOutcome {
@@ -373,7 +355,6 @@ impl Todos {
                 self.selected = again;
             }
         }
-        self.follow();
     }
 
     /// The rows the chosen tab keeps, the cursor kept on a comment.
@@ -399,11 +380,6 @@ impl Todos {
                 }
             }
         }
-    }
-
-    /// Keep the selected row among those built.
-    fn follow(&mut self) {
-        self.window.follow(self.selected, self.rows.len());
     }
 
     /// A key, a sequence of the page's own (`g g`) waited out.
@@ -495,7 +471,6 @@ impl Todos {
         self.scope = scope;
         self.selected = 0;
         self.rebuild();
-        self.follow();
     }
 
     /// Open the selected comment's line, in this pane or `beside` it.
@@ -558,7 +533,14 @@ impl Todos {
             Line::File(first) => text(relative(&self.root, &self.found[first].path))
                 .muted()
                 .into(),
-            Line::Todo(todo) => self.todo_view(at, &self.found[todo]).into(),
+            Line::Todo(todo) => {
+                let row: Element<'_, Self> = self.todo_view(at, &self.found[todo]).into();
+                // The page scrolls the selected comment into view.
+                match at == self.selected {
+                    true => row.keep_in_view(),
+                    false => row,
+                }
+            }
         }
     }
 
@@ -584,8 +566,8 @@ impl Todos {
 }
 
 impl HostedView for Todos {
-    /// The heading with a tab for each keyword, the comments built around
-    /// the cursor, and the selected one's line at the foot.
+    /// The heading with a tab for each keyword, every comment, the page
+    /// scrolling them, and the selected one's line at the foot.
     fn view(&self) -> Element<'_, Self> {
         let body: Element<'_, Self> = match (self.rows.is_empty(), self.searching) {
             (true, true) => text(SEARCHING).muted().proportional().into(),
@@ -593,19 +575,18 @@ impl HostedView for Todos {
                 text(NOTHING_FOUND).proportional().into(),
                 text(NOTHING_FOUND_DETAIL).muted().proportional().into(),
             ]),
-            (false, _) => {
-                let built = self.window.range(self.rows.len());
-                let total = self.rows.len();
-                column(built.map(|at| self.row_view(at)).collect::<Vec<_>>())
-                    .gap(Space::Cells(0.25))
-                    .on_scroll(move |todos: &mut Self, wheel| todos.window.wheel(&wheel, total))
-            }
+            (false, _) => column(
+                (0..self.rows.len())
+                    .map(|at| self.row_view(at))
+                    .collect::<Vec<_>>(),
+            )
+            .gap(Space::Cells(0.25)),
         };
         let mut shown = page(TITLE)
             .scopes(self.scopes(), self.scope, |todos: &mut Self, scope| {
                 todos.choose(scope)
             })
-            .content(body);
+            .scrolling(body);
         if let Some(footer) = self.footer() {
             shown = shown.footer(footer);
         }
@@ -880,6 +861,26 @@ mod tests {
             shown.contains("src/a.rs:3") && shown.contains("// TODO: cache the parse"),
             "the footer has the selected comment's place and line: {shown:?}"
         );
+    }
+
+    #[test]
+    fn test_the_page_scrolls_the_selected_comment_into_view() {
+        let hits = (1..=200)
+            .map(|line| hit("src/a.rs", line, &format!("// TODO: item {line:03}")))
+            .collect();
+        let mut page = found(hits);
+        let mut window = TestWindow::new(1000, 800);
+        // The scroll jumps rather than glides, so one frame shows where it
+        // went.
+        window.set_reduced_motion(true);
+        let shown = text_of(&drawn(&mut page, &window));
+        assert!(shown.contains("item 001") && !shown.contains("item 200"));
+        press(&mut page, Act::Last);
+        drawn(&mut page, &window);
+        page.view_about_to_wait(&mut window.cx());
+        let shown = text_of(&drawn(&mut page, &window));
+        assert!(shown.contains("item 200"), "the last, selected, in view");
+        assert!(!shown.contains("item 001"), "the first scrolled away");
     }
 
     #[test]
