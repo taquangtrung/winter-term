@@ -441,6 +441,8 @@ impl App {
     pub(in crate::window) fn press_in_picker(&mut self, spec: &str) {
         let focused = self.layout().focused();
         let mut window = misty::testing::TestWindow::new(TEST_WINDOW.0, TEST_WINDOW.1);
+        // The keys the app's window takes.
+        window.set_key_scheme(misty::Application::key_scheme(self));
         for word in spec.split_whitespace() {
             let keys = winter_model::input::table::keys(word).expect("a key spec");
             for key in keys {

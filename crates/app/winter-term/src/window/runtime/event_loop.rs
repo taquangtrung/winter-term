@@ -6,7 +6,9 @@ use std::cell::RefCell;
 use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
-use misty::{AccessAction, AppContext, Application, Frame, HangWatch, Input, Widget, WindowId};
+use misty::{
+    AccessAction, AppContext, Application, Frame, HangWatch, Input, KeyScheme, Widget, WindowId,
+};
 
 use winter_model::guard::{describe_panic, install_panic_hook};
 use winter_model::input;
@@ -142,6 +144,12 @@ impl Application for App {
     /// lasts (see [`crate::watchdog`]).
     fn hang_watch(&self) -> HangWatch {
         watchdog::hang_watch()
+    }
+
+    /// Winter is keyboard-first: misty's lists, fields, and controls take
+    /// the Vim and Emacs keys, as Winter's own views do.
+    fn key_scheme(&self) -> KeyScheme {
+        KeyScheme::VIM_AND_EMACS
     }
 
     fn render(&mut self, _window: WindowId, frame: &mut Frame) {
