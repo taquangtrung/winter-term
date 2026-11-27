@@ -405,7 +405,9 @@ fn click_row(editor: &mut ProcEditor, at: usize) {
     let frame = drawn(editor, &window);
     let row = frame.cell_metrics().height;
     let heading = heading_at(&frame, "PID");
-    let y = heading.y + row / 2.0 + 1.0 + (at as f32 + 0.5) * row;
+    let padding = f32::from(misty::Theme::dark().shape.row_padding);
+    let below = row / 2.0 + padding + 1.0;
+    let y = heading.y + below + (at as f32 + 0.5) * row;
     click_at(editor, &mut window, Point::new(heading.x, y));
 }
 

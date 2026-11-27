@@ -56,7 +56,9 @@ use self::details_view::{BODY as DETAILS_BODY, Details, SECTIONS};
 use self::view::{
     Process, SortDirection, SortKey, ViewMode, ViewOptions, ViewRow, descendants, layout,
 };
-use crate::table::{ROW_PADDING_COLS, cell, fit, heading as sort_heading, marked, table_row};
+use crate::table::{
+    ROW_PADDING_COLS, cell, fit, heading as sort_heading, heading_row, marked, table_row,
+};
 use crate::units::{format_kb, format_percent};
 use notice::{Acting, ProcNotice, Renice, Signalled};
 
@@ -1116,7 +1118,7 @@ impl ProcEditor {
             None,
             false,
         ));
-        table_row(cells)
+        heading_row(cells)
     }
 
     /// List row `at` as the table shows it: a cell for each column, the

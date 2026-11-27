@@ -46,6 +46,13 @@ pub fn table_row<A: 'static>(cells: Vec<Element<'_, A>>) -> Element<'_, A> {
         .padding(ROW_PADDING_COLS, 0.0)
 }
 
+/// The row of a table's column headings: its `cells` as a row of the
+/// table has them, with the theme's row padding above and below, as the
+/// header of misty's own tables has.
+pub fn heading_row<A: 'static>(cells: Vec<Element<'_, A>>) -> Element<'_, A> {
+    table_row(cells).row_padding()
+}
+
 /// A column heading, `label` under `arrow` where the table is sorted by it,
 /// saying `about` and sorting by it on a click through `sort`.
 pub fn heading<'a, A: 'static>(
