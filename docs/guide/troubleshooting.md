@@ -2,6 +2,14 @@
 
 What to do when Winter freezes, lags, or crashes, and what to send with an issue. The `Profiling:` commands are in the command palette; the `winter` commands run in a terminal, outside Winter if the window is frozen.
 
+## When the window freezes
+
+Winter watches for this itself, with profiling on or off:
+
+- After five seconds without answering, every thread's stack goes to `crash.log`, with the page that was drawing.
+- Still frozen after a minute, Winter starts again. Programs in [mux sessions](terminal.md) keep running; those in other terminals end.
+- A window that freezes again within ten minutes of such a restart is not restarted again. Close it, then open the page that froze only once it is fixed.
+
 ## Profiling
 
 Profiling is off by default. Turn it on to have Winter record what goes wrong, then leave it on until the problem shows again.
@@ -14,7 +22,6 @@ Profiling is off by default. Turn it on to have Winter record what goes wrong, t
 While profiling is on:
 
 - A moment the window took longer than a tenth of a second is kept, with what it was doing and the tab in front.
-- When the window stops answering for five seconds, every thread's stack goes to `crash.log`, and how long it was stuck once it answers again. You do not need to catch it in the act.
 - Warnings and errors go to `winter.log`.
 - The report says how many frames the window drew in the last ten seconds, how long they took, and which tabs' output asked for them. If Winter uses a lot of CPU while you are not typing, write a report then.
 - It stays on through `Window: Reload`.

@@ -57,7 +57,10 @@ impl App {
         let theme = ui_theme(self.renderer.as_ref());
         for (tab, body) in self.shown_page_views() {
             if let Some(slot) = self.open_tabs.page_mut(&tab) {
+                // Named while it draws, for a hang's report.
+                crate::watchdog::drawing(Some(slot.page.type_name()));
                 slot.page.draw_view(frame, body, theme);
+                crate::watchdog::drawing(None);
             }
         }
     }

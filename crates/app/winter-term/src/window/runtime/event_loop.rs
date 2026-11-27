@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
-use misty::{AccessAction, AppContext, Application, Frame, Input, Widget, WindowId};
+use misty::{AccessAction, AppContext, Application, Frame, HangWatch, Input, Widget, WindowId};
 
 use winter_model::guard::{describe_panic, install_panic_hook};
 use winter_model::input;
@@ -136,6 +136,12 @@ impl Application for App {
         // The window waits next: the turn is over.
         watchdog::idle(|| self.turn_detail());
         wakeup
+    }
+
+    /// A hang is reported to the crash log, and Winter started again if it
+    /// lasts (see [`crate::watchdog`]).
+    fn hang_watch(&self) -> HangWatch {
+        watchdog::hang_watch()
     }
 
     fn render(&mut self, _window: WindowId, frame: &mut Frame) {

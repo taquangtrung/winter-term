@@ -393,6 +393,12 @@ pub trait Page: AsAny {
     /// A short label for the pane title.
     fn title(&self) -> String;
 
+    /// The page's type as Rust names it (`winter_monitor::proc::ProcEditor`),
+    /// for a report of the page drawing when the window hung.
+    fn type_name(&self) -> &'static str {
+        std::any::type_name::<Self>()
+    }
+
     /// This page as the editor it is, where its contents are a buffer:
     /// `None` for a page holding none.
     fn as_editor(&self) -> Option<&dyn Editor> {

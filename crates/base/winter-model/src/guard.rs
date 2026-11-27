@@ -307,6 +307,10 @@ impl<H: Held> Page for Guarded<H> {
         self.read(|editor| editor.title())
     }
 
+    fn type_name(&self) -> &'static str {
+        self.read(|editor| editor.type_name())
+    }
+
     fn icon(&self) -> Option<IconKind> {
         self.read(|editor| editor.icon())
     }
