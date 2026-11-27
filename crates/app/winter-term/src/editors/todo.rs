@@ -24,6 +24,10 @@ use winter_model::input::Key;
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed, TableMatch};
 use winter_model::paint::{Frame, Row};
 
+mod comment;
+
+pub(crate) use comment::Comments;
+
 // ========================================================================
 // Constants
 // ========================================================================
@@ -332,6 +336,7 @@ impl Todos {
         EditorOutcome::Job(JobRequest::Search(SearchRequest {
             root: self.root.clone(),
             words: self.keywords.clone(),
+            todos: true,
         }))
     }
 
@@ -598,32 +603,34 @@ impl HostedView for Todos {
 // Functions
 // ========================================================================
 
-/// The comment `hit` is, by the first of `keywords` it holds as a whole
-/// word, or `None` for a line holding none.
+/// The todo `hit` is, by the keyword of `keywords` standing whole at its
+/// column, as [`find_todo`] places it; `None` for a hit at none.
 pub(crate) fn todo_of(hit: &SearchHit, keywords: &[String]) -> Option<Todo> {
-    let (keyword, end) = keywords
-        .iter()
-        .enumerate()
-        .filter_map(|(at, keyword)| word_at(&hit.text, keyword).map(|start| (at, start)))
-        .min_by_key(|(_, start)| *start)
-        .map(|(at, start)| (at, start + keywords[at].len()))?;
+    let rest = hit.text.get(hit.column..)?;
+    let keyword = keywords.iter().position(|keyword| {
+        rest.starts_with(keyword.as_str())
+            && comment::whole_words(&hit.text, keyword).any(|at| at == hit.column)
+    })?;
     Some(Todo {
         keyword,
         line: hit.line,
         path: hit.path.clone(),
         source: hit.text.clone(),
-        words: words_after(&hit.text[end..]),
+        words: words_after(&rest[keywords[keyword].len()..]),
     })
 }
 
-/// Where `word` first stands in `text` whole, in its own case.
-fn word_at(text: &str, word: &str) -> Option<usize> {
-    let is_word = |c: char| c.is_alphanumeric() || c == '_';
-    text.match_indices(word).map(|(at, _)| at).find(|&at| {
-        let before = text[..at].chars().next_back();
-        let after = text[at + word.len()..].chars().next();
-        !before.is_some_and(is_word) && !after.is_some_and(is_word)
-    })
+/// Whether `hit` holds one of `keywords` as a todo, `comments` reading its
+/// file's comments; its column is moved to the todo's keyword.
+pub(crate) fn find_todo(hit: &mut SearchHit, keywords: &[String], comments: &mut Comments) -> bool {
+    let on_line = comments.on_line(&hit.path, hit.line);
+    match comment::todo_in(&hit.text, on_line, keywords) {
+        Some((_, column)) => {
+            hit.column = column;
+            true
+        }
+        None => false,
+    }
 }
 
 /// What a comment says past its keyword: its punctuation and the marks
@@ -695,6 +702,11 @@ mod tests {
 
     fn hit(path: &str, line: usize, text: &str) -> SearchHit {
         SearchHit {
+            column: keywords()
+                .iter()
+                .filter_map(|keyword| text.find(keyword.as_str()))
+                .min()
+                .unwrap_or_default(),
             line,
             path: PathBuf::from("/repo").join(path),
             text: text.to_string(),
@@ -737,13 +749,25 @@ mod tests {
 
     #[test]
     fn test_an_item_says_the_words_after_its_keyword_without_the_comments_marks() {
-        let todo = |text: &str| todo_of(&hit("a.rs", 1, text), &keywords()).expect("a comment");
+        let todo_in =
+            |file: &str, text: &str| todo_of(&hit(file, 1, text), &keywords()).expect("a comment");
+        let todo = |text: &str| todo_in("a.rs", text);
         assert_eq!(todo("// TODO: cache the parse").words, "cache the parse");
         assert_eq!(todo("/* FIXME - off by one */").words, "off by one");
-        assert_eq!(todo("<!-- TODO: alt text -->").words, "alt text");
-        assert_eq!(todo("# TODO").words, NO_WORDS);
-        // The first keyword the line holds names it, whichever is listed first.
+        assert_eq!(
+            todo_in("a.html", "<!-- TODO: alt text -->").words,
+            "alt text"
+        );
+        assert_eq!(todo_in("a.py", "# TODO").words, NO_WORDS);
+        // The keyword at the hit's column names it, whichever is listed first.
         assert_eq!(todo("// FIXME: TODO later").keyword, 1);
+        let mut later = hit("a.rs", 1, "// FIXME: TODO later");
+        later.column = later.text.find("TODO").expect("TODO");
+        let todo_later = todo_of(&later, &keywords()).expect("a todo");
+        assert_eq!(
+            (todo_later.keyword, todo_later.words.as_str()),
+            (0, "later")
+        );
         assert!(
             todo_of(&hit("a.rs", 1, "let todos = TODOS;"), &keywords()).is_none(),
             "a keyword inside a word is none"

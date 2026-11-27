@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use winter_model::editor::{DirTotal, SearchHit, SearchRequest, SearchResult};
 
+use crate::editors::todo::{Comments, find_todo};
+
 // ========================================================================
 // Constants
 // ========================================================================
@@ -92,20 +94,27 @@ pub(super) fn walk_size(
 
 /// Every line under the requested root holding one of its words whole, in
 /// its own case: `TODO` finds `// TODO: x` and `TODO(me)`, never `todos`.
-/// No words find nothing rather than everything.
+/// No words find nothing rather than everything. A search for todos keeps
+/// only the lines holding one, as the Todo list shows them.
 pub(super) fn search_tree(request: &SearchRequest, cancel: &AtomicBool) -> SearchResult {
     let mut found = SearchResult::default();
     if request.words.is_empty() {
         return found;
     }
-    if let Some(ripgrep) = search_with_ripgrep(request, cancel) {
-        return ripgrep;
+    match search_with_ripgrep(request, cancel) {
+        Some(ripgrep) => found = ripgrep,
+        None => walk(&request.root, cancel, 0, &mut |path, meta| {
+            if meta.len() <= SEARCH_MAX_FILE_BYTES {
+                search_file(path, &request.words, &mut found.hits);
+            }
+        }),
     }
-    walk(&request.root, cancel, 0, &mut |path, meta| {
-        if meta.len() <= SEARCH_MAX_FILE_BYTES {
-            search_file(path, &request.words, &mut found.hits);
-        }
-    });
+    if request.todos {
+        let mut comments = Comments::default();
+        found
+            .hits
+            .retain_mut(|hit| find_todo(hit, &request.words, &mut comments));
+    }
     found
 }
 
@@ -131,7 +140,13 @@ pub(super) fn search_with_ripgrep(
 ) -> Option<SearchResult> {
     let mut command = Command::new(RIPGREP);
     command
-        .args(["--line-number", "--with-filename", "--no-heading", "--null"])
+        .args([
+            "--line-number",
+            "--column",
+            "--with-filename",
+            "--no-heading",
+            "--null",
+        ])
         .args(["--color", "never", "--hidden"])
         .args(["--sort", "path", "--no-require-git"])
         // The project's own ignore files, not one above it that would
@@ -170,13 +185,16 @@ pub(super) fn search_with_ripgrep(
     Some(found)
 }
 
-/// One line of ripgrep's output, `path NUL line:text`, as a hit.
+/// One line of ripgrep's output, `path NUL line:column:text`, as a hit; its
+/// column counts bytes from one.
 fn ripgrep_hit(line: &[u8]) -> Option<SearchHit> {
     let split = line.iter().position(|byte| *byte == PATH_END)?;
     let path = PathBuf::from(String::from_utf8_lossy(&line[..split]).to_string());
     let rest = String::from_utf8_lossy(&line[split + 1..]);
-    let (number, text) = rest.split_once(':')?;
+    let (number, rest) = rest.split_once(':')?;
+    let (column, text) = rest.split_once(':')?;
     Some(SearchHit {
+        column: column.parse::<usize>().ok()?.saturating_sub(1),
         line: number.parse().ok()?,
         path,
         text: text.trim_end().chars().take(SEARCH_MAX_LINE).collect(),
@@ -236,8 +254,9 @@ fn search_file(path: &Path, words: &[String], found: &mut Vec<SearchHit>) {
         return;
     };
     for (index, line) in text.lines().enumerate() {
-        if words.iter().any(|word| holds_word(line, word)) {
+        if let Some(column) = words.iter().filter_map(|word| word_start(line, word)).min() {
             found.push(SearchHit {
+                column,
                 line: index + 1,
                 path: path.to_path_buf(),
                 text: line.trim_end().chars().take(SEARCH_MAX_LINE).collect(),
@@ -252,15 +271,17 @@ fn is_pdf(path: &Path) -> bool {
         .is_some_and(|extension| extension.eq_ignore_ascii_case("pdf"))
 }
 
-/// Whether `line` holds `word` with no word character on either side of it,
-/// the way ripgrep's `--word-regexp` reads a word.
-fn holds_word(line: &str, word: &str) -> bool {
+/// Where `line` first holds `word` with no word character on either side of
+/// it, the way ripgrep's `--word-regexp` reads a word.
+fn word_start(line: &str, word: &str) -> Option<usize> {
     let is_word_char = |c: char| c.is_alphanumeric() || c == '_';
-    line.match_indices(word).any(|(start, _)| {
-        let before = line[..start].chars().next_back();
-        let after = line[start + word.len()..].chars().next();
-        !before.is_some_and(is_word_char) && !after.is_some_and(is_word_char)
-    })
+    line.match_indices(word)
+        .map(|(start, _)| start)
+        .find(|&start| {
+            let before = line[..start].chars().next_back();
+            let after = line[start + word.len()..].chars().next();
+            !before.is_some_and(is_word_char) && !after.is_some_and(is_word_char)
+        })
 }
 
 // ========================================================================
@@ -273,17 +294,17 @@ mod tests {
 
     #[test]
     fn test_a_word_is_found_only_with_no_word_character_beside_it() {
-        assert!(holds_word("// TODO: x", "TODO"));
-        assert!(holds_word("TODO", "TODO"));
-        assert!(holds_word("fn x() {} // TODO(me)", "TODO"));
-        assert!(!holds_word("TODOS", "TODO"));
-        assert!(!holds_word("MY_TODO", "TODO"));
+        assert!(word_start("// TODO: x", "TODO").is_some());
+        assert!(word_start("TODO", "TODO").is_some());
+        assert!(word_start("fn x() {} // TODO(me)", "TODO").is_some());
+        assert!(word_start("TODOS", "TODO").is_none());
+        assert!(word_start("MY_TODO", "TODO").is_none());
         assert!(
-            !holds_word("éTODO", "TODO"),
+            word_start("éTODO", "TODO").is_none(),
             "a letter outside ASCII is a word character"
         );
         // The first place it occurs is inside a word; the second is whole.
-        assert!(holds_word("XTODO TODO", "TODO"));
+        assert_eq!(word_start("XTODO TODO", "TODO"), Some(6));
     }
 
     #[test]

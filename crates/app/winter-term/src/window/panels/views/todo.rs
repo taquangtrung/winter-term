@@ -93,6 +93,7 @@ impl TodoView {
         EditorOutcome::Job(JobRequest::Search(SearchRequest {
             root: self.root.clone(),
             words: self.keywords.clone(),
+            todos: true,
         }))
     }
 
@@ -281,6 +282,7 @@ mod tests {
 
     fn hit(path: &str, line: usize, text: &str) -> SearchHit {
         SearchHit {
+            column: text.find("TODO").unwrap_or_default(),
             line,
             path: PathBuf::from("/repo").join(path),
             text: text.to_string(),

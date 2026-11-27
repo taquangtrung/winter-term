@@ -65,6 +65,10 @@ pub struct SearchRequest {
     pub root: PathBuf,
     /// The words, one of which each line reported holds.
     pub words: Vec<String>,
+    /// Whether only the lines holding a word as a todo are reported: in a
+    /// comment, its first word or marked with `:` or `(`, the hit's column
+    /// on it.
+    pub todos: bool,
 }
 
 /// What a search found: every matching line.
@@ -77,6 +81,8 @@ pub struct SearchResult {
 /// One matching line.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct SearchHit {
+    /// Where on the line the word found starts, in bytes from its start.
+    pub column: usize,
     /// Which line of the file it is, counting from one.
     pub line: usize,
     /// The file holding it.

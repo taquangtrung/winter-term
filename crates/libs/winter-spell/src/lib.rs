@@ -29,7 +29,7 @@ pub mod shared;
 mod user_words;
 
 pub use dictionary::{DICTIONARY_LICENSE, Dictionary, DictionaryId, UnknownDictionaryId};
-pub use extract::{CommentStyle, Prose, Segment, extract_prose, prose_for_extension};
+pub use extract::{Prose, Segment, extract_prose, prose_for_extension};
 pub use suggest::DEFAULT_SUGGESTION_LIMIT;
 pub use tokenizer::{
     MAX_UNCHECKED_ACRONYM_LENGTH, MIN_CHECKABLE_WORD_LENGTH, WordToken, should_check_token,

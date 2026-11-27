@@ -299,6 +299,7 @@ mod tests {
 
     fn hits(root: &std::path::Path) -> Vec<SearchHit> {
         vec![SearchHit {
+            column: 0,
             line: 3,
             path: root.join("a.rs"),
             text: "let found = 1;".to_string(),

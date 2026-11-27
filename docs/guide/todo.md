@@ -1,6 +1,6 @@
 # Todo
 
-The Todo page lists the comments across the project that hold a todo keyword, under the file each is in. Open it with `Project: List Todos`. `Sidebar: Todo` keeps the same comments in a sidebar (see [Sidebars](basics.md#sidebars)).
+The Todo page lists the comments across the project that hold a todo keyword, under the file each is in. The keyword counts when it opens the comment (`// TODO x`, a block comment's inner line), or anywhere in it with `:` or `(` after it (`// slow; FIXME: cache it`, `TODO(me)`). A keyword in code, in a string, or as a plain word of a sentence (`// the TODO list`) is left out. Comments are read as the text editor colors them, so a file it does not color holds none. Open it with `Project: List Todos`. `Sidebar: Todo` keeps the same comments in a sidebar (see [Sidebars](basics.md#sidebars)).
 
 | Key | Action |
 |---|---|

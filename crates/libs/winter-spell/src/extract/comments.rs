@@ -1,90 +1,85 @@
-//! Comments in source code: `//` and `/* */`, `#`, or `--`, by language.
-//!
-//! The scan is lexical: a comment marker inside a string literal also
-//! starts a comment. A marker escaped by a backslash does not.
+//! Comments in source code, as the language's TextMate grammar reads them
+//! through iris: a docstring counts as one, a comment marker inside a
+//! string does not.
 
+use std::collections::HashMap;
 use std::ops::Range;
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
-use super::CommentStyle;
-use super::scan::{find_from, line_end};
+use iris::{Grammar, Language, Languages, Registry, Tokenizer};
 
 // ========================================================================
 // Constants
 // ========================================================================
 
-/// Opens a block comment in slash-style languages.
-const BLOCK_OPEN: &str = "/*";
-
-/// Closes a block comment in slash-style languages.
-const BLOCK_CLOSE: &str = "*/";
+/// The file name a language is told from by its extension alone.
+const BY_EXTENSION: &str = "code";
 
 // ========================================================================
-// Scanning
+// Data Structures
 // ========================================================================
 
-/// The comments of `code` in `style`, in order, each from its marker to
-/// the end of its line or block.
-pub(super) fn comment_ranges(code: &str, style: CommentStyle) -> Vec<Range<usize>> {
-    let mut comments = Vec::new();
-    let mut from = 0;
-    while let Some((comment, end)) = next_comment(code, from, style) {
-        comments.push(comment);
-        from = end;
+/// The languages iris knows and their grammars, each compiled once.
+struct Grammars {
+    /// The grammars compiled so far, by scope; `None` for one that failed.
+    compiled: Mutex<HashMap<String, Option<Arc<Grammar>>>>,
+    languages: Languages,
+    registry: Registry,
+}
+
+// ========================================================================
+// Grammars Implementations
+// ========================================================================
+
+impl Grammars {
+    /// The grammar of `language`, compiled the first time it is asked for.
+    fn grammar_of(&self, language: &Language) -> Option<Arc<Grammar>> {
+        let scope = language.scope.as_deref()?;
+        let mut compiled = self.compiled.lock().unwrap_or_else(PoisonError::into_inner);
+        compiled
+            .entry(scope.to_owned())
+            .or_insert_with(|| self.registry.grammar(scope).ok())
+            .clone()
     }
-    comments
 }
 
-/// The first comment at or after `from`, and where its match ends: past
-/// the line break of a line comment.
-fn next_comment(code: &str, from: usize, style: CommentStyle) -> Option<(Range<usize>, usize)> {
-    let hay = &code[from..];
-    let (comment, end) = hay
-        .char_indices()
-        .find_map(|(at, _)| comment_at(hay, at, style))?;
-    Some((from + comment.start..from + comment.end, from + end))
+// ========================================================================
+// Functions
+// ========================================================================
+
+/// The id of the language `name` names, by its id or an alias (`rust`), or
+/// as an extension (`rs`), as a Markdown fence names its code's; `None` for
+/// one with no grammar or no comments.
+pub(super) fn language_named(name: &str) -> Option<&'static str> {
+    let languages = &grammars().languages;
+    let language = languages
+        .get(name)
+        .or_else(|| languages.detect(format!("{BY_EXTENSION}.{name}"), ""))?;
+    let commented =
+        language.config.line_comment.is_some() || language.config.block_comment.is_some();
+    (language.scope.is_some() && commented).then_some(language.id.as_str())
 }
 
-/// A comment whose match starts at `at`. Like the source regexes, a match
-/// starts one character before its marker unless the marker opens the
-/// text; for a line comment that character is no backslash, and for a
-/// block comment it is whitespace.
-fn comment_at(hay: &str, at: usize, style: CommentStyle) -> Option<(Range<usize>, usize)> {
-    let line_marker = match style {
-        CommentStyle::Dash => "--",
-        CommentStyle::Hash => "#",
-        CommentStyle::Slash => "//",
-    };
-    let line = marker_start(hay, at, line_marker, |c| c != '\\').map(|start| {
-        let end = line_end(hay, start);
-        (start..end, (end + 1).min(hay.len()))
-    });
-    let block = || match style {
-        CommentStyle::Slash => {
-            let start = marker_start(hay, at, BLOCK_OPEN, char::is_whitespace)?;
-            let close = find_from(hay, start + BLOCK_OPEN.len(), BLOCK_CLOSE)?;
-            let end = close + BLOCK_CLOSE.len();
-            Some((start..end, end))
-        }
-        CommentStyle::Dash | CommentStyle::Hash => None,
-    };
-    line.or_else(block)
+/// The comments of `code`, in the language with id `language`, in order,
+/// each a byte range of `code`; none for a language with no grammar.
+pub(super) fn comment_ranges(code: &str, language: &str) -> Vec<Range<usize>> {
+    let grammars = grammars();
+    grammars
+        .languages
+        .get(language)
+        .and_then(|language| grammars.grammar_of(language))
+        .map(|grammar| iris::comment_ranges(&mut Tokenizer::new(grammar), code))
+        .unwrap_or_default()
 }
 
-/// Where `marker` starts in a match at `at`: at `at` itself when that
-/// opens the text, else right after the character at `at`, which must
-/// satisfy `is_allowed_before`.
-fn marker_start(
-    hay: &str,
-    at: usize,
-    marker: &str,
-    is_allowed_before: impl Fn(char) -> bool,
-) -> Option<usize> {
-    if at == 0 && hay.starts_with(marker) {
-        return Some(at);
-    }
-    let before = hay[at..].chars().next()?;
-    let start = at + before.len_utf8();
-    (is_allowed_before(before) && hay[start..].starts_with(marker)).then_some(start)
+/// The languages and grammars every check shares.
+fn grammars() -> &'static Grammars {
+    static GRAMMARS: OnceLock<Grammars> = OnceLock::new();
+    GRAMMARS.get_or_init(|| Grammars {
+        compiled: Mutex::default(),
+        languages: Languages::builtin(),
+        registry: Registry::bundled(),
+    })
 }
 
 // ========================================================================
@@ -95,52 +90,37 @@ fn marker_start(
 mod tests {
     use super::*;
 
-    fn comments(code: &str, style: CommentStyle) -> Vec<&str> {
-        comment_ranges(code, style)
+    fn comments<'c>(code: &'c str, name: &str) -> Vec<&'c str> {
+        let language = language_named(name).expect("a language with comments");
+        comment_ranges(code, language)
             .into_iter()
             .map(|range| &code[range])
             .collect()
     }
 
     #[test]
-    fn test_comment_ranges_finds_slash_line_and_block_comments() {
-        let code = "let x = 1; // the count\n/// docs here\nf(x); /* a block\n note */ g();";
-        assert_eq!(
-            comments(code, CommentStyle::Slash),
-            ["// the count", "/// docs here", "/* a block\n note */"]
-        );
+    fn test_a_language_is_named_by_its_id_an_alias_or_an_extension() {
+        assert_eq!(language_named("rust"), Some("rust"));
+        assert_eq!(language_named("rs"), Some("rust"));
+        assert_eq!(language_named("py"), Some("python"));
+        assert_eq!(language_named("no-such-language"), None);
     }
 
     #[test]
-    fn test_comment_ranges_needs_whitespace_before_block_comment() {
-        assert!(comments("a/* glued */", CommentStyle::Slash).is_empty());
+    fn test_comments_are_read_as_the_languages_grammar_reads_them() {
+        let rust = "let s = \"// not one\"; // the count\n/* a block\n note */ g();";
+        assert_eq!(
+            comments(rust, "rust"),
+            ["// the count", "/* a block", " note */"]
+        );
+        assert_eq!(comments("x = '# no'  # set x", "python"), ["# set x"]);
+        assert_eq!(comments("SELECT 1; -- one row\n", "sql"), ["-- one row"]);
+        assert_eq!(comments("let x = 1 (* note *)", "ocaml"), ["(* note *)"]);
     }
 
     #[test]
-    fn test_comment_ranges_skips_escaped_marker() {
-        assert_eq!(
-            comments("s = '\\# no'\n# yes", CommentStyle::Hash),
-            ["# yes"]
-        );
-    }
-
-    #[test]
-    fn test_comment_ranges_finds_hash_and_dash_comments() {
-        assert_eq!(
-            comments("x = 1  # set x\n#!shebang", CommentStyle::Hash),
-            ["# set x", "#!shebang"]
-        );
-        assert_eq!(
-            comments("SELECT 1; -- one row\n", CommentStyle::Dash),
-            ["-- one row"]
-        );
-    }
-
-    #[test]
-    fn test_comment_ranges_handles_multibyte_text_before_marker() {
-        assert_eq!(
-            comments("é// café note", CommentStyle::Slash),
-            ["// café note"]
-        );
+    fn test_comments_keep_byte_offsets_past_multibyte_text() {
+        let code = "let s = \"é\"; // café note";
+        assert_eq!(comments(code, "rust"), ["// café note"]);
     }
 }

@@ -333,7 +333,6 @@ mod tests {
     use std::sync::OnceLock;
     use std::time::Instant;
 
-    use super::super::extract::CommentStyle;
     use super::*;
 
     /// One suffix (with an e-stripping and an e-keeping rule) and one
@@ -551,7 +550,7 @@ mod tests {
     fn test_misspellings_in_checks_only_prose_at_original_offsets() {
         let code = "let qzxv = \"wrdz\"; // the fiel is réad\n";
         let found: Vec<(String, &str)> = en_us()
-            .misspellings_in(code, Prose::Comments(CommentStyle::Slash))
+            .misspellings_in(code, Prose::Comments("rust"))
             .into_iter()
             .map(|token| (token.word, &code[token.start..token.end]))
             .collect();

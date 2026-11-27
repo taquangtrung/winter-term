@@ -836,6 +836,7 @@ mod tests {
         SearchRequest {
             root: root.to_path_buf(),
             words: words.iter().map(ToString::to_string).collect(),
+            todos: false,
         }
     }
 
@@ -1136,6 +1137,27 @@ mod tests {
         };
         let lines: Vec<usize> = found.hits.iter().map(|hit| hit.line).collect();
         assert_eq!(lines, [1, 5], "{:?}", found.hits);
+    }
+
+    #[test]
+    fn test_a_todos_search_keeps_only_the_todos_block_comments_too() {
+        let tree = TempTree::new("search-todos");
+        std::fs::write(
+            tree.0.join("a.rs"),
+            "// TODO: one\nlet s = \"// TODO\";\n/*\n   FIXME two\n   the TODO list\n*/\n// x; TODO: three\n",
+        )
+        .expect("write");
+
+        let mut jobs = Jobs::new(Waker::default());
+        let mut request = words(&tree.0, &["TODO", "FIXME"]);
+        request.todos = true;
+        jobs.spawn(TabId(1), JobRequest::Search(request));
+        let replies = wait_for_replies(&mut jobs, 1, ARRIVES);
+        let JobReply::Search(found) = &replies[0].1 else {
+            panic!("expected a search answer");
+        };
+        let lines: Vec<usize> = found.hits.iter().map(|hit| hit.line).collect();
+        assert_eq!(lines, [1, 4, 7], "{:?}", found.hits);
     }
 
     #[test]

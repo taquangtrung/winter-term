@@ -8,8 +8,8 @@
 use std::iter;
 use std::ops::Range;
 
-use super::comment_style_for_fence;
 use super::comments::comment_ranges;
+use super::fence_language;
 use super::scan::{
     Hit, Mask, char_before, find_from, inline_math_end, is_after_non_word, is_before_non_word,
     is_byte_at, line_end, url_end, whitespace_end,
@@ -179,9 +179,9 @@ fn code_fence(hay: &str, at: usize) -> Option<Hit> {
     let close = find_from(hay, code_start, FENCE)?;
     let end = close + FENCE.len();
     let info = &hay[at + FENCE.len()..info_end];
-    let keeps: Vec<Range<usize>> = comment_style_for_fence(info)
-        .map(|style| {
-            comment_ranges(&hay[code_start..close], style)
+    let keeps: Vec<Range<usize>> = fence_language(info)
+        .map(|language| {
+            comment_ranges(&hay[code_start..close], language)
                 .into_iter()
                 .map(|comment| code_start + comment.start..code_start + comment.end)
                 .collect()

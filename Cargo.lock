@@ -7525,6 +7525,7 @@ dependencies = [
 name = "winter-spell"
 version = "0.1.0"
 dependencies = [
+ "iris",
  "winter-base",
 ]
 

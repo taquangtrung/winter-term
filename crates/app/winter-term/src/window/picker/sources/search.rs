@@ -22,6 +22,7 @@ use winter_model::paint::IconKind;
 use winter_model::path::abbreviate_home;
 
 use super::stream::{place_key, stream_lines, stream_rows};
+use crate::editors::todo::{Comments, find_todo};
 use crate::window::picker::WindowOutcome;
 use crate::window::picker::outcome::SaveHits;
 use crate::window::picker::replace::Replace;
@@ -167,6 +168,7 @@ impl ProjectSearch {
                     .is_none_or(|filter| filter.matches(&hit.path))
             })
             .map(|hit| SearchHit {
+                column: hit.column.saturating_sub(1),
                 line: hit.line,
                 path: self.root.join(&hit.path),
                 text: hit.text.clone(),
@@ -460,8 +462,23 @@ impl Source<WindowOutcome, Preview> for TodoSearch {
             .args(["--regexp", &keywords])
             .current_dir(&self.root);
         let hits = Arc::clone(&self.hits);
+        let words = self.keywords.clone();
+        let root = self.root.clone();
+        let mut comments = Comments::default();
+        // Only the todos, as the Todo page keeps, each at its keyword.
         stream_lines(command, NO_RIPGREP, move |line| {
-            Some(keep_hit(&hits, parse_hit(line)?))
+            let mut hit = parse_hit(line)?;
+            let mut found = SearchHit {
+                column: hit.column.saturating_sub(1),
+                line: hit.line,
+                path: root.join(&hit.path),
+                text: hit.text.clone(),
+            };
+            if !find_todo(&mut found, &words, &mut comments) {
+                return None;
+            }
+            hit.column = found.column + 1;
+            Some(keep_hit(&hits, hit))
         })
     }
 
@@ -798,6 +815,7 @@ fn saved_hits(hits: &Hits, root: &Path, rows: &[RowKey]) -> Vec<SearchHit> {
     rows.iter()
         .filter_map(|row| hits.get(row))
         .map(|hit| SearchHit {
+            column: hit.column.saturating_sub(1),
             line: hit.line,
             path: root.join(&hit.path),
             text: hit.text.clone(),

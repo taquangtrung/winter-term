@@ -163,6 +163,7 @@ mod tests {
 
     fn hit(path: &std::path::Path, line: usize) -> SearchHit {
         SearchHit {
+            column: 0,
             line,
             path: path.to_path_buf(),
             text: String::new(),

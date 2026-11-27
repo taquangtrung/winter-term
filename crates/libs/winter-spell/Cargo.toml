@@ -10,8 +10,9 @@ keywords = ["spelling", "spellcheck", "hunspell", "dictionary", "terminal"]
 categories = ["text-processing"]
 rust-version.workspace = true
 # The bundled dictionaries are embedded at compile time; the crate needs no
-# files at runtime and has no dependencies.
+# files at runtime.
 include = ["Cargo.toml", "src/**/*.rs", "data/*"]
 
 [dependencies]
+iris.workspace = true
 winter-base.workspace = true
