@@ -248,6 +248,7 @@ commands {
     file_browser "s-S-e" platform="macos"
     git_status "C-S-g"
     process_monitor "C-S-,"
+    system_monitor "C-S-."
     // Kill the focused tab's buffer: closing a tab (C-S-q) only buries it,
     // and Alt makes it for good. Asks first about unsaved text or a build
     // still running; on a terminal, closes it.
