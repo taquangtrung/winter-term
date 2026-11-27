@@ -8,7 +8,11 @@ use winter_model::process::{CpuReading, RawProcess};
 
 use super::act::Signal;
 use super::*;
+
 use winter_model::notice::SearchMiss;
+
+/// The mark on a name too long for its column.
+const ELLIPSIS: char = '\u{2026}';
 
 fn press(code: KeyCode) -> Key {
     Key::plain(code)
@@ -308,10 +312,10 @@ fn test_a_search_moves_to_the_match_keeps_the_list_and_n_wraps_back() {
 fn test_folding_hides_children_and_the_cursor_row_survives() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "server");
-    editor.on_key(&press(KeyCode::Enter));
+    editor.on_key(&press(KeyCode::Tab));
     assert_eq!(editor.rows.len(), 2);
     assert_eq!(editor.selected().unwrap().name, "server");
-    editor.on_key(&press(KeyCode::Enter));
+    editor.on_key(&press(KeyCode::Tab));
     assert_eq!(editor.rows.len(), 3);
 }
 
@@ -709,4 +713,76 @@ fn test_a_command_repeating_the_name_is_left_blank() {
         shown.contains("sleep\nme\n\n10"),
         "nothing after init's user: {shown:?}"
     );
+}
+
+fn details_of(pid: u32) -> winter_model::monitor::ProcessDetails {
+    use winter_model::monitor::{FileKind, OpenFile, ProcessDetails};
+    ProcessDetails {
+        files: Ok(vec![OpenFile {
+            fd: Some(3),
+            kind: FileKind::File,
+            target: "/var/log/server.log".to_string(),
+        }]),
+        ..ProcessDetails::unread(pid, "not allowed: the process belongs to another user")
+    }
+}
+
+#[test]
+fn test_enter_looks_into_the_process_and_the_list_stops_reading_meanwhile() {
+    let mut editor = loaded_editor();
+    cursor_on(&mut editor, "server");
+    assert_eq!(
+        editor.on_key(&press(KeyCode::Enter)),
+        EditorOutcome::Job(JobRequest::Monitor(MonitorQuery::Details(10)))
+    );
+    assert_eq!(editor.next_tick(), None, "the list is out of sight");
+    editor.on_job(JobReply::Monitor(MonitorAnswer::Details(details_of(10))));
+    let text = drawn_text(&drawn(&mut editor, &window(900))).join("\n");
+    assert!(text.contains("server (pid 10)"), "{text:?}");
+    assert!(
+        text.contains("Open Files (1)") && text.contains("/var/log/server.log"),
+        "{text:?}"
+    );
+    assert!(
+        text.contains("belongs to another user"),
+        "a part not read says why: {text:?}"
+    );
+
+    assert_eq!(
+        editor.on_key(&press(KeyCode::Char('r'))),
+        EditorOutcome::Job(JobRequest::Monitor(MonitorQuery::Details(10)))
+    );
+    editor.on_key(&press(KeyCode::Char('q')));
+    assert!(editor.details.is_none());
+    assert!(
+        editor.next_tick().is_some(),
+        "back on the list, it reads again"
+    );
+}
+
+#[test]
+fn test_an_answer_for_another_process_is_not_shown_and_tab_still_folds() {
+    let mut editor = loaded_editor();
+    cursor_on(&mut editor, "server");
+    editor.on_key(&press(KeyCode::Enter));
+    editor.on_job(JobReply::Monitor(MonitorAnswer::Details(details_of(99))));
+    assert!(editor.details.as_ref().unwrap().state().info.is_none());
+    editor.on_key(&press(KeyCode::Escape));
+    editor.on_key(&press(KeyCode::Tab));
+    assert!(
+        editor.collapsed.contains(&10),
+        "Tab folds, Enter no longer does"
+    );
+}
+
+#[test]
+fn test_every_control_of_the_details_says_what_it_is() {
+    let mut editor = loaded_editor();
+    cursor_on(&mut editor, "server");
+    editor.on_key(&press(KeyCode::Enter));
+    editor.on_job(JobReply::Monitor(MonitorAnswer::Details(details_of(10))));
+    let frame = drawn(&mut editor, &TestWindow::new(1400, 900));
+    let unnamed = misty::testing::unnamed_controls(&frame);
+    assert!(unnamed.is_empty(), "{unnamed:?}");
+    assert_eq!(table::invalid_specs(&DETAIL_KEYS), Vec::<&str>::new());
 }

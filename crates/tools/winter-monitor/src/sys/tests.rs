@@ -4,6 +4,7 @@ use misty::testing::{TestWindow, drawn_text};
 use winter_model::input::KeyCode;
 use winter_model::system::{
     CoreLoad, CoreReading, CpuSample, CpuTicks, DiskReading, GpuReading, MemoryReading, Overview,
+    TrafficReading,
 };
 
 use super::*;
@@ -23,6 +24,7 @@ fn sample(busy: u64, total: u64) -> SystemSample {
             model: "Test CPU".to_string(),
             total: CoreLoad::Ticks(CpuTicks { busy, total }),
         },
+        disk_io: Vec::new(),
         disks: vec![DiskReading {
             available_kb: 1,
             fs_type: None,
@@ -37,6 +39,7 @@ fn sample(busy: u64, total: u64) -> SystemSample {
             swap_used_kb: 0,
             total_kb: 2,
         },
+        network: vec![traffic("eth0", busy * 1024, total * 1024)],
         overview: Overview {
             arch: "x86_64".to_string(),
             hostname: "box".to_string(),
@@ -44,6 +47,14 @@ fn sample(busy: u64, total: u64) -> SystemSample {
             release: "6.8".to_string(),
             uptime_secs: 60,
         },
+    }
+}
+
+fn traffic(name: &str, in_bytes: u64, out_bytes: u64) -> TrafficReading {
+    TrafficReading {
+        in_bytes,
+        name: name.to_string(),
+        out_bytes,
     }
 }
 
@@ -117,6 +128,45 @@ fn test_the_second_snapshot_shows_the_interval_not_the_whole_uptime() {
     // Ten busy ticks in a hundred; since boot it would still read 23.6%.
     assert!(text.contains("10.0%"), "got {text:?}");
     assert_eq!(editor.view.state().history.cpu, [25.0, 10.0]);
+}
+
+#[test]
+fn test_traffic_cards_measure_between_snapshots_and_show_only_what_is_counted() {
+    let mut editor = SysEditor::new();
+    let start = Instant::now();
+    let machine = editor.view.state_mut();
+    let mut first = sample(250, 1000);
+    first.disk_io = vec![traffic("nvme0n1", 0, 4096)];
+    machine.take(Ok(first), start);
+    let window = window(2000);
+    let text = draw(&mut editor, &window);
+    assert!(
+        text.contains("Network") && text.contains("Disk Activity"),
+        "{text:?}"
+    );
+    assert!(
+        text.contains("measuring…"),
+        "no rate from one snapshot: {text:?}"
+    );
+
+    let mut second = sample(250 + 2048, 1000);
+    second.disk_io = vec![traffic("nvme0n1", 1024 * 1024, 4096)];
+    let later = start + std::time::Duration::from_secs(2);
+    editor.view.state_mut().take(Ok(second), later);
+    let text = draw(&mut editor, &window);
+    // 2 MiB received over two seconds; the 1 MiB read, the same.
+    assert!(text.contains("\u{2193} 1.0M/s"), "{text:?}");
+    assert!(text.contains("\u{2191} 0K/s"), "{text:?}");
+    assert!(text.contains("read 512K/s"), "{text:?}");
+
+    let mut quiet = sample(250, 1000);
+    quiet.network.clear();
+    editor.view.state_mut().take(Ok(quiet), later);
+    let text = draw(&mut editor, &window);
+    assert!(
+        !text.contains("Network"),
+        "no card where nothing is counted: {text:?}"
+    );
 }
 
 #[test]

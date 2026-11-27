@@ -1746,6 +1746,7 @@ impl Page for GitEditor {
             JobReply::DirSize { .. }
             | JobReply::FileOps(_)
             | JobReply::Processes(_)
+            | JobReply::Monitor(_)
             | JobReply::Search(_)
             | JobReply::System(_) => EditorOutcome::Consumed,
         }

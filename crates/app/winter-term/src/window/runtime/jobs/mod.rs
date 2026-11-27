@@ -15,6 +15,7 @@ use winter_dir::ops;
 use winter_model::editor::{CommandOutput, FileOps, JobReply, JobRequest, SearchResult};
 use winter_model::input::{Key, KeyCode};
 use winter_model::layout::TabId;
+use winter_model::monitor::{MonitorAnswer, MonitorQuery, ProcessDetails};
 
 use winter_monitor::proc::collect;
 use winter_monitor::sys;
@@ -330,6 +331,11 @@ fn refusal(request: &JobRequest, why: &str) -> JobReply {
             path: path.clone(),
         },
         JobRequest::FileOps(_) => JobReply::FileOps(Err(why.to_string())),
+        JobRequest::Monitor(query) => JobReply::Monitor(match query {
+            MonitorQuery::Details(pid) => MonitorAnswer::Details(ProcessDetails::unread(*pid, why)),
+            MonitorQuery::Ports => MonitorAnswer::Ports(Err(why.to_string())),
+            MonitorQuery::Startup => MonitorAnswer::Startup(Err(why.to_string())),
+        }),
         JobRequest::Processes => JobReply::Processes(Err(why.to_string())),
         JobRequest::ReadFiles(_) => JobReply::Files(Vec::new()),
         JobRequest::Search(_) => JobReply::Search(SearchResult::default()),
@@ -380,6 +386,7 @@ fn run(request: JobRequest, cancel: &AtomicBool, report: &dyn Fn(&str)) -> JobRe
             let bytes = walk_size(&path, cancel, 0, &mut inner);
             JobReply::DirSize { bytes, inner, path }
         }
+        JobRequest::Monitor(query) => JobReply::Monitor(winter_monitor::answer(&query)),
         JobRequest::Processes => JobReply::Processes(collect::collect(cancel)),
         JobRequest::ReadFiles(paths) => JobReply::Files(read_files(&paths)),
         JobRequest::Search(request) => JobReply::Search(search_tree(&request, cancel)),

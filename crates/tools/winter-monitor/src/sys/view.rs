@@ -1,6 +1,6 @@
 //! How the system monitor lays a snapshot out: the machine in one line by
 //! the heading, then a responsive dashboard of cards using sparklines,
-//! vertical core bars, and compact capacity rows.
+//! vertical core bars, compact capacity rows, and traffic rates.
 
 use std::borrow::Cow;
 
@@ -13,6 +13,7 @@ use winter_model::system::{
 
 use crate::units::{format_kb, format_percent};
 
+use super::traffic::TrafficRate;
 use super::usage::Usage;
 
 // ========================================================================
@@ -29,12 +30,33 @@ pub const CPU: &str = "sys.cpu";
 pub const MEMORY: &str = "sys.memory";
 pub const GPU: &str = "sys.gpu";
 pub const DISKS: &str = "sys.disks";
+pub const NETWORK: &str = "sys.network";
+pub const DISK_IO: &str = "sys.disk_io";
 
 /// The cards' headings.
 const CPU_TITLE: &str = "CPU";
 const MEMORY_TITLE: &str = "Memory";
 const GPU_TITLE: &str = "GPU";
 const DISKS_TITLE: &str = "Disks";
+const NETWORK_TITLE: &str = "Network";
+const DISK_IO_TITLE: &str = "Disk Activity";
+
+/// What a traffic card says before it has two snapshots to measure between.
+const MEASURING: &str = "measuring…";
+
+/// The marks before a network interface's received and sent rates.
+const RECEIVED_MARK: char = '\u{2193}';
+const SENT_MARK: char = '\u{2191}';
+
+/// Bytes in a kilobyte, for wording a rate in the units sizes use.
+const BYTES_PER_KB: u64 = 1024;
+
+/// The least a traffic history line is scaled to, in bytes a second, so a
+/// quiet device draws a flat line rather than noise blown up to the top.
+const MIN_RATE_CEILING: f32 = 64.0 * 1024.0;
+
+/// How wide a traffic rate's cell is, in text columns.
+const RATE_COLS: f32 = 11.0;
 
 /// What the load in the CPU card means, for its tooltip.
 const LOAD_ABOUT: &str = "Load: how many processes are running or waiting to, on average over the last 1, 5, and \
@@ -109,17 +131,36 @@ const DAY: u64 = 24 * HOUR;
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct History {
     pub cpu: Vec<f32>,
+    /// Every disk's bytes a second, read and written together.
+    pub disk_io: Vec<f32>,
     pub memory: Vec<f32>,
+    /// Every interface's bytes a second, received and sent together.
+    pub network: Vec<f32>,
+}
+
+/// How fast each interface and disk moved bytes, `None` until two snapshots
+/// are in.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Rates {
+    pub disk_io: Option<Vec<TrafficRate>>,
+    pub network: Option<Vec<TrafficRate>>,
 }
 
 // ========================================================================
 // Functions
 // ========================================================================
 
-/// The ids of the cards `sample` shows, in reading order: a GPU card only
-/// where there is a GPU.
+/// The ids of the cards `sample` shows, in reading order: the traffic cards
+/// only where the system counts it, a GPU card only where there is a GPU.
 pub fn card_ids(sample: &SystemSample) -> Vec<&'static str> {
-    let mut ids = vec![CPU, MEMORY, DISKS];
+    let mut ids = vec![CPU, MEMORY];
+    if !sample.network.is_empty() {
+        ids.push(NETWORK);
+    }
+    ids.push(DISKS);
+    if !sample.disk_io.is_empty() {
+        ids.push(DISK_IO);
+    }
     if !sample.gpus.is_empty() {
         ids.push(GPU);
     }
@@ -146,13 +187,32 @@ pub fn machine_line<'a, A: 'static>(sample: &SystemSample) -> Element<'a, A> {
 pub fn dashboard<'a, A: 'static>(
     sample: &'a SystemSample,
     usage: &'a Usage,
+    rates: &'a Rates,
     history: &'a History,
 ) -> Element<'a, A> {
     let mut cards = vec![
         cpu_card(sample, usage, history),
         memory_card(&sample.memory, history),
-        disk_card(&sample.disks),
     ];
+    if !sample.network.is_empty() {
+        cards.push(traffic_card(
+            NETWORK,
+            NETWORK_TITLE,
+            rates.network.as_deref(),
+            &history.network,
+            network_rates,
+        ));
+    }
+    cards.push(disk_card(&sample.disks));
+    if !sample.disk_io.is_empty() {
+        cards.push(traffic_card(
+            DISK_IO,
+            DISK_IO_TITLE,
+            rates.disk_io.as_deref(),
+            &history.disk_io,
+            disk_rates,
+        ));
+    }
     if !sample.gpus.is_empty() {
         cards.push(gpu_card(&sample.gpus));
     }
@@ -290,6 +350,92 @@ fn disk_card<'a, A: 'static>(disks: &'a [DiskReading]) -> Element<'a, A> {
         })),
     };
     Element::from(card).id(DISKS)
+}
+
+/// A card of traffic, known as `id`: the history of every device's rate
+/// together, then a line per device with its rates as `rates_of` words
+/// them, or what it waits on before the second snapshot.
+fn traffic_card<'a, A: 'static>(
+    id: &'static str,
+    title: &'static str,
+    rates: Option<&'a [TrafficRate]>,
+    history: &'a [f32],
+    rates_of: fn(&TrafficRate) -> [(String, String); 2],
+) -> Element<'a, A> {
+    let Some(rates) = rates else {
+        return Element::from(section(title).item(item(MEASURING))).id(id);
+    };
+    let lines = rates.iter().map(move |rate| {
+        let mut cells = vec![Element::from(text(rate.name.clone()).proportional()).grow(1.0)];
+        let mut about = Vec::new();
+        for (shown, said) in rates_of(rate) {
+            cells.push(
+                Element::from(text(shown).muted().proportional()).width(Extent::Cells(RATE_COLS)),
+            );
+            about.push(said);
+        }
+        row(cells)
+            .gap(Space::Cells(ROW_GAP_COLS))
+            .padding(READING_PADDING.0, READING_PADDING.1)
+            .id(format!("{id}.{}", rate.name))
+            .tooltip(about.join(", "))
+    });
+    Element::from(
+        section(title)
+            .item(rate_history_line(history, id))
+            .items(lines),
+    )
+    .id(id)
+}
+
+/// An interface's rates as its line shows them, marked, and as its tooltip
+/// says them.
+fn network_rates(rate: &TrafficRate) -> [(String, String); 2] {
+    let (received, sent) = (format_rate(rate.in_per_sec), format_rate(rate.out_per_sec));
+    [
+        (
+            format!("{RECEIVED_MARK} {received}"),
+            format!("Receiving {received}"),
+        ),
+        (format!("{SENT_MARK} {sent}"), format!("sending {sent}")),
+    ]
+}
+
+/// A disk's rates as its line shows them, and as its tooltip says them.
+fn disk_rates(rate: &TrafficRate) -> [(String, String); 2] {
+    let (read, written) = (format_rate(rate.in_per_sec), format_rate(rate.out_per_sec));
+    [
+        (format!("read {read}"), format!("Reading {read}")),
+        (format!("write {written}"), format!("writing {written}")),
+    ]
+}
+
+/// Bytes a second in the units sizes use: `1.2M/s`.
+fn format_rate(bytes_per_sec: u64) -> String {
+    format!("{}/s", format_kb(bytes_per_sec / BYTES_PER_KB))
+}
+
+/// A line of a traffic card's `history`, scaled to its peak, known as
+/// `{id}.history`.
+fn rate_history_line<'a, A: 'static>(history: &'a [f32], id: &str) -> Element<'a, A> {
+    let peak = history.iter().copied().fold(0.0, f32::max);
+    let line = column([sparkline(
+        history,
+        peak.max(MIN_RATE_CEILING),
+        ThemeToken::Accent,
+    )])
+    .padding(READING_PADDING.0, READING_PADDING.1)
+    .id(format!("{id}.history"));
+    if history.len() < MIN_HISTORY {
+        return line;
+    }
+    let now = history.last().copied().unwrap_or_default();
+    line.tooltip(format!(
+        "The last {} readings, both ways together: now {}, highest {}",
+        history.len(),
+        format_rate(now as u64),
+        format_rate(peak as u64)
+    ))
 }
 
 /// A headline reading paired with a sparkline: label, optional facts, and

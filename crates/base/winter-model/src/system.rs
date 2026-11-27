@@ -10,12 +10,18 @@
 pub struct SystemSample {
     /// Processor load.
     pub cpu: CpuSample,
+    /// What each disk has read and written, empty where the system will not
+    /// say.
+    pub disk_io: Vec<TrafficReading>,
     /// Mounted local volumes.
     pub disks: Vec<DiskReading>,
     /// Graphics cards, empty where there is no editor to ask.
     pub gpus: Vec<GpuReading>,
     /// Physical memory and swap.
     pub memory: MemoryReading,
+    /// What each network interface has received and sent, the loopback
+    /// left out; empty where the system will not say.
+    pub network: Vec<TrafficReading>,
     /// Which machine this is.
     pub overview: Overview,
 }
@@ -58,6 +64,18 @@ pub struct CpuTicks {
     pub busy: u64,
     /// All ticks, busy or not.
     pub total: u64,
+}
+
+/// The bytes a device has moved since boot, both ways: a network interface's
+/// received and sent, or a disk's read and written. A rate needs two.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TrafficReading {
+    /// Bytes in: received, or read.
+    pub in_bytes: u64,
+    /// The device's name (`eth0`, `nvme0n1`).
+    pub name: String,
+    /// Bytes out: sent, or written.
+    pub out_bytes: u64,
 }
 
 /// One mounted volume.

@@ -1,6 +1,6 @@
 [package]
 name = "winter-monitor"
-description = "Winter's monitors: the machine's processes with the actions of a task manager, and its processors, memory, GPUs, and disks."
+description = "Winter's monitors: the machine's processes with the actions of a task manager, its processors, memory, traffic, GPUs, and disks, its sockets, and what starts at login."
 version.workspace = true
 edition.workspace = true
 authors.workspace = true

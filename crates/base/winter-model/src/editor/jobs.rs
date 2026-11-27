@@ -2,6 +2,7 @@
 
 use std::path::PathBuf;
 
+use crate::monitor::{MonitorAnswer, MonitorQuery};
 use crate::process::ProcessSample;
 use crate::system::SystemSample;
 
@@ -26,6 +27,8 @@ pub enum JobRequest {
     Command(CommandRequest),
     /// Total the bytes under this directory.
     DirSize(PathBuf),
+    /// Read what a monitor past the process list and the dashboard shows.
+    Monitor(MonitorQuery),
     /// Take a snapshot of every process on the machine.
     Processes,
     /// Read these files, skipping the ones that are not there. For the small
@@ -95,6 +98,8 @@ pub enum JobReply {
     /// What the files that could be read hold, keyed by the path asked for.
     /// A file that is missing or unreadable is simply absent.
     Files(Vec<(PathBuf, String)>),
+    /// What a monitor asked for, or why the system would not say.
+    Monitor(MonitorAnswer),
     /// Every process, or why the system would not list them.
     Processes(Result<ProcessSample, String>),
     /// The lines a search found.

@@ -6,12 +6,30 @@
 use serde_json::Value;
 
 use winter_model::system::{
-    CoreLoad, CoreReading, CpuTicks, DiskReading, GpuReading, MemoryReading,
+    CoreLoad, CoreReading, CpuTicks, DiskReading, GpuReading, MemoryReading, TrafficReading,
 };
 
 // ========================================================================
 // Constants
 // ========================================================================
+
+/// Linux's name for the loopback interface, and the start of macOS's
+/// (`lo0`).
+const LOOPBACK: &str = "lo";
+
+/// Where in a `/proc/net/dev` row, after the name, the sent bytes stand; the
+/// received bytes come first.
+const NET_DEV_SENT_FIELD: usize = 8;
+
+/// Where in a `/proc/diskstats` row the name and the sectors read and
+/// written stand.
+const DISKSTATS_NAME_FIELD: usize = 2;
+const DISKSTATS_READ_FIELD: usize = 5;
+const DISKSTATS_WRITTEN_FIELD: usize = 9;
+
+/// Bytes in a sector as `/proc/diskstats` counts them, whatever the disk's
+/// own sector size.
+const SECTOR_BYTES: u64 = 512;
 
 /// Bytes in a kilobyte.
 const BYTES_PER_KB: u64 = 1024;
@@ -347,6 +365,8 @@ pub struct WindowsSnapshot {
     pub hostname: String,
     /// Memory and swap.
     pub memory: MemoryReading,
+    /// What each network adapter has received and sent.
+    pub network: Vec<TrafficReading>,
     /// The processor's name.
     pub model: String,
     /// The edition and version, as Windows words them.
@@ -402,6 +422,12 @@ pub fn parse_windows_json(text: &str) -> Option<WindowsSnapshot> {
             })
         })
         .collect();
+    let network = value["net"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|row| traffic(row[0].as_str()?, row[1].as_u64()?, row[2].as_u64()?))
+        .collect();
     Some(WindowsSnapshot {
         cores: cores
             .into_iter()
@@ -418,6 +444,7 @@ pub fn parse_windows_json(text: &str) -> Option<WindowsSnapshot> {
             swap_used_kb,
             total_kb,
         },
+        network,
         model: value["model"]
             .as_str()
             .unwrap_or_default()
@@ -433,6 +460,82 @@ pub fn parse_windows_json(text: &str) -> Option<WindowsSnapshot> {
         uptime_secs: value["uptime"]
             .as_f64()
             .map_or(0, |secs| secs.max(0.0) as u64),
+    })
+}
+
+// ========================================================================
+// Traffic
+// ========================================================================
+
+/// Each interface's received and sent bytes from `/proc/net/dev`, the
+/// loopback and those that never moved a byte left out.
+pub fn parse_proc_net_dev(raw: &str) -> Vec<TrafficReading> {
+    raw.lines()
+        .filter_map(|line| {
+            let (name, counters) = line.split_once(':')?;
+            let name = name.trim();
+            let fields: Vec<u64> = counters
+                .split_whitespace()
+                .map(|field| field.parse().unwrap_or(0))
+                .collect();
+            traffic(name, *fields.first()?, *fields.get(NET_DEV_SENT_FIELD)?)
+                .filter(|_| name != LOOPBACK)
+        })
+        .collect()
+}
+
+/// Each disk's read and written bytes from `/proc/diskstats`, only those
+/// `is_disk` says are whole disks (not partitions, loops, or RAM disks).
+pub fn parse_diskstats(raw: &str, is_disk: impl Fn(&str) -> bool) -> Vec<TrafficReading> {
+    raw.lines()
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let name = *fields.get(DISKSTATS_NAME_FIELD)?;
+            if !is_disk(name) {
+                return None;
+            }
+            let sectors = |at: usize| fields.get(at)?.parse::<u64>().ok();
+            traffic(
+                name,
+                sectors(DISKSTATS_READ_FIELD)? * SECTOR_BYTES,
+                sectors(DISKSTATS_WRITTEN_FIELD)? * SECTOR_BYTES,
+            )
+        })
+        .collect()
+}
+
+/// Each interface's bytes from `netstat -ibn` on macOS and the BSDs: the
+/// `<Link#…>` row of each, which counts all its addresses together.
+pub fn parse_netstat_ib(raw: &str) -> Vec<TrafficReading> {
+    let mut lines = raw.lines();
+    let Some(header) = lines.next() else {
+        return Vec::new();
+    };
+    let columns: Vec<&str> = header.split_whitespace().collect();
+    let at = |name: &str| columns.iter().position(|column| *column == name);
+    let (Some(received), Some(sent)) = (at("Ibytes"), at("Obytes")) else {
+        return Vec::new();
+    };
+    // A link row has no address, so its fields after the network stand one
+    // to the left of the header's.
+    lines
+        .filter(|line| line.contains("<Link#"))
+        .filter_map(|line| {
+            let fields: Vec<&str> = line.split_whitespace().collect();
+            let shift = columns.len().saturating_sub(fields.len());
+            let count = |at: usize| fields.get(at.checked_sub(shift)?)?.parse::<u64>().ok();
+            let name = fields.first()?.trim_end_matches('*');
+            traffic(name, count(received)?, count(sent)?).filter(|_| !name.starts_with(LOOPBACK))
+        })
+        .collect()
+}
+
+/// A device that has moved some bytes, or nothing for one that never has.
+fn traffic(name: &str, in_bytes: u64, out_bytes: u64) -> Option<TrafficReading> {
+    (in_bytes > 0 || out_bytes > 0).then(|| TrafficReading {
+        in_bytes,
+        name: name.to_string(),
+        out_bytes,
     })
 }
 
@@ -649,5 +752,58 @@ mod tests {
     #[test]
     fn test_text_that_is_not_the_windows_query_is_rejected() {
         assert!(parse_windows_json("Get-CimInstance : Access denied").is_none());
+    }
+
+    #[test]
+    fn test_net_dev_reads_received_and_sent_and_drops_the_loopback_and_idle() {
+        let raw = "Inter-|   Receive                            |  Transmit
+ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+    lo: 9000 10 0 0 0 0 0 0 9000 10 0 0 0 0 0 0
+  eth0: 1500 12 0 0 0 0 0 0 700 9 0 0 0 0 0 0
+ wlan0: 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0
+";
+        let readings = parse_proc_net_dev(raw);
+        assert_eq!(readings.len(), 1, "{readings:?}");
+        assert_eq!(
+            (
+                readings[0].name.as_str(),
+                readings[0].in_bytes,
+                readings[0].out_bytes
+            ),
+            ("eth0", 1500, 700)
+        );
+    }
+
+    #[test]
+    fn test_diskstats_counts_sectors_as_bytes_for_whole_disks_only() {
+        let raw = " 259 0 nvme0n1 100 0 8 0 50 0 16 0 0 0 0
+ 259 1 nvme0n1p1 90 0 6 0 40 0 12 0 0 0 0
+   7 0 loop0 5 0 2 0 0 0 0 0 0 0 0
+";
+        let readings = parse_diskstats(raw, |name| name == "nvme0n1");
+        assert_eq!(readings.len(), 1, "{readings:?}");
+        assert_eq!(
+            (readings[0].in_bytes, readings[0].out_bytes),
+            (8 * 512, 16 * 512)
+        );
+    }
+
+    #[test]
+    fn test_netstat_reads_each_interface_s_link_row_without_an_address() {
+        let raw = "Name       Mtu   Network       Address            Ipkts Ierrs     Ibytes    Opkts Oerrs     Obytes  Coll
+lo0        16384 <Link#1>                        900     0      90000      900     0      90000     0
+en0        1500  <Link#6>    a4:83:e7:00:00:01  1200     0    3000000      800     0     400000     0
+en0        1500  192.168.1     192.168.1.20      1100     -    2900000      790     -     390000     -
+";
+        let readings = parse_netstat_ib(raw);
+        assert_eq!(readings.len(), 1, "{readings:?}");
+        assert_eq!(
+            (
+                readings[0].name.as_str(),
+                readings[0].in_bytes,
+                readings[0].out_bytes
+            ),
+            ("en0", 3_000_000, 400_000)
+        );
     }
 }

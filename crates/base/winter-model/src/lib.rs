@@ -24,6 +24,7 @@ pub mod layout;
 pub mod list;
 pub mod modal;
 pub mod mode;
+pub mod monitor;
 pub mod notice;
 pub mod notify;
 pub mod paint;

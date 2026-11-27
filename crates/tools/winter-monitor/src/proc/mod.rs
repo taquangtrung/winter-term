@@ -5,6 +5,7 @@
 //! - [`act`]: the commands that act on a process.
 //! - [`collect`]: taking a snapshot, the one side-effecting module.
 //! - [`cpu`]: CPU use worked out from two snapshots.
+//! - [`details`]: reading one process's files, sockets, and memory.
 //! - [`format`]: wording sizes and percentages.
 //! - [`parse`]: reading each system's process listing.
 //! - [`view`]: the order the list is shown in.
@@ -12,11 +13,14 @@
 //! Misty draws the monitor as a view: a summary over a table whose headings
 //! sort on a click and whose rows put the cursor where they are clicked,
 //! the rows that fit around the cursor built and no more, and a footer
-//! describing the process the cursor is on.
+//! describing the process the cursor is on. `Enter` looks into that
+//! process ([`details`], drawn by `details_view`) over the list.
 
 pub mod act;
 pub mod collect;
 pub mod cpu;
+pub mod details;
+mod details_view;
 pub mod notice;
 pub mod parse;
 pub mod view;
@@ -25,31 +29,32 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use misty::layout::Align;
-use misty::view::{
-    Extent, LazySource, Space, Text, badge, column, divider, lazy_column, page, row, text,
-};
+use misty::view::{LazySource, Space, Text, badge, column, divider, lazy_column, page, row, text};
 use misty::{
-    AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, Theme, ThemeToken,
+    AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, ScrollStep,
+    Theme, ThemeToken,
 };
 
 use winter_model::editor::refresh::RefreshTimer;
 use winter_model::editor::{
     CommandOutput, EditorMenuItem, EditorOutcome, JobReply, JobRequest, Notice, OwnView, Page,
-    PromptMode, PromptReply, PromptRequest, SearchReport, ViewSlot, menu_of,
+    PageView, PromptMode, PromptReply, PromptRequest, SearchReport, ViewSlot, menu_of,
 };
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed};
 use winter_model::input::{CursorMove, Key, format_key};
 use winter_model::list::{ListView, Viewport};
+use winter_model::monitor::{MonitorAnswer, MonitorQuery};
 use winter_model::paint::{Frame, Row};
 use winter_model::process::{ProcState, ProcessSample};
 use winter_model::vim::nav::{VimKey, VimNav};
 
 use self::act::{Signal, TAG_RENICE, TAG_SIGNAL};
 use self::cpu::CpuTracker;
+use self::details_view::{BODY as DETAILS_BODY, Details, SECTIONS};
 use self::view::{
     Process, SortDirection, SortKey, ViewMode, ViewOptions, ViewRow, descendants, layout,
 };
+use crate::table::{cell, fit, heading as sort_heading, marked, table_row};
 use crate::units::{format_kb, format_percent};
 use notice::{Acting, ProcNotice, Renice, Signalled};
 
@@ -109,9 +114,6 @@ const MAX_NAME_WIDTH: usize = 40;
 /// Characters of a process name kept visible however deep it sits in the tree,
 /// so the indent stops growing before it pushes the name out of its column.
 const MIN_NAME_CHARS: usize = 8;
-
-/// The mark on a name too long for its column.
-const ELLIPSIS: char = '\u{2026}';
 
 /// What the video memory column shows for a process no GPU editor lists.
 const NO_VRAM: &str = "-";
@@ -187,9 +189,15 @@ const KEYS: KeyTable<Act> = KeyTable {
             label: "Tree / Flat List",
         },
         Binding {
+            action: Act::Details,
+            id: "details",
+            keys: &["RET"],
+            label: "Look Into the Process",
+        },
+        Binding {
             action: Act::Fold,
             id: "fold",
-            keys: &["RET", "TAB"],
+            keys: &["TAB"],
             label: "Fold / Unfold",
         },
         Binding {
@@ -295,17 +303,91 @@ const KEYS: KeyTable<Act> = KeyTable {
     title: "Processes",
 };
 
+/// The keys while the monitor looks into one process. Refreshing is `C-r`
+/// in every editor; `q` and Escape go back to the list, as a Git tab's `q`
+/// does.
+const DETAIL_KEYS: KeyTable<DetailAct> = KeyTable {
+    block: "proc_details",
+    bindings: &[
+        Binding {
+            action: DetailAct::Back,
+            id: "back",
+            keys: &["q", "ESC"],
+            label: "Back to the List",
+        },
+        Binding {
+            action: DetailAct::Reload,
+            id: "reload",
+            keys: &["r", "C-r", "M-S-r"],
+            label: "Read Again",
+        },
+        Binding {
+            action: DetailAct::NextSection,
+            id: "next_section",
+            keys: &["]"],
+            label: "Next Section",
+        },
+        Binding {
+            action: DetailAct::PreviousSection,
+            id: "previous_section",
+            keys: &["["],
+            label: "Previous Section",
+        },
+        Binding {
+            action: DetailAct::LineDown,
+            id: "line_down",
+            keys: &["C-e"],
+            label: "Scroll a Line Down",
+        },
+        Binding {
+            action: DetailAct::LineUp,
+            id: "line_up",
+            keys: &["C-y"],
+            label: "Scroll a Line Up",
+        },
+        Binding {
+            action: DetailAct::CopyPid,
+            id: "copy_pid",
+            keys: &["y"],
+            label: "Copy PID",
+        },
+        Binding {
+            action: DetailAct::CopyCommand,
+            id: "copy_command",
+            keys: &["Y"],
+            label: "Copy Command",
+        },
+    ],
+    configurable: true,
+    title: "Process Details",
+};
+
 /// Every key table of this surface, for the Keys editor to list.
-pub const KEY_TABLES: &[&dyn Listed] = &[&KEYS];
+pub const KEY_TABLES: &[&dyn Listed] = &[&KEYS, &DETAIL_KEYS];
+
+/// A half of a screen, for the half-page motions over the details.
+const HALF_PAGE: f32 = 0.5;
+
+/// How far past a section's top the details must be for `[` to go back to
+/// that section rather than the one before it, in pixels.
+const SECTION_SLACK: f32 = 1.0;
 
 /// What the menu opened over a process offers, in its order, a group at a
 /// time: ending it, pausing it, its place in the tree, copying it.
-const MENU: [&[Act]; 5] = [
+const MENU: [&[Act]; 6] = [
+    &[Act::Details],
     &[Act::Terminate, Act::Kill, Act::TerminateTree, Act::KillTree],
     &[Act::Suspend, Act::Resume],
     &[Act::Renice],
     &[Act::Fold],
     &[Act::CopyPid, Act::CopyCommand],
+];
+
+/// What the menu opened over a process looked into offers.
+const DETAIL_MENU: [&[DetailAct]; 3] = [
+    &[DetailAct::Back, DetailAct::Reload],
+    &[DetailAct::NextSection, DetailAct::PreviousSection],
+    &[DetailAct::CopyPid, DetailAct::CopyCommand],
 ];
 
 // ========================================================================
@@ -319,6 +401,7 @@ enum Act {
     Close,
     CopyCommand,
     CopyPid,
+    Details,
     Filter,
     Fold,
     Kill,
@@ -339,6 +422,19 @@ enum Act {
     View,
 }
 
+/// What a key does while the monitor looks into one process.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum DetailAct {
+    Back,
+    CopyCommand,
+    CopyPid,
+    LineDown,
+    LineUp,
+    NextSection,
+    PreviousSection,
+    Reload,
+}
+
 /// A process monitor.
 #[derive(Debug)]
 pub struct ProcEditor {
@@ -347,6 +443,9 @@ pub struct ProcEditor {
     /// Tree parents whose children are folded away.
     collapsed: HashSet<u32>,
     cpu: CpuTracker,
+    /// The process looked into, shown over the list until the user goes
+    /// back to it.
+    details: Option<PageView<Details>>,
     direction: SortDirection,
     /// Why the last snapshot failed, until one succeeds.
     error: Option<String>,
@@ -360,6 +459,9 @@ pub struct ProcEditor {
     cols: usize,
     /// Whether a snapshot has arrived, so an empty list can say why.
     loaded: bool,
+    /// Whether the tab is shown, which with the details closed is what
+    /// keeps the list refreshing.
+    shown: bool,
     /// What the last action reported, waiting for the status bar to take it.
     notice: Option<ProcNotice>,
     mode: ViewMode,
@@ -423,12 +525,14 @@ impl ProcEditor {
             acting: None,
             collapsed: HashSet::new(),
             cpu: CpuTracker::new(),
+            details: None,
             direction: sort.default_direction(),
             error: None,
             filter: String::new(),
             has_gpu: false,
             cols: usize::MAX,
             loaded: false,
+            shown: true,
             notice: None,
             mode: ViewMode::Tree,
             name_width: MIN_NAME_WIDTH,
@@ -539,6 +643,122 @@ impl ProcEditor {
     fn refresh_now(&mut self) -> EditorOutcome {
         self.timer.request_now(Instant::now());
         EditorOutcome::Job(JobRequest::Processes)
+    }
+
+    /// Look into the selected process, the list set aside and not read
+    /// while it is.
+    fn open_details(&mut self) -> EditorOutcome {
+        let Some(process) = self.selected() else {
+            return EditorOutcome::Consumed;
+        };
+        let details = Details {
+            command: process.command.clone(),
+            info: None,
+            name: process.name.clone(),
+            pid: process.pid,
+        };
+        let pid = details.pid;
+        self.details = Some(PageView::new(details));
+        self.sync_timer();
+        EditorOutcome::Job(JobRequest::Monitor(MonitorQuery::Details(pid)))
+    }
+
+    /// Go back to the list, read again at once.
+    fn close_details(&mut self) {
+        self.details = None;
+        self.sync_timer();
+    }
+
+    /// Keep the list's readings to when it is in sight: the tab shown and
+    /// no process looked into over it.
+    fn sync_timer(&mut self) {
+        let hidden = !self.shown || self.details.is_some();
+        self.timer.set_hidden(hidden, Instant::now());
+    }
+
+    /// Do what a key asks while a process is looked into.
+    fn on_details_key(&mut self, key: &Key) -> EditorOutcome {
+        if !self.nav.in_sequence()
+            && let Some(act) = table::find(&DETAIL_KEYS, key)
+        {
+            return self.run_details(act);
+        }
+        match self.nav.row_key(key) {
+            VimKey::Motion(motion) => {
+                let step = match motion {
+                    CursorMove::Down => ScrollStep::Rows(1.0),
+                    CursorMove::Up => ScrollStep::Rows(-1.0),
+                    CursorMove::Top => ScrollStep::Start,
+                    CursorMove::Bottom => ScrollStep::End,
+                    CursorMove::HalfPageDown => ScrollStep::Pages(HALF_PAGE),
+                    CursorMove::HalfPageUp => ScrollStep::Pages(-HALF_PAGE),
+                    CursorMove::PageDown => ScrollStep::Pages(1.0),
+                    CursorMove::PageUp => ScrollStep::Pages(-1.0),
+                    _ => return EditorOutcome::Consumed,
+                };
+                self.scroll_details(step);
+                EditorOutcome::Consumed
+            }
+            VimKey::Pending => EditorOutcome::Consumed,
+            VimKey::Unhandled => EditorOutcome::Ignored,
+        }
+    }
+
+    /// Do what one of the details' own keys asks.
+    fn run_details(&mut self, act: DetailAct) -> EditorOutcome {
+        let Some(view) = &mut self.details else {
+            return EditorOutcome::Consumed;
+        };
+        let state = view.state();
+        match act {
+            DetailAct::Back => {
+                self.close_details();
+                return EditorOutcome::Consumed;
+            }
+            DetailAct::Reload => {
+                let pid = state.pid;
+                return EditorOutcome::Job(JobRequest::Monitor(MonitorQuery::Details(pid)));
+            }
+            DetailAct::CopyPid => return EditorOutcome::Yank(state.pid.to_string()),
+            DetailAct::CopyCommand => return EditorOutcome::Yank(state.command.clone()),
+            DetailAct::NextSection => self.jump_section(true),
+            DetailAct::PreviousSection => self.jump_section(false),
+            DetailAct::LineDown => self.scroll_details(ScrollStep::Rows(1.0)),
+            DetailAct::LineUp => self.scroll_details(ScrollStep::Rows(-1.0)),
+        }
+        EditorOutcome::Consumed
+    }
+
+    /// Scroll the details by `step`.
+    fn scroll_details(&mut self, step: ScrollStep) {
+        if let Some(view) = &mut self.details {
+            view.scroll(DETAILS_BODY, step);
+        }
+    }
+
+    /// Bring the next section of the details to the top, or the one before
+    /// the section at the top.
+    fn jump_section(&mut self, forward: bool) {
+        let Some(view) = &mut self.details else {
+            return;
+        };
+        let Some(at) = view.offset(DETAILS_BODY) else {
+            return;
+        };
+        let tops = SECTIONS
+            .iter()
+            .filter_map(|id| Some((*id, view.top_of(id)?)));
+        let target = match forward {
+            true => tops
+                .filter(|(_, top)| *top > at + SECTION_SLACK)
+                .min_by(|a, b| a.1.total_cmp(&b.1)),
+            false => tops
+                .filter(|(_, top)| *top < at - SECTION_SLACK)
+                .max_by(|a, b| a.1.total_cmp(&b.1)),
+        };
+        if let Some((id, _)) = target {
+            view.reveal_top(id);
+        }
     }
 
     /// Send a signal to the selected process: stop and continue at once, and
@@ -840,21 +1060,18 @@ impl ProcEditor {
                        key: SortKey,
                        width: Option<usize>,
                        right: bool| {
-            let sorted = key == self.sort;
-            let label = match sorted {
-                true => format!("{}{label}", self.direction.arrow()),
-                false => label.to_string(),
-            };
-            let label = match sorted {
-                true => text(label).color(ThemeToken::Accent).proportional(),
-                false => text(label).muted().proportional(),
-            };
-            cell(label, width, right)
-                .tooltip(format!("{about}; click to sort by it"))
-                .on_press(move |editor: &mut Self, _| {
+            let arrow = (key == self.sort).then(|| self.direction.arrow());
+            sort_heading(
+                label,
+                about,
+                arrow,
+                width,
+                right,
+                move |editor: &mut Self| {
                     editor.list.view_mut().release();
                     editor.sort_on_click(key);
-                })
+                },
+            )
         };
         let mut cells: Vec<Element<'_, Self>> = self
             .columns()
@@ -940,13 +1157,7 @@ impl ProcEditor {
             editor.list.view_mut().release();
             editor.move_to(at);
         });
-        match at == self.list.cursor() {
-            true => line
-                .background(ThemeToken::CursorLine)
-                .border(ThemeToken::Accent)
-                .corners(misty::view::Corners::Control),
-            false => line.hover_background(ThemeToken::CursorLine),
-        }
+        marked(line, at == self.list.cursor())
     }
 
     /// The page's footer, describing the process the cursor is on: its name
@@ -1079,7 +1290,8 @@ impl Page for ProcEditor {
     /// Not shown, the list stops refreshing; shown again, it refreshes at
     /// once.
     fn set_shown(&mut self, shown: bool) -> EditorOutcome {
-        self.timer.set_hidden(!shown, Instant::now());
+        self.shown = shown;
+        self.sync_timer();
         EditorOutcome::Consumed
     }
 
@@ -1104,21 +1316,33 @@ impl Page for ProcEditor {
     }
 
     fn draw_view(&mut self, frame: &mut MistyFrame, area: Rect, theme: &Theme) {
-        self.draw_own_view(frame, area, theme);
+        match &mut self.details {
+            Some(details) => details.draw_view(frame, area, theme),
+            None => self.draw_own_view(frame, area, theme),
+        }
     }
 
     fn view_input(&mut self, input: &Input, cx: &mut EventCx<'_>) -> Option<EditorOutcome> {
-        self.own_view_input(input, cx)
-            .then_some(EditorOutcome::Consumed)
+        let used = match &mut self.details {
+            Some(details) => details.view_input(input, cx),
+            None => self.own_view_input(input, cx),
+        };
+        used.then_some(EditorOutcome::Consumed)
     }
 
     fn view_access_action(&mut self, action: AccessAction) -> Option<EditorOutcome> {
-        self.own_access_action(action)
-            .then_some(EditorOutcome::Consumed)
+        let used = match &mut self.details {
+            Some(details) => details.access_action(action),
+            None => self.own_access_action(action),
+        };
+        used.then_some(EditorOutcome::Consumed)
     }
 
     fn view_about_to_wait(&mut self, cx: &mut EventCx<'_>) -> Option<Instant> {
-        self.own_view_about_to_wait(cx)
+        match &mut self.details {
+            Some(details) => details.view_about_to_wait(cx),
+            None => self.own_view_about_to_wait(cx),
+        }
     }
 
     fn take_notice(&mut self) -> Option<Notice> {
@@ -1130,6 +1354,9 @@ impl Page for ProcEditor {
     }
 
     fn on_key(&mut self, key: &Key) -> EditorOutcome {
+        if self.details.is_some() {
+            return self.on_details_key(key);
+        }
         self.list.view_mut().release();
         if self.nav.in_sequence() {
             return self.on_motion_key(key);
@@ -1141,7 +1368,10 @@ impl Page for ProcEditor {
     }
 
     fn keys(&self) -> Vec<KeyHelp> {
-        let mut rows = table::help(&KEYS);
+        let mut rows = match self.details {
+            Some(_) => table::help(&DETAIL_KEYS),
+            None => table::help(&KEYS),
+        };
         rows.extend(VimNav::help());
         rows
     }
@@ -1215,8 +1445,16 @@ impl Page for ProcEditor {
             JobReply::Command(output) if output.tag == TAG_SIGNAL || output.tag == TAG_RENICE => {
                 return self.on_command_done(&output);
             }
+            JobReply::Monitor(MonitorAnswer::Details(info)) => {
+                if let Some(view) = &mut self.details
+                    && view.state().pid == info.pid
+                {
+                    view.state_mut().info = Some(info);
+                }
+            }
             JobReply::Command(_)
             | JobReply::DirSize { .. }
+            | JobReply::Monitor(_)
             | JobReply::Files(_)
             | JobReply::FileOps(_)
             | JobReply::Search(_)
@@ -1239,10 +1477,19 @@ impl Page for ProcEditor {
     fn on_resume(&mut self) -> EditorOutcome {
         // Work asked for before the editor was covered was cancelled with it.
         self.timer.restart(Instant::now());
-        EditorOutcome::Consumed
+        match &self.details {
+            Some(view) if view.state().info.is_none() => {
+                let pid = view.state().pid;
+                EditorOutcome::Job(JobRequest::Monitor(MonitorQuery::Details(pid)))
+            }
+            _ => EditorOutcome::Consumed,
+        }
     }
 
     fn context_items(&self) -> Vec<EditorMenuItem> {
+        if self.details.is_some() {
+            return menu_of(&DETAIL_KEYS, &DETAIL_MENU);
+        }
         if self.selected().is_none() {
             return Vec::new();
         }
@@ -1293,6 +1540,7 @@ impl ProcEditor {
                 self.rebuild();
                 EditorOutcome::Consumed
             }
+            Act::Details => self.open_details(),
             Act::Fold => {
                 self.set_folded(None);
                 EditorOutcome::Consumed
@@ -1345,39 +1593,6 @@ impl ProcEditor {
             VimKey::Pending => EditorOutcome::Consumed,
             VimKey::Unhandled => EditorOutcome::Ignored,
         }
-    }
-}
-
-/// A cell of the table holding `content`: `width` text columns wide and a
-/// column more for the gap after it, or the room the others leave.
-fn cell<'a>(content: Text<'a>, width: Option<usize>, right: bool) -> Element<'a, ProcEditor> {
-    let shown = match right {
-        true => column([content.into()]).align(Align::End),
-        false => column([content.into()]).align(Align::Start),
-    };
-    match width {
-        Some(width) => shown.width(Extent::Cells((width + 1) as f32)).shrink(0.0),
-        None => shown.grow(1.0),
-    }
-}
-
-/// A row of the table: its cells side by side, a text row tall.
-fn table_row(cells: Vec<Element<'_, ProcEditor>>) -> Element<'_, ProcEditor> {
-    row(cells)
-        .gap(Space::Cells(0.0))
-        .align(Align::Start)
-        .padding(1.0, 0.0)
-}
-
-/// `text` cut to `width` cells, with a mark where it was cut.
-fn fit(text: &str, width: usize) -> String {
-    if text.chars().count() <= width {
-        return text.to_string();
-    }
-    let kept: String = text.chars().take(width.saturating_sub(1)).collect();
-    match width {
-        0 => String::new(),
-        _ => format!("{kept}{ELLIPSIS}"),
     }
 }
 

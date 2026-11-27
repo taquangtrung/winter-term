@@ -1038,6 +1038,7 @@ impl Page for DirEditor {
             // A listing asks for no searches or process lists of its own.
             JobReply::Files(_)
             | JobReply::Processes(_)
+            | JobReply::Monitor(_)
             | JobReply::Search(_)
             | JobReply::System(_) => return EditorOutcome::Consumed,
             JobReply::DirSize { bytes, inner, path } => {

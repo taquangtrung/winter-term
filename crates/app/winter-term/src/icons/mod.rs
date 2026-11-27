@@ -54,7 +54,7 @@ const STABLE_SETS: [&str; 2] = ["apps", SYMBOL_SET];
 
 /// Editor kind to the packed icon naming it. A kind not listed gets
 /// [`FALLBACK_EDITOR_ICON`].
-const EDITOR_ICONS: [(&str, &str); 32] = [
+const EDITOR_ICONS: [(&str, &str); 34] = [
     ("bib", "file/file_bibtex"),
     ("bibliography", "file/file_bibtex"),
     ("bookmarks", "symbols/bookmark"),
@@ -78,11 +78,13 @@ const EDITOR_ICONS: [(&str, &str); 32] = [
     ("notifications", "file/file_bell"),
     ("outline", "symbols/list-tree"),
     ("pdf", "file/file_pdf"),
+    ("ports", "symbols/plug"),
     ("preview", "file/file_markdown"),
     ("proc", "file/file_binary"),
     ("reading", "symbols/book"),
     ("sessions", "symbols/terminal"),
     ("settings", "file/file_settings"),
+    ("startup", "symbols/rocket"),
     ("sys", "file/file_host"),
     ("today", "file/file_notepad"),
     ("todo", "file/file_todo"),

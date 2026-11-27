@@ -1633,6 +1633,7 @@ mod tests {
             JobRequest::Command(command) => command,
             JobRequest::DirSize(_)
             | JobRequest::FileOps(_)
+            | JobRequest::Monitor(_)
             | JobRequest::Processes
             | JobRequest::ReadFiles(_)
             | JobRequest::Search(_)

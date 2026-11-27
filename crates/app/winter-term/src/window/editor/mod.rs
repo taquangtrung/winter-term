@@ -52,7 +52,9 @@ use winter_model::editor::{
 };
 use winter_model::guard::Guarded;
 use winter_model::layout::{Direction, Layout, Region, TabId};
+use winter_monitor::ports::PortsEditor;
 use winter_monitor::proc::ProcEditor;
+use winter_monitor::startup::StartupEditor;
 use winter_monitor::sys::SysEditor;
 use winter_pdf::PdfEditor;
 use winter_terminal::session::git_editor_command;
@@ -104,11 +106,15 @@ pub(in crate::window) enum EditorKind {
     List,
     Notifications,
     Pdf,
+    /// Every socket and the process holding it.
+    Ports,
     /// A Markdown document as it reads rendered.
     Preview,
     Proc,
     /// Every setting of Winter's and its extensions', a page of its own.
     Settings,
+    /// What starts on its own at boot or login.
+    Startup,
     Sys,
     /// The text editor, which edits a file's text.
     Text,
@@ -147,7 +153,7 @@ type Reopen = fn(PathBuf, Option<usize>, &Config) -> Option<Box<dyn Editor>>;
 
 impl EditorKind {
     /// Every kind, for reading a stored name back.
-    const ALL: [EditorKind; 18] = [
+    const ALL: [EditorKind; 20] = [
         EditorKind::Compile,
         EditorKind::Dir,
         EditorKind::Diff,
@@ -161,9 +167,11 @@ impl EditorKind {
         EditorKind::List,
         EditorKind::Notifications,
         EditorKind::Pdf,
+        EditorKind::Ports,
         EditorKind::Preview,
         EditorKind::Proc,
         EditorKind::Settings,
+        EditorKind::Startup,
         EditorKind::Sys,
         EditorKind::Todo,
     ];
@@ -231,7 +239,9 @@ impl EditorKind {
             EditorKind::Preview => KindInfo::new("preview", "Preview")
                 .with_reopen(|path, _, _| path.is_file().then(|| boxed(PreviewEditor::new(path)))),
             EditorKind::List => KindInfo::new("list", "Saved List"),
+            EditorKind::Ports => KindInfo::new("ports", "Ports"),
             EditorKind::Proc => KindInfo::new("proc", "Process Monitor"),
+            EditorKind::Startup => KindInfo::new("startup", "Startup"),
             EditorKind::Sys => KindInfo::new("sys", "System Monitor"),
             // The editor opens a file through its own path, which shows
             // what is no text as its bytes.
@@ -801,9 +811,20 @@ impl App {
         self.open_built_page(EditorKind::Proc);
     }
 
-    /// Show the machine's CPU, memory, disks, and GPUs in a tab of their own.
+    /// Show the machine's CPU, memory, traffic, disks, and GPUs in a tab of
+    /// their own.
     pub(in crate::window) fn open_sys_editor(&mut self) {
         self.open_built_page(EditorKind::Sys);
+    }
+
+    /// Show every socket and the process holding it in a tab of their own.
+    pub(in crate::window) fn open_ports_editor(&mut self) {
+        self.open_built_page(EditorKind::Ports);
+    }
+
+    /// Show what starts on its own in a tab of its own.
+    pub(in crate::window) fn open_startup_editor(&mut self) {
+        self.open_built_page(EditorKind::Startup);
     }
 
     /// Refresh each editor whose tick came due by `now`, then note when each
@@ -1251,8 +1272,10 @@ impl App {
                 self.chrome.notification_entries(),
                 now_seconds(),
             )),
+            EditorKind::Ports => Box::new(PortsEditor::new()),
             EditorKind::Proc => Box::new(ProcEditor::new()),
             EditorKind::Settings => Box::new(SettingsEditor::new(self.build_settings_page())),
+            EditorKind::Startup => Box::new(StartupEditor::new()),
             EditorKind::Sys => Box::new(SysEditor::new()),
             EditorKind::Todo => Box::new(TodoPage::new(
                 project::root(&self.focused_start_dir()),

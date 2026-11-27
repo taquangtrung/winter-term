@@ -606,7 +606,7 @@ pub(crate) const BUILTIN: &[Builtin] = &[
     window("tab_keys", "Help: Keys of This Tab", |app, focused| {
         app.open_tab_keys(focused)
     }),
-    window("process_monitor", "Tool: Process Monitor", |app, _| {
+    window("process_monitor", "Monitor: Processes", |app, _| {
         app.open_proc_editor()
     }),
     window("project_files", "Project: Find File", |app, _| {
@@ -635,8 +635,14 @@ pub(crate) const BUILTIN: &[Builtin] = &[
     window("find_file", "File: Find File", |app, _| {
         app.open_find_file()
     }),
-    window("system_monitor", "Tool: System Monitor", |app, _| {
+    window("system_monitor", "Monitor: System", |app, _| {
         app.open_sys_editor()
+    }),
+    window("ports_monitor", "Monitor: Ports", |app, _| {
+        app.open_ports_editor()
+    }),
+    window("startup_monitor", "Monitor: Startup", |app, _| {
+        app.open_startup_editor()
     }),
     window("move_tab_down", "Tab: Move to Pane Below", |app, _| {
         app.move_tab_in_direction(FocusDir::Down)

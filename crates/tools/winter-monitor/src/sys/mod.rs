@@ -1,15 +1,18 @@
 //! System monitor: the machine as a whole, with processor load per core,
-//! memory and swap, GPUs, and disks, kept current on a timer. The sibling of
-//! the process monitor, which lists what is using it.
+//! memory and swap, network and disk traffic, GPUs, and disks, kept current
+//! on a timer. The sibling of the process monitor, which lists what is using
+//! it.
 //!
 //! - [`collect`]: taking a snapshot, the one side-effecting module.
 //! - [`parse`]: reading each system's figures.
+//! - [`traffic`]: network and disk rates worked out from two snapshots.
 //! - [`usage`]: processor load worked out from two snapshots.
 //! - [`view`]: laying a snapshot out as a dashboard of cards, drawn by
 //!   misty as the page's view.
 
 pub mod collect;
 pub mod parse;
+pub mod traffic;
 pub mod usage;
 pub mod view;
 
@@ -29,8 +32,9 @@ use winter_model::paint::{Frame, Row};
 use winter_model::system::SystemSample;
 use winter_model::vim::nav::{VimKey, VimNav};
 
+use self::traffic::{TrafficRate, TrafficTracker};
 use self::usage::{Usage, UsageTracker};
-use self::view::{History, card_ids, dashboard, machine_line, tenths_of};
+use self::view::{History, Rates, card_ids, dashboard, machine_line, tenths_of};
 
 // ========================================================================
 // Constants
@@ -150,10 +154,17 @@ pub struct SysEditor {
 /// from.
 #[derive(Debug)]
 struct Machine {
+    /// The disks' counters last seen.
+    disk_tracker: TrafficTracker,
     /// Why the last snapshot failed, until one succeeds.
     error: Option<String>,
-    /// The processor's and memory's recent shares.
+    /// The recent processor and memory shares and traffic totals.
     history: History,
+    /// The interfaces' counters last seen.
+    net_tracker: TrafficTracker,
+    /// How fast each interface and disk moved bytes, once two snapshots are
+    /// in.
+    rates: Rates,
     sample: Option<SystemSample>,
     timer: RefreshTimer,
     tracker: UsageTracker,
@@ -169,8 +180,11 @@ impl SysEditor {
     /// the next tick.
     pub fn new() -> Self {
         let machine = Machine {
+            disk_tracker: TrafficTracker::default(),
             error: None,
             history: History::default(),
+            net_tracker: TrafficTracker::default(),
+            rates: Rates::default(),
             sample: None,
             timer: RefreshTimer::new(REFRESH_INTERVAL, STALL_TIMEOUT),
             tracker: UsageTracker::new(),
@@ -239,10 +253,20 @@ fn by_top(a: &&(&str, f32), b: &&(&str, f32)) -> std::cmp::Ordering {
 }
 
 impl Machine {
-    /// Take a snapshot that came back, or why none did.
-    fn take(&mut self, result: Result<SystemSample, String>) {
+    /// Take a snapshot that came back at `now`, or why none did.
+    fn take(&mut self, result: Result<SystemSample, String>, now: Instant) {
         match result {
             Ok(sample) => {
+                self.rates = Rates {
+                    disk_io: self.disk_tracker.rates(&sample.disk_io, now),
+                    network: self.net_tracker.rates(&sample.network, now),
+                };
+                if let Some(network) = &self.rates.network {
+                    push_capped(&mut self.history.network, total_rate(network));
+                }
+                if let Some(disk_io) = &self.rates.disk_io {
+                    push_capped(&mut self.history.disk_io, total_rate(disk_io));
+                }
                 self.usage = self.tracker.usage(&sample.cpu);
                 let memory = &sample.memory;
                 let used = memory.total_kb.saturating_sub(memory.available_kb);
@@ -280,7 +304,9 @@ impl HostedView for Machine {
             );
         }
         match &self.sample {
-            Some(sample) => shown.scrolling(dashboard(sample, &self.usage, &self.history)),
+            Some(sample) => {
+                shown.scrolling(dashboard(sample, &self.usage, &self.rates, &self.history))
+            }
             None => shown.scrolling(
                 text(self.error.as_deref().unwrap_or(READING))
                     .muted()
@@ -299,6 +325,14 @@ fn push_capped(history: &mut Vec<f32>, value: f32) {
         history.remove(0);
     }
     history.push(value);
+}
+
+/// Every device's bytes a second in `rates`, both ways together.
+fn total_rate(rates: &[TrafficRate]) -> f32 {
+    rates
+        .iter()
+        .map(|rate| (rate.in_per_sec + rate.out_per_sec) as f32)
+        .sum()
 }
 
 /// A share in tenths of a percent as a percentage.
@@ -379,8 +413,9 @@ impl Page for SysEditor {
     fn on_job(&mut self, reply: JobReply) -> EditorOutcome {
         if let JobReply::System(result) = reply {
             let machine = self.view.state_mut();
-            machine.timer.on_answer(Instant::now());
-            machine.take(result);
+            let now = Instant::now();
+            machine.timer.on_answer(now);
+            machine.take(result, now);
         }
         EditorOutcome::Consumed
     }

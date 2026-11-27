@@ -19,7 +19,7 @@ How to use Winter day to day, one page per tool. For what Winter is and how to i
 - [Git](git.md): status, staging, commits, history, and commit messages.
 - [Compile](compile.md): running builds and jumping to their errors.
 - [Todo](todo.md): the TODO comments across the project.
-- [Monitors](monitors.md): the process list and the system dashboard.
+- [Monitors](monitors.md): the process list, the system dashboard, ports, and what starts at login.
 - [Docker](docker.md): containers, images, volumes, and networks.
 - [Files](files.md): the file browser, and files as root, in containers, and over SSH.
 - [PDF](pdf.md): reading PDFs, with SyncTeX for LaTeX.

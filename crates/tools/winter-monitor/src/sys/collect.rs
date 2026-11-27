@@ -1,9 +1,11 @@
 //! Taking a snapshot of the machine. This is the side-effecting half of the
-//! system monitor: it reads `/proc` on Linux, asks `sysctl` and `vm_stat` on
-//! macOS and the BSDs, and runs PowerShell on Windows. What it reads is turned
-//! into readings by [`super::parse`], which holds all the format knowledge.
+//! system monitor: it reads `/proc` on Linux, asks `sysctl`, `vm_stat` and
+//! `netstat` on macOS and the BSDs, and runs PowerShell on Windows. What it
+//! reads is turned into readings by [`super::parse`], which holds all the
+//! format knowledge.
 
 use std::fs;
+use std::path::Path;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::gpu;
@@ -25,6 +27,12 @@ const PROC_DIR: &str = "/proc";
 /// on a network that has gone away can block it for good.
 const DF_PATIENCE: Duration = Duration::from_secs(4);
 
+/// Where Linux lists the whole disks, partitions left out.
+const BLOCK_DIR: &str = "/sys/block";
+
+/// Block devices that are not disks: loop-mounted files and RAM disks.
+const NOT_DISKS: [&str; 2] = ["loop", "ram"];
+
 /// The distribution's description.
 const OS_RELEASE: &str = "/etc/os-release";
 
@@ -40,7 +48,7 @@ const GPU_QUERY: [&str; 2] = [
 
 /// The PowerShell that describes the machine as JSON: per-core load from the
 /// performance counters (already a percentage), the processor and operating
-/// system, editor files, and the fixed drives. A leading comma keeps PowerShell
+/// system, swap files, the fixed drives, and the network adapters. A leading comma keeps PowerShell
 /// from flattening one row into the next.
 const WINDOWS_SCRIPT: &str = "$ErrorActionPreference='SilentlyContinue'; \
 $cpu=@(Get-CimInstance Win32_PerfFormattedData_PerfOS_Processor | ForEach-Object { ,@($_.Name, $_.PercentProcessorTime) }); \
@@ -49,9 +57,10 @@ $os=Get-CimInstance Win32_OperatingSystem; \
 $swap=@(Get-CimInstance Win32_PageFileUsage | ForEach-Object { ,@($_.AllocatedBaseSize, $_.CurrentUsage) }); \
 $disks=@([IO.DriveInfo]::GetDrives() | Where-Object { $_.DriveType -eq 'Fixed' -and $_.IsReady } | \
 ForEach-Object { ,@($_.Name, $_.DriveFormat, $_.TotalSize, $_.AvailableFreeSpace) }); \
+$net=@(Get-NetAdapterStatistics | ForEach-Object { ,@($_.Name, $_.ReceivedBytes, $_.SentBytes) }); \
 ConvertTo-Json -Compress -Depth 4 @{cpu=$cpu; model=$p.Name; mhz=$p.MaxClockSpeed; totalKb=$os.TotalVisibleMemorySize; \
 freeKb=$os.FreePhysicalMemory; caption=$os.Caption; version=$os.Version; \
-uptime=((Get-Date) - $os.LastBootUpTime).TotalSeconds; swap=$swap; disks=$disks; host=$env:COMPUTERNAME}";
+uptime=((Get-Date) - $os.LastBootUpTime).TotalSeconds; swap=$swap; disks=$disks; net=$net; host=$env:COMPUTERNAME}";
 
 // ========================================================================
 // Functions
@@ -115,11 +124,17 @@ fn collect_linux() -> Result<SystemSample, String> {
             model,
             total: CoreLoad::Ticks(total),
         },
+        disk_io: read("diskstats")
+            .map(|text| parse::parse_diskstats(&text, is_whole_disk))
+            .unwrap_or_default(),
         disks: run_text_within("df", &["-TkP"], DF_PATIENCE)
             .map(|text| parse::parse_df_linux(&text))
             .unwrap_or_default(),
         gpus: Vec::new(),
         memory,
+        network: read("net/dev")
+            .map(|text| parse::parse_proc_net_dev(&text))
+            .unwrap_or_default(),
         overview,
     })
 }
@@ -166,11 +181,15 @@ fn collect_mac() -> Result<SystemSample, String> {
             model: ask("machdep.cpu.brand_string").trim().to_string(),
             total: CoreLoad::Percent(load),
         },
+        disk_io: Vec::new(),
         disks: run_text_within("df", &["-P", "-k"], DF_PATIENCE)
             .map(|text| parse::parse_df_mac(&text))
             .unwrap_or_default(),
         gpus: Vec::new(),
         memory,
+        network: run_text("netstat", &["-ibn"])
+            .map(|text| parse::parse_netstat_ib(&text))
+            .unwrap_or_default(),
         overview,
     })
 }
@@ -190,9 +209,11 @@ fn collect_windows() -> Result<SystemSample, String> {
             model: snapshot.model,
             total: CoreLoad::Percent(snapshot.total_percent),
         },
+        disk_io: Vec::new(),
         disks: snapshot.disks,
         gpus: Vec::new(),
         memory: snapshot.memory,
+        network: snapshot.network,
         overview: Overview {
             arch: std::env::consts::ARCH.to_string(),
             hostname: snapshot.hostname,
@@ -201,6 +222,13 @@ fn collect_windows() -> Result<SystemSample, String> {
             uptime_secs: snapshot.uptime_secs,
         },
     })
+}
+
+/// Whether block device `name` is a whole disk: listed in [`BLOCK_DIR`],
+/// which leaves partitions out, and not a loop or RAM disk.
+fn is_whole_disk(name: &str) -> bool {
+    !NOT_DISKS.iter().any(|prefix| name.starts_with(prefix))
+        && Path::new(BLOCK_DIR).join(name).exists()
 }
 
 /// A small file's text without its trailing newline, or nothing when it will
