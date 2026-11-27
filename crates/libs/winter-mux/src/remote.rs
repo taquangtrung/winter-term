@@ -239,7 +239,9 @@ mod tests {
         // tell a dead tunnel from a quiet one and would poll it forever.
         let mut client =
             RemoteClient::connect("nonexistent.host.invalid", "default", true).unwrap();
-        assert!(!client.eof());
+        // No check that it starts open: ssh to no host dies within
+        // milliseconds, and the reader thread may see its end before the
+        // test looks.
         let deadline = Instant::now() + Duration::from_secs(10);
         while !client.eof() && Instant::now() < deadline {
             let _ = client.recv().unwrap();
