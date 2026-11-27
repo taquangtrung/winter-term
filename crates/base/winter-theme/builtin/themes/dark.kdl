@@ -1,6 +1,6 @@
 // Winter's built-in dark theme: the One Color theme, its editor and
 // terminal colors. Winter reads its dark preset from this file.
-// The window chrome (title bar, tabs, menus, the cursor's row) is derived
+// The window's bars and menus (title bar, tabs, menus, the cursor's row) are derived
 // from the background and foreground, so it has no colors here.
 //
 // Every color must be named: one left out is black. A theme file of your

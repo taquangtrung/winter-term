@@ -249,7 +249,7 @@ impl App {
     /// Spawning at the real size matters on Windows: the old estimate used
     /// `renderer.grid_size()` (the full window grid, including the
     /// tabbar/status-bar rows and ignoring existing splits), so the child was
-    /// routinely started too large: by the chrome rows for a first split, and
+    /// routinely started too large: by the bars' rows for a first split, and
     /// roughly 2× too tall when splitting an already-half-height pane.
     /// [`Self::resize_all_panes`] would then shrink the PTY + grid to fit. Unix
     /// PTYs reflow that shrink cleanly, but Windows ConPTY reflows a shrink

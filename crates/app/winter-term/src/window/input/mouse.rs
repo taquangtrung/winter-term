@@ -169,7 +169,7 @@ impl App {
     }
 
     /// Route a mouse button press or release. The tabbar and any open menu
-    /// take precedence over the panes, so a click on chrome never reaches a
+    /// take precedence over the panes, so a click on a bar never reaches a
     /// pane underneath it.
     pub(in crate::window) fn on_mouse_input(
         &mut self,
@@ -208,7 +208,7 @@ impl App {
     /// The mouse button handler proper, split from [`Self::on_mouse_input`] so
     /// tests can drive it without an `ActiveEventLoop`.
     pub(in crate::window) fn handle_mouse_input(&mut self, pressed: bool, button: PointerButton) {
-        if self.chrome.dialog_open() && pressed {
+        if self.parts.dialog_open() && pressed {
             self.press_in_dialog(button);
             return;
         }
@@ -230,7 +230,7 @@ impl App {
             }
             // The title bar is misty's; what of it misty leaves (the empty
             // bar under a system frame) selects no pane text.
-            if y < self.top_chrome_height() {
+            if y < self.top_bars_height() {
                 return;
             }
         }
@@ -521,7 +521,7 @@ impl App {
     /// part it was on, and the editor it rested on.
     pub(in crate::window) fn on_cursor_left(&mut self) {
         self.input.pointer.in_window = false;
-        if self.chrome.status_hover.take().is_some() {
+        if self.parts.status_hover.take().is_some() {
             self.dirty = true;
         }
         if let Some(tab) = self.input.pointer.hovered_editor.take() {
@@ -548,7 +548,7 @@ impl App {
         if self.input.pointer.scrollbar_keyed.take().is_some() {
             self.dirty = true;
         }
-        if self.chrome.dialog_open() {
+        if self.parts.dialog_open() {
             self.hover_dialog(x, y);
             return;
         }
@@ -772,14 +772,14 @@ impl App {
     pub(in crate::window) fn cursor_icon_at(&self, x: f32, y: f32) -> CursorIcon {
         // Under a dialog only the window's edges take the pointer here;
         // misty's dialog sets the shape over itself.
-        if self.chrome.dialog_open() {
+        if self.parts.dialog_open() {
             return match self.edge_resize_direction(x, y) {
                 Some(edge) => edge.cursor(),
                 None => CursorIcon::Default,
             };
         }
 
-        let is_tab_dragging = self.chrome.tab_drag.is_some();
+        let is_tab_dragging = self.parts.tab_drag.is_some();
 
         if self.input.pointer.scrollbar_drag.is_some()
             || self.input.pointer.scrollbar_hover.is_some()
@@ -837,7 +837,7 @@ impl App {
             self.dirty = true;
         }
         // Nothing scrolls under a dialog.
-        if self.chrome.dialog_open() {
+        if self.parts.dialog_open() {
             return;
         }
         // The part of a row scrolled short of a whole one is kept for the
@@ -1074,10 +1074,10 @@ mod tests {
         let mut app = App::new();
         app.on_cursor_moved(Point::new(10.0, 10.0));
         assert!(app.input.pointer.in_window);
-        app.chrome.status_hover = Some(crate::render::StatusHover::Bell);
+        app.parts.status_hover = Some(crate::render::StatusHover::Bell);
         app.dirty = false;
         app.on_cursor_left();
-        assert_eq!(app.chrome.status_hover, None);
+        assert_eq!(app.parts.status_hover, None);
         assert!(app.dirty, "drawn again without it");
         assert!(!app.input.pointer.in_window, "so no frame lights it again");
     }
@@ -1826,7 +1826,7 @@ mod tests {
             "the pane took no press"
         );
         assert!(
-            app.chrome.close_prompt().is_some(),
+            app.parts.close_prompt().is_some(),
             "a stray press off the dialog answers nothing: the question stays"
         );
         assert!(app.open_tabs.page(&tab).is_some(), "and closes nothing");

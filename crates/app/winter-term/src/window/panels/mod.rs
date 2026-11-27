@@ -839,10 +839,9 @@ impl App {
 fn start_edge(kind: SidebarKind) -> Edge {
     match kind {
         SidebarKind::Outline => Edge::Right,
-        SidebarKind::Files
-        | SidebarKind::Git
-        | SidebarKind::Sessions
-        | SidebarKind::Todo => Edge::Left,
+        SidebarKind::Files | SidebarKind::Git | SidebarKind::Sessions | SidebarKind::Todo => {
+            Edge::Left
+        }
     }
 }
 
@@ -1120,11 +1119,7 @@ mod tests {
         );
         assert_eq!(
             app.layout().sidebar(Edge::Left).kinds(),
-            [
-                SidebarKind::Git,
-                SidebarKind::Todo,
-                SidebarKind::Sessions
-            ]
+            [SidebarKind::Git, SidebarKind::Todo, SidebarKind::Sessions]
         );
         assert_eq!(
             app.layout().sidebar(Edge::Right).active_kind(),

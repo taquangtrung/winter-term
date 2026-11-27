@@ -393,7 +393,7 @@ mod tests {
         let before = app.keymap.clone();
         app.adopt_config(config.clone());
         assert_eq!(app.keymap, before, "nothing rebound over a broken file");
-        let notice = app.chrome.notice_text();
+        let notice = app.parts.notice_text();
         assert_eq!(notice, Some("keybindings.kdl: line 1: unexpected token"));
 
         config.keybindings_error = None;

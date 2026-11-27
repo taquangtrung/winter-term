@@ -1,5 +1,5 @@
 //! Rasterizing SVG documents with resvg, shared by the GPU image pass and the
-//! chrome painted on the CPU, so an icon comes out at the same size and in the
+//! bars painted on the CPU, so an icon comes out at the same size and in the
 //! same place in an editor's rows, a pane strip, and a popup.
 
 use resvg::tiny_skia::{Pixmap, Transform};
@@ -62,7 +62,7 @@ pub(super) fn rasterize_in_box(
 }
 
 /// A pixmap's pixels as straight-alpha RGBA. tiny-skia stores premultiplied
-/// alpha, and both the image pass and the chrome's blending want straight.
+/// alpha, and both the image pass and the bars' blending want straight.
 pub(super) fn straight_rgba(pixmap: &Pixmap) -> Vec<u8> {
     let mut rgba = Vec::with_capacity(pixmap.pixels().len() * 4);
     for pixel in pixmap.pixels() {

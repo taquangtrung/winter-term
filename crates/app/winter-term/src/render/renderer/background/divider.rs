@@ -2,7 +2,7 @@
 //! edge they share is one separator, and it is a border of each: the bottom
 //! border of the pane above and the top border of the pane below, the right
 //! border of the pane on its left and the left border of the pane on its
-//! right. The chrome around the content is a neighbor the same way: a pane
+//! right. The bars around the content are a neighbor the same way: a pane
 //! against the title bar has its top border there, and one resting on the
 //! status bar its bottom border on the bar's top edge.
 //!
@@ -35,7 +35,7 @@ const EDGE_SLACK_PX: f32 = 1.0;
 // Data Structures
 // ========================================================================
 
-/// The stretch of an edge two panes share, or a pane and the chrome around
+/// The stretch of an edge two panes share, or a pane and the bars around
 /// the content, as drawn.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct Separator {
@@ -102,7 +102,7 @@ pub(crate) fn separators(areas: &[Rect], width: f32, status_top: Option<f32>) ->
             );
         }
     }
-    // The chrome above the content (the title bar) is a neighbor too.
+    // The bar above the content (the title bar) is a neighbor too.
     let top = areas
         .iter()
         .map(|area| area.y)

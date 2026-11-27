@@ -124,7 +124,7 @@ impl Application for App {
         let window = self.window.as_ref().map(|window| window.id());
         if let Some(window) = window {
             let cards = self.cards_deadline(&mut cx.event_cx(window));
-            let tooltip = self.chrome.tooltip.about_to_wait(&mut cx.event_cx(window));
+            let tooltip = self.parts.tooltip.about_to_wait(&mut cx.event_cx(window));
             let strips = self.strips_deadline(&mut cx.event_cx(window));
             let pages = self.page_views_deadline(&mut cx.event_cx(window));
             let texts = self.text_editors_deadline(&mut cx.event_cx(window));
@@ -244,7 +244,7 @@ impl App {
         crate::diagnose::note_frame(started.elapsed());
     }
 
-    /// Build the window's frame into `frame`: the panes, the chrome around
+    /// Build the window's frame into `frame`: the panes, the bars and popups around
     /// them, and whatever lies over them.
     fn draw_window(&mut self, frame: &mut Frame) {
         let bounds = frame.bounds();
@@ -333,7 +333,7 @@ impl App {
         // rests on something else.
         let pressed = matches!(input, Input::PointerButton(button) if button.pressed);
         if (matches!(input, Input::Key(_) | Input::Wheel(_)) || pressed)
-            && self.chrome.tooltip.dismiss()
+            && self.parts.tooltip.dismiss()
         {
             self.dirty = true;
         }
@@ -384,7 +384,7 @@ impl App {
             // A dialog is answered first: closing the window from its title
             // bar or the window manager would put the quit question over it.
             Input::CloseRequested => {
-                if !self.chrome.dialog_open() {
+                if !self.parts.dialog_open() {
                     self.quit(cx);
                 }
             }
@@ -395,7 +395,7 @@ impl App {
                     self.input.keys.prefix = input::PendingPrefix::None;
                     self.input.clear_sequence();
                     self.input.keys.forwarded.clear();
-                    self.chrome.tab_drag = None;
+                    self.parts.tab_drag = None;
                     self.on_cursor_left();
                 }
                 if self.input.focus.window != focused {
@@ -675,7 +675,7 @@ mod tests {
         let mut app = App::new();
         app.survive(|_| panic!("handler gone wrong"));
         let told = app
-            .chrome
+            .parts
             .notifier
             .log()
             .iter()

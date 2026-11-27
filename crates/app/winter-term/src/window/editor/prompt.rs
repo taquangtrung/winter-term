@@ -223,7 +223,7 @@ impl App {
             return Some(deadline);
         }
         self.host.prompts.debounce = None;
-        if let Some(prompt) = self.chrome.editor_prompt() {
+        if let Some(prompt) = self.parts.editor_prompt() {
             let query = prompt.field.text().to_string();
             let tag = prompt.request.tag;
             if let Some(slot) = self.open_tabs.page_mut(&tab) {
@@ -243,7 +243,7 @@ impl App {
         let answer = {
             // The field rather than the accessor, so the answers kept beside
             // it can be read while the prompt is held.
-            let Some(Overlay::EditorPrompt(prompt)) = &mut self.chrome.overlay else {
+            let Some(Overlay::EditorPrompt(prompt)) = &mut self.parts.overlay else {
                 return;
             };
             match (prompt.request.mode, key.chord()) {
@@ -340,7 +340,7 @@ impl App {
         self.term.search.current = None;
         self.host.prompts.debounce = None;
         let Some(Overlay::EditorPrompt(prompt)) = self
-            .chrome
+            .parts
             .overlay
             .take_if(|o| matches!(o, Overlay::EditorPrompt(_)))
         else {
@@ -360,7 +360,7 @@ impl App {
 
     /// Click the confirmation dialog button at index `idx` (e.g. 0 for Yes, 1 for No).
     pub(in crate::window) fn click_dialog_button(&mut self, idx: usize) {
-        match &self.chrome.overlay {
+        match &self.parts.overlay {
             Some(Overlay::Error(dialog)) => {
                 if let Some(button) = dialog.buttons.buttons().get(idx) {
                     self.choose_on_error_dialog(button.value);
@@ -372,7 +372,7 @@ impl App {
                 };
                 let yes = btn.value;
                 let Some(Overlay::Close(prompt)) = self
-                    .chrome
+                    .parts
                     .overlay
                     .take_if(|o| matches!(o, Overlay::Close(_)))
                 else {
@@ -400,7 +400,7 @@ impl App {
                 self.term.search.current = None;
                 self.host.prompts.debounce = None;
                 let Some(Overlay::EditorPrompt(prompt)) = self
-                    .chrome
+                    .parts
                     .overlay
                     .take_if(|o| matches!(o, Overlay::EditorPrompt(_)))
                 else {
@@ -428,13 +428,13 @@ impl App {
     /// choosing answers with nothing, the way an escaped prompt does.
     #[cfg(test)]
     pub(in crate::window) fn answer_editor_pick(&mut self, choice: Option<String>) {
-        let Some(mut overlay) = self.chrome.take_picker_overlay() else {
+        let Some(mut overlay) = self.parts.take_picker_overlay() else {
             return;
         };
         match overlay.pick.take() {
             Some(pick) => self.answer_pick(pick, choice),
             // Not a pick: the picker was the window's own, and stays.
-            None => self.chrome.overlay = Some(Overlay::Picker(Box::new(overlay))),
+            None => self.parts.overlay = Some(Overlay::Picker(Box::new(overlay))),
         }
     }
 
@@ -458,7 +458,7 @@ impl App {
         // A search is typed in the find popup instead (see
         // [`App::find_target`]).
         if let Some(prompt) = self
-            .chrome
+            .parts
             .editor_prompt()
             .filter(|prompt| prompt.typed_search().is_none())
         {
@@ -488,7 +488,7 @@ impl App {
             }
             return Some(view);
         }
-        if let Some(dialog) = self.chrome.error_dialog() {
+        if let Some(dialog) = self.parts.error_dialog() {
             let mut view = input_dialog(
                 &dialog.message(),
                 "",
@@ -504,7 +504,7 @@ impl App {
             view.kind = Some(crate::render::NoticeKind::Error);
             return Some(view);
         }
-        if let Some(prompt) = self.chrome.close_prompt() {
+        if let Some(prompt) = self.parts.close_prompt() {
             let mut view = input_dialog(
                 &prompt.label,
                 "",
@@ -516,7 +516,7 @@ impl App {
             view.kind = Some(crate::render::NoticeKind::Warning);
             return Some(view);
         }
-        if let Some(input) = self.chrome.password_input() {
+        if let Some(input) = self.parts.password_input() {
             return Some(input_dialog(
                 super::remote::PASSWORD_LABEL,
                 &input.field.text(),
@@ -525,7 +525,7 @@ impl App {
                 Vec::new(),
             ));
         }
-        if let Some(input) = self.chrome.secret_input() {
+        if let Some(input) = self.parts.secret_input() {
             return Some(input_dialog(
                 &input.label,
                 &input.field.text(),
@@ -534,7 +534,7 @@ impl App {
                 Vec::new(),
             ));
         }
-        let field = self.chrome.theme_name_input()?;
+        let field = self.parts.theme_name_input()?;
         Some(input_dialog(
             THEME_NAME_LABEL,
             &field.text(),
@@ -556,7 +556,7 @@ impl App {
         self.dirty = true;
         // While the question is open, what is typed into it is what is
         // highlighted: a search only becomes the window's once answered.
-        if self.chrome.editor_prompt().is_some() {
+        if self.parts.editor_prompt().is_some() {
             return;
         }
         let was_hidden = self.term.search.query.is_none();

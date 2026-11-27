@@ -73,7 +73,7 @@ impl App {
             .map(|(width, _)| width as f32)
             .unwrap_or(full_cols as f32 * cw);
 
-        let top_h_on_screen = self.top_chrome_height();
+        let top_h_on_screen = self.top_bars_height();
         let status_h = match status_enabled {
             true => self
                 .status_bar_height()
@@ -100,7 +100,7 @@ impl App {
         theme: &Theme,
     ) -> PaneOverlays {
         let qs_labels: Vec<(usize, usize, char)> = self
-            .chrome
+            .parts
             .labels
             .quick
             .as_ref()
@@ -109,7 +109,7 @@ impl App {
         // The `f`/`t` jump overlay's labels, for the focused pane only (that's
         // where the cursor being moved lives).
         let find_label_data: Vec<(usize, usize, char)> = self
-            .chrome
+            .parts
             .labels
             .find
             .as_ref()
@@ -247,7 +247,7 @@ impl App {
             Some((paint.tab, area, paint.icons.as_slice(), row_slot_w))
         });
         // Kept for the pointer, which a mark's tooltip hangs off.
-        self.chrome.gutter_strips = gutters
+        self.parts.gutter_strips = gutters
             .iter()
             .flat_map(|gutter| {
                 gutter.lanes.iter().map(move |lane| {
@@ -266,7 +266,7 @@ impl App {
             })
         });
         let mut placements = Vec::new();
-        self.chrome.spinner_slots.clear();
+        self.parts.spinner_slots.clear();
         for (tab, pane_rect, icons, slot_w) in content.chain(gutter) {
             let alpha = alpha_of(tab);
             for icon in icons {
@@ -281,7 +281,7 @@ impl App {
                     if slot.y + ch <= pane_rect.y + pane_rect.height
                         && slot.x + spinner_w <= pane_rect.x + pane_rect.width
                     {
-                        self.chrome.spinner_slots.push(slot);
+                        self.parts.spinner_slots.push(slot);
                     }
                     continue;
                 }

@@ -54,7 +54,7 @@ impl App {
             .collect();
         for tab in ended {
             if let Some(task) = self.progress.jobs.remove(&tab) {
-                changed |= self.chrome.notifier.finish(task, None, now, 0);
+                changed |= self.parts.notifier.finish(task, None, now, 0);
             }
         }
         for (tab, label) in long {
@@ -63,7 +63,7 @@ impl App {
                 None => {
                     let source = self.tab_full_name(tab);
                     let progress = Progress::new(label).from_source(source).cancellable();
-                    let task = self.chrome.notifier.start(progress, now);
+                    let task = self.parts.notifier.start(progress, now);
                     self.progress.jobs.insert(tab, task);
                     changed = true;
                     task
@@ -72,7 +72,7 @@ impl App {
             let step = self.host.jobs.progress_for(tab);
             let before = self.task_step(task);
             if before != step {
-                self.chrome.notifier.set_step(task, step);
+                self.parts.notifier.set_step(task, step);
                 changed = true;
             }
         }
@@ -98,7 +98,7 @@ impl App {
         let mut changed = false;
         if let Some(task) = ended {
             self.progress.lsp = None;
-            changed |= self.chrome.notifier.finish(task, None, now, 0);
+            changed |= self.parts.notifier.finish(task, None, now, 0);
         }
         let Some(busy) = busy else {
             return changed;
@@ -107,14 +107,14 @@ impl App {
             Some(task) => task,
             None => {
                 let progress = Progress::new(busy.work.title.clone()).from_source(busy.server);
-                let task = self.chrome.notifier.start(progress, now);
+                let task = self.parts.notifier.start(progress, now);
                 self.progress.lsp = Some((task, busy.work.title.clone()));
                 changed = true;
                 task
             }
         };
         if self.task_step(task) != busy.work.message {
-            self.chrome.notifier.set_step(task, busy.work.message);
+            self.parts.notifier.set_step(task, busy.work.message);
             changed = true;
         }
         let fraction = busy
@@ -122,7 +122,7 @@ impl App {
             .percentage
             .map(|percent| f32::from(percent) / FULL_PERCENT);
         if self.task_fraction(task) != fraction {
-            self.chrome.notifier.set_fraction(task, fraction);
+            self.parts.notifier.set_fraction(task, fraction);
             changed = true;
         }
         changed
@@ -130,7 +130,7 @@ impl App {
 
     /// How far task `task` has come, as the notifier has it.
     fn task_fraction(&self, task: ProgressId) -> Option<f32> {
-        self.chrome
+        self.parts
             .notifier
             .tasks()
             .iter()
@@ -140,7 +140,7 @@ impl App {
 
     /// The step task `task` is on, as the notifier has it.
     fn task_step(&self, task: ProgressId) -> Option<String> {
-        self.chrome
+        self.parts
             .notifier
             .tasks()
             .iter()

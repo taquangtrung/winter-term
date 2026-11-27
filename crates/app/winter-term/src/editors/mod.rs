@@ -485,7 +485,7 @@ mod tests {
         ("tools/winter-dir/src/edit.rs", 1),
         ("tools/winter-git/src/keys.rs", 7),
         ("tools/winter-git/src/push.rs", 2),
-        ("tools/winter-pdf/src/chrome.rs", 8),
+        ("tools/winter-pdf/src/controls.rs", 8),
         ("tools/winter-pdf/src/editor.rs", 4),
         ("tools/winter-pdf/src/keys.rs", 1),
         ("tools/winter-pdf/src/navigate.rs", 2),

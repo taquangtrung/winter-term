@@ -11,7 +11,7 @@ fn test_closing_an_editor_tab_buries_its_buffer_as_it_was() {
     app.close_editor(tab);
     assert!(!app.layout().contains(tab), "no pane shows it");
     assert_eq!(app.open_tabs.buried(), [tab]);
-    assert!(app.chrome.close_prompt().is_none(), "and nothing was asked");
+    assert!(app.parts.close_prompt().is_none(), "and nothing was asked");
 
     app.show_buffer(tab);
     assert_eq!(app.layout().focused(), tab, "back, under the tab it had");
@@ -49,7 +49,7 @@ fn test_reopening_with_nothing_closed_says_so() {
     let mut app = App::new();
     app.reopen_closed_tab();
     let said = crate::window::layout::tabs::NOTHING_CLOSED;
-    assert_eq!(app.chrome.notice_text(), Some(said));
+    assert_eq!(app.parts.notice_text(), Some(said));
 }
 
 #[test]
@@ -249,7 +249,7 @@ fn test_closing_one_view_leaves_the_buffer_to_the_other() {
     app.show_buffer(there);
     let here = app.layout().focused();
     app.close_tab(here);
-    assert!(app.chrome.close_prompt().is_none(), "nothing is lost");
+    assert!(app.parts.close_prompt().is_none(), "nothing is lost");
     assert!(
         app.open_tabs.buried().is_empty(),
         "nor buried: it is still shown"
@@ -340,7 +340,7 @@ fn test_browsing_onto_parent_dir_item_changes_path_instead_of_opening_dir_view()
 
     // Picker stays open and path changes to parent directory
     app.settle_picker();
-    let palette = app.chrome.picker().expect("the browser is still open");
+    let palette = app.parts.picker().expect("the browser is still open");
     assert_eq!(
         palette.view().title,
         winter_model::path::abbreviate_home(&tree.0),
@@ -351,7 +351,7 @@ fn test_browsing_onto_parent_dir_item_changes_path_instead_of_opening_dir_view()
     browse_to(&mut app, "child/");
     browse_key(&mut app, "RET");
 
-    assert!(app.chrome.picker().is_none(), "the browser is done");
+    assert!(app.parts.picker().is_none(), "the browser is done");
     let tab = app.layout().focused();
     assert_eq!(
         app.open_tabs.page(&tab).map(|slot| slot.kind),

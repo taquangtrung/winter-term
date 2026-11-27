@@ -19,8 +19,8 @@ impl App {
     /// put it away when there is none.
     pub(in crate::window) fn draw_which_key(&mut self, frame: &mut Frame) {
         let theme = ui_theme(self.renderer.as_ref());
-        let Some(view) = &self.chrome.drawn_which_key else {
-            self.chrome.which_key.reset();
+        let Some(view) = &self.parts.drawn_which_key else {
+            self.parts.which_key.reset();
             return;
         };
         let entries = view
@@ -28,12 +28,12 @@ impl App {
             .iter()
             .map(|(key, title)| which_key_entry(key, title))
             .collect();
-        self.chrome.which_key.show(view.title.as_str(), entries);
+        self.parts.which_key.show(view.title.as_str(), entries);
         let area = match view.anchor_rect {
             Some((x, y, width, height)) => Rect::new(x, y, width, height),
             None => self.viewport_rect(),
         };
-        self.chrome.which_key.draw(frame, area, theme);
+        self.parts.which_key.draw(frame, area, theme);
     }
 
     /// Hand pointer `input` to the which-key popup; whether it took it.
@@ -42,10 +42,10 @@ impl App {
         input: &Input,
         cx: &mut EventCx<'_>,
     ) -> bool {
-        match self.chrome.which_key.handle(input, cx) {
+        match self.parts.which_key.handle(input, cx) {
             WhichKeyResponse::Activated(index) => {
                 let key = self
-                    .chrome
+                    .parts
                     .drawn_which_key
                     .as_ref()
                     .and_then(|view: &WhichKeyView| view.items.get(index))

@@ -299,7 +299,10 @@ impl App {
             return;
         }
         let in_front = self.layout().main_shown_tabs();
-        self.tabs.agents.unseen.retain(|tab| !in_front.contains(tab));
+        self.tabs
+            .agents
+            .unseen
+            .retain(|tab| !in_front.contains(tab));
     }
 }
 
@@ -476,7 +479,10 @@ mod tests {
         app.set_agent_state(tab, AgentState::Working);
         app.set_agent_state(tab, AgentState::Waiting);
         app.mark_agents_seen();
-        assert!(app.tabs.agents.unseen(tab), "the window is in the background");
+        assert!(
+            app.tabs.agents.unseen(tab),
+            "the window is in the background"
+        );
         app.input.focus.window = true;
         app.mark_agents_seen();
         assert!(!app.tabs.agents.unseen(tab), "seen now");

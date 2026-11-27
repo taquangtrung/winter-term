@@ -744,7 +744,7 @@ mod tests {
         let before = scratch.app.layout().members();
 
         scratch.app.mark_workspace();
-        let palette = scratch.app.chrome.picker().expect("asks for a name");
+        let palette = scratch.app.parts.picker().expect("asks for a name");
         assert_eq!(palette.id(), "workspace_name");
         let suggested = palette.query().to_string();
         assert_eq!(suggested, workspace::suggest_name(&root, &[]));
@@ -770,7 +770,7 @@ mod tests {
         scratch.add("mine", root);
 
         scratch.app.mark_workspace();
-        assert!(scratch.app.chrome.picker().is_none(), "nothing to name");
+        assert!(scratch.app.parts.picker().is_none(), "nothing to name");
         assert_eq!(scratch.app.workspace.active.as_deref(), Some("mine"));
         assert_eq!(scratch.store().list().len(), 1);
     }
@@ -975,7 +975,7 @@ mod tests {
 
         // A program running in it is no reason to ask: nothing is closed.
         scratch.app.switch_workspace("b").expect("goes through");
-        assert!(scratch.app.chrome.close_prompt().is_none());
+        assert!(scratch.app.parts.close_prompt().is_none());
         assert_eq!(scratch.app.workspace.active.as_deref(), Some("b"));
         assert_eq!(scratch.app.layout().members().len(), 1, "b's one shell");
         for tab in &a_tabs {
@@ -1184,7 +1184,7 @@ mod tests {
         let shell = scratch.app.layout().focused();
         scratch.app.switch_workspace("b").expect("goes through");
         assert!(
-            scratch.app.chrome.close_prompt().is_none(),
+            scratch.app.parts.close_prompt().is_none(),
             "nothing is lost"
         );
         assert_eq!(scratch.app.workspace.active.as_deref(), Some("b"));

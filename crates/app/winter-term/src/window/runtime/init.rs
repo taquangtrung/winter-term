@@ -21,10 +21,10 @@ use crate::window::{
 // Constants
 // ========================================================================
 
-/// How big Winter's chrome text (menus, pickers, dialogs, the bars) is
+/// How big Winter's UI text (menus, pickers, dialogs, the bars) is
 /// against its terminal text: the same size, as the desktop's own popups
 /// read beside it.
-const CHROME_FONT_RATIO: f32 = 1.0;
+const UI_FONT_RATIO: f32 = 1.0;
 
 /// How far the corners of the window are rounded, in logical pixels, where
 /// Winter draws its own title bar: by the system on macOS and Windows 11, by
@@ -77,7 +77,7 @@ impl App {
     }
 
     /// The font misty's widgets (the status bar, the picker, the cards) draw
-    /// in: the terminal's family, at the size Winter's chrome text takes.
+    /// in: the terminal's family, at the size Winter's UI text takes.
     /// Its ligatures and weights are the ones every grid the window draws
     /// keeps, so they are the user's.
     pub(in crate::window) fn misty_font(&self) -> misty::Font {
@@ -86,7 +86,7 @@ impl App {
 
     /// [`App::misty_font`] for a terminal font of `size` logical pixels.
     pub(in crate::window) fn misty_font_at(&self, size: f32) -> misty::Font {
-        let size = size * CHROME_FONT_RATIO;
+        let size = size * UI_FONT_RATIO;
         let font = misty::Font::new(size)
             .with_ligatures(self.config.ligatures)
             .with_weights(
@@ -100,12 +100,12 @@ impl App {
     }
 
     /// The font misty sets its proportional text (pages, labels, the
-    /// chrome's words) in, for a terminal font of `size` logical pixels:
+    /// bars' words) in, for a terminal font of `size` logical pixels:
     /// the desktop's interface family at the size and weights of
     /// [`App::misty_font_at`], so words read as heavy as the grid beside
     /// them.
     pub(in crate::window) fn ui_font_at(&self, size: f32) -> misty::UiFont {
-        misty::UiFont::new(size * CHROME_FONT_RATIO).with_weights(
+        misty::UiFont::new(size * UI_FONT_RATIO).with_weights(
             regular_weight(self.config.font_weight.as_deref()),
             bold_weight(self.config.font_weight_bold.as_deref()),
         )
@@ -265,10 +265,10 @@ impl App {
         // terminal that rounded it to whole cells would push past a tile's
         // edge. Space short of a whole row or column is left as padding
         // inside the panes. No resize increments are set either:
-        // a height holding whole rows is the chrome plus a multiple of the
+        // a height holding whole rows is the bars plus a multiple of the
         // cell, which X11 spells as a base size the increment alone cannot
         // carry, so a manager honouring a bare cell increment would floor off
-        // the chrome's pixels.
+        // the bars' pixels.
 
         // The saved session, when there is one, becomes the window's layout.
         // One that brings nothing back leaves the bootstrap pane empty, so

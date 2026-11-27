@@ -21,22 +21,22 @@ impl App {
     /// Draw the key menu the last frame worked out over `frame`: the card
     /// already up when it is the same menu, a new one otherwise.
     pub(in crate::window) fn draw_transient(&mut self, frame: &mut Frame) {
-        let Some(view) = self.chrome.drawn_transient.clone() else {
-            self.chrome.transient = None;
+        let Some(view) = self.parts.drawn_transient.clone() else {
+            self.parts.transient = None;
             return;
         };
         let theme = ui_theme(self.renderer.as_ref());
-        let same = self.chrome.transient_title.as_deref() == Some(view.title.as_str())
+        let same = self.parts.transient_title.as_deref() == Some(view.title.as_str())
             && self
-                .chrome
+                .parts
                 .transient
                 .as_ref()
                 .is_some_and(|card| card.switches().len() == view.switches.len());
         if !same {
-            self.chrome.transient = Some(card_of(&view));
-            self.chrome.transient_title = Some(view.title.clone());
+            self.parts.transient = Some(card_of(&view));
+            self.parts.transient_title = Some(view.title.clone());
         }
-        let Some(card) = &mut self.chrome.transient else {
+        let Some(card) = &mut self.parts.transient else {
             return;
         };
         for (index, switch) in view.switches.iter().enumerate() {
@@ -58,7 +58,7 @@ impl App {
         input: &Input,
         cx: &mut EventCx<'_>,
     ) -> bool {
-        let (Some(card), Some(view)) = (&mut self.chrome.transient, &self.chrome.drawn_transient)
+        let (Some(card), Some(view)) = (&mut self.parts.transient, &self.parts.drawn_transient)
         else {
             return false;
         };
@@ -107,7 +107,7 @@ impl App {
     /// Where the key menu's card was drawn last, as `(x, y, width,
     /// height)`, for the list a command opens to take its place.
     pub(in crate::window) fn transient_card_rect(&self) -> Option<(f32, f32, f32, f32)> {
-        let rect = self.chrome.transient.as_ref()?.card_rect()?;
+        let rect = self.parts.transient.as_ref()?.card_rect()?;
         Some((rect.x, rect.y, rect.width, rect.height))
     }
 }

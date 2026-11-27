@@ -331,7 +331,7 @@ impl Page for PdfEditor {
         if rows == 0 || cols == 0 {
             return EditorOutcome::Ignored;
         }
-        if let Some(outcome) = self.on_chrome_mouse(at) {
+        if let Some(outcome) = self.on_controls_mouse(at) {
             return outcome;
         }
         self.mark = None;

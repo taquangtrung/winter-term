@@ -36,7 +36,7 @@ pub use glyphs::{FontConfig, bold_weight, clamp_font_size, regular_weight, start
 /// pipelines. Designed to be created once and reused across frames.
 pub struct GpuRenderer {
     /// How the window around the panes is laid out: dividers, the bars shown, decorations, and the popups' input row.
-    chrome: ChromeLayout,
+    window_layout: WindowLayout,
     /// The font in force and the cell it makes.
     fonts: FontState,
     /// Where the last frame drew what the pointer can act on, for the window to test a click or a hover against what is on screen.
@@ -103,7 +103,7 @@ struct FontState {
 }
 
 /// How the window around the panes is laid out, as the settings in force have it.
-struct ChromeLayout {
+struct WindowLayout {
     /// Whether the OS window manager draws its own frame around the window.
     /// When `false` (the undecorated "Modern" title bar style), the window
     /// draws its own 1px [`Theme::window_border`](winter_theme::Theme::window_border)

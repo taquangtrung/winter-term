@@ -409,7 +409,11 @@ mod tests {
             row,
         };
         editor.on_mouse(click(2));
-        assert_eq!(editor.list.cursor(), 0, "the first line takes three screen rows");
+        assert_eq!(
+            editor.list.cursor(),
+            0,
+            "the first line takes three screen rows"
+        );
         editor.on_mouse(click(3));
         assert_eq!(editor.list.cursor(), 1);
     }

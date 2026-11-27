@@ -21,7 +21,7 @@ const QUICK_SELECT_LABELS: &[char] = &[
 
 impl App {
     pub(in crate::window) fn enter_quick_select(&mut self, focused: TabId) {
-        self.chrome.labels.quick = self.generate_quick_labels(focused);
+        self.parts.labels.quick = self.generate_quick_labels(focused);
         self.dirty = true;
     }
 
@@ -56,7 +56,7 @@ impl App {
     /// Scroll the focused pane so the block `label` marks starts at the top
     /// of the view.
     pub(in crate::window) fn quick_jump(&mut self, focused: TabId, label: char) {
-        let Some(labels) = self.chrome.labels.quick.take() else {
+        let Some(labels) = self.parts.labels.quick.take() else {
             return;
         };
         let Some(target) = labels.iter().find(|ql| ql.label == label) else {

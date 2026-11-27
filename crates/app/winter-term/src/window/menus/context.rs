@@ -151,9 +151,9 @@ impl ContextAction {
 impl App {
     /// Close the right-click context menu.
     pub(in crate::window) fn close_context_menu(&mut self) {
-        if self.chrome.menus.context.is_some() {
-            self.chrome.menus.context = None;
-            self.chrome.menus.context_actions.clear();
+        if self.parts.menus.context.is_some() {
+            self.parts.menus.context = None;
+            self.parts.menus.context_actions.clear();
             self.dirty = true;
         }
     }
@@ -186,8 +186,8 @@ impl App {
         }
         let mut menu = Menu::new(context_entries(&actions));
         menu.open(Rect::new(x, y, 0.0, 0.0), PopupSide::Below);
-        self.chrome.menus.context = Some(menu);
-        self.chrome.menus.context_actions = actions;
+        self.parts.menus.context = Some(menu);
+        self.parts.menus.context_actions = actions;
         self.close_menu();
         self.dirty = true;
     }
@@ -425,7 +425,7 @@ mod tests {
 
     /// The open menu's shape: labels, `-` for a separator.
     fn shape(app: &App) -> Vec<String> {
-        app.chrome
+        app.parts
             .menus
             .context_actions
             .iter()
@@ -459,7 +459,7 @@ mod tests {
         let shape = shape(&app);
         assert!(
             matches!(
-                app.chrome.menus.context_actions.first(),
+                app.parts.menus.context_actions.first(),
                 Some(ContextAction::EditorKey(_))
             ),
             "the editor's own entries come first: {shape:?}"

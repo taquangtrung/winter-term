@@ -231,7 +231,7 @@ fn test_an_editor_report_reaches_the_status_bar_whatever_the_outcome() {
     let editor = ReportingEditor(Some(Notice::info("pushed")));
     let tab = app.show_editor(EditorKind::Git, Box::new(editor));
     app.act_on_editor_outcome(tab, EditorOutcome::Consumed);
-    assert_eq!(app.chrome.notice_text(), Some("pushed"));
+    assert_eq!(app.parts.notice_text(), Some("pushed"));
 }
 
 #[test]
@@ -246,7 +246,7 @@ fn test_browsing_into_a_directory_keeps_the_palette_up_rooted_there() {
     browse_key(&mut app, "TAB");
 
     app.settle_picker();
-    let title = |app: &App| app.chrome.picker().expect("still browsing").view().title;
+    let title = |app: &App| app.parts.picker().expect("still browsing").view().title;
     assert_eq!(
         title(&app),
         winter_model::path::abbreviate_home(&tree.0.join("src"))
@@ -260,7 +260,7 @@ fn test_browsing_into_a_directory_keeps_the_palette_up_rooted_there() {
     browse_to(&mut app, "lib.rs");
     browse_key(&mut app, "TAB");
     assert!(
-        app.chrome.picker().is_some(),
+        app.parts.picker().is_some(),
         "tab on a file keeps the browser up"
     );
 
@@ -287,7 +287,7 @@ fn test_browsing_onto_a_directory_opens_it_in_dir_editor_tab() {
     browse_to(&mut app, "src/");
     browse_key(&mut app, "RET");
 
-    assert!(app.chrome.picker().is_none(), "the browser is done");
+    assert!(app.parts.picker().is_none(), "the browser is done");
     let tab = app.layout().focused();
     assert_eq!(
         app.open_tabs.page(&tab).map(|slot| slot.kind),
@@ -346,7 +346,7 @@ fn test_browsing_onto_a_file_opens_it_in_an_editor_tab() {
     browse_to(&mut app, "README.md");
     browse_key(&mut app, "RET");
 
-    assert!(app.chrome.picker().is_none(), "the browser is done");
+    assert!(app.parts.picker().is_none(), "the browser is done");
     let tab = app.layout().focused();
     assert_eq!(
         app.open_tabs.page(&tab).map(|slot| slot.kind),

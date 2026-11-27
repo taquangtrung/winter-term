@@ -1,4 +1,4 @@
-//! Window geometry: chrome insets, viewports, and pane hit-testing.
+//! Window geometry: the bars' insets, viewports, and pane hit-testing.
 
 use std::time::Instant;
 
@@ -88,7 +88,7 @@ impl App {
             .map(|r| r.cell_size().1)
             .unwrap_or(0.0);
         let status_enabled = self.status_bar_visible();
-        let top_h_on_screen = self.top_chrome_height();
+        let top_h_on_screen = self.top_bars_height();
         // As tall as misty draws it, once a frame has measured its font.
         let status_h = match status_enabled {
             true => self
@@ -375,7 +375,7 @@ mod tests {
         app.config.status_bar.enabled = false;
         assert!(!app.status_bar_visible());
 
-        app.chrome.overlay = Some(Overlay::ThemeName(winter_field::Field::line("custom")));
+        app.parts.overlay = Some(Overlay::ThemeName(winter_field::Field::line("custom")));
         assert!(!app.status_bar_visible());
 
         let prompt = editor::ActivePrompt {
@@ -393,7 +393,7 @@ mod tests {
                 title: None,
             },
         };
-        app.chrome.overlay = Some(Overlay::EditorPrompt(Box::new(prompt)));
+        app.parts.overlay = Some(Overlay::EditorPrompt(Box::new(prompt)));
         assert!(!app.status_bar_visible());
     }
 

@@ -956,6 +956,6 @@ mod tests {
     fn test_export_focused_block_text_with_no_pane() {
         let mut app = App::new();
         app.export_focused_block_text(TabId(999));
-        assert!(app.chrome.notice_text().is_none());
+        assert!(app.parts.notice_text().is_none());
     }
 }

@@ -75,7 +75,7 @@ impl App {
             })
             .collect();
         // A card held for a list is the last key's: this key asks anew.
-        self.chrome.transient_card = None;
+        self.parts.transient_card = None;
         let card = self.transient_card_rect();
         let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
             return false;
@@ -87,7 +87,7 @@ impl App {
         // A key that closes a transient leaves its card for the list the
         // choice asks for, which may come back only once a job has run.
         if had_transient && slot.page.transient().is_none() {
-            self.chrome.transient_card = card.map(|rect| TransientCard { rect, tab: tab_id });
+            self.parts.transient_card = card.map(|rect| TransientCard { rect, tab: tab_id });
         }
         let Some(slot) = self.open_tabs.page_mut(&tab_id) else {
             return false;
@@ -104,7 +104,7 @@ impl App {
     /// The card of the transient `tab_id`'s last key closed, for the list or
     /// question that key asked for: spent on the first that comes.
     fn take_transient_card(&mut self, tab_id: TabId) -> Option<(f32, f32, f32, f32)> {
-        self.chrome
+        self.parts
             .transient_card
             .take()
             .filter(|card| card.tab == tab_id)

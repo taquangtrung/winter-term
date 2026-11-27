@@ -85,7 +85,7 @@ A page built on misty is one of two kinds, and says which. Neither guesses how m
 
 - **Scrolling** (`page(..).scrolling(content)`) for content built in full: a form, sections, a table of a few hundred rows. misty scrolls it; a row the cursor is on takes `Element::keep_in_view`.
 - **Filled** (`page(..).filled(content)`) for a long list: the content holds a `lazy_column` over a `LazySource`, which builds only the rows that show. Its `on_shown` reports them, for the keys that go by the screen (`ListView`'s `Viewport::set_shown`).
-- **Never count rows that fit.** No estimate of a row's height or of the chrome around a list: misty measures what it lays out.
+- **Never count rows that fit.** No estimate of a row's height or of the bars around a list: misty measures what it lays out.
 - **Test it.** `view_tests::drawn` fails on an element that scrolls itself inside a scrolling page (`misty::testing::nested_scrolls`).
 
 ## Motions

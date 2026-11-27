@@ -145,7 +145,7 @@ pub(crate) fn add_to(icons: &mut misty::IconSet, names: &[String]) {
         let Some(svg) = named_svg(name).and_then(|bytes| misty::Svg::parse(&bytes).ok()) else {
             continue;
         };
-        // Winter's bundled icons keep their own colors, as its chrome draws
+        // Winter's bundled icons keep their own colors, as its bars draw
         // them.
         icons.insert_colored(name.clone(), svg);
     }
@@ -273,9 +273,7 @@ fn terminal_icon() -> String {
 
 /// Whether a dedicated bundled app icon exists for terminal program `name`.
 pub(crate) fn has_program_icon(name: &str) -> bool {
-    PROGRAM_ICONS
-        .iter()
-        .any(|(program, _)| *program == name)
+    PROGRAM_ICONS.iter().any(|(program, _)| *program == name)
 }
 
 /// The icon naming a terminal tab running program `name`: the program's own,

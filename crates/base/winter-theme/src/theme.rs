@@ -117,7 +117,7 @@ pub struct Theme {
     pub background: Rgb,
     /// How opaque the terminal background is, 0 (see-through) to 255 (solid).
     /// Below 255 the window is translucent: the background and the cells that
-    /// leave it showing let the desktop through, while the chrome stays solid.
+    /// leave it showing let the desktop through, while the bars stay solid.
     pub background_alpha: u8,
     /// Color used to tint the tab bar briefly on a bell event and for the
     /// bell-dot indicator. Falls back to `cursor_bg` for the dot when `None`.
@@ -415,7 +415,7 @@ impl Default for Theme {
 
 impl Theme {
     /// The built-in dark preset: the One Color theme, from its editor and
-    /// terminal colors, with the window chrome derived from the background
+    /// terminal colors, with the window's bars and menus derived from the background
     /// as for any theme.
     pub fn dark() -> Self {
         DARK.clone()
@@ -469,12 +469,12 @@ impl Theme {
         }
     }
 
-    /// Re-derive the window chrome from the background and the text color in
+    /// Re-derive the window's bars and menus from the background and the text color in
     /// effect: the title bar band, the active tab, the menu card, and the
     /// cursor's row. A theme or a color override that changes the background
-    /// would otherwise sit under the preset's chrome, a dark title bar over a
+    /// would otherwise sit under the preset's bars, a dark title bar over a
     /// light terminal or the reverse.
-    pub fn fit_chrome_to_background(&mut self) {
+    pub fn fit_ui_to_background(&mut self) {
         let black = Rgb::new(0, 0, 0);
         let white = Rgb::new(255, 255, 255);
         let dark = self.background.luminance() < DARK_LUMINANCE;
@@ -647,20 +647,20 @@ mod tests {
         // A dark background a theme set gets it too, not a shade of its own.
         let mut theme = Theme::dark();
         theme.background = Rgb::parse_hex("#002b36").unwrap();
-        theme.fit_chrome_to_background();
+        theme.fit_ui_to_background();
         assert_eq!(theme.menu_bg.to_hex(), POPUP_BG_DARK);
         // A light one keeps its white popups, which its dark text reads on.
         assert_eq!(Theme::light().menu_bg, Rgb::new(255, 255, 255));
     }
 
     #[test]
-    fn test_the_chrome_follows_a_background_the_theme_changed() {
+    fn test_the_bars_follow_a_background_the_theme_changed() {
         // A light background over the dark preset: the band must come out
         // light and just darker than the terminal, not the preset's near-black.
         let mut theme = Theme::dark();
         theme.background = Rgb::parse_hex("#fdf6e3").unwrap();
         theme.foreground = Rgb::parse_hex("#586e75").unwrap();
-        theme.fit_chrome_to_background();
+        theme.fit_ui_to_background();
         let band = theme.tabbar_bg.luminance();
         assert!(band > 0.7, "a light band: {}", theme.tabbar_bg.to_hex());
         assert!(
@@ -672,7 +672,7 @@ mod tests {
         // And the presets' own bands are the ones the rule derives.
         for preset in [Theme::dark(), Theme::light()] {
             let mut fitted = preset.clone();
-            fitted.fit_chrome_to_background();
+            fitted.fit_ui_to_background();
             assert_eq!(
                 fitted.tabbar_bg,
                 preset.tabbar_bg,

@@ -1269,7 +1269,7 @@ impl App {
                 &self.config.keybindings,
             )),
             EditorKind::Notifications => Box::new(NotificationsEditor::new(
-                self.chrome.notification_entries(),
+                self.parts.notification_entries(),
                 now_seconds(),
             )),
             EditorKind::Ports => Box::new(PortsEditor::new()),

@@ -1,7 +1,7 @@
 //! Winter's theme as misty's: the colors misty's widgets draw in, named
 //! from Winter's own (a menu's background is misty's raised surface, the
-//! tab bar its chrome surface), so a misty widget over a pane matches the
-//! chrome Winter draws around it. [`Themes`] keeps the two together, built
+//! tab bar its bar surface), so a misty widget over a pane matches the
+//! bars Winter draws around it. [`Themes`] keeps the two together, built
 //! once each time Winter's theme changes, so no draw builds misty's again.
 
 use std::borrow::Cow;
@@ -112,7 +112,7 @@ impl Themes {
 
 /// Misty's theme for Winter's `theme`: misty's light or dark preset,
 /// whichever the background is, with Winter's colors put in, and Winter's
-/// own look set rather than left to misty's defaults: chrome labels in the
+/// own look set rather than left to misty's defaults: labels in the
 /// proportional font, rounded boxes with an even shadow, and pages inset
 /// from their pane's sides as far as an editor's text is.
 fn misty_theme(theme: &Theme) -> MistyTheme {

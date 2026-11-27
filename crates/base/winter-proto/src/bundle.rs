@@ -40,7 +40,7 @@ pub struct BlockMeta {
     /// terminal caps it against the viewport and re-reserves as content grows.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height_hint: Option<u16>,
-    /// A short label shown in the block's chrome.
+    /// A short label shown in the block's header.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
 }
@@ -94,7 +94,7 @@ impl BlockMeta {
         }
     }
 
-    /// The same, with `title` shown in the block's chrome.
+    /// The same, with `title` shown in the block's header.
     pub fn with_title(self, title: impl Into<String>) -> Self {
         Self {
             title: Some(title.into()),

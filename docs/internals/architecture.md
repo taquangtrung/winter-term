@@ -30,7 +30,7 @@ crates/ext       extensions shipped with Winter, on the sdk alone
 
 | Folder | Crate | Owns |
 |---|---|---|
-| `app` | `winter-term` | The window: panes, tabs, the terminal tab, the chrome and renderer, the pickers' sources, config, and the editors not yet in crates of their own. |
+| `app` | `winter-term` | The window: panes, tabs, the terminal tab, the bars, popups, and renderer, the pickers' sources, config, and the editors not yet in crates of their own. |
 | `tools` | `winter-dir` | The directory listing, and the file moves, copies, and deletes it runs. |
 | `tools` | `winter-git` | The Git view. |
 | `tools` | `winter-monitor` | The system pages: process, resource, and port monitors, and startup programs. |
@@ -144,7 +144,7 @@ Every byte reaching the terminal is untrusted, and any program can spell `trust=
 
 **Shown.** Each frame `sync_shown` finds what is shown and tells each page through `Page::set_shown`. Nothing not shown does work, and nothing polls: views follow files through `DirWatch` and `TreeWatch`.
 
-**The `App`.** `window/mod.rs` runs on misty's event loop, with submodules splitting the `App` by concern: `runtime`, `input`, `frame`, `layout`, `editor`, `picker`, `settings`, `workspace`, `appearance`, `terminal`, and the chrome around the panes. Shared state is grouped into types (`EditorHost`, `Chrome`, `RuntimeState`, `InputState`, `TerminalState`, and smaller ones for search, menus, the pointer, the selection, and Vim), and a method touching one group alone belongs to that group.
+**The `App`.** `window/mod.rs` runs on misty's event loop, with submodules splitting the `App` by concern: `runtime`, `input`, `frame`, `layout`, `editor`, `picker`, `settings`, `workspace`, `appearance`, `terminal`, and the bars and popups around the panes. Shared state is grouped into types (`EditorHost`, `WindowParts`, `RuntimeState`, `InputState`, `TerminalState`, and smaller ones for search, menus, the pointer, the selection, and Vim), and a method touching one group alone belongs to that group.
 
 **Crashes and freezes.** Every handler runs inside `survive` (`window/runtime/event_loop.rs`): a panic is written with its backtrace to `crash.log`, a notice says so, and the window carries on. Profiling, off by default (`winter --profile` or `Profiling: Profile the Window (Toggle)`), adds two things. Warnings and errors go to `winter.log` as well as standard error. And a watchdog (`watchdog.rs`) keeps the event loop's turns past 100 ms; one past five seconds writes the slow turns and every thread's stack (from `/proc`, and `gdb` where installed) to `crash.log`. The watchdog sleeps while the window waits. `Profiling: Write a Report` and `winter profile` gather the same account; the control socket answers on a thread of its own, so a frozen window still answers.
 

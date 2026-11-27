@@ -190,7 +190,7 @@ impl App {
     /// How a strip names `pane`: the rename being typed while it is the
     /// focused tab, else its title.
     pub(in crate::window) fn strip_title(&self, tab: TabId) -> String {
-        match self.chrome.rename_input() {
+        match self.parts.rename_input() {
             Some(input) if input.tab == tab => {
                 let text = input.field.text();
                 let (before, after) = text.split_at(

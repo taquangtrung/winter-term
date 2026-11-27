@@ -33,7 +33,7 @@ use crate::window::terminal::navigation::{SearchState, VimState};
 use crate::window::terminal::pointer::{PointerState, SelectionState};
 use crate::window::workspace::WorkspaceState;
 use crate::window::{
-    App, Chrome, EditorHost, GEOMETRY_SAVE_SETTLE, InputState, RuntimeState, TerminalState,
+    App, EditorHost, GEOMETRY_SAVE_SETTLE, InputState, RuntimeState, TerminalState, WindowParts,
 };
 
 // ========================================================================
@@ -174,7 +174,7 @@ impl App {
 
         Self {
             config,
-            chrome: Chrome {
+            parts: WindowParts {
                 cards: misty::Toasts::new()
                     .with_corner(misty::Corner::TopRight)
                     .with_severity_mark(misty::SeverityMark::Icon),
@@ -187,7 +187,7 @@ impl App {
                 status_bar: misty::StatusBar::new()
                     .with_background(misty::ThemeToken::Background)
                     .with_icons(status_bar_icons()),
-                ..Chrome::default()
+                ..WindowParts::default()
             },
             host: EditorHost {
                 commit_companions: HashMap::new(),
@@ -663,6 +663,6 @@ mod tests {
         let mut app = App::new();
         let focused = app.layout().focused();
         app.handle_action(Action::RunCommand("mux_new_session".to_string()), focused);
-        assert_eq!(app.chrome.picker().map(|p| p.id()), Some("mux_new"));
+        assert_eq!(app.parts.picker().map(|p| p.id()), Some("mux_new"));
     }
 }

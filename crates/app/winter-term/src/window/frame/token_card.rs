@@ -26,7 +26,7 @@ impl App {
     /// Draw the token inspector's card the last frame worked out over
     /// `frame`.
     pub(in crate::window) fn draw_token_card(&mut self, frame: &mut Frame) {
-        let Some(view) = &self.chrome.drawn_token_inspect else {
+        let Some(view) = &self.parts.drawn_token_inspect else {
             return;
         };
         let theme = ui_theme(self.renderer.as_ref());

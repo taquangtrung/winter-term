@@ -46,11 +46,11 @@ fn test_f8_from_a_file_walks_the_newest_build() {
     app.set_focus(editing);
     app.step_error(editing, true);
     assert!(
-        app.chrome
+        app.parts
             .notice_text()
             .is_some_and(|notice| notice.starts_with("1 of 1: ")),
         "{:?}",
-        app.chrome.notice_text()
+        app.parts.notice_text()
     );
     assert_eq!(app.newest_build(), compile_tabs(&app).first().copied());
     let _ = std::fs::remove_dir_all(&dir);
@@ -101,7 +101,7 @@ fn test_one_task_runs_at_once_in_a_tab_left_behind_the_work() {
     let working = app.layout().focused();
     app.compile_task();
     assert!(
-        app.chrome.picker().is_none(),
+        app.parts.picker().is_none(),
         "nothing to choose, nothing asked"
     );
     assert_eq!(compile_tabs(&app).len(), 1, "it runs");

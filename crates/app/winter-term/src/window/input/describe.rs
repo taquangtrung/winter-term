@@ -199,7 +199,7 @@ mod tests {
         for key in keys {
             app.describe_next_key(*key);
         }
-        app.chrome.notice_text().map(str::to_string)
+        app.parts.notice_text().map(str::to_string)
     }
 
     #[test]
@@ -212,7 +212,7 @@ mod tests {
         app.describe_next_key(alt('h'));
         assert!(app.input.describing.is_none(), "done");
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some("M-g M-h runs Tab: Move to Left Pane")
         );
     }
@@ -236,7 +236,7 @@ mod tests {
         let mut app = App::new();
         let said = described(&mut app, &[ctrl(',')]).expect("said");
         assert_eq!(said, "C-, runs Preferences: Settings");
-        assert!(app.chrome.overlay.is_none(), "nothing opened");
+        assert!(app.parts.overlay.is_none(), "nothing opened");
     }
 
     #[test]
@@ -270,7 +270,7 @@ mod tests {
         app.describe_next_key(Key::plain(KeyCode::Char('g')));
         assert!(app.input.describing.is_some(), "waiting on the next key");
         app.describe_next_key(Key::plain(KeyCode::Char('g')));
-        let said = app.chrome.notice_text().expect("said");
+        let said = app.parts.notice_text().expect("said");
         assert!(said.starts_with("g g does "), "{said}");
         assert!(said.ends_with("in Normal mode"), "{said}");
     }

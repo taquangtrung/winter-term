@@ -134,7 +134,7 @@ impl App {
     /// Open a live picker over `listing`, selected on its row `start`.
     fn open_live(&mut self, listing: Listing, start: Option<usize>) {
         self.open_picker(Box::new(listing));
-        if let (Some(picker), Some(start)) = (self.chrome.picker_mut(), start) {
+        if let (Some(picker), Some(start)) = (self.parts.picker_mut(), start) {
             picker.preselect(RowKey(start as u64));
         }
     }

@@ -1,7 +1,7 @@
 // Winter's built-in light theme: the dark theme's palette on a light
 // surface, its source colors darkened until they read there, and no git
 // colors (the git views derive theirs from the palette). Winter reads its
-// light preset from this file. The window chrome is derived from the
+// light preset from this file. The window's bars and menus are derived from the
 // background and foreground, so it has no colors here.
 //
 // Every color must be named: one left out is black. A theme file of your

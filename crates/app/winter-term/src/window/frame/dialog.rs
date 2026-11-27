@@ -86,22 +86,22 @@ impl App {
     /// Draw the dialog the last frame worked out over `frame`, building it
     /// afresh when what it asks has changed.
     pub(in crate::window) fn draw_dialog(&mut self, frame: &mut Frame) {
-        let Some(view) = self.chrome.drawn_dialog.clone() else {
-            self.chrome.dialog = None;
+        let Some(view) = self.parts.drawn_dialog.clone() else {
+            self.parts.dialog = None;
             return;
         };
         let shape = shape_of(&view);
         if self
-            .chrome
+            .parts
             .dialog
             .as_ref()
             .is_none_or(|open| open.shape != shape)
         {
-            self.chrome.dialog = Some(open_dialog(&view, shape));
+            self.parts.dialog = Some(open_dialog(&view, shape));
         }
         let theme = ui_theme(self.renderer.as_ref());
         let area = area_of(&view, frame);
-        let Some(open) = &mut self.chrome.dialog else {
+        let Some(open) = &mut self.parts.dialog else {
             return;
         };
         open.dialog.draw(frame, area, theme);
@@ -120,7 +120,7 @@ impl App {
         input: &Input,
         cx: &mut EventCx<'_>,
     ) -> bool {
-        if self.chrome.dialog.is_none() || !self.chrome.dialog_open() {
+        if self.parts.dialog.is_none() || !self.parts.dialog_open() {
             return false;
         }
         if let Input::PointerButton(button) = input
@@ -131,7 +131,7 @@ impl App {
         {
             return false;
         }
-        let Some(open) = &mut self.chrome.dialog else {
+        let Some(open) = &mut self.parts.dialog else {
             return false;
         };
         let response = open.dialog.handle(input, cx);

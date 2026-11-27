@@ -13,8 +13,8 @@ use super::{BELL_ID, BRANCH_ID, HOST_ID, MODE_ID, PROJECT_ID, SEGMENT_IDS};
 
 /// How big the status bar's and the tooltips' text is against the
 /// terminal's: a step smaller, 13.5 pixels beside the default 15, so they
-/// read as chrome rather than another line of output.
-const SMALL_CHROME_FONT_RATIO: f32 = 13.5 / 15.0;
+/// read as bars rather than another line of output.
+const SMALL_UI_FONT_RATIO: f32 = 13.5 / 15.0;
 
 use crate::window::App;
 use crate::window::appearance::ui_theme;
@@ -27,23 +27,23 @@ impl App {
     /// Draw the status bar the last frame built along the bottom of
     /// `frame`, with the notifier's message and tasks.
     pub(in crate::window) fn draw_status_bar(&mut self, frame: &mut Frame) {
-        let Some(line) = &self.chrome.drawn_status else {
+        let Some(line) = &self.parts.drawn_status else {
             return;
         };
         let theme = ui_theme(self.renderer.as_ref());
         let bounds = frame.bounds();
-        let font = self.small_chrome_font();
-        let bar = &mut self.chrome.status_bar;
+        let font = self.small_ui_font();
+        let bar = &mut self.parts.status_bar;
         frame.with_font(&font, |frame| {
-            bar.lend(line, &self.chrome.notifier)
+            bar.lend(line, &self.parts.notifier)
                 .draw(frame, bounds, theme);
         });
     }
 
     /// The font the status bar and the tooltips are drawn in: the
-    /// chrome's, a step smaller.
-    pub(in crate::window) fn small_chrome_font(&self) -> misty::Font {
-        self.misty_font_at(self.config.font_size * SMALL_CHROME_FONT_RATIO)
+    /// UI font's, a step smaller.
+    pub(in crate::window) fn small_ui_font(&self) -> misty::Font {
+        self.misty_font_at(self.config.font_size * SMALL_UI_FONT_RATIO)
     }
 
     /// Hand pointer `input` to the status bar; whether it took it. The bell
@@ -54,17 +54,17 @@ impl App {
         input: &Input,
         cx: &mut misty::EventCx<'_>,
     ) -> bool {
-        let Some(line) = &self.chrome.drawn_status else {
+        let Some(line) = &self.parts.drawn_status else {
             return false;
         };
         let answer = self
-            .chrome
+            .parts
             .status_bar
-            .lend(line, &self.chrome.notifier)
+            .lend(line, &self.parts.notifier)
             .handle(input, cx);
-        let hover = self.chrome.status_bar.hovered().and_then(status_hover);
-        if hover != self.chrome.status_hover {
-            self.chrome.status_hover = hover;
+        let hover = self.parts.status_bar.hovered().and_then(status_hover);
+        if hover != self.parts.status_hover {
+            self.parts.status_hover = hover;
             self.dirty = true;
         }
         match answer {
@@ -86,7 +86,7 @@ impl App {
             StatusBarResponse::Handled => true,
             StatusBarResponse::Ignored => false,
             StatusBarResponse::Progress => {
-                self.chrome.notifier.show_task_cards();
+                self.parts.notifier.show_task_cards();
                 self.dirty = true;
                 true
             }
@@ -110,7 +110,7 @@ impl App {
             StatusHover::Project => PROJECT_ID,
             StatusHover::Segment(index) => SEGMENT_IDS.get(index)?,
         };
-        let rect = self.chrome.status_bar.segment_rect(id)?;
+        let rect = self.parts.status_bar.segment_rect(id)?;
         Some(crate::render::Region {
             h: rect.height,
             w: rect.width,
@@ -124,7 +124,7 @@ impl App {
     pub(in crate::window) fn status_bar_height(&self) -> Option<f32> {
         let window = self.window.as_ref()?;
         let scale_factor = window.scale_factor();
-        let metrics = self.small_chrome_font().cell_metrics(scale_factor);
+        let metrics = self.small_ui_font().cell_metrics(scale_factor);
         Some(misty::StatusBar::height(metrics, scale_factor))
     }
 }

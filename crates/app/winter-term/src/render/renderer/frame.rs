@@ -42,7 +42,7 @@ impl GpuRenderer {
     /// [`Self::hits`]. The panes themselves the host draws from
     /// [`Self::paint_pane`].
     pub fn prepare(&mut self, status_bar: Option<f32>, images: &[ImagePlacement]) {
-        self.chrome.status_bar_height = status_bar;
+        self.window_layout.status_bar_height = status_bar;
         self.hits.pictures = images.to_vec();
     }
 
@@ -84,10 +84,12 @@ impl GpuRenderer {
                 offset_y: rect.y,
                 // The cursor's row gets a `cursorline` wash while the pane is
                 // being navigated; it doesn't blink with the cursor itself.
-                cursor_line: pane.cursor_line_row.map(|row| match pane.cursor_line_alone {
-                    true => (row, row),
-                    false => grid.wrapped_row_span(row),
-                }),
+                cursor_line: pane
+                    .cursor_line_row
+                    .map(|row| match pane.cursor_line_alone {
+                        true => (row, row),
+                        false => grid.wrapped_row_span(row),
+                    }),
                 jump_line: pane.jump_target_row.map(|row| grid.wrapped_row_span(row)),
                 line_flash: pane.line_flash.map(|(row, strength)| LineFlash {
                     rows: grid.wrapped_row_span(row),
@@ -186,7 +188,7 @@ impl GpuRenderer {
     }
 
     // --------------------------------------------------------------------
-    // Chrome around the panes
+    // WindowParts around the panes
     // --------------------------------------------------------------------
 
     /// The color split dividers are drawn in: the theme's divider at full
@@ -206,7 +208,7 @@ impl GpuRenderer {
             focus: self.themes.winter().active_pane_border.as_linear(),
             plain: self.split_divider_color().as_linear(),
             status: self.themes.winter().status_bar_border.as_linear(),
-            width: self.chrome.divider_width,
+            width: self.window_layout.divider_width,
         };
         // The focused pane is marked only among others: alone, it is plainly
         // the one in use.
@@ -218,7 +220,7 @@ impl GpuRenderer {
         // Flush with the window's bottom, so the slack of a height no whole
         // number of rows collects above it.
         let status_top = self
-            .chrome
+            .window_layout
             .status_bar_height
             .map(|height| (self.size.height as f32 - height).round());
         let found = separators(&areas, style.width, status_top);

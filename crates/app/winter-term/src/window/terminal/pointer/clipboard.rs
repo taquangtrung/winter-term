@@ -400,7 +400,7 @@ impl App {
     pub(in crate::window) fn paste_into_focus(&mut self, text: &str) {
         let line = text.lines().next().unwrap_or_default();
         self.dirty = true;
-        match &mut self.chrome.overlay {
+        match &mut self.parts.overlay {
             Some(Overlay::Close(_) | Overlay::Error(_)) => {}
             Some(Overlay::Picker(_)) => self.paste_into_palette(line),
             Some(Overlay::Password(input)) => input.field.paste(text),
@@ -593,7 +593,7 @@ mod tests {
     }
 
     fn field_text(app: &App) -> Option<String> {
-        match app.chrome.overlay.as_ref()? {
+        match app.parts.overlay.as_ref()? {
             Overlay::Password(input) => Some(input.field.text().to_string()),
             Overlay::Rename(input) => Some(input.field.text().to_string()),
             Overlay::Secret(input) => Some(input.field.text().to_string()),
@@ -622,7 +622,7 @@ mod tests {
         ];
         for dialog in dialogs {
             let mut app = App::new();
-            app.chrome.overlay = Some(dialog);
+            app.parts.overlay = Some(dialog);
             app.paste_into_focus(CLIPBOARD);
             assert_eq!(
                 field_text(&app).as_deref(),
@@ -635,7 +635,7 @@ mod tests {
     #[test]
     fn test_a_paste_into_an_editor_s_question_is_searched_and_a_yes_or_no_takes_none() {
         let mut app = App::new();
-        app.chrome.overlay = Some(prompt(PromptMode::Text));
+        app.parts.overlay = Some(prompt(PromptMode::Text));
         app.paste_into_focus(CLIPBOARD);
         assert_eq!(field_text(&app).as_deref(), Some("find sk-123"));
         assert!(
@@ -644,7 +644,7 @@ mod tests {
         );
 
         let mut app = App::new();
-        app.chrome.overlay = Some(prompt(PromptMode::Confirm));
+        app.parts.overlay = Some(prompt(PromptMode::Confirm));
         app.paste_into_focus(CLIPBOARD);
         assert_eq!(
             field_text(&app).as_deref(),

@@ -2,7 +2,7 @@
 
 use super::background::DIVIDER_THICKNESS;
 use super::glyphs::{DEFAULT_FONT_SIZE, DEFAULT_LINE_HEIGHT, FontConfig, clamp_font_size};
-use super::{ChromeLayout, FontState, FrameHits, FrameSize, GpuRenderer};
+use super::{FontState, FrameHits, FrameSize, GpuRenderer, WindowLayout};
 use crate::render::Themes;
 use crate::render::image::ImagePass;
 use misty::{Font, Rect};
@@ -56,7 +56,7 @@ impl GpuRenderer {
         let image_pass = ImagePass::default();
 
         Self {
-            chrome: ChromeLayout {
+            window_layout: WindowLayout {
                 decorated: true,
                 divider_width: DIVIDER_THICKNESS,
                 popup_input_height: crate::render::DEFAULT_POPUP_INPUT_HEIGHT,
@@ -105,12 +105,12 @@ impl GpuRenderer {
     /// Set the window's opacity, `0.0` to `1.0`, on top of the theme's own
     /// background alpha.
     pub fn set_window_opacity(&mut self, opacity: f32) {
-        self.chrome.window_opacity = opacity.clamp(0.0, 1.0);
+        self.window_layout.window_opacity = opacity.clamp(0.0, 1.0);
     }
     /// How opaque the terminal background is drawn: the window's opacity times
     /// the theme's background alpha.
     pub fn background_opacity(&self) -> f32 {
-        self.chrome.window_opacity * self.themes.winter().background_alpha as f32 / 255.0
+        self.window_layout.window_opacity * self.themes.winter().background_alpha as f32 / 255.0
     }
     /// Whether the window has to be transparent for the background to show
     /// the desktop through it.
@@ -119,25 +119,25 @@ impl GpuRenderer {
     }
     /// Set the thickness (in logical pixels) of the line drawn between adjacent panes.
     pub fn set_divider_width(&mut self, width: f32) {
-        self.chrome.divider_width = width.max(1.0);
+        self.window_layout.divider_width = width.max(1.0);
     }
     /// Set how tall the field typed into is in every popup, in rows of the
     /// font, kept within [`crate::render::POPUP_INPUT_HEIGHT_RANGE`].
     pub fn set_popup_input_height(&mut self, rows: f32) {
         let (least, most) = crate::render::POPUP_INPUT_HEIGHT_RANGE;
-        self.chrome.popup_input_height = rows.clamp(least, most);
+        self.window_layout.popup_input_height = rows.clamp(least, most);
     }
 
     /// Record whether the OS window manager draws its own frame. Undecorated
     /// windows get the renderer's own outline drawn around their outer edge.
     pub fn set_decorated(&mut self, decorated: bool) {
-        self.chrome.decorated = decorated;
+        self.window_layout.decorated = decorated;
     }
 
     /// Whether the system draws the window's frame, so Winter draws no
     /// outline of its own.
     pub fn is_decorated(&self) -> bool {
-        self.chrome.decorated
+        self.window_layout.decorated
     }
     /// Current theme colors.
     pub fn theme(&self) -> &Theme {
@@ -183,7 +183,7 @@ impl GpuRenderer {
     /// window: misty lays glyphs out on that stride, and the backgrounds and
     /// the cursor drawn at `col * cell_width` and `row * cell_height` must
     /// land on the same pixels. `cols` and `rows` are the full window's; the
-    /// app takes the chrome's rows off itself and pads out the remainder.
+    /// app takes the bars' rows off itself and pads out the remainder.
     pub(super) fn measure_grid(&mut self) {
         let cell = self.grid_font().cell_metrics(self.fonts.scale_factor);
         self.fonts.cell_width = cell.width;

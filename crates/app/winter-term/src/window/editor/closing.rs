@@ -474,12 +474,12 @@ impl App {
     /// Route one key into the host's close question: `Tab` cycles between buttons,
     /// `Enter` confirms the focused button, direct shortcuts (`y`, `n`, `Esc`) activate immediately.
     pub(in crate::window) fn handle_close_prompt_key(&mut self, key: &Key) {
-        let Some(Overlay::Close(prompt)) = &mut self.chrome.overlay else {
+        let Some(Overlay::Close(prompt)) = &mut self.parts.overlay else {
             return;
         };
         if let Some(yes) = prompt.buttons.on_key(key) {
             let Some(Overlay::Close(prompt)) = self
-                .chrome
+                .parts
                 .overlay
                 .take_if(|o| matches!(o, Overlay::Close(_)))
             else {

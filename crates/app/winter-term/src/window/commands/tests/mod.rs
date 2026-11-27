@@ -133,7 +133,7 @@ fn test_an_outline_with_nothing_in_it_opens_no_picker_and_says_so() {
     let editor = winter_text::TextEditor::new(file, None).expect("opens");
     let tab = app.show_editor(EditorKind::Text, Box::new(editor));
     app.run_command("outline", tab);
-    assert!(app.chrome.picker().is_none(), "no empty list");
-    assert_eq!(app.chrome.notice_text(), Some("nothing to outline here"));
+    assert!(app.parts.picker().is_none(), "no empty list");
+    assert_eq!(app.parts.notice_text(), Some("nothing to outline here"));
     let _ = std::fs::remove_dir_all(&dir);
 }

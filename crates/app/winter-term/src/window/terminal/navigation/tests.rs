@@ -334,7 +334,7 @@ fn test_find_overlay_labels_every_candidate_and_jumps_to_the_picked_one() {
         id,
     );
 
-    let labels = app.chrome.labels.find.clone().expect("overlay is up");
+    let labels = app.parts.labels.find.clone().expect("overlay is up");
     assert_eq!(
         labels.iter().map(|l| (l.row, l.col)).collect::<Vec<_>>(),
         vec![(0, 1), (0, 3), (0, 5)]
@@ -351,7 +351,7 @@ fn test_find_overlay_labels_every_candidate_and_jumps_to_the_picked_one() {
 
     assert_eq!(app.nav_cursor(id), Some((0, 3)));
     assert!(
-        app.chrome.labels.find.is_none(),
+        app.parts.labels.find.is_none(),
         "overlay taken down after the jump"
     );
 }
@@ -375,7 +375,7 @@ fn test_find_overlay_is_skipped_for_a_single_candidate() {
     );
 
     assert!(
-        app.chrome.labels.find.is_none(),
+        app.parts.labels.find.is_none(),
         "one candidate needs no overlay"
     );
     assert_eq!(app.nav_cursor(id), Some((0, 2)), "it just jumps");
@@ -403,7 +403,7 @@ fn test_find_overlay_spans_the_visible_rows_and_respects_till() {
         id,
     );
 
-    let labels = app.chrome.labels.find.clone().expect("overlay is up");
+    let labels = app.parts.labels.find.clone().expect("overlay is up");
     assert_eq!(
         labels.iter().map(|l| (l.row, l.col)).collect::<Vec<_>>(),
         vec![(0, 1), (1, 1)],
@@ -431,7 +431,7 @@ fn test_find_overlay_jump_extends_a_visual_selection() {
         }),
         id,
     );
-    let label = app.chrome.labels.find.clone().expect("overlay is up")[2].label;
+    let label = app.parts.labels.find.clone().expect("overlay is up")[2].label;
     app.handle_action(input::Action::FindJump(label), id);
 
     assert_eq!(app.nav_cursor(id), Some((0, 5)));
@@ -458,7 +458,7 @@ fn test_find_overlay_cancel_leaves_the_cursor_alone() {
     );
     app.handle_action(input::Action::FindCancel, id);
 
-    assert!(app.chrome.labels.find.is_none());
+    assert!(app.parts.labels.find.is_none());
     assert_eq!(app.nav_cursor(id), Some((0, 0)));
 }
 
@@ -1445,7 +1445,7 @@ fn test_scout_on_a_terminal_previews_and_confirms_with_jump_history() {
 
     app.open_scout(id);
     app.settle_picker();
-    let picker = app.chrome.picker().expect("Scout is open");
+    let picker = app.parts.picker().expect("Scout is open");
     assert_eq!(picker.view().title, "Scout: Terminal");
     assert_eq!(
         app.picker_labels(),
@@ -1459,7 +1459,7 @@ fn test_scout_on_a_terminal_previews_and_confirms_with_jump_history() {
 
     // Enter goes there for good, where it started kept for `C-o`.
     app.press_in_picker("RET");
-    assert!(app.chrome.picker().is_none());
+    assert!(app.parts.picker().is_none());
     assert_eq!(app.nav_cursor(id), Some((1, 0)));
     let jumps = &mut app.vim.tabs.get_mut(&id).expect("a jump list").jump_list;
     assert_eq!(jumps.older((1, 0)), Some((0, 0)));
@@ -1479,7 +1479,7 @@ fn test_scout_opens_on_the_word_under_the_cursor_selected_to_replace() {
 
     app.open_scout(id);
     app.settle_picker();
-    let view = app.chrome.picker().expect("Scout is open").view();
+    let view = app.parts.picker().expect("Scout is open").view();
     assert_eq!(view.query, "target");
     assert_eq!(app.picker_labels(), ["2"], "the line holding it");
 }
@@ -1496,7 +1496,7 @@ fn test_scout_opens_empty_with_the_word_at_point_turned_off() {
 
     app.open_scout(id);
     app.settle_picker();
-    let view = app.chrome.picker().expect("Scout is open").view();
+    let view = app.parts.picker().expect("Scout is open").view();
     assert_eq!(view.query, "");
 }
 
@@ -1519,7 +1519,7 @@ fn test_scout_put_away_restores_the_terminal_cursor() {
     assert_eq!(app.nav_cursor(id), Some((1, 0)));
 
     app.press_in_picker("ESC");
-    assert!(app.chrome.picker().is_none());
+    assert!(app.parts.picker().is_none());
     assert_eq!(app.nav_cursor(id), Some((0, 2)));
 }
 
@@ -1555,7 +1555,7 @@ fn test_scout_on_an_editor_previews_and_put_away_goes_back() {
 
     app.open_scout(id);
     app.settle_picker();
-    let title = app.chrome.picker().expect("Scout is open").view().title;
+    let title = app.parts.picker().expect("Scout is open").view().title;
     assert!(title.starts_with("Scout: "), "{title}");
 
     // Rows of the listing, under `.` and `..`: a.txt is row 2, b.txt row 3.
@@ -1564,7 +1564,7 @@ fn test_scout_on_an_editor_previews_and_put_away_goes_back() {
     assert_eq!(cursor(&app), Some(3));
 
     app.press_in_picker("ESC");
-    assert!(app.chrome.picker().is_none());
+    assert!(app.parts.picker().is_none());
     assert_eq!(cursor(&app), Some(2));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -1582,7 +1582,7 @@ fn test_action_jump_opens_scout_and_closes_it_again() {
 
     // The chord again puts it away, the cursor back where it was.
     app.handle_action(winter_model::input::Action::Jump, id);
-    assert!(app.chrome.picker().is_none());
+    assert!(app.parts.picker().is_none());
     assert!(app.term.scout_origin.is_none());
 }
 
@@ -1687,13 +1687,13 @@ fn test_prompt_edits_refuse_the_shells_own_prompt_text() {
 
     app.handle_action(input::Action::ReplaceChar('X'), id);
     assert!(
-        app.chrome.notice_text().is_some(),
+        app.parts.notice_text().is_some(),
         "refused with a dedicated error"
     );
     assert_eq!(app.nav_cursor(id), Some((0, 0)), "nothing moved");
 
     app.handle_action(input::Action::DeleteCharForward, id);
-    assert!(app.chrome.notice_text().is_some());
+    assert!(app.parts.notice_text().is_some());
 
     // The same edit on the command text itself still works.
     app.set_nav_cursor(id, (0, 3)); // 'l' of \"ls\"

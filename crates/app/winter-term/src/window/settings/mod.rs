@@ -76,7 +76,7 @@ impl App {
         let mut fields = vec![
             SettingsField::choice("theme", "Theme", theme_options, theme_index)
                 .in_section("Appearance")
-                .with_note("Color palette for the terminal and chrome. To add a custom one, run \"Theme: Create New…\" from the command palette"),
+                .with_note("Color palette for the terminal, the bars, and the menus. To add a custom one, run \"Theme: Create New…\" from the command palette"),
             SettingsField::choice("menu_style", "Menu style", menu_options, menu_index)
                 .with_note("Modern hamburger menu or a classic menubar"),
             {
@@ -1033,7 +1033,7 @@ mod tests {
         assert_eq!(app.config.font_size, 20.0, "applied");
         let said = winter_model::editor::Notice::from(WindowNotice::SettingsNotSaved).text;
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some(said.as_str()),
             "and said so, not saved"
         );

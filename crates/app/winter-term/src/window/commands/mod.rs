@@ -828,7 +828,7 @@ pub(crate) const BUILTIN: &[Builtin] = &[
         |app, _| app.split_pane_with_terminal(Direction::Vertical),
     ),
     window("show_tasks", "Tasks: Show Running", |app, _| {
-        app.chrome.notifier.show_task_cards();
+        app.parts.notifier.show_task_cards();
         app.dirty = true;
     }),
     window("stop_tasks", "Tasks: Stop Running", |app, focused| {

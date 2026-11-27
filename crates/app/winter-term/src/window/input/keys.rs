@@ -187,7 +187,7 @@ impl App {
     /// Whether `key` only moves the open palette's selection (`Up`, `Down`,
     /// `C-n`, `C-p`), leaving its query as it was.
     fn moves_palette_selection(&self, key: &input::Key) -> bool {
-        self.chrome.picker().is_some()
+        self.parts.picker().is_some()
             && matches!(
                 key.chord(),
                 (
@@ -346,17 +346,17 @@ impl App {
     /// tab the rename was started on, Escape or `C-g` cancels, and the rest
     /// edit the name as any field's Emacs keys do.
     fn route_rename_key(&mut self, press: &KeyPress) -> KeyRoute {
-        let Some(Overlay::Rename(input)) = &mut self.chrome.overlay else {
+        let Some(Overlay::Rename(input)) = &mut self.parts.overlay else {
             return KeyRoute::Pass;
         };
         match input.field.on_key(&press.key.typed()) {
             EditOutcome::Submit => {
                 let tab = input.tab;
                 let name = input.field.text().to_string();
-                self.chrome.overlay = None;
+                self.parts.overlay = None;
                 self.tabs.set_name(tab, Some(name));
             }
-            EditOutcome::Cancel => self.chrome.overlay = None,
+            EditOutcome::Cancel => self.parts.overlay = None,
             _ => {}
         }
         KeyRoute::Handled
@@ -369,7 +369,7 @@ impl App {
         if !self.input.is_sequence_pending() {
             return KeyRoute::Pass;
         }
-        if self.chrome.dialog_open() {
+        if self.parts.dialog_open() {
             self.input.clear_sequence();
             return KeyRoute::Pass;
         }
@@ -390,7 +390,7 @@ impl App {
     /// keyboard or a click on one of its buttons presses it. Whether one was
     /// up to take it.
     pub(in crate::window) fn dialog_key(&mut self, key: &Key) -> bool {
-        match &mut self.chrome.overlay {
+        match &mut self.parts.overlay {
             Some(Overlay::Close(_)) => self.handle_close_prompt_key(key),
             Some(Overlay::Error(_)) => self.handle_error_dialog_key(key),
             Some(Overlay::EditorPrompt(_)) => self.handle_prompt_key(key),
@@ -399,10 +399,10 @@ impl App {
             Some(Overlay::ThemeName(input)) => match input.on_key(&key.typed()) {
                 EditOutcome::Submit => {
                     let name = input.text().to_string();
-                    self.chrome.overlay = None;
+                    self.parts.overlay = None;
                     self.create_named_theme(&name);
                 }
-                EditOutcome::Cancel => self.chrome.overlay = None,
+                EditOutcome::Cancel => self.parts.overlay = None,
                 _ => {}
             },
             Some(Overlay::Picker(_) | Overlay::Rename(_)) | None => return false,
@@ -445,7 +445,7 @@ impl App {
 
     /// The open palette takes every key that is not a global chord.
     fn route_palette_key(&mut self, press: &KeyPress) -> KeyRoute {
-        if self.chrome.picker().is_none() {
+        if self.parts.picker().is_none() {
             return KeyRoute::Pass;
         }
         self.press_picker_key(&press.key, press.focused);
@@ -675,7 +675,7 @@ impl App {
     /// ordinary keymap, where it resolves to the same harmless copy.
     fn is_copy_yielded_to_editor(&self, action: &input::Action, focused: TabId) -> bool {
         *action == input::Action::Copy
-            && self.chrome.picker().is_none()
+            && self.parts.picker().is_none()
             && self.open_tabs.is_page(&focused)
             && self.selected_text().is_none()
     }
@@ -719,7 +719,7 @@ impl App {
     pub(in crate::window) fn escape_has_winter_target(&self) -> bool {
         self.input.keys.prefix != input::PendingPrefix::None
             || self.term.search.query.is_some()
-            || self.chrome.labels.are_up()
+            || self.parts.labels.are_up()
             || self.host.token_inspect.is_some()
     }
 }
@@ -940,7 +940,7 @@ mod tests {
         }
         press(&mut app, input::Key::plain(KeyCode::Enter));
         assert!(
-            app.chrome.editor_prompt().is_none(),
+            app.parts.editor_prompt().is_none(),
             "Enter answered the question"
         );
         assert_eq!(app.term.search.query.as_deref(), Some("alpha"), "still lit");
@@ -1023,7 +1023,7 @@ mod tests {
             Mode::Normal,
             "Winter takes the first Escape"
         );
-        assert!(app.chrome.notice_text().is_none());
+        assert!(app.parts.notice_text().is_none());
         assert!(
             !echoed_escape(&mut app, id, Duration::from_millis(300)),
             "the program was sent nothing"
@@ -1098,7 +1098,7 @@ mod tests {
         // no notice.
         assert!(!app.route_key(true, input::Key::with_alt(KeyCode::Escape)));
         assert_eq!(app.open_tabs.mode(&id).unwrap(), Mode::Normal);
-        assert!(app.chrome.notice_text().is_none());
+        assert!(app.parts.notice_text().is_none());
     }
 
     #[test]
@@ -1111,7 +1111,7 @@ mod tests {
         let pressed = app.route_key(true, input::Key::plain(KeyCode::Char('\0')));
         assert!(!pressed);
         assert_eq!(
-            app.chrome.rename_input().map(|input| input.field.text()),
+            app.parts.rename_input().map(|input| input.field.text()),
             Some("ab".to_string())
         );
     }
@@ -1145,7 +1145,7 @@ mod tests {
         app.route_key(true, ctrl_a);
         app.route_key(true, input::Key::plain(KeyCode::Char('x')));
         assert_eq!(
-            app.chrome.rename_input().map(|input| input.field.text()),
+            app.parts.rename_input().map(|input| input.field.text()),
             Some("xhello".to_string())
         );
         assert_eq!(

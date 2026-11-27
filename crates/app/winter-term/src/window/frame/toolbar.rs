@@ -1,4 +1,4 @@
-//! The pane toolbars and breadcrumb rows, drawn by misty in the chrome font:
+//! The pane toolbars and breadcrumb rows, drawn by misty in the UI font:
 //! a band matching the pane background with a subtle hairline below it,
 //! rounded hover pills on clickable items, column names aligned over their
 //! columns, and hit spans kept for pointer interaction and tooltips.
@@ -37,7 +37,7 @@ const HAIRLINE: f32 = 1.0;
 /// Horizontal gap between an item's icon and its label, in logical pixels.
 const ICON_GAP: f32 = 4.0;
 
-/// Icon side length as a share of the chrome font's cell height.
+/// Icon side length as a share of the UI font's cell height.
 const ICON_HEIGHT_SHARE: f32 = 0.85;
 
 /// Horizontal gap between adjacent items, in logical pixels.
@@ -112,9 +112,9 @@ impl App {
         let theme = ui_theme(self.renderer.as_ref());
         let hovered = self.input.pointer.hovered_toolbar_button;
         let font = self.misty_font_at(self.config.font_size * TOOLBAR_FONT_RATIO);
-        let bars = std::mem::take(&mut self.chrome.drawn_toolbars);
-        load_toolbar_icons(&mut self.chrome.toolbar_icons, &bars);
-        let icons = &self.chrome.toolbar_icons;
+        let bars = std::mem::take(&mut self.parts.drawn_toolbars);
+        load_toolbar_icons(&mut self.parts.toolbar_icons, &bars);
+        let icons = &self.parts.toolbar_icons;
         let mut hits = Vec::with_capacity(bars.len());
         frame.with_font(&font, |frame| {
             hits.extend(
@@ -122,15 +122,15 @@ impl App {
                     .map(|bar| draw_toolbar(frame, bar, theme, icons, hovered)),
             );
         });
-        self.chrome.toolbar_hits = hits;
-        self.chrome.drawn_toolbars = bars;
+        self.parts.toolbar_hits = hits;
+        self.parts.drawn_toolbars = bars;
     }
 
     /// Where button `button` of `owner`'s bar was last drawn, for its
     /// tooltip to hang under.
     pub(in crate::window) fn toolbar_button_rect(&self, owner: u64, button: u16) -> Option<Rect> {
         let hits = self
-            .chrome
+            .parts
             .toolbar_hits
             .iter()
             .find(|hits| hits.owner == owner)?;
@@ -142,7 +142,7 @@ impl App {
     /// The toolbar button at `(x, y)` as the bars were last drawn: whose bar
     /// it is, and what the button is told back as.
     pub(in crate::window) fn toolbar_button_at(&self, x: f32, y: f32) -> Option<(u64, u16)> {
-        self.chrome
+        self.parts
             .toolbar_hits
             .iter()
             .filter(|hits| y >= hits.band.0 && y < hits.band.1)

@@ -12,8 +12,8 @@ use misty::{
 
 use crate::config::TitleBarStyle;
 use crate::window::App;
-use crate::window::menus::menu_defs;
 use crate::window::appearance::ui_theme;
+use crate::window::menus::menu_defs;
 
 // ========================================================================
 // Constants
@@ -27,7 +27,7 @@ const TITLE_BAR_LABEL: &str = "Winter Term";
 /// had, kept whatever misty's own default becomes.
 const TITLE_BAR_HEIGHT_RATIO: f32 = 1.6;
 
-/// What screen readers know the chrome's tooltip by.
+/// What screen readers know the title bar's tooltip by.
 const TOOLTIP_ID: misty::FocusId = misty::FocusId::new("winter.tooltip");
 
 // ========================================================================
@@ -53,11 +53,11 @@ impl App {
     pub(in crate::window) fn draw_title_bar(&mut self, frame: &mut Frame) {
         let theme = ui_theme(self.renderer.as_ref());
         let shape = self.title_bar_shape();
-        if self.chrome.title_bar.as_ref().map(|(had, _)| *had) != Some(shape) {
-            self.chrome.title_bar = Some((shape, title_bar_of(shape)));
+        if self.parts.title_bar.as_ref().map(|(had, _)| *had) != Some(shape) {
+            self.parts.title_bar = Some((shape, title_bar_of(shape)));
         }
-        let open = self.chrome.menus.open;
-        if let Some((_, bar)) = &mut self.chrome.title_bar {
+        let open = self.parts.menus.open;
+        if let Some((_, bar)) = &mut self.parts.title_bar {
             bar.set_open_menu(open);
             bar.draw(frame, frame.bounds(), theme);
         }
@@ -70,9 +70,9 @@ impl App {
         let theme = ui_theme(self.renderer.as_ref());
         // An open menu covers what the pointer rested on, and a tab dragged
         // off its strip has left it.
-        let covered = self.chrome.menus.dropdown.is_some()
-            || self.chrome.menus.context.is_some()
-            || self.chrome.tab_drag.is_some();
+        let covered = self.parts.menus.dropdown.is_some()
+            || self.parts.menus.context.is_some()
+            || self.parts.tab_drag.is_some();
         match self.hover_tooltip().filter(|_| !covered) {
             Some(tip) => {
                 // One that hangs off the pointer stays where it first rested
@@ -83,27 +83,27 @@ impl App {
                         let (x, y) = self.input.pointer.cursor_pos;
                         let cell_h = frame.cell_metrics().height;
                         let at = Rect::new(x, y, 1.0, cell_h);
-                        match &self.chrome.pointer_tip {
+                        match &self.parts.pointer_tip {
                             Some((text, kept)) if *text == tip.text => *kept,
                             _ => {
-                                self.chrome.pointer_tip = Some((tip.text.clone(), at));
+                                self.parts.pointer_tip = Some((tip.text.clone(), at));
                                 at
                             }
                         }
                     }
                 };
-                self.chrome.tooltip.set_placement(tip.placement);
-                self.chrome.tooltip.hover(anchor, tip.text);
+                self.parts.tooltip.set_placement(tip.placement);
+                self.parts.tooltip.hover(anchor, tip.text);
             }
             None => {
-                self.chrome.pointer_tip = None;
-                self.chrome.tooltip.leave();
+                self.parts.pointer_tip = None;
+                self.parts.tooltip.leave();
             }
         }
         // In the status bar's font, a step smaller than the text it hangs
         // over, so a tooltip reads as a hint rather than as more content.
-        let font = self.small_chrome_font();
-        let tooltip = &mut self.chrome.tooltip;
+        let font = self.small_ui_font();
+        let tooltip = &mut self.parts.tooltip;
         let bounds = frame.bounds();
         frame.with_font(&font, |frame| tooltip.draw(frame, bounds, theme));
         // Screen readers read it while it shows, as misty's own pages do.
@@ -127,12 +127,12 @@ impl App {
         if let Input::PointerButton(button) = input {
             let (x, y) = (button.position.x, button.position.y);
             if button.pressed
-                && (self.chrome.dialog_open() || self.edge_resize_direction(x, y).is_some())
+                && (self.parts.dialog_open() || self.edge_resize_direction(x, y).is_some())
             {
                 return false;
             }
         }
-        let Some((_, bar)) = &mut self.chrome.title_bar else {
+        let Some((_, bar)) = &mut self.parts.title_bar else {
             return false;
         };
         let answer = bar.handle(input, cx);
@@ -142,7 +142,7 @@ impl App {
             TitleBarResponse::Close => self.runtime.exit.requested = true,
             TitleBarResponse::OpenMenu => self.toggle_menu(0),
             TitleBarResponse::OpenMenuTitle(index) => {
-                if self.chrome.menus.open != Some(index) {
+                if self.parts.menus.open != Some(index) {
                     self.toggle_menu(index);
                 }
                 return true;
@@ -177,13 +177,13 @@ impl App {
     /// What the title bar has at `(x, y)` as it was last drawn, or `None`
     /// off it.
     pub(in crate::window) fn title_bar_hit(&self, x: f32, y: f32) -> Option<TitleBarHit> {
-        let (_, bar) = self.chrome.title_bar.as_ref()?;
+        let (_, bar) = self.parts.title_bar.as_ref()?;
         bar.hit_test(Point::new(x, y))
     }
 
     /// Where the open menu drops from: its title, or the hamburger button.
     pub(in crate::window) fn menu_anchor(&self, index: usize) -> Option<Rect> {
-        let (_, bar) = self.chrome.title_bar.as_ref()?;
+        let (_, bar) = self.parts.title_bar.as_ref()?;
         match self.config.menu_style {
             MenuStyle::Classic => bar.menu_title(index),
             MenuStyle::Modern => bar.menu_button(),

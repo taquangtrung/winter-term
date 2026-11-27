@@ -57,7 +57,7 @@ impl App {
     /// Route one key into the password dialog: `Enter` hands the password
     /// to sudo and, once taken, opens the browser as root.
     pub(in crate::window) fn handle_password_key(&mut self, key: &Key) {
-        let Some(Overlay::Password(input)) = &mut self.chrome.overlay else {
+        let Some(Overlay::Password(input)) = &mut self.parts.overlay else {
             return;
         };
         self.dirty = true;
@@ -65,14 +65,14 @@ impl App {
             EditOutcome::Submit => {
                 let password = input.field.text().to_string();
                 let then = input.then.clone();
-                self.chrome.overlay = None;
+                self.parts.overlay = None;
                 match remote::sudo_authenticate(&password) {
                     Ok(()) => self.open_browser_at(then),
                     Err(RemoteError::Failed(reason)) => self.notify(HostNotice::SudoFailed(reason)),
                     Err(RemoteError::NeedsPassword) => self.notify(HostNotice::SudoRefused),
                 }
             }
-            EditOutcome::Cancel => self.chrome.overlay = None,
+            EditOutcome::Cancel => self.parts.overlay = None,
             _ => {}
         }
     }
@@ -118,9 +118,9 @@ mod tests {
         assert_eq!(view.label, PASSWORD_LABEL);
 
         app.handle_password_key(&press(KeyCode::Escape));
-        assert!(app.chrome.password_input().is_none());
+        assert!(app.parts.password_input().is_none());
         assert!(
-            app.chrome.picker().is_none(),
+            app.parts.picker().is_none(),
             "nothing is browsed without the password"
         );
     }

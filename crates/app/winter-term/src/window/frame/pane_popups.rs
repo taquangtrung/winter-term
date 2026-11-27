@@ -41,12 +41,12 @@ pub(in crate::window) struct PanePopups {
 impl App {
     /// Draw each pane's popups over `frame`.
     pub(in crate::window) fn draw_pane_popups(&mut self, frame: &mut Frame) {
-        if self.chrome.pane_popups.is_empty() {
+        if self.parts.pane_popups.is_empty() {
             return;
         }
         let theme = ui_theme(self.renderer.as_ref());
         let bounds = frame.bounds();
-        for popups in &self.chrome.pane_popups {
+        for popups in &self.parts.pane_popups {
             if let Some(view) = &popups.drop_list {
                 let (left, top) = view.origin;
                 let (cell_width, cell_height) = view.cell;

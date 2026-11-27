@@ -508,7 +508,7 @@ mod tests {
         );
         assert!(!app.input.is_sequence_pending());
         assert!(log.borrow().is_empty());
-        let notice = app.chrome.notice_text();
+        let notice = app.parts.notice_text();
         assert_eq!(notice, Some("M-g x is undefined"));
     }
 
@@ -517,7 +517,7 @@ mod tests {
         let (mut app, tab, _) = app_with_editor(EditorKind::Dir);
         app.route_sequence_key(tab, &alt('g'));
         app.route_sequence_key(tab, &Key::plain(KeyCode::Char('r')));
-        let notice = app.chrome.notice_text();
+        let notice = app.parts.notice_text();
         assert_eq!(notice, Some("M-g r is undefined"));
     }
 
@@ -530,7 +530,7 @@ mod tests {
             Some(false)
         );
         assert!(!app.input.is_sequence_pending());
-        assert!(app.chrome.notice_text().is_none());
+        assert!(app.parts.notice_text().is_none());
     }
 
     #[test]

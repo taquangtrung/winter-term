@@ -168,7 +168,7 @@ impl App {
     /// Open the picker `typed`, its query starting as `initial`.
     pub(in crate::window) fn open_typed(&mut self, typed: Typed, initial: &str) {
         self.open_picker(Box::new(typed));
-        if let Some(picker) = self.chrome.picker_mut() {
+        if let Some(picker) = self.parts.picker_mut() {
             picker.paste(initial, std::time::Instant::now());
         }
     }
@@ -373,15 +373,15 @@ mod tests {
         let mut app = App::new();
         app.open_recent_list();
         assert!(
-            !app.chrome.picker().expect("open").view().panel,
+            !app.parts.picker().expect("open").view().panel,
             "hidden at first"
         );
         app.press_in_picker("F6");
-        assert!(app.chrome.picker().expect("open").view().panel);
+        assert!(app.parts.picker().expect("open").view().panel);
         app.press_in_picker("ESC");
         app.open_recent_list();
         assert!(
-            app.chrome.picker().expect("open").view().panel,
+            app.parts.picker().expect("open").view().panel,
             "shown again next time"
         );
     }

@@ -1,4 +1,4 @@
-//! What the window's chrome says of its tabs: their names, the tooltip for
+//! What the window's tab bar says of its tabs: their names, the tooltip for
 //! what the pointer rests on, and the tab commands. The title bar itself is
 //! misty's (see [`crate::window::frame::title_bar`]); the menus live in
 //! [`crate::window::menus`], the right-click menu in
@@ -338,13 +338,13 @@ impl App {
             StripHit::None => {}
         }
         let window_button = |button: WindowButton| {
-            let (_, bar) = self.chrome.title_bar.as_ref()?;
+            let (_, bar) = self.parts.title_bar.as_ref()?;
             bar.button_rect(button)
         };
         let title_bar = match self.title_bar_hit(cx, cy) {
             Some(TitleBarHit::MenuButton) => {
                 let rect = self
-                    .chrome
+                    .parts
                     .title_bar
                     .as_ref()
                     .and_then(|(_, bar)| bar.menu_button());
@@ -372,10 +372,10 @@ impl App {
         if let Some((label, rect)) = title_bar {
             return Some(below(label.to_string(), rect));
         }
-        if let Some(part) = self.chrome.status_hover {
+        if let Some(part) = self.parts.status_hover {
             let text = match part {
                 StatusHover::Mode => self.mode_tooltip(),
-                StatusHover::Bell => Some(match self.chrome.notifier.log().unread() {
+                StatusHover::Bell => Some(match self.parts.notifier.log().unread() {
                     0 => "Notifications".to_string(),
                     1 => "1 unread notification".to_string(),
                     n => format!("{n} unread notifications"),
@@ -409,7 +409,7 @@ impl App {
     pub(in crate::window) fn gutter_row_at(&self, x: f32, y: f32) -> Option<(TabId, usize)> {
         let point = misty::Point::new(x, y);
         let (tab, strip) = self
-            .chrome
+            .parts
             .gutter_strips
             .iter()
             .find(|(_, strip)| strip.contains(point))?;
@@ -421,11 +421,7 @@ impl App {
     /// terminal command's status, or what an editor's mark means.
     fn gutter_tooltip(&self, x: f32, y: f32) -> Option<(String, Rect)> {
         let (tab, row) = self.gutter_row_at(x, y)?;
-        let (_, strip) = self
-            .chrome
-            .gutter_strips
-            .iter()
-            .find(|(at, _)| *at == tab)?;
+        let (_, strip) = self.parts.gutter_strips.iter().find(|(at, _)| *at == tab)?;
         let cell_h = self.renderer.as_ref()?.cell_size().1;
         let text = match self.open_tabs.terminal(&tab) {
             Some(terminal) => crate::window::terminal::command_marks::mark_tooltip(terminal, row)?,
@@ -505,7 +501,7 @@ impl App {
     }
 
     /// Pixel height of the title bar's band along the window's top.
-    pub(in crate::window) fn top_chrome_height(&self) -> f32 {
+    pub(in crate::window) fn top_bars_height(&self) -> f32 {
         self.title_bar_height()
     }
 
@@ -857,7 +853,7 @@ mod tests {
 
         impl Editor for NormalEditor {}
         app.show_editor(EditorKind::Text, Box::new(NormalEditor));
-        app.chrome.status_hover = Some(StatusHover::Mode);
+        app.parts.status_hover = Some(StatusHover::Mode);
         app.input.pointer.cursor_pos = (12.0, 500.0);
         let tip = app.hover_tooltip().expect("a tooltip");
         assert_eq!(tip.text, "Normal mode");
@@ -914,7 +910,7 @@ mod tests {
         );
         app.tabs.strip_hover = StripHit::None;
 
-        app.chrome.status_hover = Some(StatusHover::Bell);
+        app.parts.status_hover = Some(StatusHover::Bell);
         assert_eq!(text(&app), Some("Notifications".to_string()));
 
         // A link takes priority, and hangs off the pointer.

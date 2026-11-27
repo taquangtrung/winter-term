@@ -254,7 +254,7 @@ impl App {
     pub(in crate::window) fn sync_strips(&mut self) {
         let areas = self.strip_areas();
         let focused_pane = self.active_pane();
-        let mut old = std::mem::take(&mut self.chrome.strips);
+        let mut old = std::mem::take(&mut self.parts.strips);
         let mut strips = Vec::with_capacity(areas.len());
         for (area, rect) in areas {
             let reuse = old
@@ -284,20 +284,20 @@ impl App {
             );
             // The accent takes over the border along the strip's top.
             if let StripKind::Tabs(tabs) = &mut strip.kind {
-                tabs.set_accent_overhang(border_above(rect, &self.chrome.drawn_separators));
+                tabs.set_accent_overhang(border_above(rect, &self.parts.drawn_separators));
             }
             strip.rect = rect;
             strips.push(strip);
         }
-        self.chrome.strips = strips;
+        self.parts.strips = strips;
     }
 
     /// Draw every pane's strip over `frame`, as [`Self::sync_strips`] last
     /// left them, and where a tab dragged off its strip would go.
     pub(in crate::window) fn draw_strips(&mut self, frame: &mut Frame) {
         let theme = ui_theme(self.renderer.as_ref());
-        let dragging = self.chrome.tab_drag;
-        for (index, pane) in self.chrome.strips.iter_mut().enumerate() {
+        let dragging = self.parts.tab_drag;
+        for (index, pane) in self.parts.strips.iter_mut().enumerate() {
             // Nothing is dropped into a panel.
             let marker = dragging
                 .filter(|_| pane.region == Region::Main)
@@ -340,14 +340,14 @@ impl App {
                 .layout()
                 .divider_at(x, y, self.viewport_rect())
                 .is_some();
-            if button.pressed && (on_divider || self.chrome.dialog_open()) {
+            if button.pressed && (on_divider || self.parts.dialog_open()) {
                 return false;
             }
         }
         let moved = matches!(input, Input::PointerMoved(_) | Input::PointerLeft);
         let mut sidebar_answer = None;
         let mut tab_answer = None;
-        for (index, pane) in self.chrome.strips.iter_mut().enumerate() {
+        for (index, pane) in self.parts.strips.iter_mut().enumerate() {
             match &mut pane.kind {
                 StripKind::Sidebar(bar) => {
                     let response = bar.handle(input, cx);
@@ -375,7 +375,7 @@ impl App {
     /// Do what a screen reader's `action` on a strip asks, as a click there
     /// would; whether a strip took it.
     pub(in crate::window) fn strips_access_action(&mut self, action: AccessAction) -> bool {
-        for (index, pane) in self.chrome.strips.iter_mut().enumerate() {
+        for (index, pane) in self.parts.strips.iter_mut().enumerate() {
             match &mut pane.kind {
                 StripKind::Sidebar(bar) => {
                     let response = bar.access_action(strip_id(index), action);
@@ -417,7 +417,7 @@ impl App {
     fn act_on_strip(&mut self, index: usize, response: TabStripResponse, moved: bool) -> bool {
         // What the answer names, read off the strip before the layout
         // changes under it.
-        let pane = &self.chrome.strips[index];
+        let pane = &self.parts.strips[index];
         if let Region::Panel(_) = pane.region {
             return self.act_on_switcher(index, response, moved);
         }
@@ -464,12 +464,12 @@ impl App {
                 }
             }
             TabStripResponse::Dragging(drag) => {
-                self.chrome.tab_drag = self.tab_dragging(index, drag);
+                self.parts.tab_drag = self.tab_dragging(index, drag);
                 self.dirty = true;
                 return true;
             }
             TabStripResponse::DroppedOutside(drag) => {
-                self.chrome.tab_drag = None;
+                self.parts.tab_drag = None;
                 if let Some(dragging) = self.tab_dragging(index, drag) {
                     let drop = self.drop_at(dragging.point);
                     self.drop_tab(dragging.tab, drop);
@@ -491,7 +491,7 @@ impl App {
     /// Carry out what a panel's switcher, strip `index`, answered: a view
     /// chosen. Its views never close or move, so a drag only snaps back.
     fn act_on_switcher(&mut self, index: usize, response: TabStripResponse, moved: bool) -> bool {
-        let pane = &self.chrome.strips[index];
+        let pane = &self.parts.strips[index];
         match response {
             TabStripResponse::Activated(id) => {
                 if let Some(view) = pane.winter(id) {
@@ -500,7 +500,7 @@ impl App {
                 }
             }
             TabStripResponse::Dragging(_) | TabStripResponse::DroppedOutside(_) => {
-                self.chrome.tab_drag = None;
+                self.parts.tab_drag = None;
             }
             TabStripResponse::Close(_) | TabStripResponse::Moved(_) => {}
             TabStripResponse::Handled => {
@@ -518,7 +518,7 @@ impl App {
 
     /// When the strips next need drawing for a spinner's turn.
     pub(in crate::window) fn strips_deadline(&mut self, cx: &mut EventCx<'_>) -> Option<Instant> {
-        self.chrome
+        self.parts
             .strips
             .iter_mut()
             .filter_map(|pane| match &mut pane.kind {
@@ -531,7 +531,7 @@ impl App {
     /// What the strips have at `(x, y)` as last drawn.
     pub(in crate::window) fn strip_hit(&self, x: f32, y: f32) -> StripHit {
         let point = Point::new(x, y);
-        for pane in &self.chrome.strips {
+        for pane in &self.parts.strips {
             match &pane.kind {
                 StripKind::Sidebar(bar) => {
                     if let Some(tab) = bar.hit_tab(point) {
@@ -564,18 +564,15 @@ impl App {
     /// close button, or a button.
     pub(in crate::window) fn strip_part_rect(&self, x: f32, y: f32) -> Option<Rect> {
         let point = Point::new(x, y);
-        self.chrome
-            .strips
-            .iter()
-            .find_map(|pane| match &pane.kind {
-                StripKind::Sidebar(bar) => bar.part_rect(point),
-                StripKind::Tabs(strip) => strip.part_rect(point),
-            })
+        self.parts.strips.iter().find_map(|pane| match &pane.kind {
+            StripKind::Sidebar(bar) => bar.part_rect(point),
+            StripKind::Tabs(strip) => strip.part_rect(point),
+        })
     }
 
     /// Whether `tab`'s strip cut its title short in the last frame.
     pub(in crate::window) fn strip_title_cut(&self, tab: TabId) -> bool {
-        self.chrome
+        self.parts
             .strips
             .iter()
             .find(|pane| pane.has(tab))
@@ -612,7 +609,7 @@ impl App {
 
     /// The tab misty says is dragged off strip `index`.
     fn tab_dragging(&self, index: usize, drag: TabDrag) -> Option<TabDragging> {
-        let tab = self.chrome.strips.get(index)?.winter(drag.tab)?;
+        let tab = self.parts.strips.get(index)?.winter(drag.tab)?;
         Some(TabDragging {
             point: drag.position,
             tab,
@@ -623,7 +620,7 @@ impl App {
     /// gap there, or by the pane under it.
     fn drop_at(&self, point: Point) -> TabDrop {
         let strip = self
-            .chrome
+            .parts
             .strips
             .iter()
             .find(|pane| pane.contains(point.x, point.y));
@@ -642,7 +639,7 @@ impl App {
     /// to split it toward, or its center to join its tabs.
     fn drop_zone(&self, drag: TabDragging) -> Option<(misty::Rect, DropZone)> {
         let (x, y) = (drag.point.x, drag.point.y);
-        if self.chrome.strips.iter().any(|pane| pane.contains(x, y)) {
+        if self.parts.strips.iter().any(|pane| pane.contains(x, y)) {
             return None;
         }
         let (target, rect) = self.pane_at_pixel(x, y)?;
@@ -708,7 +705,7 @@ mod tests {
 
     /// The Winter tabs on the first strip, in order, and the one shown.
     fn first_strip(app: &App) -> (Vec<TabId>, Option<TabId>) {
-        let pane = &app.chrome.strips[0];
+        let pane = &app.parts.strips[0];
         let StripKind::Tabs(strip) = &pane.kind else {
             panic!("expected tab strip");
         };
@@ -776,7 +773,7 @@ mod tests {
         let second = app.layout().focused();
         app.sync_strips();
         let owners: Vec<Vec<TabId>> = app
-            .chrome
+            .parts
             .strips
             .iter()
             .map(|pane| pane.tabs.iter().map(|(tab, _)| *tab).collect())

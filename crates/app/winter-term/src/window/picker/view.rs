@@ -39,7 +39,7 @@ impl App {
         // window while it is drawn in it.
         let theme = ui_theme(self.renderer.as_ref()).clone();
         let cell_width = frame.cell_metrics().width;
-        let Some(quick) = self.chrome.quick_pick_mut() else {
+        let Some(quick) = self.parts.quick_pick_mut() else {
             return;
         };
         quick.set_placement(placement(view.placement));
@@ -91,7 +91,7 @@ impl App {
         cx: &mut EventCx<'_>,
     ) -> bool {
         let focused = self.layout().focused();
-        let Some(quick) = self.chrome.quick_pick_mut() else {
+        let Some(quick) = self.parts.quick_pick_mut() else {
             return false;
         };
         let reply = quick.handle(input, cx);

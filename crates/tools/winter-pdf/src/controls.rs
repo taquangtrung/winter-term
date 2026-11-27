@@ -230,7 +230,7 @@ impl PdfEditor {
 
     /// A click on the toolbar or the open outline under it, at `at`:
     /// `None` for one on the pages.
-    pub(super) fn on_chrome_mouse(&mut self, at: Point) -> Option<EditorOutcome> {
+    pub(super) fn on_controls_mouse(&mut self, at: Point) -> Option<EditorOutcome> {
         // The window answers a press on a button of the toolbar itself (see
         // `on_toolbar`); anything else that lands on its row, a drag across
         // it included, does nothing.

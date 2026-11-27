@@ -203,7 +203,7 @@ impl App {
 
     /// Whether the picker open is `id`.
     pub(in crate::window) fn is_picker_open(&self, id: &str) -> bool {
-        self.chrome.picker().is_some_and(|picker| picker.id() == id)
+        self.parts.picker().is_some_and(|picker| picker.id() == id)
     }
 
     /// Open the last picker session closed, as it was.
@@ -237,7 +237,7 @@ impl App {
     /// Route `key` to the open picker: its own table first, then the table
     /// of its source's actions, then the source and the query.
     pub(in crate::window) fn press_picker_key(&mut self, key: &Key, focused: TabId) {
-        let Some(quick) = self.chrome.quick_pick_mut() else {
+        let Some(quick) = self.parts.quick_pick_mut() else {
             return;
         };
         let reply = match find(&KEYS, key) {
@@ -266,7 +266,7 @@ impl App {
         let focused = self.layout().focused();
         let now = Instant::now();
         for key in typed {
-            let Some(picker) = self.chrome.picker_mut() else {
+            let Some(picker) = self.parts.picker_mut() else {
                 return;
             };
             let reply = picker.key(key, cx, now);
@@ -276,7 +276,7 @@ impl App {
 
     /// Text pasted while a picker is open goes to its query.
     pub(in crate::window) fn paste_into_picker(&mut self, text: &str) {
-        if let Some(picker) = self.chrome.picker_mut() {
+        if let Some(picker) = self.parts.picker_mut() {
             picker.paste(text, Instant::now());
             self.dirty = true;
         }
@@ -291,7 +291,7 @@ impl App {
     pub(in crate::window) fn tick_picker(&mut self, now: Instant) -> Option<Instant> {
         let panel_again = self.take_panel_preview();
         let focused = self.layout().focused();
-        let picker = self.chrome.picker_mut()?;
+        let picker = self.parts.picker_mut()?;
         let kind = picker.preview_kind();
         let query = picker.query().to_string();
         let tick = picker.tick(now);
@@ -347,7 +347,7 @@ impl App {
     /// the picker keeping its session, and carry the outcome out, an answer
     /// to whoever asked.
     fn finish_picker(&mut self, outcome: WindowOutcome, focused: TabId) {
-        let Some(overlay) = self.chrome.take_picker_overlay() else {
+        let Some(overlay) = self.parts.take_picker_overlay() else {
             return;
         };
         self.remember_choice(&overlay);
@@ -424,7 +424,7 @@ impl App {
             self.tick_picker(Instant::now() + SETTLE_PAST);
             self.tell_extension_queries();
             let working = self
-                .chrome
+                .parts
                 .picker()
                 .is_some_and(|picker| picker.view().status == misty::picker::Status::Working);
             if !working || Instant::now() > deadline {
@@ -455,7 +455,7 @@ impl App {
 
     /// The labels of the open picker's rows on screen.
     pub(in crate::window) fn picker_labels(&self) -> Vec<String> {
-        self.chrome
+        self.parts
             .picker()
             .map(|picker| {
                 picker

@@ -60,7 +60,7 @@ impl App {
         let alpha = renderer.theme().background_alpha;
         frame.clear(Rgba::new(background.r, background.g, background.b, alpha));
         let font = renderer.grid_font();
-        for paint in &self.chrome.drawn_panes {
+        for paint in &self.parts.drawn_panes {
             let origin = Point::new(paint.origin.0, paint.origin.1);
             frame.draw_cells_in(paint, origin, &font, theme);
             for fill in &paint.fills {
@@ -78,8 +78,8 @@ impl App {
     /// the dim of the words beside them, turning in step from when the first
     /// showed.
     fn draw_spinners(&mut self, frame: &mut Frame) {
-        if self.chrome.spinner_slots.is_empty() {
-            self.chrome.spinner_epoch = None;
+        if self.parts.spinner_slots.is_empty() {
+            self.parts.spinner_epoch = None;
             return;
         }
         let Some(renderer) = &self.renderer else {
@@ -88,8 +88,8 @@ impl App {
         let theme = renderer.theme();
         // The cell grid's dim mixes in the background's share; this the text's.
         let color = mix(theme.foreground, theme.background, 1.0 - PAGE_DIM_MIX);
-        let epoch = *self.chrome.spinner_epoch.get_or_insert_with(Instant::now);
-        for slot in &self.chrome.spinner_slots {
+        let epoch = *self.parts.spinner_epoch.get_or_insert_with(Instant::now);
+        for slot in &self.parts.spinner_slots {
             frame.draw_spinner(epoch, *slot, slot.y, color);
         }
     }
@@ -106,12 +106,12 @@ impl App {
     /// focused strip's accent, which takes its top border over.
     pub(in crate::window) fn draw_separators(&self, frame: &mut Frame) {
         let accents: Vec<Rect> = self
-            .chrome
+            .parts
             .strips
             .iter()
             .filter_map(|strip| strip.accent_rect())
             .collect();
-        for fill in &self.chrome.drawn_separators {
+        for fill in &self.parts.drawn_separators {
             for part in uncovered(fill.rect, &accents) {
                 frame.fill_rect(part, fill.color);
             }

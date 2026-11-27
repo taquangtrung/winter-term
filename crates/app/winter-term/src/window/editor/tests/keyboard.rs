@@ -23,7 +23,7 @@ fn test_the_stop_key_stops_a_busy_editor_and_is_the_editor_s_own_when_idle() {
         }),
     );
     assert!(app.offer_key_to_editor(tab, &STOP_TASKS_KEY));
-    let notice = app.chrome.notice_text();
+    let notice = app.parts.notice_text();
     assert_eq!(notice, Some("stopping sleep 30"));
     assert!(
         app.host.jobs.long_jobs().is_empty(),
@@ -56,7 +56,7 @@ fn test_f1_h_lists_the_focused_editor_s_own_keys() {
     let tab = app.show_page(EditorKind::Sys, Box::new(SysEditor::new()));
     app.open_tab_keys(tab);
     app.settle_picker();
-    let view = app.chrome.picker().expect("the list opens").view();
+    let view = app.parts.picker().expect("the list opens").view();
     assert_eq!(view.title, "Keys: Resource Monitor");
     let refresh = view
         .rows
@@ -70,10 +70,10 @@ fn test_f1_h_lists_the_focused_editor_s_own_keys() {
 fn test_the_browser_chord_pressed_twice_puts_it_away() {
     let mut app = App::new();
     app.open_file_browser();
-    assert!(app.chrome.picker().is_some());
+    assert!(app.parts.picker().is_some());
     app.open_file_browser();
     assert!(
-        app.chrome.picker().is_none(),
+        app.parts.picker().is_none(),
         "the same chord toggles it off"
     );
 }

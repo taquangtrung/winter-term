@@ -39,8 +39,8 @@ impl App {
     /// Draw the find card the last frame worked out over `frame`, and keep
     /// where it went for the pointer.
     pub(in crate::window) fn draw_find(&mut self, frame: &mut Frame) {
-        let Some(view) = self.chrome.drawn_find.clone() else {
-            self.chrome.find_rect = None;
+        let Some(view) = self.parts.drawn_find.clone() else {
+            self.parts.find_rect = None;
             return;
         };
         let theme = ui_theme(self.renderer.as_ref());
@@ -60,7 +60,7 @@ impl App {
         );
         let popup = Popup::new(anchor, width, height, PopupSide::Below, frame.bounds());
         popup.draw(frame, theme);
-        self.chrome.find_rect = Some(popup.rect());
+        self.parts.find_rect = Some(popup.rect());
         let content = popup.content(&theme.shape, scale_factor);
         let label = StyledText::from(
             Span::new(view.label.as_str(), TextColor::Token(ThemeToken::Muted)).bold(),
@@ -117,7 +117,7 @@ impl App {
 
     /// Whether `(x, y)` is on the find card as last drawn.
     pub(in crate::window) fn find_card_at(&self, x: f32, y: f32) -> bool {
-        self.chrome
+        self.parts
             .find_rect
             .is_some_and(|rect| rect.contains(Point::new(x, y)))
     }

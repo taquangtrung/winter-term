@@ -313,21 +313,21 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
             title: None,
         },
     };
-    app.chrome.overlay = Some(Overlay::EditorPrompt(Box::new(prompt)));
+    app.parts.overlay = Some(Overlay::EditorPrompt(Box::new(prompt)));
     assert!(app.find_target().is_none(), "a question is not a search");
     let dialog = app.input_view().expect("an editor's question");
     assert_eq!(dialog.label, "find");
     assert_eq!(dialog.input.as_deref(), Some("hello"));
     assert_eq!(dialog.caret, 5);
 
-    app.chrome.overlay = Some(Overlay::ThemeName(winter_field::Field::line("dracula")));
+    app.parts.overlay = Some(Overlay::ThemeName(winter_field::Field::line("dracula")));
     assert!(app.find_target().is_none());
     let dialog = app.input_view().expect("the theme name question");
     assert_eq!(dialog.label, "New theme name");
     assert_eq!(dialog.input.as_deref(), Some("dracula"));
 
     // An editor's search is typed in the find popup, not a dialog.
-    app.chrome.overlay = Some(Overlay::EditorPrompt(Box::new(editor::ActivePrompt {
+    app.parts.overlay = Some(Overlay::EditorPrompt(Box::new(editor::ActivePrompt {
         origin: None,
         buttons: None,
         query_buttons: None,
@@ -355,7 +355,7 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
     );
 
     // And so is the terminal's own `/` line.
-    app.chrome.overlay = None;
+    app.parts.overlay = None;
     app.input.keys.prefix = PendingPrefix::SearchInput;
     app.term.search.reverse = false;
     app.term.search.query = Some("term".to_string());

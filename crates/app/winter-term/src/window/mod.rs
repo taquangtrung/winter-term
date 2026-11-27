@@ -207,7 +207,7 @@ pub struct App {
     pub(in crate::window) host: EditorHost,
     /// The furniture over the panes: menus, the overlay holding the
     /// keyboard, jump labels, the status bar's hover, and notifications.
-    pub(in crate::window) chrome: Chrome,
+    pub(in crate::window) parts: WindowParts,
     pub(in crate::window) config: Config,
     pub(in crate::window) dirty: bool,
     /// The notifier's tasks standing for the long work under way.
@@ -356,7 +356,7 @@ pub(in crate::window) struct TerminalState {
 /// The furniture the window lays over its panes: what the user reads and
 /// picks from, rather than what a tab holds.
 #[derive(Default)]
-pub(in crate::window) struct Chrome {
+pub(in crate::window) struct WindowParts {
     /// The labels laid over the focused pane to jump with one key, and the
     /// last `f`/`t` jump.
     pub(in crate::window) labels: JumpLabels,

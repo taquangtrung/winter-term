@@ -411,7 +411,7 @@ fn browse_to(app: &mut App, label: &str) {
         .position(|shown| shown == label)
         .unwrap_or_else(|| panic!("no row labelled {label} in {labels:?}"));
     let selected = app
-        .chrome
+        .parts
         .picker()
         .and_then(|picker| picker.view().selected)
         .unwrap_or(0);

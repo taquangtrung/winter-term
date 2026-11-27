@@ -363,12 +363,12 @@ impl ColorOverrides {
                 theme.indexed.push((*idx, c));
             }
         }
-        // The window chrome has no colors of its own to set, so it follows
+        // The window's bars have no colors of their own to set, so they follow
         // the terminal's: a theme with its own background gets a title bar,
         // tabs, and menus that belong with it. One that keeps the preset's
-        // keeps the preset's own chrome too.
+        // keeps the preset's own bars too.
         if (theme.background, theme.foreground) != surface {
-            theme.fit_chrome_to_background();
+            theme.fit_ui_to_background();
         }
     }
 
@@ -507,7 +507,7 @@ pub fn parse_theme_file(text: &str) -> Result<Theme, String> {
 }
 
 /// A built-in theme from its file: every color the file names, laid over a
-/// theme that sets none, with the window chrome derived from them. It has no
+/// theme that sets none, with the window's bars and menus derived from them. It has no
 /// `base`, being one.
 pub(crate) fn builtin_theme(text: &str) -> Theme {
     let kdl: KdlThemeFile = kdl::de::from_str(text).expect("a built-in theme parses");
@@ -515,7 +515,7 @@ pub(crate) fn builtin_theme(text: &str) -> Theme {
     if let Some(colors) = kdl.colors {
         ColorOverrides::from_kdl(colors).apply(&mut theme);
     }
-    theme.fit_chrome_to_background();
+    theme.fit_ui_to_background();
     theme
 }
 

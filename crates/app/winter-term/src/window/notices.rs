@@ -14,7 +14,7 @@ use winter_model::layout::TabId;
 use winter_model::notify::{LoggedNotice, Notice, Severity};
 
 use crate::window::App;
-use crate::window::Chrome;
+use crate::window::WindowParts;
 use crate::window::editor::EditorKind;
 use crate::window::input::overlay::{ErrorChoice, ErrorDialog, Overlay};
 use crate::window::notice::WindowNotice;
@@ -113,15 +113,12 @@ impl App {
         match notice.severity {
             Severity::Error => {
                 if notice.logged {
-                    self.chrome
-                        .notifier
-                        .log_mut()
-                        .record(&notice, now_seconds());
+                    self.parts.notifier.log_mut().record(&notice, now_seconds());
                 }
                 self.report_error(tab, &notice);
             }
             Severity::Info | Severity::Refusal | Severity::Warning => {
-                self.chrome
+                self.parts
                     .notifier
                     .post(&notice, Instant::now(), now_seconds());
             }
@@ -144,7 +141,7 @@ impl App {
 
     /// Route one key into the error dialog: a button's key carries it out.
     pub(in crate::window) fn handle_error_dialog_key(&mut self, key: &Key) {
-        let Some(Overlay::Error(dialog)) = &mut self.chrome.overlay else {
+        let Some(Overlay::Error(dialog)) = &mut self.parts.overlay else {
             return;
         };
         let choice = dialog.buttons.on_key(key);
@@ -158,7 +155,7 @@ impl App {
     /// action handed back to its editor, or the details copied.
     pub(in crate::window) fn choose_on_error_dialog(&mut self, choice: ErrorChoice) {
         let Some(Overlay::Error(dialog)) = self
-            .chrome
+            .parts
             .overlay
             .take_if(|overlay| matches!(overlay, Overlay::Error(_)))
         else {
@@ -194,10 +191,10 @@ impl App {
     /// Take the toasts whose time is up off screen, and return when the next
     /// one is due, for the event loop to wake at.
     pub(in crate::window) fn expire_toasts(&mut self, now: Instant) -> Option<Instant> {
-        if self.chrome.notifier.toasts_mut().expire(now) {
+        if self.parts.notifier.toasts_mut().expire(now) {
             self.dirty = true;
         }
-        self.chrome.notifier.toasts().next_expiry()
+        self.parts.notifier.toasts().next_expiry()
     }
 }
 
@@ -218,14 +215,14 @@ impl App {
                 .then_some(Severity::Warning),
             status_bar: self.status_bar_visible(),
         };
-        self.chrome.notifier.set_routing(routing);
+        self.parts.notifier.set_routing(routing);
     }
 
     /// What the status bar says of the oldest task under way: who runs it,
     /// what it is doing and how far it has got, how many more run, and how
     /// to stop it when it may be stopped.
     fn progress_line(&self) -> Option<String> {
-        let tasks = self.chrome.notifier.tasks();
+        let tasks = self.parts.notifier.tasks();
         let task = tasks.first()?;
         let mut line = attributed(task.source(), task.title());
         if let Some(step) = task.step() {
@@ -248,7 +245,7 @@ impl App {
     /// What the status bar says after its mode: the newest notice not drawn
     /// as a card, else the progress of a program still running.
     pub(in crate::window) fn status_notice(&self) -> Option<StatusNotice> {
-        let newest = self.chrome.notifier.status_message();
+        let newest = self.parts.notifier.status_message();
         match newest {
             Some(toast) => Some(StatusNotice {
                 kind: notice_kind(toast.severity()),
@@ -283,9 +280,9 @@ impl App {
         let bounds = frame.bounds();
         let top = self.viewport_rect().y;
         let area = misty::Rect::new(bounds.x, top, bounds.width, (bounds.height - top).max(0.0));
-        self.chrome
+        self.parts
             .cards
-            .lend(&mut self.chrome.notifier)
+            .lend(&mut self.parts.notifier)
             .draw(frame, area, theme);
     }
 
@@ -297,9 +294,9 @@ impl App {
         cx: &mut misty::EventCx<'_>,
     ) -> bool {
         let answer = self
-            .chrome
+            .parts
             .cards
-            .lend(&mut self.chrome.notifier)
+            .lend(&mut self.parts.notifier)
             .handle(input, cx);
         match answer {
             ToastsResponse::Cancelled(task) => self.cancel_task(task),
@@ -319,9 +316,9 @@ impl App {
         &mut self,
         cx: &mut misty::EventCx<'_>,
     ) -> Option<Instant> {
-        self.chrome
+        self.parts
             .cards
-            .lend(&mut self.chrome.notifier)
+            .lend(&mut self.parts.notifier)
             .about_to_wait(cx)
     }
 }
@@ -337,9 +334,9 @@ impl App {
     pub(in crate::window) fn open_notifications(&mut self) {
         // The page is handed the history as it was before it was read, so
         // it can still mark which it was that had not been.
-        let unread = self.chrome.notification_entries();
-        self.chrome.notifier.log_mut().mark_read();
-        self.chrome.notifier.toasts_mut().dismiss_all();
+        let unread = self.parts.notification_entries();
+        self.parts.notifier.log_mut().mark_read();
+        self.parts.notifier.toasts_mut().dismiss_all();
         let now = now_seconds();
         self.open_page(EditorKind::Notifications, |_| {
             Box::new(NotificationsEditor::new(unread.clone(), now))
@@ -352,7 +349,7 @@ impl App {
 
     /// Hand the history to every Notifications tab, after it changed.
     pub(in crate::window) fn sync_notification_tabs(&mut self) {
-        let entries = self.chrome.notification_entries();
+        let entries = self.parts.notification_entries();
         let now = now_seconds();
         for page in self.open_tabs.own_pages_mut() {
             page.with_kind_mut(|tab: &mut NotificationsEditor| {
@@ -363,18 +360,18 @@ impl App {
 
     /// Forget the history and take the toasts down.
     pub(in crate::window) fn clear_notifications(&mut self) {
-        self.chrome.notifier.log_mut().clear();
-        self.chrome.notifier.toasts_mut().dismiss_all();
+        self.parts.notifier.log_mut().clear();
+        self.parts.notifier.toasts_mut().dismiss_all();
         self.sync_notification_tabs();
         self.notify(WindowNotice::NotificationsCleared);
     }
 }
 
 // ========================================================================
-// Chrome
+// WindowParts
 // ========================================================================
 
-impl Chrome {
+impl WindowParts {
     /// The text of the newest notice still on screen, the error dialog's
     /// ahead of any toast, for tests that check what was said.
     #[cfg(test)]
@@ -413,18 +410,18 @@ mod tests {
     fn test_an_error_is_reported_in_a_dialog_until_acknowledged() {
         let mut app = App::new();
         app.notify(Notice::error("failed: cannot rebase").from_source("Git"));
-        let dialog = app.chrome.error_dialog().expect("a dialog, not a toast");
+        let dialog = app.parts.error_dialog().expect("a dialog, not a toast");
         assert_eq!(dialog.title, "Git Error");
         assert_eq!(dialog.message(), "failed: cannot rebase");
-        assert!(app.chrome.notifier.toasts().newest().is_none());
+        assert!(app.parts.notifier.toasts().newest().is_none());
         assert_eq!(
-            app.chrome.notifier.log().iter().count(),
+            app.parts.notifier.log().iter().count(),
             1,
             "kept in the history"
         );
 
         app.handle_error_dialog_key(&Key::plain(winter_model::input::KeyCode::Escape));
-        assert!(app.chrome.error_dialog().is_none(), "Esc presses its OK");
+        assert!(app.parts.error_dialog().is_none(), "Esc presses its OK");
     }
 
     #[test]
@@ -435,7 +432,7 @@ mod tests {
             .with_action("abort_rebase", "Abort Rebase")
             .from_source("Git");
         app.notify(notice);
-        let dialog = app.chrome.error_dialog().expect("a dialog");
+        let dialog = app.parts.error_dialog().expect("a dialog");
         assert_eq!(
             dialog.message(),
             "git rebase main failed\n\nCONFLICT (content): Merge conflict in a.rs"
@@ -448,7 +445,7 @@ mod tests {
             .collect();
         assert_eq!(labels, ["OK", "Abort Rebase", "Copy Details"]);
         assert_eq!(
-            app.chrome
+            app.parts
                 .notifier
                 .log()
                 .iter()
@@ -466,12 +463,12 @@ mod tests {
         app.notify(Notice::error("second"));
         app.notify(Notice::error("second"));
         assert_eq!(
-            app.chrome.error_dialog().map(|d| d.summary.as_str()),
+            app.parts.error_dialog().map(|d| d.summary.as_str()),
             Some("first")
         );
         app.handle_error_dialog_key(&Key::plain(winter_model::input::KeyCode::Enter));
         app.open_held_dialog();
-        let next = app.chrome.error_dialog().expect("the next one, not lost");
+        let next = app.parts.error_dialog().expect("the next one, not lost");
         assert_eq!((next.summary.as_str(), next.repeats), ("second", 2));
         assert_eq!(next.shown_title(), "Error (2x)");
     }
@@ -481,12 +478,12 @@ mod tests {
         let mut app = App::new();
         app.notify(Notice::refusal("nothing to undo"));
         assert!(
-            app.chrome.error_dialog().is_none(),
+            app.parts.error_dialog().is_none(),
             "no dialog for a key that did nothing"
         );
-        assert_eq!(app.chrome.notice_text(), Some("nothing to undo"));
-        assert_eq!(app.chrome.notifier.log().iter().count(), 0, "not kept");
-        assert_eq!(app.chrome.status_bell().icon, BELL_ICON);
+        assert_eq!(app.parts.notice_text(), Some("nothing to undo"));
+        assert_eq!(app.parts.notifier.log().iter().count(), 0, "not kept");
+        assert_eq!(app.parts.status_bell().icon, BELL_ICON);
     }
 
     #[test]
@@ -494,16 +491,16 @@ mod tests {
         let mut app = App::new();
         app.notify(Notice::error("push failed"));
         assert_eq!(
-            app.chrome.status_bell().icon,
+            app.parts.status_bell().icon,
             BELL_UNREAD_ICON,
             "dotted, with no count"
         );
         app.handle_error_dialog_key(&Key::plain(winter_model::input::KeyCode::Enter));
 
         app.open_notifications();
-        assert_eq!(app.chrome.status_bell().icon, BELL_ICON);
+        assert_eq!(app.parts.status_bell().icon, BELL_ICON);
         assert!(
-            app.chrome.notice_text().is_none(),
+            app.parts.notice_text().is_none(),
             "the toasts went into the list"
         );
         let tab = app.layout().focused();
@@ -522,7 +519,7 @@ mod tests {
 
         app.clear_notifications();
         assert_eq!(
-            app.chrome.notifier.log().iter().count(),
+            app.parts.notifier.log().iter().count(),
             0,
             "clearing says so unlogged"
         );
@@ -534,7 +531,7 @@ mod tests {
         app.notify(Notice::warning("slow").from_source("Git"));
         app.notify(Notice::info("copied"));
         app.sync_notice_routing();
-        let cards: Vec<_> = app.chrome.notifier.cards().collect();
+        let cards: Vec<_> = app.parts.notifier.cards().collect();
         assert_eq!(cards.len(), 1, "only the warning is a card");
         assert_eq!(cards[0].source(), Some("Git"));
         assert_eq!(
@@ -546,7 +543,7 @@ mod tests {
         app.config.notifications.toasts = false;
         app.sync_notice_routing();
         assert_eq!(
-            app.chrome.notifier.cards().count(),
+            app.parts.notifier.cards().count(),
             0,
             "cards off: all in the bar"
         );
@@ -558,7 +555,7 @@ mod tests {
         app.config.status_bar.enabled = false;
         app.sync_notice_routing();
         assert_eq!(
-            app.chrome.notifier.cards().count(),
+            app.parts.notifier.cards().count(),
             2,
             "no bar: everything is a card"
         );
@@ -570,8 +567,8 @@ mod tests {
         let mut app = App::new();
         app.config.notifications.toasts = false;
         let progress = misty::Progress::new("cargo build").cancellable();
-        let build = app.chrome.notifier.start(progress, Instant::now());
-        app.chrome.notifier.set_step(build, Some("3/10".into()));
+        let build = app.parts.notifier.start(progress, Instant::now());
+        app.parts.notifier.set_step(build, Some("3/10".into()));
         let notice = app.status_notice().expect("the progress");
         assert_eq!(notice.kind, NoticeKind::Progress);
         assert!(
@@ -589,6 +586,6 @@ mod tests {
             app.status_notice().map(|notice| notice.text),
             Some("Copied 1 line, 5 characters".into())
         );
-        assert_eq!(app.chrome.notifier.log().iter().count(), 0);
+        assert_eq!(app.parts.notifier.log().iter().count(), 0);
     }
 }

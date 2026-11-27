@@ -1,4 +1,4 @@
-//! Frame composition: the panes, the chrome, and the canvas's images, put
+//! Frame composition: the panes, the bars and popups, and the canvas's images, put
 //! together for one frame.
 
 use std::collections::HashMap;
@@ -528,9 +528,8 @@ fn fade_scrollbars(
         let Some(view) = views.iter_mut().find(|view| view.rect == pane) else {
             continue;
         };
-        let pinned = (view.focused && window_focused)
-            || hovered_pane == Some(*tab)
-            || view.scrollbar_hover;
+        let pinned =
+            (view.focused && window_focused) || hovered_pane == Some(*tab) || view.scrollbar_hover;
         let state = fades.entry(*tab).or_insert_with(|| ScrollbarState {
             fade: ScrollbarFade::new(),
             offset: view.scroll_offset,
@@ -563,7 +562,7 @@ impl App {
     ) -> Option<Instant> {
         let now = Instant::now();
         let next = self
-            .chrome
+            .parts
             .scrollbar_fades
             .values()
             .filter_map(|state| state.fade.next_frame(self.config.scrollbar, now))
@@ -1002,7 +1001,7 @@ impl App {
                 tab: self.tabs.layout.focused(),
             });
         }
-        let prompt = self.chrome.editor_prompt()?;
+        let prompt = self.parts.editor_prompt()?;
         prompt.typed_search()?;
         Some(FindTarget {
             caret: prompt.field.col(),
@@ -1022,7 +1021,7 @@ impl App {
     /// every match, and the selected row's as the current one, as a `/`
     /// search lights them. `None` while Scout is not open.
     fn scout_highlight_cells(&self, id: TabId) -> Option<(Cells, Cells)> {
-        let picker = self.chrome.picker().filter(|picker| picker.id() == SCOUT)?;
+        let picker = self.parts.picker().filter(|picker| picker.id() == SCOUT)?;
         let query = misty::picker::Query::parse(picker.query());
         if query.is_empty() {
             return Some(Default::default());
@@ -1059,7 +1058,7 @@ impl App {
             return cells;
         }
         let typed = self
-            .chrome
+            .parts
             .editor_prompt()
             .and_then(|prompt| prompt.typed_search())
             .map(|(text, _)| text);
@@ -1207,7 +1206,7 @@ impl App {
         }
         // A list of what can be done at the cursor floats from the asking
         // editor's cursor; one whose editor is not shown is centred instead.
-        if let (Some(view), Some(pick)) = (palette_view.as_mut(), self.chrome.editor_pick())
+        if let (Some(view), Some(pick)) = (palette_view.as_mut(), self.parts.editor_pick())
             && pick.placement == PickPlacement::Cursor
             && pick.origin.is_none()
         {
@@ -1218,20 +1217,20 @@ impl App {
         }
         // A list a transient's choice asked for is drawn where the transient
         // was, at its size.
-        let origin = self.chrome.editor_pick().and_then(|pick| pick.origin);
+        let origin = self.parts.editor_pick().and_then(|pick| pick.origin);
         if let (Some(view), Some(rect)) = (palette_view.as_mut(), origin) {
             view.placement = PickerPlacement::Transient(rect);
-        } else if let (Some(view), Some(picker)) = (palette_view.as_mut(), self.chrome.picker()) {
+        } else if let (Some(view), Some(picker)) = (palette_view.as_mut(), self.parts.picker()) {
             let at_bottom = picker.preview_kind() == misty::picker::PreviewKind::Live
-                || self.chrome.editor_pick().is_some_and(|pick| {
+                || self.parts.editor_pick().is_some_and(|pick| {
                     pick.placement == winter_model::editor::PickPlacement::EditorBottom
                 });
-            let target_tab = self.chrome.editor_pick().map(|p| p.tab).unwrap_or(focused);
+            let target_tab = self.parts.editor_pick().map(|p| p.tab).unwrap_or(focused);
             let anchor = pane_rect_of(&bounds, target_tab);
             // An editor's list is drawn on the editor card in its pane, as
             // its menus are; the window's own palette is centred on the
             // window.
-            let editors = self.chrome.editor_pick().is_some();
+            let editors = self.parts.editor_pick().is_some();
             view.placement = match (at_bottom, editors, anchor) {
                 (true, _, Some(rect)) => PickerPlacement::EditorBottom(rect),
                 (false, true, Some(rect)) => PickerPlacement::Pane(rect),
@@ -1240,7 +1239,7 @@ impl App {
         }
         // An editor's question opens on the editor card in its pane too,
         // where no transient card was left for it.
-        if let (Some(view), Some(prompt)) = (input_view.as_mut(), self.chrome.editor_prompt()) {
+        if let (Some(view), Some(prompt)) = (input_view.as_mut(), self.parts.editor_prompt()) {
             view.pane = pane_rect_of(&bounds, prompt.tab);
         }
         let overlays = self.build_pane_overlays(&rects, renderer.theme());
@@ -1254,7 +1253,7 @@ impl App {
         // Built only for a bar that shows: building it reads the disk.
         // Misty's status bar draws it over the frame.
         let _ = notice;
-        self.chrome.drawn_status =
+        self.parts.drawn_status =
             status_enabled.then(|| self.build_status_bar(mode, renderer.theme(), search, &focused));
         // As tall as misty draws it in its font, so the line above it lands
         // on its top edge.
@@ -1262,21 +1261,21 @@ impl App {
             self.status_bar_height()
                 .unwrap_or_else(|| crate::render::status_bar_height_px(ch))
         });
-        self.chrome.drawn_find = self.find_popup(&rects);
+        self.parts.drawn_find = self.find_popup(&rects);
         // The key menus are sized to, and centred in, the focused pane: the
         // whole of it, its gutter and breadcrumb row too, not just its text.
         let focused_pane = pane_rect_of(&bounds, focused);
         // Misty draws the key menu over the frame, centred in the focused
         // pane, holding where it was dragged and the size it grew to.
-        self.chrome.drawn_transient = self
+        self.parts.drawn_transient = self
             .transient_popup(focused)
             .map(|tr| tr.with_anchor_rect(focused_pane));
         // Misty draws the which-key popup over the frame.
-        self.chrome.drawn_which_key = self.which_key_popup(focused).map(|view| WhichKeyView {
+        self.parts.drawn_which_key = self.which_key_popup(focused).map(|view| WhichKeyView {
             anchor_rect: focused_pane,
             ..view
         });
-        self.chrome.drawn_token_inspect =
+        self.parts.drawn_token_inspect =
             rects
                 .iter()
                 .find(|(id, _)| *id == focused)
@@ -1298,7 +1297,7 @@ impl App {
         // Only where the keys go: a completion list in a pane typed into no
         // longer would answer nothing.
         let keyed = (self.input.focus.window).then_some(focused);
-        self.chrome.pane_popups = editor_paints
+        self.parts.pane_popups = editor_paints
             .iter()
             .map(|paint| PanePopups {
                 completion: paint
@@ -1367,11 +1366,11 @@ impl App {
         // Misty's quick pick draws the picker over the frame.
         self.pickers.drawn = palette_view.take();
         renderer.prepare(status, &placements);
-        self.chrome.drawn_dialog = input_view.take();
+        self.parts.drawn_dialog = input_view.take();
         // Misty draws the toolbars and the panes from what the renderer
         // resolved of them.
         fade_scrollbars(
-            &mut self.chrome.scrollbar_fades,
+            &mut self.parts.scrollbar_fades,
             &rects,
             &mut views,
             hovered_pane,
@@ -1379,15 +1378,15 @@ impl App {
             self.config.scrollbar,
             Instant::now(),
         );
-        self.chrome.drawn_toolbars = views
+        self.parts.drawn_toolbars = views
             .iter()
             .filter_map(|view| view.toolbar.cloned())
             .collect();
-        self.chrome.drawn_panes = views
+        self.parts.drawn_panes = views
             .iter()
             .flat_map(|view| renderer.paint_pane(view))
             .collect();
-        self.chrome.drawn_separators = renderer.paint_separators(&views);
+        self.parts.drawn_separators = renderer.paint_separators(&views);
 
         self.update_ime_anchor(focused);
     }
@@ -1422,7 +1421,7 @@ impl App {
             theme,
         };
         let session = self
-            .chrome
+            .parts
             .picker()
             .map(|picker| (picker.id(), picker.view()));
         let mut view = session
@@ -1450,7 +1449,7 @@ impl App {
     /// which it shows over any search already lit, else the one lit.
     fn status_search(&self) -> Option<StatusSearch> {
         let typed = self
-            .chrome
+            .parts
             .editor_prompt()
             .and_then(|prompt| prompt.typed_search());
         typed

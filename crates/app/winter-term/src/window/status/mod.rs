@@ -187,7 +187,7 @@ impl App {
         // same path here is some other repository, or none.
         let (project, branch) = match (&host, &cwd) {
             (Host::Local, Some(cwd)) => {
-                self.chrome
+                self.parts
                     .place
                     .project_and_branch(*focused, cwd, Instant::now())
             }
@@ -272,7 +272,7 @@ impl App {
                 None => segment,
             });
         }
-        let bell = self.chrome.status_bell();
+        let bell = self.parts.status_bell();
         line.with_segment(
             StatusSegment::new(segment_text(""))
                 .with_icon(bell.icon)
@@ -310,7 +310,7 @@ impl App {
         if self.config.status_bar.progress_details {
             return None;
         }
-        let task = self.chrome.notifier.tasks().first()?;
+        let task = self.parts.notifier.tasks().first()?;
         task.step().map(str::to_owned)
     }
 

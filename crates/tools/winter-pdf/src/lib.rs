@@ -6,14 +6,14 @@
 //!
 //! The viewer's state and its types are here; what it does is split by
 //! topic: [`keys`], [`view`], [`navigate`], [`pages`], [`marks`],
-//! [`chrome`], and the window's side of it in [`editor`]; what it says to
+//! [`controls`], and the window's side of it in [`editor`]; what it says to
 //! the user is typed in `notice` until the window takes it.
 
 #![deny(unsafe_code)]
 #![deny(missing_docs)]
 
 mod caret;
-mod chrome;
+mod controls;
 mod document;
 mod editor;
 mod keys;

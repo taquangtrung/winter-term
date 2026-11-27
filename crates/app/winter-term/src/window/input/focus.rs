@@ -126,7 +126,7 @@ impl App {
     /// The pane drawn as the active one: the focused tab, unless a popup holds
     /// the keyboard over the panes, when every pane is drawn inactive.
     pub(in crate::window) fn active_pane(&self) -> Option<TabId> {
-        match &self.chrome.overlay {
+        match &self.parts.overlay {
             None => Some(self.layout().focused()),
             // A search's popup leaves the pane it searches lit: that pane is
             // still what is being read, and its matches show as they are typed.

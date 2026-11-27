@@ -18,10 +18,10 @@ impl App {
     pub(in crate::window) fn draw_menus(&mut self, frame: &mut Frame) {
         let theme = ui_theme(self.renderer.as_ref());
         let area = frame.bounds();
-        if let Some(menu) = &mut self.chrome.menus.dropdown {
+        if let Some(menu) = &mut self.parts.menus.dropdown {
             menu.draw(frame, area, theme);
         }
-        if let Some(menu) = &mut self.chrome.menus.context {
+        if let Some(menu) = &mut self.parts.menus.context {
             menu.draw(frame, area, theme);
         }
     }
@@ -36,10 +36,10 @@ impl App {
         input: &Input,
         cx: &mut EventCx<'_>,
     ) -> bool {
-        if let Some(menu) = &mut self.chrome.menus.context {
+        if let Some(menu) = &mut self.parts.menus.context {
             return match menu.handle(input, cx) {
                 MenuResponse::Activated(index) => {
-                    let action = self.chrome.menus.context_actions.get(index).cloned();
+                    let action = self.parts.menus.context_actions.get(index).cloned();
                     self.close_context_menu();
                     if let Some(action) = action {
                         self.run_context_action(action);
@@ -56,7 +56,7 @@ impl App {
                 _ => false,
             };
         }
-        let Some(menu) = &mut self.chrome.menus.dropdown else {
+        let Some(menu) = &mut self.parts.menus.dropdown else {
             return false;
         };
         match menu.handle(input, cx) {
@@ -72,8 +72,8 @@ impl App {
                         let (x, y) = (button.position.x, button.position.y);
                         let hit = self.title_bar_hit(x, y);
                         let own = hit == Some(TitleBarHit::MenuButton)
-                            || self.chrome.menus.open.map(TitleBarHit::MenuTitle) == hit;
-                        y < self.top_chrome_height() && !own
+                            || self.parts.menus.open.map(TitleBarHit::MenuTitle) == hit;
+                        y < self.top_bars_height() && !own
                     }
                     _ => false,
                 };

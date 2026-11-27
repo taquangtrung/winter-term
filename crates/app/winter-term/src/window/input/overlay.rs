@@ -14,7 +14,7 @@ use winter_model::layout::TabId;
 use winter_model::notify::Notice;
 
 use crate::window::App;
-use crate::window::Chrome;
+use crate::window::WindowParts;
 use crate::window::editor::{ActivePick, ActivePrompt, PendingClose};
 use crate::window::picker::Preview;
 use crate::window::picker::WindowOutcome;
@@ -305,7 +305,7 @@ impl App {
     pub(in crate::window) fn open_overlay(&mut self, overlay: Overlay) {
         let asker = overlay.unanswered().map(|(tab, _)| tab);
         let refused = asker.is_some_and(|tab| {
-            self.chrome
+            self.parts
                 .overlay
                 .as_ref()
                 .is_some_and(|open| !open.yields_to_editor(tab))
@@ -317,16 +317,16 @@ impl App {
         // A dialog of the window's own waits its turn behind the one open,
         // rather than taking its place; an error already up or waiting is
         // counted again instead.
-        if asker.is_none() && overlay.is_dialog() && self.chrome.dialog_open() {
-            if !self.chrome.count_repeat(&overlay) {
-                self.chrome.held.push_back(overlay);
+        if asker.is_none() && overlay.is_dialog() && self.parts.dialog_open() {
+            if !self.parts.count_repeat(&overlay) {
+                self.parts.held.push_back(overlay);
             }
             self.dirty = true;
             return;
         }
         // Installed before the one it replaces is told it went, so what that
         // editor does on hearing it sees the new overlay in place.
-        let replaced = self.chrome.overlay.replace(overlay);
+        let replaced = self.parts.overlay.replace(overlay);
         if let Some(replaced) = replaced {
             self.overlay_closed(replaced);
         }
@@ -335,10 +335,10 @@ impl App {
 
     /// Open the dialog held back while another was up, once nothing is.
     pub(in crate::window) fn open_held_dialog(&mut self) {
-        if self.chrome.overlay.is_some() {
+        if self.parts.overlay.is_some() {
             return;
         }
-        if let Some(held) = self.chrome.held.pop_front() {
+        if let Some(held) = self.parts.held.pop_front() {
             self.open_overlay(held);
         }
     }
@@ -347,7 +347,7 @@ impl App {
     /// it: an editor question is answered with nothing, the settings page puts
     /// back what it covered.
     pub(in crate::window) fn dismiss_overlay(&mut self) {
-        if let Some(overlay) = self.chrome.overlay.take() {
+        if let Some(overlay) = self.parts.overlay.take() {
             self.overlay_closed(overlay);
         }
         self.dirty = true;
@@ -357,12 +357,12 @@ impl App {
     /// going: nothing is told, as nothing is left to tell.
     pub(in crate::window) fn drop_overlay_of(&mut self, tab: TabId) {
         if self
-            .chrome
+            .parts
             .overlay
             .as_ref()
             .is_some_and(|o| o.belongs_to(tab))
         {
-            self.chrome.overlay = None;
+            self.parts.overlay = None;
             self.host.prompts.debounce = None;
             self.dirty = true;
         }
@@ -397,10 +397,10 @@ impl App {
 }
 
 // ========================================================================
-// Chrome
+// WindowParts
 // ========================================================================
 
-impl Chrome {
+impl WindowParts {
     /// The open picker, if the overlay is one.
     pub(in crate::window) fn picker(&self) -> Option<&Picker<WindowOutcome, Preview>> {
         let Some(Overlay::Picker(overlay)) = &self.overlay else {

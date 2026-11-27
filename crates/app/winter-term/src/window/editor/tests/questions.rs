@@ -13,7 +13,7 @@ fn test_closing_a_pane_buries_its_editors_and_asks_nothing_about_them() {
 
     app.close_pane(tab);
     assert!(
-        app.chrome.close_prompt().is_none(),
+        app.parts.close_prompt().is_none(),
         "unsaved text is not lost"
     );
     assert_eq!(app.layout().shown_tabs(), vec![sibling], "the pane closed");
@@ -34,7 +34,7 @@ fn test_kill_buffer_asks_about_unsaved_text_then_lets_it_go() {
     let tab = app.show_editor(EditorKind::Text, Box::new(UnsavedEditor("main.rs")));
 
     app.kill_buffer(tab);
-    let asked = app.chrome.close_prompt().expect("the question is up");
+    let asked = app.parts.close_prompt().expect("the question is up");
     assert!(
         asked.label.contains("main.rs"),
         "naming it: {}",
@@ -71,7 +71,7 @@ fn test_quitting_asks_about_unsaved_text_in_a_buried_buffer() {
         app.ask_before_quitting(),
         "the buried edits are asked about"
     );
-    let asked = app.chrome.close_prompt().expect("the question is up");
+    let asked = app.parts.close_prompt().expect("the question is up");
     assert!(
         asked.label.contains("main.rs"),
         "naming it: {}",
@@ -98,7 +98,7 @@ fn test_closing_a_tab_with_a_program_running_buries_it_and_killing_it_asks_first
     assert!(busy.buries(tab, Closing::Keep));
 
     busy.kill_buffer(tab);
-    let label = busy.chrome.close_prompt().expect("asked").label.clone();
+    let label = busy.parts.close_prompt().expect("asked").label.clone();
     assert!(label.starts_with("Still running: "), "label: {label}");
     assert!(
         label.ends_with("Closing the terminal stops it."),
@@ -119,7 +119,7 @@ fn test_closing_a_tab_with_a_program_running_buries_it_and_killing_it_asks_first
         "the yes button says what it does"
     );
     let focused = busy
-        .chrome
+        .parts
         .close_prompt()
         .map(|prompt| prompt.buttons.focused());
     assert_eq!(
@@ -128,7 +128,7 @@ fn test_closing_a_tab_with_a_program_running_buries_it_and_killing_it_asks_first
         "Enter stops it: stopping it is what killing the terminal asks"
     );
     assert_eq!(
-        busy.chrome.close_prompt().map(|prompt| prompt.pending),
+        busy.parts.close_prompt().map(|prompt| prompt.pending),
         Some(PendingClose::Kill(tab))
     );
 }
@@ -206,7 +206,7 @@ fn test_quitting_with_a_program_running_asks_and_a_yes_goes_through_without_aski
 
     assert!(app.ask_before_quitting());
     assert_eq!(
-        app.chrome.close_prompt().map(|prompt| prompt.pending),
+        app.parts.close_prompt().map(|prompt| prompt.pending),
         Some(PendingClose::Quit)
     );
     assert!(!app.runtime.exit.requested, "nothing has been closed yet");
@@ -230,7 +230,7 @@ fn test_quitting_declined_keeps_the_window() {
 
     assert!(!app.runtime.exit.requested);
     assert!(!app.runtime.exit.quit_confirmed);
-    assert!(app.chrome.close_prompt().is_none());
+    assert!(app.parts.close_prompt().is_none());
 }
 
 #[test]
@@ -284,12 +284,12 @@ fn test_a_close_question_goes_with_the_tab_it_was_about() {
     // close stayed pending, and the next editor question answered was
     // taken as the answer to it.
     let (mut app, asking, heard) = app_asking();
-    app.chrome.overlay = None;
+    app.parts.overlay = None;
     let unsaved = app.show_editor(EditorKind::Text, Box::new(WaitedEditor));
     assert!(app.ask_before_closing_tab(unsaved));
     app.close_tab_now(unsaved, Closing::Keep);
     assert!(
-        app.chrome.close_prompt().is_none(),
+        app.parts.close_prompt().is_none(),
         "nothing left to ask about"
     );
 
@@ -302,13 +302,13 @@ fn test_a_close_question_goes_with_the_tab_it_was_about() {
 #[test]
 fn test_an_editor_question_cannot_hide_the_hosts_close_question() {
     let (mut app, asking, heard) = app_asking();
-    app.chrome.overlay = None;
+    app.parts.overlay = None;
     let unsaved = app.show_editor(EditorKind::Text, Box::new(WaitedEditor));
     assert!(app.ask_before_closing_tab(unsaved));
 
     app.offer_key_to_editor(asking, &press(KeyCode::Char('x')));
     assert!(
-        app.chrome.close_prompt().is_some(),
+        app.parts.close_prompt().is_some(),
         "the host's question stays up"
     );
     assert_eq!(
@@ -326,14 +326,14 @@ fn test_the_hosts_question_waits_for_the_editor_question_it_finds_open() {
     let unsaved = app.show_editor(EditorKind::Text, Box::new(WaitedEditor));
     assert!(app.ask_before_closing_tab(unsaved));
     assert!(
-        app.chrome.editor_prompt().is_some(),
+        app.parts.editor_prompt().is_some(),
         "the editor's question stays"
     );
     assert!(heard.borrow().is_empty(), "and is not answered for it");
     app.handle_prompt_key(&press(KeyCode::Escape));
     app.open_held_dialog();
     assert!(
-        app.chrome.close_prompt().is_some(),
+        app.parts.close_prompt().is_some(),
         "the close question follows"
     );
 }
@@ -349,7 +349,7 @@ fn test_a_reload_over_unsaved_edits_asks_first_and_a_yes_carries_it_out() {
     );
     app.show_editor(EditorKind::Text, Box::new(UnsavedEditor("main.rs")));
     assert!(app.ask_before_reloading());
-    let label = app.chrome.close_prompt().expect("asked").label.clone();
+    let label = app.parts.close_prompt().expect("asked").label.clone();
     assert!(label.contains("main.rs"), "label: {label}");
 
     app.handle_close_prompt_key(&press(KeyCode::Char('y')));
@@ -401,7 +401,7 @@ fn test_typing_edits_the_prompt_and_enter_delivers_the_answer() {
 
     app.handle_prompt_key(&press(KeyCode::Enter));
     assert!(
-        app.chrome.editor_prompt().is_none(),
+        app.parts.editor_prompt().is_none(),
         "the prompt closes on Enter"
     );
     assert!(app.open_tabs.is_page(&pane), "and the page stays open");
@@ -467,7 +467,7 @@ fn test_close_prompt_tab_switches_buttons_and_enter_submits_focused() {
     let mut app = App::new();
     let tab = app.show_editor(EditorKind::Text, Box::new(WaitedEditor));
     app.close_pane(tab);
-    assert!(app.chrome.close_prompt().is_some());
+    assert!(app.parts.close_prompt().is_some());
     let view = app.input_view().expect("dialog open");
     assert!(
         view.buttons[0].focused,
@@ -481,7 +481,7 @@ fn test_close_prompt_tab_switches_buttons_and_enter_submits_focused() {
 
     // Enter on Cancel cancels the close
     app.handle_close_prompt_key(&press(KeyCode::Enter));
-    assert!(app.chrome.close_prompt().is_none(), "dialog closed");
+    assert!(app.parts.close_prompt().is_none(), "dialog closed");
     assert_eq!(app.layout().shown_tabs().len(), 1, "pane was not closed");
 }
 
@@ -494,24 +494,21 @@ fn test_close_prompt_mouse_click() {
         .split(Direction::Vertical, SPLIT_RATIO, sibling);
 
     app.close_pane(tab);
-    assert!(app.chrome.close_prompt().is_some());
+    assert!(app.parts.close_prompt().is_some());
     let view = app.input_view().expect("dialog open");
     assert!(view.buttons[0].focused, "the yes starts focused");
 
     // Click button 1 (No) cancels the close
     app.click_dialog_button(1);
-    assert!(
-        app.chrome.close_prompt().is_none(),
-        "dialog closed on click"
-    );
+    assert!(app.parts.close_prompt().is_none(), "dialog closed on click");
     assert_eq!(app.layout().shown_tabs().len(), 2, "pane was kept");
 
     // Try again with click button 0 (Yes)
     app.close_pane(tab);
-    assert!(app.chrome.close_prompt().is_some());
+    assert!(app.parts.close_prompt().is_some());
     app.click_dialog_button(0);
     assert!(
-        app.chrome.close_prompt().is_none(),
+        app.parts.close_prompt().is_none(),
         "dialog closed on Yes click"
     );
     assert_eq!(app.layout().shown_tabs(), vec![sibling], "pane was closed");
@@ -600,7 +597,7 @@ fn test_a_list_answers_the_editor_the_way_a_prompt_does() {
     // The palette stands in for the prompt when the answer is one of a
     // known set: what is chosen comes back under the same tag.
     let (mut app, pane, heard) = app_asking();
-    app.chrome.overlay = None;
+    app.parts.overlay = None;
     app.act_on_editor_outcome(
         pane,
         EditorOutcome::Pick(winter_model::editor::PickRequest {
@@ -612,16 +609,16 @@ fn test_a_list_answers_the_editor_the_way_a_prompt_does() {
             tag: "ask",
         }),
     );
-    assert!(app.chrome.picker().is_some(), "the list is showing");
+    assert!(app.parts.picker().is_some(), "the list is showing");
     assert_eq!(
-        app.chrome.picker().map(|picker| picker.view().title),
+        app.parts.picker().map(|picker| picker.view().title),
         Some("Checkout".to_string()),
         "and it says what it is a list of"
     );
 
     app.answer_editor_pick(Some("feature".to_string()));
     assert!(
-        app.chrome.editor_pick().is_none(),
+        app.parts.editor_pick().is_none(),
         "the question is answered"
     );
     assert_eq!(heard.borrow().as_slice(), [Some("feature".to_string())]);
@@ -630,19 +627,19 @@ fn test_a_list_answers_the_editor_the_way_a_prompt_does() {
 #[test]
 fn test_a_list_a_transient_asked_for_is_drawn_on_its_card() {
     let (mut app, pane, _heard) = app_asking();
-    app.chrome.overlay = None;
+    app.parts.overlay = None;
     let card = (260.0, 180.0, 480.0, 360.0);
-    app.chrome.transient_card = Some(TransientCard {
+    app.parts.transient_card = Some(TransientCard {
         rect: card,
         tab: pane,
     });
     app.act_on_editor_outcome(pane, EditorOutcome::Pick(checkout_pick()));
     assert_eq!(
-        app.chrome.editor_pick().and_then(|pick| pick.origin),
+        app.parts.editor_pick().and_then(|pick| pick.origin),
         Some(card)
     );
     assert!(
-        app.chrome.transient_card.is_none(),
+        app.parts.transient_card.is_none(),
         "the card is spent on the one list"
     );
 }
@@ -650,9 +647,9 @@ fn test_a_list_a_transient_asked_for_is_drawn_on_its_card() {
 #[test]
 fn test_a_question_a_transient_asked_opens_on_its_card() {
     let (mut app, pane, _heard) = app_asking();
-    app.chrome.overlay = None;
+    app.parts.overlay = None;
     let card = (260.0, 180.0, 480.0, 360.0);
-    app.chrome.transient_card = Some(TransientCard {
+    app.parts.transient_card = Some(TransientCard {
         rect: card,
         tab: pane,
     });
@@ -668,7 +665,7 @@ fn test_a_question_a_transient_asked_opens_on_its_card() {
     );
     assert_eq!(app.input_view().and_then(|view| view.card), Some(card));
     assert!(
-        app.chrome.transient_card.is_none(),
+        app.parts.transient_card.is_none(),
         "spent, so a list asked after the answer opens where lists open"
     );
 }
@@ -676,14 +673,14 @@ fn test_a_question_a_transient_asked_opens_on_its_card() {
 #[test]
 fn test_another_editors_transient_card_is_not_taken() {
     let (mut app, pane, _heard) = app_asking();
-    app.chrome.overlay = None;
+    app.parts.overlay = None;
     let other = app.alloc_tab_id();
-    app.chrome.transient_card = Some(TransientCard {
+    app.parts.transient_card = Some(TransientCard {
         rect: (260.0, 180.0, 480.0, 360.0),
         tab: other,
     });
     app.act_on_editor_outcome(pane, EditorOutcome::Pick(checkout_pick()));
-    assert_eq!(app.chrome.editor_pick().and_then(|pick| pick.origin), None);
+    assert_eq!(app.parts.editor_pick().and_then(|pick| pick.origin), None);
 }
 
 /// A list of branches to check out, as the git editor asks for one.
@@ -701,7 +698,7 @@ fn checkout_pick() -> winter_model::editor::PickRequest {
 #[test]
 fn test_a_list_closed_without_choosing_says_so() {
     let (mut app, pane, heard) = app_asking();
-    app.chrome.overlay = None;
+    app.parts.overlay = None;
     app.act_on_editor_outcome(
         pane,
         EditorOutcome::Pick(winter_model::editor::PickRequest {
@@ -723,7 +720,7 @@ fn test_escape_cancels_a_prompt_and_says_so() {
     // operation waiting on an answer would otherwise stay half-started.
     let (mut app, _, heard) = app_asking();
     app.handle_prompt_key(&press(KeyCode::Escape));
-    assert!(app.chrome.editor_prompt().is_none());
+    assert!(app.parts.editor_prompt().is_none());
     assert_eq!(heard.borrow().as_slice(), [None]);
 }
 
@@ -732,9 +729,9 @@ fn test_closing_the_editor_takes_its_question_with_it() {
     // A prompt left behind would deliver its answer to an editor that is gone,
     // or worse, to whatever editor opened next in that pane.
     let (mut app, pane, heard) = app_asking();
-    assert!(app.chrome.editor_prompt().is_some());
+    assert!(app.parts.editor_prompt().is_some());
     app.close_editor(pane);
-    assert!(app.chrome.editor_prompt().is_none());
+    assert!(app.parts.editor_prompt().is_none());
     assert!(heard.borrow().is_empty(), "and answers nothing");
 }
 
@@ -768,7 +765,7 @@ fn test_a_dialog_stays_up_when_another_editor_asks_something() {
     app.act_on_editor_outcome(tab, ask("first?"));
     app.act_on_editor_outcome(other, ask("second?"));
     let label = app
-        .chrome
+        .parts
         .editor_prompt()
         .map(|prompt| prompt.request.label.clone());
     assert!(
@@ -782,16 +779,16 @@ fn test_a_dialog_of_the_window_s_own_waits_for_the_open_one() {
     let mut app = App::new();
     let tab = app.show_editor(EditorKind::Text, Box::new(UnsavedEditor("main.rs")));
     app.kill_buffer(tab);
-    assert!(app.chrome.close_prompt().is_some());
+    assert!(app.parts.close_prompt().is_some());
     app.open_overlay(crate::window::Overlay::ThemeName(
         winter_field::Field::line(""),
     ));
-    assert!(app.chrome.close_prompt().is_some(), "the open dialog stays");
+    assert!(app.parts.close_prompt().is_some(), "the open dialog stays");
     app.handle_close_prompt_key(&press(KeyCode::Char('c')));
-    assert!(app.chrome.close_prompt().is_none(), "c cancels");
+    assert!(app.parts.close_prompt().is_none(), "c cancels");
     app.open_held_dialog();
     assert!(
-        app.chrome.theme_name_input().is_some(),
+        app.parts.theme_name_input().is_some(),
         "the held one opens after"
     );
 }
@@ -842,9 +839,9 @@ fn test_a_click_on_a_query_replace_button_answers_as_its_key_does() {
     );
     for (button, answer) in [(0, "y"), (1, "n"), (2, "!"), (3, "q")] {
         app.offer_key_to_editor(tab, &press(KeyCode::Char('x')));
-        assert!(app.chrome.dialog_open(), "the question is up");
+        assert!(app.parts.dialog_open(), "the question is up");
         app.click_dialog_button(button);
-        assert!(!app.chrome.dialog_open(), "a click answers it");
+        assert!(!app.parts.dialog_open(), "a click answers it");
         assert_eq!(heard.borrow().last(), Some(&Some(answer.to_string())));
     }
 }

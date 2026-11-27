@@ -120,7 +120,7 @@ impl App {
                 self.select_paragraph(focused);
             }
             Action::FindChar(find) => {
-                self.chrome.labels.last_find = Some(find);
+                self.parts.labels.last_find = Some(find);
                 // Several candidates put up the jump overlay and hold the keymap
                 // for the label key; one or none just moves (or doesn't).
                 if self.find_char_overlay(find, focused) {
@@ -134,7 +134,7 @@ impl App {
                 self.clear_find_labels();
             }
             Action::FindRepeat { reverse } => {
-                if let Some(find) = self.chrome.labels.last_find {
+                if let Some(find) = self.parts.labels.last_find {
                     let target = if reverse { find.reversed() } else { find };
                     self.find_char_move(target, focused);
                 }
@@ -358,7 +358,7 @@ impl App {
                 self.quick_jump(focused, c);
             }
             Action::QuickCancel => {
-                self.chrome.labels.quick = None;
+                self.parts.labels.quick = None;
             }
             Action::ScrollPageUp => {
                 if let Some(terminal) = self.open_tabs.terminal_mut(&focused) {
@@ -496,7 +496,7 @@ impl App {
     /// open one instead, i.e. whether there was nothing to close.
     fn close_open_palette(&mut self) -> bool {
         self.dirty = true;
-        if self.chrome.picker().is_none() {
+        if self.parts.picker().is_none() {
             return true;
         }
         self.dismiss_overlay();
@@ -599,7 +599,7 @@ mod tests {
             focused,
         );
         assert!(
-            app.chrome.notice_text().is_some(),
+            app.parts.notice_text().is_some(),
             "the declined keypress should be reported, not silently dropped"
         );
     }

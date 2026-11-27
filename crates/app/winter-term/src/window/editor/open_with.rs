@@ -225,7 +225,7 @@ mod tests {
         let mut app = App::new();
         let focused = app.layout().focused();
         app.open_with_list(focused);
-        assert!(app.chrome.picker().is_none(), "nothing to pick from");
+        assert!(app.parts.picker().is_none(), "nothing to pick from");
     }
 
     #[test]

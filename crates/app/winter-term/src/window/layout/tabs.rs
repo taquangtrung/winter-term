@@ -1251,7 +1251,7 @@ mod tests {
             "the mux tab must be closed"
         );
         assert!(!app.open_tabs.is_terminal(&focused));
-        assert!(app.chrome.notice_text().is_some());
+        assert!(app.parts.notice_text().is_some());
 
         let _ = server.join();
         let _ = std::fs::remove_file(&path);

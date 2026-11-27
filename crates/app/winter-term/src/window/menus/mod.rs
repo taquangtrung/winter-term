@@ -223,7 +223,7 @@ impl App {
     /// Toggle the dropdown for menu `index` open or closed, dropping it from
     /// its title (or the hamburger button).
     pub(in crate::window) fn toggle_menu(&mut self, index: usize) {
-        if self.chrome.menus.open == Some(index) {
+        if self.parts.menus.open == Some(index) {
             self.close_menu();
             return;
         }
@@ -231,19 +231,19 @@ impl App {
             return;
         };
         self.close_context_menu();
-        self.chrome.menus.open = Some(index);
+        self.parts.menus.open = Some(index);
         let anchor = self.menu_anchor(index).unwrap_or_default();
         // Built from the keymap as it opens, so it names the keys in force.
         let mut menu = Menu::new(entries_of(def.items, &self.keymap));
         menu.open(anchor, PopupSide::Below);
-        self.chrome.menus.dropdown = Some(menu);
+        self.parts.menus.dropdown = Some(menu);
         self.dirty = true;
     }
 
     /// Rebuild the open dropdown, if one is, so the keys it shows follow a
     /// keymap just changed.
     pub(in crate::window) fn refresh_menu(&mut self) {
-        if let Some(index) = self.chrome.menus.open {
+        if let Some(index) = self.parts.menus.open {
             self.close_menu();
             self.toggle_menu(index);
         }
@@ -251,9 +251,9 @@ impl App {
 
     /// Close any open dropdown (and its submenu).
     pub(in crate::window) fn close_menu(&mut self) {
-        if self.chrome.menus.open.is_some() {
-            self.chrome.menus.open = None;
-            self.chrome.menus.dropdown = None;
+        if self.parts.menus.open.is_some() {
+            self.parts.menus.open = None;
+            self.parts.menus.dropdown = None;
             self.dirty = true;
         }
     }
@@ -310,7 +310,7 @@ mod tests {
     fn test_a_parent_opens_its_children_and_a_leaf_runs_its_command() {
         let mut app = App::new();
         app.toggle_menu(0);
-        let menu = app.chrome.menus.dropdown.as_mut().expect("open");
+        let menu = app.parts.menus.dropdown.as_mut().expect("open");
         menu.move_highlight(1);
         assert_eq!(menu.highlighted(), Some("new_terminal"));
         // The highlight passes over the separators.
@@ -348,16 +348,16 @@ mod tests {
         let mut app = App::new();
         app.toggle_menu(0);
         app.refresh_menu();
-        assert_eq!(app.chrome.menus.open, Some(0), "still open, rebuilt");
-        assert!(app.chrome.menus.dropdown.is_some());
+        assert_eq!(app.parts.menus.open, Some(0), "still open, rebuilt");
+        assert!(app.parts.menus.dropdown.is_some());
     }
 
     #[test]
     fn test_toggle_menu_opens_then_closes() {
         let mut app = App::new();
         app.toggle_menu(0);
-        assert_eq!(app.chrome.menus.open, Some(0));
+        assert_eq!(app.parts.menus.open, Some(0));
         app.toggle_menu(0);
-        assert_eq!(app.chrome.menus.open, None);
+        assert_eq!(app.parts.menus.open, None);
     }
 }

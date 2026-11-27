@@ -34,7 +34,7 @@ impl App {
     /// Returns `true` when the overlay is now up, so the caller can park the
     /// keymap on [`PendingPrefix::FindLabel`](winter_model::input::PendingPrefix::FindLabel) to catch the label key.
     pub(in crate::window) fn find_char_overlay(&mut self, find: FindChar, focused: TabId) -> bool {
-        self.chrome.labels.find = None;
+        self.parts.labels.find = None;
         let Some(terminal) = self.open_tabs.terminal(&focused) else {
             return false;
         };
@@ -50,7 +50,7 @@ impl App {
                 false
             }
             _ => {
-                self.chrome.labels.find = Some(
+                self.parts.labels.find = Some(
                     targets
                         .iter()
                         .zip(FIND_LABELS)
@@ -67,7 +67,7 @@ impl App {
     /// the overlay down. An unknown label just dismisses it.
     pub(in crate::window) fn find_jump(&mut self, focused: TabId, label: char) {
         let target = self
-            .chrome
+            .parts
             .labels
             .find
             .take()
@@ -82,7 +82,7 @@ impl App {
 
     /// Take down the `f`/`t` overlay without moving.
     pub(in crate::window) fn clear_find_labels(&mut self) {
-        if self.chrome.labels.find.take().is_some() {
+        if self.parts.labels.find.take().is_some() {
             self.dirty = true;
         }
     }

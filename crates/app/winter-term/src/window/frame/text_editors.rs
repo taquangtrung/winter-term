@@ -70,8 +70,8 @@ impl App {
             self.hover_text_editors(&shown, focused, input, cx);
         }
         // Scrollbar and divider drags belong to the window, never to the text.
-        let dragging =
-            self.input.pointer.scrollbar_drag.is_some() || self.input.pointer.divider_drag.is_some();
+        let dragging = self.input.pointer.scrollbar_drag.is_some()
+            || self.input.pointer.divider_drag.is_some();
         let rects = self.pane_rects();
         let viewport = self.viewport_rect();
         let on_scrollbar =

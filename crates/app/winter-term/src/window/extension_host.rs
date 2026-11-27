@@ -398,7 +398,7 @@ impl App {
     /// `Enter` keeps what was typed in the system's secret store, or forgets
     /// the one kept when blank, and tells the extension.
     pub(in crate::window) fn handle_secret_key(&mut self, key: &Key) {
-        let Some(Overlay::Secret(input)) = &mut self.chrome.overlay else {
+        let Some(Overlay::Secret(input)) = &mut self.parts.overlay else {
             return;
         };
         self.dirty = true;
@@ -406,7 +406,7 @@ impl App {
             EditOutcome::Submit => {
                 let (extension, key) = (input.extension, input.key.clone());
                 let typed = input.field.text().to_string();
-                self.chrome.overlay = None;
+                self.parts.overlay = None;
                 match secret::set(extension, &key, &typed) {
                     Ok(()) if typed.trim().is_empty() => {
                         self.notify(WindowNotice::SecretForgotten(SecretKey {
@@ -422,7 +422,7 @@ impl App {
                 }
                 self.tell_extension(extension, &Event::SecretChanged(key));
             }
-            EditOutcome::Cancel => self.chrome.overlay = None,
+            EditOutcome::Cancel => self.parts.overlay = None,
             _ => {}
         }
     }
@@ -963,7 +963,7 @@ mod tests {
         let mut app = App::new();
         let focused = app.layout().focused();
         app.run_command("probe.ping", focused);
-        assert_eq!(app.chrome.notice_text(), Some(PONG));
+        assert_eq!(app.parts.notice_text(), Some(PONG));
     }
 
     /// A text editor tab on a file holding "text", in a directory named
@@ -1011,7 +1011,7 @@ mod tests {
         let mut app = App::new();
         let (_, file) = editing(&mut app, "opened");
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some(format!("{OPENED} notes.txt").as_str())
         );
         let _ = std::fs::remove_dir_all(file.parent().expect("dir"));
@@ -1033,7 +1033,7 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some(format!("{SAVED} notes.txt").as_str())
         );
         let _ = std::fs::remove_dir_all(file.parent().expect("dir"));
@@ -1230,7 +1230,7 @@ mod tests {
         let board = app.layout().focused();
         assert!(app.offer_key_to_editor(board, &Key::plain(KeyCode::Char('n'))));
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some(PRESSED),
             "what it asked, done"
         );
@@ -1281,7 +1281,7 @@ mod tests {
         let board = app.layout().focused();
         app.offer_key_to_editor(board, &Key::plain(KeyCode::Char('p')));
         let failed = "the probe extension failed and was stopped there";
-        assert_eq!(app.chrome.notice_text(), Some(failed));
+        assert_eq!(app.parts.notice_text(), Some(failed));
         assert_eq!(painted(&mut app, board), [failed]);
         assert!(
             !app.offer_key_to_editor(board, &Key::plain(KeyCode::Char('n'))),
@@ -1420,7 +1420,7 @@ mod tests {
         };
         assert!(app.offer_mouse_to_editor(board, press));
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some(format!("{CLICKED} 1:4").as_str())
         );
         let drag = Point {
@@ -1441,7 +1441,7 @@ mod tests {
         let focused = app.layout().focused();
         app.run_command("probe.choose", focused);
         app.settle_picker();
-        let view = app.chrome.picker().expect("the picker, open").view();
+        let view = app.parts.picker().expect("the picker, open").view();
         assert_eq!(view.title, CHOOSE);
         assert_eq!(app.picker_labels(), CHOICES);
         assert_eq!(
@@ -1458,7 +1458,7 @@ mod tests {
         assert!(view.rows[1].row.icon.is_none(), "no file, no icon");
         app.press_in_picker("<down> RET");
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some(format!("{CHOSE} {}", CHOICES[1]).as_str()),
             "the one selected, not the first"
         );
@@ -1470,7 +1470,7 @@ mod tests {
         let focused = app.layout().focused();
         app.run_command("probe.ask", focused);
         app.settle_picker();
-        assert_eq!(app.chrome.picker().expect("open").view().title, ASK);
+        assert_eq!(app.parts.picker().expect("open").view().title, ASK);
         app.press_in_picker("h i");
         assert_eq!(
             app.picker_labels(),
@@ -1478,7 +1478,7 @@ mod tests {
             "the rows it gave for the query"
         );
         app.press_in_picker("F4");
-        let view = app.chrome.picker().expect("open").view();
+        let view = app.parts.picker().expect("open").view();
         let menu = view.menu.expect("the action menu");
         let titles: Vec<&str> = menu
             .actions
@@ -1487,9 +1487,9 @@ mod tests {
             .collect();
         assert_eq!(titles, ["Shout", "Whisper"]);
         app.press_in_picker("C-n RET");
-        assert!(app.chrome.picker().is_none());
+        assert!(app.parts.picker().is_none());
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some(format!("{ASKED} whisper 0").as_str()),
             "the action chosen in the menu, on the row given"
         );
@@ -1508,7 +1508,7 @@ mod tests {
         app.press_in_picker("ESC");
         app.tell_extension_queries();
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some(format!("{ASKED} nothing").as_str())
         );
         assert!(app.host.extensions.pickers.is_empty());
@@ -1520,12 +1520,12 @@ mod tests {
         let focused = app.layout().focused();
         app.run_command("probe.panic", focused);
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some("the probe extension failed and was stopped there")
         );
         app.run_command("probe.ping", focused);
         assert_eq!(
-            app.chrome.notice_text(),
+            app.parts.notice_text(),
             Some(PONG),
             "and the window goes on"
         );
