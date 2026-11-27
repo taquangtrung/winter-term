@@ -8,7 +8,7 @@ use std::borrow::Cow;
 
 use crate::render::{PANE_H_PAD, Theme, ThemeRgb};
 use misty::Theme as MistyTheme;
-use misty::{ChromeText, Rgb, Rgba, Shape, ShapeShadow, Spacing};
+use misty::{LabelFont, Rgb, Rgba, Shape, ShapeShadow, Spacing};
 
 // ========================================================================
 // Constants
@@ -120,7 +120,7 @@ fn misty_theme(theme: &Theme) -> MistyTheme {
         true => MistyTheme::light(),
         false => MistyTheme::dark(),
     };
-    misty.chrome_text = ChromeText::Proportional;
+    misty.label_font = LabelFont::Proportional;
     misty.shape = Shape {
         shadow: Some(POPUP_SHADOW),
         ..Shape::MODERN
