@@ -536,6 +536,7 @@ impl Todos {
     fn row_view(&self, at: usize) -> Element<'_, Self> {
         match self.rows[at] {
             Line::File(first) => text(relative(&self.root, &self.found[first].path))
+                .monospace()
                 .muted()
                 .into(),
             Line::Todo(todo) => {
@@ -554,7 +555,7 @@ impl Todos {
         item(todo.words.as_str())
             .selected(at == self.selected)
             .badge(badge(keyword.as_str(), tone(keyword)))
-            .trailing(text(todo.line.to_string()).muted())
+            .trailing(text(todo.line.to_string()).monospace().muted())
             .tooltip(format!("Line {} of {}", todo.line, todo.path.display()))
             .on_pointer_press(move |todos: &mut Self, press: Press| todos.click(at, press))
     }
@@ -564,8 +565,11 @@ impl Todos {
         let todo = self.selected_todo()?;
         let place = format!("{}:{}", relative(&self.root, &todo.path), todo.line);
         Some(
-            column([text(place).muted().into(), text(todo.source.trim()).into()])
-                .gap(Space::Cells(0.25)),
+            column([
+                text(place).monospace().muted().into(),
+                text(todo.source.trim()).monospace().into(),
+            ])
+            .gap(Space::Cells(0.25)),
         )
     }
 }
@@ -575,10 +579,10 @@ impl HostedView for Todos {
     /// scrolling them, and the selected one's line at the foot.
     fn view(&self) -> Element<'_, Self> {
         let body: Element<'_, Self> = match (self.rows.is_empty(), self.searching) {
-            (true, true) => text(SEARCHING).muted().proportional().into(),
+            (true, true) => text(SEARCHING).muted().into(),
             (true, false) => column([
-                text(NOTHING_FOUND).proportional().into(),
-                text(NOTHING_FOUND_DETAIL).muted().proportional().into(),
+                text(NOTHING_FOUND).into(),
+                text(NOTHING_FOUND_DETAIL).muted().into(),
             ]),
             (false, _) => column(
                 (0..self.rows.len())

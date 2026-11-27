@@ -366,7 +366,7 @@ fn scope_view<'a>(
     used: bool,
 ) -> Element<'a, ProblemsView> {
     let words = format!("{name} {count}");
-    let chip = row([text(words).proportional().into()])
+    let chip = row([text(words).into()])
         .width(Extent::Auto)
         .corners(Corners::Control)
         .padding_px(SCOPE_PADDING_PX.0, SCOPE_PADDING_PX.1)

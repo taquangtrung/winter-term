@@ -379,7 +379,7 @@ impl HostedView for GitView {
                     .as_ref()
                     .and_then(|status| status.branch.as_deref())
                     .unwrap_or(DETACHED);
-                let head = Element::from(text(branch).emphasized().proportional())
+                let head = Element::from(text(branch).emphasized())
                     .padding_px(8.0, 4.0)
                     .tooltip(format!("Branch of {}", found.root.display()));
                 column([head, list_view(self, CLEAN)]).gap(Space::Px(2.0))

@@ -398,9 +398,7 @@ impl PanelList {
     /// The non-heading row with `key`, for custom card views to borrow its
     /// precomputed icon, mark, subtitle, and tooltip.
     pub(super) fn row_for(&self, key: usize) -> Option<&ListRow> {
-        self.rows
-            .iter()
-            .find(|row| !row.heading && row.key == key)
+        self.rows.iter().find(|row| !row.heading && row.key == key)
     }
 
     /// Loaded icons for custom panel views.
@@ -761,7 +759,11 @@ impl Columns {
             self.icon |= row.icon.is_some() && !row.heading;
             if let Some(mark) = &row.mark {
                 let is_icon = mark.icon == Some(IconKind::Spinner)
-                    || mark.icon.as_ref().and_then(|kind| art_name(icons, kind)).is_some();
+                    || mark
+                        .icon
+                        .as_ref()
+                        .and_then(|kind| art_name(icons, kind))
+                        .is_some();
                 let wide = match is_icon {
                     true => ICON_CELLS,
                     false => cells_of(&mark.text),
@@ -789,7 +791,7 @@ pub(in crate::window) fn list_view<'a, S: PanelView>(
 ) -> Element<'a, S> {
     let list = state.list();
     if list.rows.is_empty() {
-        return Element::from(text(empty).muted().proportional())
+        return Element::from(text(empty).muted())
             .padding_px(ROW_PADDING_PX.0, ROW_PADDING_PX.1 * 2.0);
     }
     lazy_column(list, list.selected).into()
@@ -827,15 +829,12 @@ fn row_view<S: PanelView>(list: &PanelList, at: usize) -> Element<'_, S> {
         icon.unwrap_or_else(|| blank(Extent::Px(ICON_PX)))
     });
     let label = match shown.heading {
-        true if shown.note => text(shown.label.as_str()).muted().proportional(),
+        true if shown.note => text(shown.label.as_str()).muted(),
         // In capitals, so it never reads as one of the rows under it.
-        true => text(shown.label.to_uppercase())
-            .muted()
-            .emphasized()
-            .proportional(),
-        false if shown.cells => text(shown.label.as_str()),
-        false if shown.muted => text(shown.label.as_str()).muted().proportional(),
-        false => text(shown.label.as_str()).proportional(),
+        true => text(shown.label.to_uppercase()).muted().emphasized(),
+        false if shown.cells => text(shown.label.as_str()).monospace(),
+        false if shown.muted => text(shown.label.as_str()).muted(),
+        false => text(shown.label.as_str()),
     };
     let trailing_mark = columns.mark.map(|cells| {
         let mark = shown
@@ -847,7 +846,7 @@ fn row_view<S: PanelView>(list: &PanelList, at: usize) -> Element<'_, S> {
     });
     let trailing_detail = columns.detail.map(|cells| {
         let detail = shown.detail.as_deref().unwrap_or_default();
-        let detail = Element::from(text(detail).muted().proportional());
+        let detail = Element::from(text(detail).muted());
         row([detail])
             .justify(Justify::End)
             .width(Extent::Cells(cells))
@@ -861,7 +860,7 @@ fn row_view<S: PanelView>(list: &PanelList, at: usize) -> Element<'_, S> {
     let body = match &shown.subtitle {
         Some(subtitle) => column([
             row(first_line).gap(Space::Px(ROW_GAP_PX)),
-            Element::from(text(subtitle).muted()),
+            Element::from(text(subtitle).monospace().muted()),
         ])
         .gap(Space::Px(SUBTITLE_GAP_PX)),
         None => row(first_line).gap(Space::Px(ROW_GAP_PX)),
@@ -929,7 +928,7 @@ fn fold_button<S: PanelView>(open: bool, at: usize, width: f32) -> Element<'stat
         true => FOLD_TIP,
         false => UNFOLD_TIP,
     };
-    row([Element::from(text(glyph).muted().proportional())])
+    row([Element::from(text(glyph).muted())])
         .justify(Justify::Center)
         .width(Extent::Px(width))
         .corners(Corners::Control)
@@ -954,8 +953,9 @@ pub(super) fn mark_view<'a, S: PanelView>(
     let art = mark.icon.as_ref().and_then(|kind| art_name(icons, kind));
     match art {
         Some(art) => icon_view(icons, art, mark.color, &mark.meaning),
-        None => Element::from(text(mark.text.as_str()).color(mark.color).proportional())
-            .tooltip(mark.meaning.as_str()),
+        None => {
+            Element::from(text(mark.text.as_str()).color(mark.color)).tooltip(mark.meaning.as_str())
+        }
     }
 }
 
@@ -1018,7 +1018,7 @@ pub(super) fn icon_view<'a, S: PanelView>(
 /// An empty slot `width` wide, holding a column's place on a row with
 /// nothing in it.
 fn blank<'a, S: PanelView>(width: Extent) -> Element<'a, S> {
-    Element::from(text("")).width(width)
+    Element::from(text("").monospace()).width(width)
 }
 
 /// The name `kind`'s artwork has in `icons`, where it was loaded.

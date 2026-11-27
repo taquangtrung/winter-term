@@ -18,7 +18,7 @@ pub mod view;
 
 use std::time::{Duration, Instant};
 
-use misty::view::{badge, page};
+use misty::view::{badge, page, text};
 use misty::{Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, ScrollStep};
 use misty::{Theme, ThemeToken};
 
@@ -35,7 +35,6 @@ use winter_model::vim::nav::{VimKey, VimNav};
 use self::traffic::{TrafficRate, TrafficTracker};
 use self::usage::{Usage, UsageTracker};
 use self::view::{History, Rates, card_ids, dashboard, machine_line, tenths_of};
-use crate::table::text;
 
 // ========================================================================
 // Constants

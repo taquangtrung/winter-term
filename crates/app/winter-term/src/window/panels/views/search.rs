@@ -155,7 +155,7 @@ impl HostedView for SearchView {
         let Some(heading) = self.heading() else {
             return list_view(self, NOTHING_KEPT);
         };
-        let head = Element::from(text(heading).muted().emphasized().proportional())
+        let head = Element::from(text(heading).muted().emphasized())
             .padding_px(8.0, 4.0)
             .tooltip(KEEP_HINT);
         column([head, list_view(self, EMPTY_SET)]).gap(Space::Px(2.0))

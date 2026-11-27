@@ -298,17 +298,17 @@ impl HostedView for OutputView {
                 .iter()
                 .find(|run| run.tab == read)
                 .map_or("", |run| run.name.as_str());
-            let head = Element::from(text(name).muted().emphasized().proportional())
+            let head = Element::from(text(name).muted().emphasized())
                 .padding_px(LINES_PADDING_PX.0, LINES_PADDING_PX.1)
                 .tooltip(READ_HINT);
             return column([head, list_view(self, NO_OUTPUT)]).gap(Space::Px(0.0));
         }
         let lines: Element<'_, Self> = match self.lines.is_empty() {
-            true => text(NO_OUTPUT).muted().proportional().into(),
+            true => text(NO_OUTPUT).muted().into(),
             false => column(
                 self.lines
                     .iter()
-                    .map(|line| text(line.as_str()).into())
+                    .map(|line| text(line.as_str()).monospace().into())
                     .collect::<Vec<_>>(),
             ),
         };

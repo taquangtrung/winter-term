@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use misty::ThemeToken;
-use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row};
+use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row, text};
 use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, Theme};
 
 use winter_model::editor::{
@@ -29,7 +29,7 @@ use winter_model::monitor::{MonitorAnswer, MonitorQuery, StartupEntry, StartupKi
 use winter_model::paint::{Frame, Row};
 use winter_model::vim::nav::{VimKey, VimNav};
 
-use crate::table::{cell, fit, heading_row, marked, table_row, text};
+use crate::table::{cell, fit, heading_row, marked, table_row};
 
 use self::notice::StartupNotice;
 

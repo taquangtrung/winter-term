@@ -317,11 +317,11 @@ impl HexEditor {
             .map(|byte| shown_char(*byte).to_string())
             .collect();
         let pad = (PER_ROW * 3 + 1).saturating_sub(hex.iter().map(String::len).sum());
-        let mut parts = vec![text(format!("{start:08x}  ")).muted().into()];
+        let mut parts = vec![text(format!("{start:08x}  ")).monospace().muted().into()];
         parts.extend(self.lit_run(&hex, cursor, " ".repeat(pad)));
-        parts.push(text(" \u{2502}").muted().into());
+        parts.push(text(" \u{2502}").monospace().muted().into());
         parts.extend(self.lit_run(&chars, cursor, String::new()));
-        parts.push(text("\u{2502}").muted().into());
+        parts.push(text("\u{2502}").monospace().muted().into());
         row(parts)
             .gap(Space::Cells(0.0))
             .align(Align::Start)
@@ -338,7 +338,7 @@ impl HexEditor {
         tail: String,
     ) -> Vec<Element<'a, Self>> {
         let Some(at) = lit else {
-            return vec![text(pieces.concat() + &tail).into()];
+            return vec![text(pieces.concat() + &tail).monospace().into()];
         };
         let piece = &pieces[at];
         let shown = piece.trim();
@@ -349,12 +349,14 @@ impl HexEditor {
             false => ThemeToken::Selection,
         };
         vec![
-            text(pieces[..at].concat() + lead).into(),
-            row([text(shown.to_string()).into()])
+            text(pieces[..at].concat() + lead).monospace().into(),
+            row([text(shown.to_string()).monospace().into()])
                 .width(Extent::Auto)
                 .background(tone)
                 .corners(Corners::Control),
-            text(trail.to_string() + &pieces[at + 1..].concat() + &tail).into(),
+            text(trail.to_string() + &pieces[at + 1..].concat() + &tail)
+                .monospace()
+                .into(),
         ]
     }
 
@@ -376,7 +378,8 @@ impl HexEditor {
     /// ways round; then the file's size and state.
     fn inspector(&self) -> Element<'_, Self> {
         let byte = self.bytes.get(self.cursor).copied().unwrap_or(0);
-        let fact = |label: &'static str, value: String| item(label).trailing(text(value));
+        let fact =
+            |label: &'static str, value: String| item(label).trailing(text(value).monospace());
         let mut card = section("Inspector")
             .item(fact(
                 "Offset",
@@ -433,7 +436,7 @@ impl HostedView for HexEditor {
     /// the rows that fit and the inspector beside them or under them.
     fn view(&self) -> Element<'_, Self> {
         let mut rows = vec![
-            row([text(HEADING).muted().into()]).padding(ROW_PAD_COLS as f32, 0.0),
+            row([text(HEADING).monospace().muted().into()]).padding(ROW_PAD_COLS as f32, 0.0),
             divider(),
         ];
         // The list's own keys go by the rows misty shows.

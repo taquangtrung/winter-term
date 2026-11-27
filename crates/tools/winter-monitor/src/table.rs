@@ -1,11 +1,9 @@
 //! The table every list monitor draws: fixed-width cells and the last one
 //! taking the room left, a heading cell that sorts on a click, and text cut
-//! to fit a cell. And the text every monitor page draws, in the UI font.
-
-use std::borrow::Cow;
+//! to fit a cell.
 
 use misty::layout::Align;
-use misty::view::{Extent, Space, Text, column, row};
+use misty::view::{Extent, Space, Text, column, row, text};
 use misty::{Element, ThemeToken};
 
 // ========================================================================
@@ -22,12 +20,6 @@ pub const ROW_PADDING_COLS: f32 = 1.0;
 // ========================================================================
 // Functions
 // ========================================================================
-
-/// `words` in the proportional UI font, as every monitor page sets its
-/// text: one font for the table, the footer, and the readings alike.
-pub fn text<'a>(words: impl Into<Cow<'a, str>>) -> Text<'a> {
-    misty::view::text(words).proportional()
-}
 
 /// A cell holding `content`: `width` text columns wide and a column more for
 /// the gap after it, or the room the others leave.

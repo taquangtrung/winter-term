@@ -3,14 +3,13 @@
 //! sockets, libraries, memory, environment, threads), each saying why where
 //! the system would not tell it.
 
-use misty::view::{Extent, Space, column, item, page, row, section};
+use misty::view::{Extent, Space, column, item, page, row, section, text};
 use misty::{Element, HostedView, ThemeToken};
 
 use winter_model::monitor::{
     FileKind, MemoryRegion, OpenFile, ProcessDetails, Protocol, Socket, ThreadInfo,
 };
 
-use crate::table::text;
 use crate::units::format_kb;
 
 // ========================================================================

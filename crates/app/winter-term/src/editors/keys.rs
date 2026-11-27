@@ -933,9 +933,8 @@ impl Keys {
                     .color(ThemeToken::Accent)
                     .then(placeholder)
                     .muted()
-                    .proportional()
             }
-            (false, false) => text(typed.to_string()).proportional(),
+            (false, false) => text(typed.to_string()),
             (false, true) => {
                 let at = self.filter.col();
                 let before: String = typed.chars().take(at).collect();
@@ -944,13 +943,12 @@ impl Keys {
                     .then(CARET)
                     .color(ThemeToken::Accent)
                     .then(after)
-                    .proportional()
             }
         };
 
         let mut parts: Vec<Element<'_, Self>> = Vec::new();
         if let Some(label) = label {
-            parts.push(text(label).muted().proportional().into());
+            parts.push(text(label).muted().into());
         }
         parts.push(shown.into());
         row(parts)
@@ -982,18 +980,18 @@ impl Keys {
             CaptureKind::Platform => CAPTURE_PLATFORM,
             CaptureKind::Replace => CAPTURE_REPLACE,
         };
-        let mut parts = vec![text(format!("{what} {label}:")).proportional().into()];
+        let mut parts = vec![text(format!("{what} {label}:")).into()];
         if !capture.keys.is_empty() {
             parts.push(proportional_keycap(format_sequence(&capture.keys)));
         }
-        parts.push(text(CARET).color(ThemeToken::Accent).proportional().into());
+        parts.push(text(CARET).color(ThemeToken::Accent).into());
         let conflicts = self.capture_conflicts();
         if !conflicts.is_empty() {
             let taken = format!("{CAPTURE_TAKEN} {}", conflicts.join(", "));
-            parts.push(text(taken).color(ThemeToken::Warning).proportional().into());
+            parts.push(text(taken).color(ThemeToken::Warning).into());
         }
         parts.push(column(Vec::new()).grow(1.0));
-        parts.push(text(CAPTURE_HELP).muted().proportional().into());
+        parts.push(text(CAPTURE_HELP).muted().into());
         Some(
             row(parts)
                 .padding(1.0, 0.25)
@@ -1005,10 +1003,10 @@ impl Keys {
     /// The table's heading: what each column holds.
     fn heading_view(&self) -> Element<'_, Self> {
         table_row([
-            text(HEADING_COMMAND).muted().proportional().into(),
-            text(HEADING_CHORD).muted().proportional().into(),
-            text(HEADING_SOURCE).muted().proportional().into(),
-            text(HEADING_ID).muted().proportional().into(),
+            text(HEADING_COMMAND).muted().into(),
+            text(HEADING_CHORD).muted().into(),
+            text(HEADING_SOURCE).muted().into(),
+            text(HEADING_ID).muted().into(),
         ])
     }
 
@@ -1021,9 +1019,9 @@ impl Keys {
         let command = &self.commands[shown.index];
         let selected = at == self.selected;
         let contested = self.contested.contains(&shown.index);
-        let name = lit(&command.label, &shown.matched.label).proportional();
+        let name = lit(&command.label, &shown.matched.label);
         let chords: Vec<Element<'_, Self>> = match command.chord.is_empty() {
-            true => vec![text(NO_CHORD).muted().proportional().into()],
+            true => vec![text(NO_CHORD).muted().into()],
             false => command
                 .chords()
                 .map(|chord| match contested {
@@ -1033,21 +1031,15 @@ impl Keys {
                 .collect(),
         };
         let source: Element<'_, Self> = match command.source {
-            Source::Default => text(SOURCE_DEFAULT).muted().proportional().into(),
-            Source::Unbound => text("").into(),
-            Source::User => text(SOURCE_USER)
-                .color(ThemeToken::Accent)
-                .proportional()
-                .into(),
+            Source::Default => text(SOURCE_DEFAULT).muted().into(),
+            Source::Unbound => text("").monospace().into(),
+            Source::User => text(SOURCE_USER).color(ThemeToken::Accent).into(),
         };
         let line = table_row([
             name.into(),
             row(chords).gap(Space::Cells(0.5)),
             source,
-            lit(&command.action, &shown.matched.action)
-                .muted()
-                .proportional()
-                .into(),
+            lit(&command.action, &shown.matched.action).muted().into(),
         ])
         .on_pointer_press(move |keys: &mut Self, press: Press| {
             keys.click(at, (press.clicks >= 2).then_some(Command::Run));
@@ -1113,7 +1105,7 @@ impl HostedView for Keys {
         table.push(self.heading_view());
         table.push(divider());
         if self.shown.is_empty() && !self.commands.is_empty() {
-            table.push(text(EMPTY_FILTERED).muted().proportional().into());
+            table.push(text(EMPTY_FILTERED).muted().into());
         }
         // Every command, the page scrolling them and keeping the selected
         // one in view.
@@ -1125,12 +1117,10 @@ impl HostedView for Keys {
         );
         let table = column(table).gap(Space::Cells(0.25));
         let shown = page(HEADING)
-            .action(text(self.total()).muted().proportional())
+            .action(text(self.total()).muted())
             .scrolling(table);
         match self.shown.get(self.selected) {
-            Some(row) => shown
-                .footer(text(self.details(row.index)).muted().proportional())
-                .into(),
+            Some(row) => shown.footer(text(self.details(row.index)).muted()).into(),
             None => shown.into(),
         }
     }

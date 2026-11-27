@@ -10,7 +10,7 @@
 use std::time::{Duration, Instant};
 
 use misty::ThemeToken;
-use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row};
+use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row, text};
 use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, Theme};
 
 use winter_model::editor::refresh::RefreshTimer;
@@ -28,7 +28,7 @@ use winter_model::vim::nav::{VimKey, VimNav};
 use crate::proc::act::{self, Signal, TAG_SIGNAL};
 use crate::proc::notice::{Acting, ProcNotice, Signalled};
 use crate::proc::view::SortDirection;
-use crate::table::{cell, fit, heading, heading_row, marked, table_row, text};
+use crate::table::{cell, fit, heading, heading_row, marked, table_row};
 
 // ========================================================================
 // Constants

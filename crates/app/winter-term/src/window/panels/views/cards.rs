@@ -79,7 +79,7 @@ pub(super) fn empty_state<'a, S: PanelView>(
             icon_view(icons, art, ThemeToken::Muted, message).id(format!("empty/{icon_name}")),
         );
     }
-    parts.push(Element::from(text(message).muted().proportional()));
+    parts.push(Element::from(text(message).muted()));
     row(parts)
         .gap(Space::Px(INLINE_GAP_PX))
         .padding_px(EMPTY_PAD_PX.0, EMPTY_PAD_PX.1)
@@ -92,18 +92,9 @@ pub(super) fn section_bar<'a, S: PanelView>(
     count: usize,
     separated: bool,
 ) -> Element<'a, S> {
-    let title = Element::from(
-        text(label)
-            .muted()
-            .emphasized()
-            .proportional()
-            .scale(SECTION_LABEL_SCALE),
-    );
+    let title = Element::from(text(label).muted().emphasized().scale(SECTION_LABEL_SCALE));
     let badge = row([Element::from(
-        text(count.to_string())
-            .muted()
-            .proportional()
-            .scale(SECTION_LABEL_SCALE),
+        text(count.to_string()).muted().scale(SECTION_LABEL_SCALE),
     )])
     .width(Extent::Auto)
     .padding_px(COUNT_PAD_PX.0, COUNT_PAD_PX.1)
@@ -115,8 +106,8 @@ pub(super) fn section_bar<'a, S: PanelView>(
         .padding_px(SECTION_PAD_PX.0, SECTION_PAD_PX.1);
     let header = match separated {
         true => {
-            let spacer = column(Vec::<Element<'a, S>>::new())
-                .height(Extent::Px(SECTION_SPACE_ABOVE_PX));
+            let spacer =
+                column(Vec::<Element<'a, S>>::new()).height(Extent::Px(SECTION_SPACE_ABOVE_PX));
             column([spacer, bar]).gap(Space::Px(0.0))
         }
         false => bar,
@@ -173,7 +164,7 @@ pub(super) fn card_fold_button<'a, S: PanelView>(
         true => (OPEN_MARK, FOLD_TIP),
         false => (CLOSED_MARK, UNFOLD_TIP),
     };
-    row([Element::from(text(glyph).muted().proportional())])
+    row([Element::from(text(glyph).muted())])
         .width(Extent::Px(FOLD_PX))
         .corners(Corners::Control)
         .hover_background(ThemeToken::Hover)
@@ -216,10 +207,8 @@ pub(super) fn detail_line<'a, S: PanelView>(
     if let Some(art) = art_name(icons, &IconKind::Symbol { name: icon_name }) {
         parts.push(icon_view(icons, art, ThemeToken::Muted, icon_label));
     }
-    parts.push(Element::from(text(value).muted().proportional()).grow(1.0));
-    row(parts)
-        .gap(Space::Px(INLINE_GAP_PX))
-        .tooltip(tooltip)
+    parts.push(Element::from(text(value).muted()).grow(1.0));
+    row(parts).gap(Space::Px(INLINE_GAP_PX)).tooltip(tooltip)
 }
 
 /// Inline gap for card header lines.

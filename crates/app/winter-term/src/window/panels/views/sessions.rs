@@ -668,14 +668,14 @@ fn managed_card<'a>(
     {
         header.push(drawn);
     }
-    header.push(Element::from(text(agent.branch.as_str()).proportional()).grow(1.0));
+    header.push(Element::from(text(agent.branch.as_str())).grow(1.0));
     if let Some(mark) = list_row.mark.as_ref() {
         header.push(mark_view(icons, spinner_epoch, mark));
     }
 
     let mut lines: Vec<Element<'a, SessionsView>> = vec![row(header).gap(cards::inline_gap())];
     if let Some(subtitle) = list_row.subtitle.as_deref() {
-        lines.push(Element::from(text(subtitle).muted()));
+        lines.push(Element::from(text(subtitle).monospace().muted()));
     }
     if open {
         lines.push(divider());
@@ -783,14 +783,14 @@ fn detected_card<'a>(
     {
         header.push(drawn);
     }
-    header.push(Element::from(text(detected.agent.as_str()).proportional()).grow(1.0));
+    header.push(Element::from(text(detected.agent.as_str())).grow(1.0));
     if let Some(mark) = list_row.mark.as_ref() {
         header.push(mark_view(icons, spinner_epoch, mark));
     }
 
     let mut lines: Vec<Element<'a, SessionsView>> = vec![row(header).gap(cards::inline_gap())];
     if let Some(subtitle) = list_row.subtitle.as_deref() {
-        lines.push(Element::from(text(subtitle).muted()));
+        lines.push(Element::from(text(subtitle).monospace().muted()));
     }
     if open && let Some(task) = detected.task.as_deref() {
         lines.push(divider());
@@ -823,14 +823,14 @@ fn terminal_card<'a>(
     {
         header.push(drawn);
     }
-    header.push(Element::from(text(entry.task.as_str()).proportional()).grow(1.0));
+    header.push(Element::from(text(entry.task.as_str())).grow(1.0));
     if let Some(mark) = list_row.mark.as_ref() {
         header.push(mark_view(icons, spinner_epoch, mark));
     }
 
     let mut lines: Vec<Element<'a, SessionsView>> = vec![row(header).gap(cards::inline_gap())];
     if let Some(subtitle) = list_row.subtitle.as_deref() {
-        lines.push(Element::from(text(subtitle).muted()));
+        lines.push(Element::from(text(subtitle).monospace().muted()));
     }
     let tab = entry.tab;
     cards::card_shell(

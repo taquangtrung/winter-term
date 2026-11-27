@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use misty::view::{
-    LazySource, Space, Text, badge, column, divider, lazy_column, row, untitled_page,
+    LazySource, Space, Text, badge, column, divider, lazy_column, row, text, untitled_page,
 };
 use misty::{
     AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, ScrollStep,
@@ -57,7 +57,7 @@ use self::view::{
     Process, SortDirection, SortKey, ViewMode, ViewOptions, ViewRow, descendants, layout,
 };
 use crate::table::{
-    ROW_PADDING_COLS, cell, fit, heading as sort_heading, heading_row, marked, table_row, text,
+    ROW_PADDING_COLS, cell, fit, heading as sort_heading, heading_row, marked, table_row,
 };
 use crate::units::{format_kb, format_percent};
 use notice::{Acting, ProcNotice, Renice, Signalled};

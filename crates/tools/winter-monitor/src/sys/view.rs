@@ -5,14 +5,13 @@
 use std::borrow::Cow;
 
 use misty::layout::Align;
-use misty::view::{Extent, Space, canvas, column, item, row, section, sparkline};
+use misty::view::{Extent, Space, canvas, column, item, row, section, sparkline, text};
 use misty::{BoxStyle, Element, Rect, ThemeToken};
 
 use winter_model::system::{
     CoreReading, CpuSample, DiskReading, GpuReading, MemoryReading, SystemSample,
 };
 
-use crate::table::text;
 use crate::units::{format_kb, format_percent};
 
 use super::traffic::TrafficRate;
