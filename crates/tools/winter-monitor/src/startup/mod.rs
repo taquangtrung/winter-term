@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use misty::ThemeToken;
-use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row, text};
+use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row};
 use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, Theme};
 
 use winter_model::editor::{
@@ -29,7 +29,7 @@ use winter_model::monitor::{MonitorAnswer, MonitorQuery, StartupEntry, StartupKi
 use winter_model::paint::{Frame, Row};
 use winter_model::vim::nav::{VimKey, VimNav};
 
-use crate::table::{cell, fit, heading_row, marked, table_row};
+use crate::table::{cell, fit, heading_row, marked, table_row, text};
 
 use self::notice::StartupNotice;
 
@@ -355,7 +355,7 @@ impl StartupEditor {
             true if self.filter.is_empty() => format!("{} entries, {on} on", self.entries.len()),
             true => format!("{} entries ({} shown)", self.entries.len(), self.rows.len()),
         };
-        let mut parts = vec![text(count).muted().proportional().into()];
+        let mut parts = vec![text(count).muted().into()];
         if !self.filter.is_empty() {
             parts.push(
                 badge(format!("filter: {}", self.filter), ThemeToken::Accent).tooltip(format!(
@@ -366,12 +366,7 @@ impl StartupEditor {
             );
         }
         if let Some(why) = &self.error {
-            parts.push(
-                text(why.as_str())
-                    .color(ThemeToken::Danger)
-                    .proportional()
-                    .into(),
-            );
+            parts.push(text(why.as_str()).color(ThemeToken::Danger).into());
         }
         parts
     }
@@ -379,7 +374,7 @@ impl StartupEditor {
     /// The column headings.
     fn heading_view(&self) -> Element<'_, Self> {
         let head = |label: &'static str, about: &'static str, width: Option<usize>| {
-            cell(text(label).muted().proportional(), width, false).tooltip(about)
+            cell(text(label).muted(), width, false).tooltip(about)
         };
         heading_row(vec![
             head("ON", "Whether it is set to start", Some(STATE_WIDTH)),
@@ -431,7 +426,7 @@ impl StartupEditor {
         );
         let mut lines = vec![
             row([
-                text(entry.name.as_str()).emphasized().proportional().into(),
+                text(entry.name.as_str()).emphasized().into(),
                 badge(about, ThemeToken::Muted),
             ])
             .gap(Space::Cells(1.0)),
@@ -460,12 +455,7 @@ impl HostedView for StartupEditor {
     fn view(&self) -> Element<'_, Self> {
         let mut table = vec![self.heading_view(), divider()];
         if self.rows.is_empty() && self.loaded {
-            table.push(
-                text("nothing starts on its own")
-                    .muted()
-                    .proportional()
-                    .into(),
-            );
+            table.push(text("nothing starts on its own").muted().into());
         }
         table.push(
             lazy_column(self, self.list.cursor())

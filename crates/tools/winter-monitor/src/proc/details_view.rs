@@ -3,13 +3,14 @@
 //! sockets, libraries, memory, environment, threads), each saying why where
 //! the system would not tell it.
 
-use misty::view::{Extent, Space, column, item, page, row, section, text};
+use misty::view::{Extent, Space, column, item, page, row, section};
 use misty::{Element, HostedView, ThemeToken};
 
 use winter_model::monitor::{
     FileKind, MemoryRegion, OpenFile, ProcessDetails, Protocol, Socket, ThreadInfo,
 };
 
+use crate::table::text;
 use crate::units::format_kb;
 
 // ========================================================================
@@ -73,10 +74,10 @@ impl HostedView for Details {
     /// The process in the heading, over its parts.
     fn view(&self) -> Element<'_, Self> {
         let heading = page(format!("{} (pid {})", self.name, self.pid))
-            .action(text(self.command.as_str()).muted().proportional());
+            .action(text(self.command.as_str()).muted());
         let Some(info) = &self.info else {
             return heading
-                .scrolling(text(READING).muted().proportional())
+                .scrolling(text(READING).muted())
                 .scroll_id(BODY)
                 .into();
         };
@@ -110,20 +111,17 @@ fn part<'a, T>(
     row_of: impl Fn(&'a T) -> Element<'a, Details>,
 ) -> Element<'a, Details> {
     let shown = match read {
-        Err(why) => section(title.to_string()).item(Element::from(
-            text(why.as_str()).color(ThemeToken::Warning).proportional(),
-        )),
+        Err(why) => section(title.to_string())
+            .item(Element::from(text(why.as_str()).color(ThemeToken::Warning))),
         Ok(rows) if rows.is_empty() => {
-            section(format!("{title} (0)")).item(Element::from(text("none").muted().proportional()))
+            section(format!("{title} (0)")).item(Element::from(text("none").muted()))
         }
         Ok(rows) => {
             let mut shown = section(format!("{title} ({})", rows.len()))
                 .items(rows.iter().take(MAX_ROWS).map(row_of));
             if rows.len() > MAX_ROWS {
                 shown = shown.item(Element::from(
-                    text(format!("and {} more", rows.len() - MAX_ROWS))
-                        .muted()
-                        .proportional(),
+                    text(format!("and {} more", rows.len() - MAX_ROWS)).muted(),
                 ));
             }
             shown

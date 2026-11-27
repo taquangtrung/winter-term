@@ -10,7 +10,7 @@
 use std::time::{Duration, Instant};
 
 use misty::ThemeToken;
-use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row, text};
+use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row};
 use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, Theme};
 
 use winter_model::editor::refresh::RefreshTimer;
@@ -28,7 +28,7 @@ use winter_model::vim::nav::{VimKey, VimNav};
 use crate::proc::act::{self, Signal, TAG_SIGNAL};
 use crate::proc::notice::{Acting, ProcNotice, Signalled};
 use crate::proc::view::SortDirection;
-use crate::table::{cell, fit, heading, heading_row, marked, table_row};
+use crate::table::{cell, fit, heading, heading_row, marked, table_row, text};
 
 // ========================================================================
 // Constants
@@ -501,7 +501,7 @@ impl PortsEditor {
             ),
         };
         let mut parts = vec![
-            text(count).muted().proportional().into(),
+            text(count).muted().into(),
             badge(shown, ThemeToken::Muted).tooltip(about.replace("{}", &key_of(Act::All))),
             badge(format!("sort {}", self.sort.label()), ThemeToken::Muted).tooltip(format!(
                 "Sorted by {}; {} sorts by the next column, {} turns it round",
@@ -524,12 +524,7 @@ impl PortsEditor {
             parts.push(badge("paused", ThemeToken::Warning).tooltip(paused));
         }
         if let Some(why) = &self.error {
-            parts.push(
-                text(why.as_str())
-                    .color(ThemeToken::Danger)
-                    .proportional()
-                    .into(),
-            );
+            parts.push(text(why.as_str()).color(ThemeToken::Danger).into());
         }
         parts
     }
@@ -663,14 +658,11 @@ impl PortsEditor {
         Some(
             column([
                 row([
-                    text(protocol_name(socket.protocol))
-                        .emphasized()
-                        .proportional()
-                        .into(),
+                    text(protocol_name(socket.protocol)).emphasized().into(),
                     text(reach).into(),
                 ])
                 .gap(Space::Cells(1.0)),
-                text(holder).muted().proportional().into(),
+                text(holder).muted().into(),
             ])
             .gap(Space::Cells(0.2)),
         )
@@ -697,7 +689,7 @@ impl HostedView for PortsEditor {
                 true => "no sockets",
                 false => "nothing is listening",
             };
-            table.push(text(none).muted().proportional().into());
+            table.push(text(none).muted().into());
         }
         table.push(
             lazy_column(self, self.list.cursor())

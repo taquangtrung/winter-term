@@ -30,7 +30,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use misty::view::{
-    LazySource, Space, Text, badge, column, divider, lazy_column, row, text, untitled_page,
+    LazySource, Space, Text, badge, column, divider, lazy_column, row, untitled_page,
 };
 use misty::{
     AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, ScrollStep,
@@ -57,7 +57,7 @@ use self::view::{
     Process, SortDirection, SortKey, ViewMode, ViewOptions, ViewRow, descendants, layout,
 };
 use crate::table::{
-    ROW_PADDING_COLS, cell, fit, heading as sort_heading, heading_row, marked, table_row,
+    ROW_PADDING_COLS, cell, fit, heading as sort_heading, heading_row, marked, table_row, text,
 };
 use crate::units::{format_kb, format_percent};
 use notice::{Acting, ProcNotice, Renice, Signalled};
@@ -1054,7 +1054,7 @@ impl ProcEditor {
             key_of(Act::Reverse)
         );
         let mut parts = vec![
-            text(count).muted().proportional().into(),
+            text(count).muted().into(),
             badge(mode, ThemeToken::Muted).tooltip(listed.replace("{}", &key_of(Act::View))),
             badge(format!("sort {}", self.sort.label()), ThemeToken::Muted).tooltip(sorted),
         ];
@@ -1072,12 +1072,7 @@ impl ProcEditor {
             parts.push(badge("paused", ThemeToken::Warning).tooltip(paused));
         }
         if let Some(report) = &self.error {
-            parts.push(
-                text(report.as_str())
-                    .color(ThemeToken::Danger)
-                    .proportional()
-                    .into(),
-            );
+            parts.push(text(report.as_str()).color(ThemeToken::Danger).into());
         }
         parts
     }
@@ -1285,7 +1280,7 @@ impl HostedView for ProcEditor {
     fn view(&self) -> Element<'_, Self> {
         let mut table = vec![self.heading_view(), divider()];
         if self.rows.is_empty() && self.loaded {
-            table.push(text(NO_MATCH).muted().proportional().into());
+            table.push(text(NO_MATCH).muted().into());
         }
         // The list's own keys go by the rows misty shows.
         let rows = lazy_column(self, self.list.cursor())

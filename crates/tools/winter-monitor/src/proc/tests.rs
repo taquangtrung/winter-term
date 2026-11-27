@@ -754,7 +754,7 @@ fn test_a_command_repeating_the_name_is_left_blank() {
     );
     // init's row ends at its user, with no command cell repeating its name.
     assert!(
-        shown.contains("sleep\nme\n10"),
+        shown.contains("sleep\nme\n\n10"),
         "nothing after init's user: {shown:?}"
     );
 }

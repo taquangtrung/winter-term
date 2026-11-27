@@ -4,13 +4,15 @@
 
 use std::borrow::Cow;
 
-use misty::view::{Extent, Space, canvas, column, item, row, section, sparkline, text};
+use misty::layout::Align;
+use misty::view::{Extent, Space, canvas, column, item, row, section, sparkline};
 use misty::{BoxStyle, Element, Rect, ThemeToken};
 
 use winter_model::system::{
     CoreReading, CpuSample, DiskReading, GpuReading, MemoryReading, SystemSample,
 };
 
+use crate::table::text;
 use crate::units::{format_kb, format_percent};
 
 use super::traffic::TrafficRate;
@@ -176,10 +178,7 @@ pub fn machine_line<'a, A: 'static>(sample: &SystemSample) -> Element<'a, A> {
         format!("{} {} ({})", overview.os, overview.release, overview.arch),
         format!("up {}", format_uptime(overview.uptime_secs)),
     ];
-    text(facts.join(FACT_SEPARATOR))
-        .muted()
-        .proportional()
-        .into()
+    text(facts.join(FACT_SEPARATOR)).muted().into()
 }
 
 /// The dashboard for `sample`: its cards stacked in a single column so
@@ -446,8 +445,7 @@ fn headline_reading<'a, A: 'static>(
 ) -> Element<'a, A> {
     let tone = tone(tenths);
     let mut cells = vec![
-        Element::from(text(label.to_string()).proportional())
-            .width(Extent::Cells(SHORT_LABEL_COLS)),
+        Element::from(text(label.to_string())).width(Extent::Cells(SHORT_LABEL_COLS)),
         Element::from(text(facts.unwrap_or_default()).muted()).grow(1.0),
         share_cell(tenths, tone),
     ];
@@ -467,8 +465,7 @@ fn compact_reading<'a, A: 'static>(
 ) -> Element<'a, A> {
     let tone = tone(tenths);
     let header = row([
-        Element::from(text(label.to_string()).proportional())
-            .width(Extent::Cells(SHORT_LABEL_COLS)),
+        Element::from(text(label.to_string())).width(Extent::Cells(SHORT_LABEL_COLS)),
         Element::from(text(facts).muted()).grow(1.0),
         share_cell(tenths, tone),
     ])
@@ -490,13 +487,13 @@ fn block_reading<'a, A: 'static>(
     facts: String,
 ) -> Element<'a, A> {
     let tone = tone(tenths);
-    let mut left = vec![text(label.to_string()).proportional().into()];
+    let mut left = vec![text(label.to_string()).into()];
     if let Some(sub) = sublabel {
-        left.push(text(sub.to_string()).muted().proportional().into());
+        left.push(text(sub.to_string()).muted().into());
     }
     let cells = [
         row(left).gap(Space::Cells(ROW_GAP_COLS)).grow(1.0),
-        text(facts).muted().proportional().into(),
+        text(facts).muted().into(),
         share_cell(tenths, tone),
     ];
     let header = row(cells).gap(Space::Cells(ROW_GAP_COLS));
@@ -533,7 +530,11 @@ fn flat_bar<'a, A: 'static>(fraction: f32, tone: ThemeToken) -> Element<'a, A> {
 
 /// Right-aligned percentage cell colored by load threshold.
 fn share_cell<'a, A: 'static>(tenths: u32, tone: ThemeToken) -> Element<'a, A> {
-    Element::from(text(format!("{:>5}%", format_percent(percent(tenths)))).color(tone))
+    // Aligned by the column, not by padding spaces, as the UI font's
+    // digits and spaces differ in width.
+    let share = text(format!("{}%", format_percent(percent(tenths)))).color(tone);
+    column([share.into()])
+        .align(Align::End)
         .width(Extent::Cells(SHARE_COLS))
 }
 

@@ -18,7 +18,7 @@ pub mod view;
 
 use std::time::{Duration, Instant};
 
-use misty::view::{badge, page, text};
+use misty::view::{badge, page};
 use misty::{Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, ScrollStep};
 use misty::{Theme, ThemeToken};
 
@@ -35,6 +35,7 @@ use winter_model::vim::nav::{VimKey, VimNav};
 use self::traffic::{TrafficRate, TrafficTracker};
 use self::usage::{Usage, UsageTracker};
 use self::view::{History, Rates, card_ids, dashboard, machine_line, tenths_of};
+use crate::table::text;
 
 // ========================================================================
 // Constants
@@ -297,21 +298,13 @@ impl HostedView for Machine {
         }
         shown = shown.action(state);
         if let Some(report) = &self.error {
-            shown = shown.action(
-                text(format!("\u{26a0} {report}"))
-                    .color(ThemeToken::Danger)
-                    .proportional(),
-            );
+            shown = shown.action(text(format!("\u{26a0} {report}")).color(ThemeToken::Danger));
         }
         match &self.sample {
             Some(sample) => {
                 shown.scrolling(dashboard(sample, &self.usage, &self.rates, &self.history))
             }
-            None => shown.scrolling(
-                text(self.error.as_deref().unwrap_or(READING))
-                    .muted()
-                    .proportional(),
-            ),
+            None => shown.scrolling(text(self.error.as_deref().unwrap_or(READING)).muted()),
         }
         .scroll_id(BODY)
         .into()
