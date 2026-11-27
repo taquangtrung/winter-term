@@ -1142,9 +1142,10 @@ mod tests {
             [
                 ("-c", crate::render::SwitchKind::Radio),
                 ("-d", crate::render::SwitchKind::Radio),
+                ("-a", crate::render::SwitchKind::Checkbox),
                 ("-A", crate::render::SwitchKind::Checkbox),
             ],
-            "the dates switches are a pair, the stash one stands alone"
+            "the dates switches are a pair, the author and stash ones stand alone"
         );
 
         // Dismiss rebase popup
