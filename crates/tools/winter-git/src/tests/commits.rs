@@ -1,6 +1,7 @@
 //! The git view's tests: committing, reading a commit, and rewriting history.
 
 use super::*;
+use crate::popup::REBASE_RESET_AUTHOR;
 
 #[test]
 fn test_plus_asks_the_status_view_for_more_recent_commits() {
@@ -412,6 +413,22 @@ fn test_a_rebase_onto_the_upstream_goes_with_the_switches_on() {
         command_of(&outcome)
             .args
             .ends_with(&["rebase", "--autostash", "@{upstream}"].map(str::to_string)),
+        "{:?}",
+        command_of(&outcome).args
+    );
+}
+
+#[test]
+fn test_a_rebase_with_the_author_switch_rewrites_each_commit_s_author() {
+    let mut editor = loaded_editor();
+    editor.on_key(&menu_key('r'));
+    editor.on_key(&press_char('-'));
+    editor.on_key(&press_char('a'));
+    let outcome = editor.on_key(&press_char('u'));
+    assert!(
+        command_of(&outcome)
+            .args
+            .ends_with(&["rebase", REBASE_RESET_AUTHOR, "@{upstream}"].map(str::to_string)),
         "{:?}",
         command_of(&outcome).args
     );

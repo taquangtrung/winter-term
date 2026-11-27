@@ -137,6 +137,12 @@ const MERGE_SWITCHES: &[Switch] = &[
     },
 ];
 
+/// Rewrites each replayed commit with the configured user as its author,
+/// since git's rebase has no flag of its own for it. Hooks already ran when
+/// each commit was first made.
+pub const REBASE_RESET_AUTHOR: &str =
+    "--exec=git commit --amend --no-edit --no-verify --reset-author";
+
 /// The rebase menu's switches. The two dates ones are each other's opposite,
 /// so turning one on turns the other off (see [`Popup::exclusive_switches`]).
 const REBASE_SWITCHES: &[Switch] = &[
@@ -149,6 +155,11 @@ const REBASE_SWITCHES: &[Switch] = &[
         flag: "--reset-author-date",
         key: 'd',
         label: "Redate: author date set to now",
+    },
+    Switch {
+        flag: REBASE_RESET_AUTHOR,
+        key: 'a',
+        label: "Reauthor: you as the author, dated now",
     },
     Switch {
         flag: "--autostash",

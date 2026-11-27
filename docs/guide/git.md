@@ -58,7 +58,7 @@ These keys open a menu; the next key picks from it, and a card shows the choices
 | `i` | Ignore this path or extension |
 | `C-l` | Log: this branch, another, every branch, this file, or a search |
 
-In a menu, `-` then a letter turns on a switch such as `--force-with-lease`.
+In a menu, `-` then a letter turns on a switch such as `--force-with-lease`. In the rebase menu, `-a` makes you the author of every commit it replays.
 
 In every menu, `x` throws away, as it does outside one: it deletes a branch or tag, drops a stash, removes a remote or worktree, or aborts a merge, rebase, cherry-pick, revert, or bisect. `X` deletes a branch even when it is not merged.
 
