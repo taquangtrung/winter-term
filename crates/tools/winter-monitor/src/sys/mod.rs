@@ -49,7 +49,7 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const STALL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What the monitor is called in the pane title.
-const TITLE: &str = "System Monitor";
+const TITLE: &str = "Resource Monitor";
 
 /// The id of the page's scrolling body, which the keys scroll.
 const BODY: &str = "sys.body";
@@ -113,7 +113,7 @@ const KEYS: KeyTable<Act> = KeyTable {
         },
     ],
     configurable: true,
-    title: "System",
+    title: "Resource Monitor",
 };
 
 /// Every key table of this surface, for the Keys editor to list.

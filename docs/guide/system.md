@@ -1,19 +1,19 @@
-# Monitors
+# System
 
-Four pages show what the machine is doing, each from a `Monitor:` command in the command palette:
+Four pages show what the machine is doing, each from a `System:` command in the command palette:
 
 | Command | Shows |
 |---|---|
-| `Monitor: Processes` (`C-S-,`) | Every process, with the actions of a task manager |
-| `Monitor: System` | The whole machine: CPU, memory, network, disks, GPUs |
-| `Monitor: Ports` | Every socket and the process holding it |
-| `Monitor: Startup` | What starts on its own at boot or login |
+| `System: Process Monitor` (`C-S-,`) | Every process, with the actions of a task manager |
+| `System: Resource Monitor` (`C-S-.`) | The whole machine: CPU, memory, network, disks, GPUs |
+| `System: Port Monitor` | Every socket and the process holding it |
+| `System: Startup Programs` | What starts on its own at boot or login |
 
 Each reads only while it is shown, and catches up when you come back to it.
 
 ## Process Monitor
 
-The Process Monitor lists every process on the machine, refreshed every two seconds, as a tree of which process started which. A summary at the top says how many there are and how they are listed. The footer describes the selected process: its ids, owner, shares, paths, and full command line.
+The Process Monitor lists every process on the machine, refreshed every two seconds, as a flat list; `=` shows them as a tree of which process started which. A summary at the top says how many there are and how they are listed. The footer describes the selected process: its ids, owner, shares, paths, and full command line.
 
 | Key | Action |
 |---|---|
@@ -33,7 +33,7 @@ The Process Monitor lists every process on the machine, refreshed every two seco
 | `r` / `p` | Refresh now, pause or resume |
 | `y` / `Y` | Copy the pid, the command line |
 
-CPU is a share of one core, so a busy process can pass 100. A VRAM column appears when `nvidia-smi` answers. Signals go through the system's own `kill`, so another user's process needs `sudo` from a terminal.
+CPU is a share of the whole machine, as btop and GNOME System Monitor show it: a process keeping one of eight cores busy reads 12.5, and one at 50 or more is marked. MEM is the memory a process holds; its tooltip gives its share of the machine's. A VRAM column appears when `nvidia-smi` answers. Signals go through the system's own `kill`, so another user's process needs `sudo` from a terminal.
 
 ### Looking into a process
 
@@ -56,9 +56,9 @@ It is read once when opened; `r` reads it again. Another user's process keeps mo
 | `r` | Read again |
 | `y` / `Y` | Copy the pid, the command line |
 
-## System Monitor
+## Resource Monitor
 
-The System Monitor is a dashboard of the whole machine, refreshed every two seconds. Its cards stack in one column:
+The Resource Monitor is a dashboard of the whole machine, refreshed every two seconds. Its cards stack in one column:
 
 - **CPU:** model, core count, load averages, total use with its recent history, and a vertical bar chart of each core.
 - **Memory:** RAM use with its recent history, and swap use when present.
@@ -76,9 +76,9 @@ Usage bars and percentages turn amber at 75 percent and red at 90. The rates nee
 | `]` / `[` | Next, previous card |
 | `r` / `p` | Refresh now, pause or resume |
 
-## Ports
+## Port Monitor
 
-The Ports page lists the sockets waiting for connections and the process holding each, refreshed every two seconds: what answers "what is on port 3000?". `a` lists every socket, connections too. The footer describes the selected socket.
+The Port Monitor lists the sockets waiting for connections and the process holding each, refreshed every two seconds: what answers "what is on port 3000?". `a` lists every socket, connections too. The footer describes the selected socket.
 
 | Key | Action |
 |---|---|
@@ -94,9 +94,9 @@ The Ports page lists the sockets waiting for connections and the process holding
 
 A socket held by another user's process shows no program, and cannot be ended from here.
 
-## Startup
+## Startup Programs
 
-The Startup page lists what starts on its own, and whether each is on:
+The Startup Programs page lists what starts on its own, and whether each is on:
 
 - **systemd:** your services, on and off, and the machine's that are on (Linux).
 - **autostart:** the desktop's login entries (Linux), or Windows's startup commands.

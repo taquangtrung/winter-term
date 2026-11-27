@@ -57,7 +57,7 @@ fn test_f1_h_lists_the_focused_editor_s_own_keys() {
     app.open_tab_keys(tab);
     app.settle_picker();
     let view = app.chrome.picker().expect("the list opens").view();
-    assert_eq!(view.title, "Keys: System Monitor");
+    assert_eq!(view.title, "Keys: Resource Monitor");
     let refresh = view
         .rows
         .iter()

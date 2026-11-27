@@ -35,7 +35,7 @@ use crate::table::{cell, fit, heading, marked, table_row};
 // ========================================================================
 
 /// What the monitor is called in the pane title.
-const TITLE: &str = "Ports";
+const TITLE: &str = "Port Monitor";
 
 /// The questions the monitor asks.
 const ASK_CONFIRM: &str = "ports-confirm";
@@ -153,7 +153,7 @@ const KEYS: KeyTable<Act> = KeyTable {
         },
     ],
     configurable: true,
-    title: "Ports",
+    title: "Port Monitor",
 };
 
 /// Every key table of this surface, for the Keys editor to list.

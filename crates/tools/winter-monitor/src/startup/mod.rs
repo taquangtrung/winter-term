@@ -38,7 +38,7 @@ use self::notice::StartupNotice;
 // ========================================================================
 
 /// What the monitor is called in the pane title.
-const TITLE: &str = "Startup";
+const TITLE: &str = "Startup Programs";
 
 /// The questions the monitor asks.
 const ASK_FILTER: &str = "startup-filter";
@@ -123,7 +123,7 @@ const KEYS: KeyTable<Act> = KeyTable {
         },
     ],
     configurable: true,
-    title: "Startup",
+    title: "Startup Programs",
 };
 
 /// Every key table of this surface, for the Keys editor to list.

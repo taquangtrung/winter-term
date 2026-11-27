@@ -33,7 +33,7 @@ crates/ext       extensions shipped with Winter, on the sdk alone
 | `app` | `winter-term` | The window: panes, tabs, the terminal tab, the chrome and renderer, the pickers' sources, config, and the editors not yet in crates of their own. |
 | `tools` | `winter-dir` | The directory listing, and the file moves, copies, and deletes it runs. |
 | `tools` | `winter-git` | The Git view. |
-| `tools` | `winter-monitor` | The process and system monitors. |
+| `tools` | `winter-monitor` | The system pages: process, resource, and port monitors, and startup programs. |
 | `tools` | `winter-pdf` | The PDF viewer, drawn with hayro, with selection and SyncTeX. |
 | `tools` | `winter-terminal` | The terminal runtime: PTY sessions, the parser, blocks, charts, image protocols. |
 | `tools` | `winter-text` | The text editor, diff and merge, and syntax colors from the theme's scope table. |

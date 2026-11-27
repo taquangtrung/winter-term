@@ -239,10 +239,10 @@ impl EditorKind {
             EditorKind::Preview => KindInfo::new("preview", "Preview")
                 .with_reopen(|path, _, _| path.is_file().then(|| boxed(PreviewEditor::new(path)))),
             EditorKind::List => KindInfo::new("list", "Saved List"),
-            EditorKind::Ports => KindInfo::new("ports", "Ports"),
+            EditorKind::Ports => KindInfo::new("ports", "Port Monitor"),
             EditorKind::Proc => KindInfo::new("proc", "Process Monitor"),
-            EditorKind::Startup => KindInfo::new("startup", "Startup"),
-            EditorKind::Sys => KindInfo::new("sys", "System Monitor"),
+            EditorKind::Startup => KindInfo::new("startup", "Startup Programs"),
+            EditorKind::Sys => KindInfo::new("sys", "Resource Monitor"),
             // The editor opens a file through its own path, which shows
             // what is no text as its bytes.
             EditorKind::Text => KindInfo {
