@@ -64,7 +64,8 @@ impl App {
             .with_min_size(min_size())
             .with_size(opening_size(state.window_size))
             .with_option_as_alt(misty_option_as_alt(self.config.option_as_alt))
-            .with_font(self.misty_font());
+            .with_font(self.misty_font())
+            .with_ui_font(self.ui_font_at(self.config.font_size));
         let options = match load_window_icon() {
             Some(icon) => options.with_icon(icon),
             None => options,
@@ -96,6 +97,18 @@ impl App {
             Some(family) => font.with_family(family.clone()),
             None => font,
         }
+    }
+
+    /// The font misty sets its proportional text (pages, labels, the
+    /// chrome's words) in, for a terminal font of `size` logical pixels:
+    /// the desktop's interface family at the size and weights of
+    /// [`App::misty_font_at`], so words read as heavy as the grid beside
+    /// them.
+    pub(in crate::window) fn ui_font_at(&self, size: f32) -> misty::UiFont {
+        misty::UiFont::new(size * CHROME_FONT_RATIO).with_weights(
+            regular_weight(self.config.font_weight.as_deref()),
+            bold_weight(self.config.font_weight_bold.as_deref()),
+        )
     }
 
     /// Full one-time setup once misty has opened `window`: font scan

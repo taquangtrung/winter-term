@@ -199,6 +199,7 @@ impl App {
         }
         if let Some(window) = &self.window {
             window.set_font(self.misty_font_at(logical_size));
+            window.set_ui_font(self.ui_font_at(logical_size));
         }
         self.dirty = true;
         true

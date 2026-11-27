@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 
 use misty::{
     AppContext, CellMetrics, ColorScheme, CursorIcon, Font, ImeFocus, OptionAsAlt, Rect,
-    ResizeEdge, WindowGeometry, WindowId,
+    ResizeEdge, UiFont, WindowGeometry, WindowId,
 };
 
 // ========================================================================
@@ -69,6 +69,8 @@ enum Request {
     SetCursor(CursorIcon),
     /// Draw misty's widgets in this font.
     SetFont(Font),
+    /// Draw misty's proportional text in this font.
+    SetUiFont(UiFont),
     /// Name the window this.
     SetTitle(String),
     /// Let the background show the desktop through it.
@@ -221,6 +223,11 @@ impl WindowHandle {
         self.ask(Request::SetFont(font));
     }
 
+    /// Draws misty's proportional text in `ui_font` from the next frame.
+    pub(in crate::window) fn set_ui_font(&self, ui_font: UiFont) {
+        self.ask(Request::SetUiFont(ui_font));
+    }
+
     /// Names the window `title`.
     pub(in crate::window) fn set_title(&self, title: &str) {
         self.ask(Request::SetTitle(title.to_owned()));
@@ -262,6 +269,7 @@ impl WindowHandle {
                 Request::Resize(edge) => cx.event_cx(id).drag_resize_window(edge),
                 Request::SetCursor(icon) => cx.event_cx(id).set_cursor(icon),
                 Request::SetFont(font) => cx.event_cx(id).set_font(font),
+                Request::SetUiFont(ui_font) => cx.event_cx(id).set_ui_font(ui_font),
                 Request::SetTitle(title) => cx.event_cx(id).set_title(title),
                 Request::SetTransparent(transparent) => {
                     cx.event_cx(id).set_transparent(transparent)
