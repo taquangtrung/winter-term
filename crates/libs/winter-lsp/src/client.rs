@@ -971,12 +971,22 @@ mod tests {
     /// one found.
     const FAKE_SERVER: ServerId = ServerId::MAX;
 
+    /// The id of the server the diagnostics test reads, its own: a test
+    /// that sees `FAKE_SERVER` out forgets that one's diagnostics, which
+    /// could land between this test's publishing and its reading them.
+    const DIAGNOSING_SERVER: ServerId = ServerId::MAX - 1;
+
     fn port() -> (Port, Receiver<Value>) {
+        port_of(FAKE_SERVER)
+    }
+
+    /// A fake server's port known as `id`.
+    fn port_of(id: ServerId) -> (Port, Receiver<Value>) {
         let (to_server, sent) = mpsc::sync_channel(MAX_QUEUED_MESSAGES);
         let port = Port(Arc::new(Shared {
             capabilities: Mutex::new(Value::Null),
             everywhere: false,
-            id: FAKE_SERVER,
+            id,
             languages: vec!["rust".to_string()],
             name: "fake".to_string(),
             next_request: AtomicU64::new(1),
@@ -1127,7 +1137,7 @@ mod tests {
 
     #[test]
     fn test_diagnostics_land_in_the_store_and_an_empty_list_clears_them() {
-        let (port, _sent) = port();
+        let (port, _sent) = port_of(DIAGNOSING_SERVER);
         let to = port
             .0
             .to_server
@@ -1145,11 +1155,11 @@ mod tests {
             [Event::Diagnostics(PathBuf::from("/lsp-client-test/a.rs"))]
         );
         let path = Path::new("/lsp-client-test/a.rs");
-        assert_eq!(diagnostics::of(Backend::Lsp(FAKE_SERVER), path).len(), 1);
+        assert_eq!(diagnostics::of(Backend::Lsp(DIAGNOSING_SERVER), path).len(), 1);
         let cleared = json!({"method": "textDocument/publishDiagnostics",
             "params": {"uri": "file:///lsp-client-test/a.rs", "diagnostics": []}});
         read(&cleared, &port, &to, &mut BTreeMap::new());
-        assert!(diagnostics::of(Backend::Lsp(FAKE_SERVER), path).is_empty());
+        assert!(diagnostics::of(Backend::Lsp(DIAGNOSING_SERVER), path).is_empty());
     }
 
     #[test]
