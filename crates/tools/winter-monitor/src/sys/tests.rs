@@ -155,8 +155,8 @@ fn test_traffic_cards_measure_between_snapshots_and_show_only_what_is_counted() 
     editor.view.state_mut().take(Ok(second), later);
     let text = draw(&mut editor, &window);
     // 2 MiB received over two seconds; the 1 MiB read, the same.
-    assert!(text.contains("\u{2193} 1.0M/s"), "{text:?}");
-    assert!(text.contains("\u{2191} 0K/s"), "{text:?}");
+    assert!(text.contains("\u{2193}\n 1.0M/s"), "{text:?}");
+    assert!(text.contains("\u{2191}\n 0K/s"), "{text:?}");
     assert!(text.contains("read 512K/s"), "{text:?}");
 
     let mut quiet = sample(250, 1000);

@@ -244,8 +244,8 @@ fn cpu_card<'a, A: 'static>(
     let mut card = section(CPU_TITLE);
 
     if let Some(summary) = cpu_summary(cpu) {
-        let mut line = Element::from(text(summary).muted().proportional())
-            .padding(READING_PADDING.0, READING_PADDING.1);
+        let mut line =
+            Element::from(text(summary).muted()).padding(READING_PADDING.0, READING_PADDING.1);
         if cpu.load.is_some() {
             line = line.tooltip(LOAD_ABOUT);
         }
@@ -366,12 +366,10 @@ fn traffic_card<'a, A: 'static>(
         return Element::from(section(title).item(item(MEASURING))).id(id);
     };
     let lines = rates.iter().map(move |rate| {
-        let mut cells = vec![Element::from(text(rate.name.clone()).proportional()).grow(1.0)];
+        let mut cells = vec![Element::from(text(rate.name.clone())).grow(1.0)];
         let mut about = Vec::new();
         for (shown, said) in rates_of(rate) {
-            cells.push(
-                Element::from(text(shown).muted().proportional()).width(Extent::Cells(RATE_COLS)),
-            );
+            cells.push(Element::from(text(shown).muted()).width(Extent::Cells(RATE_COLS)));
             about.push(said);
         }
         row(cells)
@@ -422,7 +420,7 @@ fn rate_history_line<'a, A: 'static>(history: &'a [f32], id: &str) -> Element<'a
     let line = column([sparkline(
         history,
         peak.max(MIN_RATE_CEILING),
-        ThemeToken::Accent,
+        ThemeToken::Data,
     )])
     .padding(READING_PADDING.0, READING_PADDING.1)
     .id(format!("{id}.history"));
@@ -450,7 +448,7 @@ fn headline_reading<'a, A: 'static>(
     let mut cells = vec![
         Element::from(text(label.to_string()).proportional())
             .width(Extent::Cells(SHORT_LABEL_COLS)),
-        Element::from(text(facts.unwrap_or_default()).muted().proportional()).grow(1.0),
+        Element::from(text(facts.unwrap_or_default()).muted()).grow(1.0),
         share_cell(tenths, tone),
     ];
     row(cells.drain(..))
@@ -471,7 +469,7 @@ fn compact_reading<'a, A: 'static>(
     let header = row([
         Element::from(text(label.to_string()).proportional())
             .width(Extent::Cells(SHORT_LABEL_COLS)),
-        Element::from(text(facts).muted().proportional()).grow(1.0),
+        Element::from(text(facts).muted()).grow(1.0),
         share_cell(tenths, tone),
     ])
     .gap(Space::Cells(ROW_GAP_COLS));
@@ -496,12 +494,12 @@ fn block_reading<'a, A: 'static>(
     if let Some(sub) = sublabel {
         left.push(text(sub.to_string()).muted().proportional().into());
     }
-    let header = row([
+    let cells = [
         row(left).gap(Space::Cells(ROW_GAP_COLS)).grow(1.0),
         text(facts).muted().proportional().into(),
         share_cell(tenths, tone),
-    ])
-    .gap(Space::Cells(ROW_GAP_COLS));
+    ];
+    let header = row(cells).gap(Space::Cells(ROW_GAP_COLS));
 
     column([header, flat_bar(share(tenths), tone)])
         .gap(Space::Cells(BLOCK_GAP_ROWS))
@@ -522,7 +520,7 @@ fn flat_bar<'a, A: 'static>(fraction: f32, tone: ThemeToken) -> Element<'a, A> {
             fill: theme.color(color).into(),
             shadow: None,
         };
-        frame.draw_box(track, &style(ThemeToken::Hover));
+        frame.draw_box(track, &style(ThemeToken::Border));
         let filled_width = (area.width * fraction).round();
         if filled_width > 0.0 {
             let filled = Rect::new(area.x, y, filled_width, FLAT_BAR_HEIGHT_PX);
@@ -556,7 +554,7 @@ fn amounts(used: u64, total: u64) -> String {
 /// there from the first reading so the card keeps its shape, drawn once
 /// there are two readings to draw it between.
 fn history_line<'a, A: 'static>(history: &'a [f32], id: &'static str) -> Element<'a, A> {
-    let line = column([sparkline(history, HISTORY_CEILING, ThemeToken::Accent)])
+    let line = column([sparkline(history, HISTORY_CEILING, ThemeToken::Data)])
         .padding(READING_PADDING.0, READING_PADDING.1)
         .id(id);
     if history.len() < MIN_HISTORY {
@@ -625,7 +623,7 @@ fn draw_core_bars(frame: &mut misty::Frame, area: Rect, theme: &misty::Theme, sh
         for (col_index, &tenths) in chunk.iter().enumerate() {
             let x = area.x + col_index as f32 * (bar_width + CORE_BAR_GAP_PX);
             let slot = Rect::new(x, row_y, bar_width, row_height);
-            frame.draw_box(slot, &style(ThemeToken::Hover));
+            frame.draw_box(slot, &style(ThemeToken::CursorLine));
 
             let fill_height = (row_height * share(tenths))
                 .round()
@@ -680,13 +678,13 @@ fn cores_summary(cores: &[CoreReading], shares: &[u32]) -> String {
     )
 }
 
-/// The color a share reads in: the accent, then the warning color, then
+/// The color a share reads in: the data color, then the warning color, then
 /// danger.
 fn tone(tenths: u32) -> ThemeToken {
     match percent(tenths) {
         p if p >= CRITICAL_PERCENT => ThemeToken::Danger,
         p if p >= WARNING_PERCENT => ThemeToken::Warning,
-        _ => ThemeToken::Accent,
+        _ => ThemeToken::Data,
     }
 }
 
@@ -726,7 +724,7 @@ mod tests {
 
     #[test]
     fn test_a_share_turns_to_warning_at_seventy_five_and_danger_at_ninety() {
-        assert_eq!(tone(749), ThemeToken::Accent);
+        assert_eq!(tone(749), ThemeToken::Data);
         assert_eq!(tone(750), ThemeToken::Warning);
         assert_eq!(tone(899), ThemeToken::Warning);
         assert_eq!(tone(900), ThemeToken::Danger);

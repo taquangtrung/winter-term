@@ -17,6 +17,10 @@ use misty::{ChromeText, Rgb, Rgba, Shape, ShapeShadow};
 /// The ANSI color misty's danger color takes: red.
 const ANSI_RED: usize = 1;
 
+/// The ANSI color misty's data color takes: green, apart from the accent
+/// that marks what is active.
+const ANSI_GREEN: usize = 2;
+
 /// The ANSI color misty's warning color takes: yellow.
 const ANSI_YELLOW: usize = 3;
 
@@ -139,6 +143,7 @@ fn misty_theme(theme: &Theme) -> MistyTheme {
     misty.border = rgb(theme.divider);
     misty.cursor_line = rgb(theme.cursor_line_bg);
     misty.danger = rgb(theme.ansi[ANSI_RED]);
+    misty.data = rgb(theme.ansi[ANSI_GREEN]);
     misty.hover = mix(theme.foreground, theme.menu_hover_bg, HOVER_LIFT_SHARE);
     let match_base = match is_light(theme) {
         true => theme.active_indicator,
@@ -210,7 +215,10 @@ mod tests {
         assert_eq!(misty.background, rgb(dark.background));
         assert_eq!(misty.foreground, rgb(dark.foreground));
         assert_eq!(misty.selected_row, rgb(dark.menu_hover_bg));
-        assert_ne!(misty.hover, misty.selected_row, "hover visible over selected row");
+        assert_ne!(
+            misty.hover, misty.selected_row,
+            "hover visible over selected row"
+        );
         assert_ne!(misty.selected_row, misty.selection, "rows apart from text");
         let light = misty_theme(&Theme::light());
         assert!(is_light(&Theme::light()));
