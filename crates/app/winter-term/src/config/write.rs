@@ -4,9 +4,9 @@
 use crate::render::MenuStyle;
 
 use super::Config;
+use super::agents::write_agents;
 use super::config_dir;
 use super::schema::{controls_side_as_value, cursor_shape_as_value, kdl_bool, kdl_string};
-use super::agents::write_agents;
 use super::servers::write_servers;
 
 // ========================================================================
@@ -54,6 +54,12 @@ impl Config {
         }
         if let Some(bold_weight) = &self.font_weight_bold {
             out.push_str(&format!("font-weight-bold {}\n", kdl_string(bold_weight)));
+        }
+        if let Some(font) = &self.ui_font_family {
+            out.push_str(&format!("ui-font {}\n", kdl_string(font)));
+        }
+        if let Some(size) = self.ui_font_size {
+            out.push_str(&format!("ui-font-size {size}\n"));
         }
         out.push_str(&format!("opacity {}\n", self.opacity));
         out.push_str(&format!(

@@ -145,6 +145,15 @@ impl App {
     // Session overrides
     // --------------------------------------------------------------------
 
+    /// Sets misty's proportional text in the interface font the settings
+    /// name, at the size in force, from the next frame.
+    pub(in crate::window) fn apply_ui_font(&mut self) {
+        if let Some(window) = &self.window {
+            window.set_ui_font(self.ui_font_at(self.font_size()));
+        }
+        self.dirty = true;
+    }
+
     /// The font size in force: the session's zoom, else the configured one.
     pub(in crate::window) fn font_size(&self) -> f32 {
         self.overrides.font_size.unwrap_or(self.config.font_size)

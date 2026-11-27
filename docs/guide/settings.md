@@ -29,6 +29,7 @@ The page is in Normal mode until `i`, `RET`, or `/`, so letters never type into 
 |---|---|
 | `font` / `font-size` | Font family and size |
 | `font-weight` / `font-weight-bold` | Weights for normal and bold text |
+| `ui-font` / `ui-font-size` | Family and size of the words on pages, menus, and the bars; the desktop's interface font and `font-size` when unset |
 | `ligatures` | Draw `->` and `=>` as arrows |
 | `theme` | `"dark"`, `"light"`, `"auto"`, or a theme file's name |
 | `opacity` | Window opacity, `0.1` to `1.0` |

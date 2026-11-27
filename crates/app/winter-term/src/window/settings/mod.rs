@@ -184,6 +184,22 @@ impl App {
             )
             .in_section("Text")
             .with_note("e.g. 500, bold, medium. Applied on restart"),
+            SettingsField::text(
+                "ui_font_family",
+                "Interface font family",
+                self.config.ui_font_family.clone().unwrap_or_default(),
+            )
+            .in_section("Text")
+            .with_note("Pages, menus, and the bars; the desktop's interface font when empty"),
+            SettingsField::text(
+                "ui_font_size",
+                "Interface font size",
+                self.config
+                    .ui_font_size
+                    .map_or_else(String::new, |size| size.to_string()),
+            )
+            .in_section("Text")
+            .with_note("Pages, menus, and the bars; the font size when empty"),
             SettingsField::toggle("ligatures", "Ligatures", self.config.ligatures)
                 .in_section("Text")
                 .with_note("Render -> and => as arrows. Off by default, so every glyph stays at its own cell"),
@@ -558,6 +574,24 @@ impl App {
                 let trimmed = value.trim();
                 self.config.font_weight_bold = (!trimmed.is_empty()).then(|| trimmed.to_string());
             }
+            "ui_font_family" => {
+                let trimmed = value.trim();
+                self.config.ui_font_family = (!trimmed.is_empty()).then(|| trimmed.to_string());
+                self.apply_ui_font();
+            }
+            "ui_font_size" => match value.trim() {
+                "" => {
+                    self.config.ui_font_size = None;
+                    self.apply_ui_font();
+                }
+                text => match text.parse::<f32>() {
+                    Ok(size) => {
+                        self.config.ui_font_size = Some(crate::render::clamp_font_size(size));
+                        self.apply_ui_font();
+                    }
+                    Err(_) => return false,
+                },
+            },
             // Held to what the renderer can draw before it is saved: a zero
             // or negative size written to settings.kdl would stop every launch.
             "font_size" => match value.parse::<f32>() {
@@ -891,7 +925,7 @@ mod tests {
     ];
 
     /// Rows whose key differs from the setting they write.
-    const RENAMED: [(&str, &str); 1] = [("font", "font_family")];
+    const RENAMED: [(&str, &str); 2] = [("font", "font_family"), ("ui_font", "ui_font_family")];
 
     /// The fields of one schema struct, read from the schema's own source so the
     /// list cannot fall behind it.

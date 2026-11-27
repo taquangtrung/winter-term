@@ -1144,6 +1144,8 @@ fn test_every_setting_survives_a_save() {
         font_family: Some("Fira Code".to_string()),
         font_weight: Some("regular".to_string()),
         font_weight_bold: Some("bold".to_string()),
+        ui_font_family: Some("Noto Sans".to_string()),
+        ui_font_size: Some(13.0),
         scrollback_lines: Some(5_000),
         shell: Some("/bin/zsh".to_string()),
         shell_linux: Some("/bin/zsh".to_string()),
@@ -1186,7 +1188,7 @@ fn test_the_builtin_settings_give_every_setting_a_value_but_those_unset_by_defau
     // A setting the built-in file leaves commented out is read over
     // settings that set nothing: off, zero, or empty, not its default.
     // Only the ones whose default is to have no value may be left so.
-    const UNSET_BY_DEFAULT: [&str; 9] = [
+    const UNSET_BY_DEFAULT: [&str; 11] = [
         "colors",
         "font",
         "font-weight",
@@ -1196,6 +1198,8 @@ fn test_the_builtin_settings_give_every_setting_a_value_but_those_unset_by_defau
         "shell-linux",
         "shell-macos",
         "shell-windows",
+        "ui-font",
+        "ui-font-size",
     ];
     let schema = include_str!("schema.rs");
     let builtin = include_str!("../../builtin/settings.kdl");

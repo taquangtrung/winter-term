@@ -41,6 +41,14 @@ font-size 15
 // Named weight for bold text. Falls back to font-weight when not set.
 // font-weight-bold "bold"
 
+// The family pages, menus, and the bars set their words in. Falls back to
+// the desktop's interface font when not set.
+// ui-font "Noto Sans"
+
+// The point size pages, menus, and the bars set their words at, which a
+// zoom scales with the terminal's text. Falls back to font-size when not set.
+// ui-font-size 13
+
 // Enable OpenType ligatures (e.g. -> and => rendered as arrows). Default: false:
 // like most terminals, winter keeps every glyph at its nominal cell position, so
 // contextual shaping never shifts a character out of the monospace grid.

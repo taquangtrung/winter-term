@@ -277,6 +277,11 @@ fn read_settings(
             .map_or(base.font_size, crate::render::clamp_font_size),
         font_weight: named(kdl.font_weight, &base.font_weight),
         font_weight_bold: named(kdl.font_weight_bold, &base.font_weight_bold),
+        ui_font_family: named(kdl.ui_font, &base.ui_font_family),
+        ui_font_size: kdl
+            .ui_font_size
+            .map(crate::render::clamp_font_size)
+            .or(base.ui_font_size),
         editor_indent_guides: kdl
             .editor_indent_guides
             .unwrap_or(base.editor_indent_guides),
@@ -365,9 +370,7 @@ fn read_settings(
         scroll_margin: kdl.scroll_margin.map_or(base.scroll_margin, |rows| {
             (rows as usize).min(MAX_SCROLL_MARGIN)
         }),
-        screen_row_motions: kdl
-            .screen_row_motions
-            .unwrap_or(base.screen_row_motions),
+        screen_row_motions: kdl.screen_row_motions.unwrap_or(base.screen_row_motions),
         scrollback_lines: kdl
             .scrollback_lines
             .map(|n| n as usize)

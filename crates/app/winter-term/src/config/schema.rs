@@ -42,6 +42,8 @@ pub(super) struct KdlConfig {
     pub(crate) font_weight_bold: Option<String>,
     pub(crate) gutter_side: Option<String>,
     pub(crate) terminal_gutter: Option<bool>,
+    pub(crate) ui_font: Option<String>,
+    pub(crate) ui_font_size: Option<f32>,
     pub(crate) lsp: Option<KdlLsp>,
     pub(crate) menu_style: Option<String>,
     pub(crate) scroll_margin: Option<u64>,

@@ -105,10 +105,19 @@ impl App {
     /// [`App::misty_font_at`], so words read as heavy as the grid beside
     /// them.
     pub(in crate::window) fn ui_font_at(&self, size: f32) -> misty::UiFont {
-        misty::UiFont::new(size * UI_FONT_RATIO).with_weights(
+        // The user's own size, scaled as a zoom scales the terminal's.
+        let size = match self.config.ui_font_size {
+            Some(ui_size) if self.config.font_size > 0.0 => ui_size * size / self.config.font_size,
+            Some(_) | None => size * UI_FONT_RATIO,
+        };
+        let font = misty::UiFont::new(size).with_weights(
             regular_weight(self.config.font_weight.as_deref()),
             bold_weight(self.config.font_weight_bold.as_deref()),
-        )
+        );
+        match &self.config.ui_font_family {
+            Some(family) => font.with_family(family.clone()),
+            None => font,
+        }
     }
 
     /// Full one-time setup once misty has opened `window`: font scan
