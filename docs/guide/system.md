@@ -13,7 +13,7 @@ Each reads only while it is shown, and catches up when you come back to it.
 
 ## Process Monitor
 
-The Process Monitor lists every process on the machine, refreshed every two seconds, as a flat list; `=` shows them as a tree of which process started which. A summary at the top says how many there are and how they are listed. The footer describes the selected process: its ids, owner, shares, paths, and full command line.
+The Process Monitor lists every process on the machine, refreshed every two seconds, as a flat list; `=` shows them as a tree of which process started which. A summary at the right of the footer says how many there are and how they are listed. The footer describes the selected process: its name and command line (hover it for the whole), then its id, parent, owner, state, CPU and memory, video memory, how many children it started, and its paths.
 
 | Key | Action |
 |---|---|

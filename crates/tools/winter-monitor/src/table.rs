@@ -13,6 +13,10 @@ use misty::{Element, ThemeToken};
 /// The mark on text too long for its cell.
 const ELLIPSIS: char = '\u{2026}';
 
+/// The text columns at each side of a row, inside the mark the cursor's
+/// row takes; what lines up with the table's text pads by as much.
+pub const ROW_PADDING_COLS: f32 = 1.0;
+
 // ========================================================================
 // Functions
 // ========================================================================
@@ -39,7 +43,7 @@ pub fn table_row<A: 'static>(cells: Vec<Element<'_, A>>) -> Element<'_, A> {
     row(cells)
         .gap(Space::Cells(0.0))
         .align(Align::Start)
-        .padding(1.0, 0.0)
+        .padding(ROW_PADDING_COLS, 0.0)
 }
 
 /// A column heading, `label` under `arrow` where the table is sorted by it,

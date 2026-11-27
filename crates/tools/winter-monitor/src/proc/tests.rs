@@ -469,11 +469,13 @@ fn test_clicking_the_sorted_heading_again_reverses_it() {
 
 #[test]
 fn test_the_video_memory_column_appears_only_when_a_gpu_editor_answered() {
+    // The footer always has a VRAM cell; the table's heading is what may not.
+    let heading = |text: &str| text.split("COMMAND").next().unwrap_or_default().to_string();
     let plain = shown(&mut loaded_editor(), &window(900));
-    assert!(!plain.contains("VRAM"));
+    assert!(!heading(&plain).contains("VRAM"));
     let mut editor = gpu_editor();
     let text = shown(&mut editor, &window(900));
-    assert!(text.contains("VRAM"));
+    assert!(heading(&text).contains("VRAM"));
     // The one with a reading shows it, and the others show a dash rather
     // than a zero they were never measured at.
     assert!(text.contains("2.0M"), "got {text:?}");
@@ -517,13 +519,42 @@ fn test_a_click_below_the_last_process_selects_nothing() {
 }
 
 #[test]
+fn test_the_headings_sit_at_the_top_of_the_page() {
+    // The tab names the monitor, so no title band or padding comes first.
+    let mut editor = loaded_editor();
+    let frame = drawn(&mut editor, &window(900));
+    let row = frame.cell_metrics().height;
+    let heading = heading_at(&frame, "PID");
+    assert!(
+        heading.y < row,
+        "the headings' middle at {}, a row {row} tall",
+        heading.y
+    );
+}
+
+#[test]
 fn test_the_footer_describes_the_selected_process() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "worker");
     let text = shown(&mut editor, &window(900));
-    for words in ["PPID ", "10", "CWD ", "/work/worker", "worker --serve"] {
+    for words in [
+        "\nPPID\n10 (server)\n",
+        "\nCWD\n/work/worker",
+        "\nCHILDREN\n0",
+    ] {
         assert!(text.contains(words), "{words:?} in {text:?}");
     }
+}
+
+#[test]
+fn test_the_footer_keeps_its_cells_with_nothing_selected() {
+    let mut editor = loaded_editor();
+    let selected = shown(&mut editor, &window(900));
+    editor.rows.clear();
+    let blank = shown(&mut editor, &window(900));
+    assert!(blank.contains("no process selected"), "got {blank:?}");
+    let cells = |text: &str| text.split("\nPID\n").last().unwrap().lines().count();
+    assert_eq!(cells(&blank), cells(&selected));
 }
 
 #[test]
@@ -532,7 +563,7 @@ fn test_a_short_pane_drops_the_footer_to_keep_the_list() {
     let row = window(900).frame().cell_metrics().height;
     let short = ((MIN_ROWS_FOR_DETAIL - 1) as f32 * row) as u32;
     let text = shown(&mut editor, &window(short));
-    assert!(!text.contains("CWD "), "got {text:?}");
+    assert!(!text.contains("\nCWD\n"), "got {text:?}");
     assert!(text.contains("worker"), "the list kept");
 }
 

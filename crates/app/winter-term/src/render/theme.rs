@@ -6,9 +6,9 @@
 
 use std::borrow::Cow;
 
-use crate::render::{Theme, ThemeRgb};
+use crate::render::{PANE_H_PAD, Theme, ThemeRgb};
 use misty::Theme as MistyTheme;
-use misty::{ChromeText, Rgb, Rgba, Shape, ShapeShadow};
+use misty::{ChromeText, Rgb, Rgba, Shape, ShapeShadow, Spacing};
 
 // ========================================================================
 // Constants
@@ -113,7 +113,8 @@ impl Themes {
 /// Misty's theme for Winter's `theme`: misty's light or dark preset,
 /// whichever the background is, with Winter's colors put in, and Winter's
 /// own look set rather than left to misty's defaults: chrome labels in the
-/// proportional font, rounded boxes with an even shadow.
+/// proportional font, rounded boxes with an even shadow, and pages inset
+/// from their pane's sides as far as an editor's text is.
 fn misty_theme(theme: &Theme) -> MistyTheme {
     let mut misty = match is_light(theme) {
         true => MistyTheme::light(),
@@ -123,6 +124,9 @@ fn misty_theme(theme: &Theme) -> MistyTheme {
     misty.shape = Shape {
         shadow: Some(POPUP_SHADOW),
         ..Shape::MODERN
+    };
+    misty.spacing = Spacing {
+        page_inset: PANE_H_PAD as u16,
     };
     // A picker's hints line in Winter's words.
     misty.strings.picker_actions = Cow::Borrowed(PICKER_ACTIONS);

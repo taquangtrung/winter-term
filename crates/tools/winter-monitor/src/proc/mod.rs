@@ -29,7 +29,9 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use misty::view::{LazySource, Space, Text, badge, column, divider, lazy_column, page, row, text};
+use misty::view::{
+    LazySource, Space, Text, badge, column, divider, lazy_column, row, text, untitled_page,
+};
 use misty::{
     AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, ScrollStep,
     Theme, ThemeToken,
@@ -54,7 +56,7 @@ use self::details_view::{BODY as DETAILS_BODY, Details, SECTIONS};
 use self::view::{
     Process, SortDirection, SortKey, ViewMode, ViewOptions, ViewRow, descendants, layout,
 };
-use crate::table::{cell, fit, heading as sort_heading, marked, table_row};
+use crate::table::{ROW_PADDING_COLS, cell, fit, heading as sort_heading, marked, table_row};
 use crate::units::{format_kb, format_percent};
 use notice::{Acting, ProcNotice, Renice, Signalled};
 
@@ -146,10 +148,38 @@ const TREE_INDENT: &str = "  ";
 const MARKER_FOLDED: char = '\u{25b8}';
 const MARKER_OPEN: char = '\u{25be}';
 
-/// Spacing in the selected process footer: between the name and state badge,
-/// and between the footer's lines.
+/// Spacing in the selected process footer: between the name, the state
+/// badge, and the command line, and between the footer's lines.
 const DETAIL_TITLE_GAP_COLS: f32 = 1.0;
 const DETAIL_GAP_ROWS: f32 = 0.2;
+
+/// The footer's grid of facts, column by column: its ids, its owner and
+/// state, its shares, and its places. Every cell is always there, `-` where
+/// the system does not tell, so the footer is the same size whatever the
+/// cursor is on.
+const DETAIL_COLUMNS: usize = 5;
+const DETAIL_ROWS: usize = 2;
+const DETAIL_LABELS: [[&str; DETAIL_ROWS]; DETAIL_COLUMNS] = [
+    ["PID", "PPID"],
+    ["USER", "STATE"],
+    ["CPU", "MEM"],
+    ["VRAM", "CHILDREN"],
+    ["PATH", "CWD"],
+];
+
+/// How wide a value in each of the grid's columns but the last is, in
+/// cells: a parent's id and name, a user, a size and its share, a size or
+/// a count. Kept tight, as a cell already leaves a column after its value,
+/// so the last, the paths, takes as much as the room left. Then the gap
+/// after a column.
+const DETAIL_VALUE_COLS: [usize; DETAIL_COLUMNS - 1] = [16, 8, 12, 6];
+const DETAIL_COLUMN_GAP_COLS: f32 = 1.0;
+
+/// What a fact the system does not tell shows.
+const NO_FACT: &str = "-";
+
+/// What the footer's title says with no process under the cursor.
+const NO_SELECTION: &str = "no process selected";
 
 /// The monitor's own keys. Refreshing is `C-r` in every editor; `r` stays as
 /// the short key.
@@ -1002,7 +1032,7 @@ impl ProcEditor {
     // Drawing
     // ====================================================================
 
-    /// The summary at the heading's right: how many processes, how they
+    /// The summary at the footer's right: how many processes, how they
     /// are listed, and whether the readings are paused, and why the last
     /// snapshot failed.
     fn summary(&self) -> Vec<Element<'_, Self>> {
@@ -1149,53 +1179,70 @@ impl ProcEditor {
         marked(line, at == self.list.cursor())
     }
 
-    /// The page's footer, describing the process the cursor is on: its name
-    /// and state, its ids and shares, its paths, and the whole of its
-    /// command line.
-    fn detail_view(&self) -> Option<Element<'_, Self>> {
-        let process = self.selected()?;
-        let fields = |pairs: Vec<(&'static str, String)>| {
-            pairs
-                .into_iter()
-                .fold(text(""), |line: Text<'_>, (label, value)| {
-                    line.then(format!("{label} "))
-                        .muted()
-                        .then(format!("{value}   "))
-                })
+    /// `start` and then the summary at its right, as the footer's first
+    /// line.
+    fn summary_line<'a>(&'a self, start: Element<'a, Self>) -> Element<'a, Self> {
+        let mut parts = vec![start];
+        parts.extend(self.summary());
+        row(parts)
+            .gap(Space::Cells(DETAIL_TITLE_GAP_COLS))
+            .grow(1.0)
+    }
+
+    /// The page's footer, describing the process the cursor is on: its
+    /// name and command line on the first line, the summary at its right, then a grid of its ids, its
+    /// state, its shares, and its paths. Always the same three lines, so the
+    /// list above keeps its height as the cursor moves.
+    fn detail_view(&self) -> Element<'_, Self> {
+        let Some(process) = self.selected() else {
+            let blank = || [text(NO_FACT), text(NO_FACT)];
+            let title = self.summary_line(Element::from(text(NO_SELECTION).muted()).grow(1.0));
+            return detail_grid(title, [blank(), blank(), blank(), blank(), blank()]);
         };
-        let mut facts = vec![
-            ("PID", process.pid.to_string()),
-            (
-                "PPID",
-                process.ppid.map_or("-".to_string(), |p| p.to_string()),
+        let parent = process.ppid.map_or(NO_FACT.to_string(), |ppid| {
+            match self.processes.iter().find(|other| other.pid == ppid) {
+                Some(other) => format!("{ppid} ({})", other.name),
+                None => ppid.to_string(),
+            }
+        });
+        let children = self
+            .processes
+            .iter()
+            .filter(|other| other.ppid == Some(process.pid))
+            .count();
+        let known = |value: &Option<String>| text(value.clone().unwrap_or(NO_FACT.to_string()));
+        let title = row([
+            Element::from(text(process.name.as_str()).emphasized()).shrink(0.0),
+            self.summary_line(
+                Element::from(text(process.command.as_str()).muted())
+                    .grow(1.0)
+                    .tooltip(process.command.as_str()),
             ),
-            ("USER", process.user.clone().unwrap_or("-".to_string())),
-            ("CPU", format!("{}%", format_percent(process.cpu_percent))),
-            ("MEM", format_kb(process.rss_kb)),
-        ];
-        if let Some(gpu_kb) = process.gpu_kb {
-            facts.push(("VRAM", format_kb(gpu_kb)));
-        }
-        let mut places = Vec::new();
-        if let Some(path) = &process.exec_path {
-            places.push(("PATH", path.clone()));
-        }
-        if let Some(cwd) = &process.cwd {
-            places.push(("CWD", cwd.clone()));
-        }
-        let mut lines = vec![
-            row([
-                text(process.name.as_str()).emphasized().into(),
-                badge(state_label(process.state), state_tone(process.state)),
-            ])
-            .gap(Space::Cells(DETAIL_TITLE_GAP_COLS)),
-            fields(facts).into(),
-        ];
-        if !places.is_empty() {
-            lines.push(fields(places).into());
-        }
-        lines.push(text(process.command.as_str()).muted().into());
-        Some(column(lines).gap(Space::Cells(DETAIL_GAP_ROWS)))
+        ])
+        .gap(Space::Cells(DETAIL_TITLE_GAP_COLS));
+        detail_grid(
+            title,
+            [
+                [text(process.pid.to_string()), text(parent)],
+                [
+                    known(&process.user),
+                    text(state_label(process.state)).color(state_tone(process.state)),
+                ],
+                [
+                    text(format!("{}%", format_percent(process.cpu_percent))),
+                    text(format!(
+                        "{} ({}%)",
+                        format_kb(process.rss_kb),
+                        format_percent(process.mem_percent)
+                    )),
+                ],
+                [
+                    text(process.gpu_kb.map_or(NO_FACT.to_string(), format_kb)),
+                    text(children.to_string()),
+                ],
+                [known(&process.exec_path), known(&process.cwd)],
+            ],
+        )
     }
 
     /// The tree's indent and fold marker before a NAME, and the name cut to
@@ -1230,9 +1277,9 @@ impl LazySource<ProcEditor> for ProcEditor {
 }
 
 impl HostedView for ProcEditor {
-    /// The summary over the column headings and the processes, misty
-    /// building those that show, and the selected process in the footer
-    /// where the pane has room for it.
+    /// The column headings over the processes, misty building those that
+    /// show, and the summary in the footer, with the selected process where
+    /// the pane has room for it.
     fn view(&self) -> Element<'_, Self> {
         let mut table = vec![self.heading_view(), divider()];
         if self.rows.is_empty() && self.loaded {
@@ -1243,15 +1290,19 @@ impl HostedView for ProcEditor {
             .on_shown(|editor: &mut Self, shown| editor.list.view_mut().set_shown(shown));
         table.push(rows.into());
         let table = column(table).gap(Space::Cells(0.0));
-        let mut heading = page(TITLE);
-        for part in self.summary() {
-            heading = heading.action(part);
-        }
-        let mut shown = heading.filled(table);
-        if let Some(detail) = self.detail.then(|| self.detail_view()).flatten() {
-            shown = shown.footer(detail);
-        }
-        shown.into()
+        // The tab already names the monitor, so the table starts at the
+        // page's top, and the summary goes at the footer's right.
+        let footer = match self.detail {
+            true => self.detail_view(),
+            false => self.summary_line(Element::from(text("")).grow(1.0)),
+        };
+        // The headings sit right under the tab, and the footer's text lines
+        // up with the table's.
+        untitled_page()
+            .content_padding(Space::Cells(0.0))
+            .filled(table)
+            .footer(footer.padding(ROW_PADDING_COLS, 0.0))
+            .into()
     }
 }
 
@@ -1590,6 +1641,41 @@ fn state_label(state: ProcState) -> &'static str {
         ProcState::Unknown => "-",
         ProcState::Zombie => "zombie",
     }
+}
+
+/// The footer: `title` over a grid of [`DETAIL_LABELS`] beside `values`,
+/// column by column, the last column taking the room the others leave.
+fn detail_grid<'a>(
+    title: Element<'a, ProcEditor>,
+    values: [[Text<'a>; DETAIL_ROWS]; DETAIL_COLUMNS],
+) -> Element<'a, ProcEditor> {
+    let last = DETAIL_COLUMNS - 1;
+    let columns = DETAIL_LABELS
+        .iter()
+        .zip(values)
+        .enumerate()
+        .map(|(at, (labels, values))| {
+            let label_cols = labels
+                .iter()
+                .map(|label| label.len())
+                .max()
+                .unwrap_or_default();
+            let width = DETAIL_VALUE_COLS.get(at).copied();
+            let lines = labels.iter().zip(values).map(|(label, value)| {
+                row([
+                    cell(text(*label).muted(), Some(label_cols), false),
+                    cell(value, width, false),
+                ])
+                .gap(Space::Cells(0.0))
+            });
+            let shown = column(lines).gap(Space::Cells(DETAIL_GAP_ROWS));
+            match at < last {
+                true => shown.shrink(0.0),
+                false => shown.grow(1.0),
+            }
+        });
+    let grid = row(columns).gap(Space::Cells(DETAIL_COLUMN_GAP_COLS));
+    column([title, grid]).gap(Space::Cells(DETAIL_GAP_ROWS))
 }
 
 /// Whether `columns` and the command at its least fit a pane `cols` text
