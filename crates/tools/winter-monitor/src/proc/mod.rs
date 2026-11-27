@@ -85,7 +85,8 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 /// dropped one would leave the editor waiting forever.
 const STALL_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// A CPU or memory share at or past this is drawn in the accent color.
+/// A CPU share at or past this is drawn in the warning color: half the
+/// machine is a process worth a look.
 const HOT_PERCENT: f64 = 50.0;
 
 /// What the monitor is called in the pane title.
@@ -100,8 +101,7 @@ const RENICE_LABEL_WINDOWS: &str =
 const PID_WIDTH: usize = 7;
 const USER_WIDTH: usize = 10;
 const CPU_WIDTH: usize = 6;
-const MEM_WIDTH: usize = 6;
-const RSS_WIDTH: usize = 7;
+const MEM_WIDTH: usize = 7;
 const STATE_WIDTH: usize = 6;
 const VRAM_WIDTH: usize = 7;
 
@@ -125,15 +125,14 @@ const COMMAND_LABEL: &str = "COMMAND";
 const PID_LABEL: &str = "PID";
 const NAME_LABEL: &str = "NAME";
 const CPU_LABEL: &str = "CPU%";
-const MEM_LABEL: &str = "MEM%";
-const RSS_LABEL: &str = "RSS";
+const MEM_LABEL: &str = "MEM";
 const VRAM_LABEL: &str = "VRAM";
 const STATE_LABEL: &str = "STATE";
 const USER_LABEL: &str = "USER";
 
 /// The columns a narrow pane leaves out, the first first, until the rest
 /// fit; the id, the name, and the CPU share always stay.
-const DROP_ORDER: [&str; 5] = [VRAM_LABEL, USER_LABEL, MEM_LABEL, RSS_LABEL, STATE_LABEL];
+const DROP_ORDER: [&str; 4] = [VRAM_LABEL, USER_LABEL, MEM_LABEL, STATE_LABEL];
 
 /// The text columns the command keeps at the least, and those the page's
 /// padding takes.
@@ -534,7 +533,7 @@ impl ProcEditor {
             loaded: false,
             shown: true,
             notice: None,
-            mode: ViewMode::Tree,
+            mode: ViewMode::Flat,
             name_width: MIN_NAME_WIDTH,
             pending_signal: None,
             pending_renice: None,
@@ -941,18 +940,17 @@ impl ProcEditor {
                 false,
                 SortKey::Name,
             ),
-            column(CPU_LABEL, "Share of the CPU", CPU_WIDTH, true, SortKey::Cpu),
             column(
-                MEM_LABEL,
-                "Share of the memory",
-                MEM_WIDTH,
+                CPU_LABEL,
+                "Share of the whole machine's CPU",
+                CPU_WIDTH,
                 true,
-                SortKey::Memory,
+                SortKey::Cpu,
             ),
             column(
-                RSS_LABEL,
+                MEM_LABEL,
                 "Memory in use (resident set size)",
-                RSS_WIDTH,
+                MEM_WIDTH,
                 true,
                 SortKey::Memory,
             ),
@@ -1092,15 +1090,15 @@ impl ProcEditor {
     }
 
     /// List row `at` as the table shows it: a cell for each column, the
-    /// shares at or past [`HOT_PERCENT`] in the accent and the state in its
+    /// CPU share at or past [`HOT_PERCENT`] in the warning color and the state in its
     /// color; the cursor's row marked. A click puts the cursor on it.
     fn process_view(&self, at: usize) -> Element<'_, Self> {
         let row = &self.rows[at];
         let process = &self.processes[row.index];
         let hot = |percent: f64| {
-            let share = text(format_percent(percent)).proportional();
+            let share = text(format_percent(percent));
             match percent >= HOT_PERCENT {
-                true => share.color(ThemeToken::Accent),
+                true => share.color(ThemeToken::Warning),
                 false => share,
             }
         };
@@ -1109,38 +1107,29 @@ impl ProcEditor {
         for column in self.columns() {
             let width = Some(column.width);
             cells.push(match column.label {
-                PID_LABEL => cell(
-                    text(process.pid.to_string()).muted().proportional(),
-                    width,
-                    true,
-                ),
+                PID_LABEL => cell(text(process.pid.to_string()).muted(), width, true),
                 NAME_LABEL => cell(
-                    text(prefix.clone())
-                        .muted()
-                        .then(name.clone())
-                        .proportional(),
+                    text(prefix.clone()).muted().then(name.clone()),
                     width,
                     false,
                 ),
                 CPU_LABEL => cell(hot(process.cpu_percent), width, true),
-                MEM_LABEL => cell(hot(process.mem_percent), width, true),
-                RSS_LABEL => cell(text(format_kb(process.rss_kb)).proportional(), width, true),
+                MEM_LABEL => cell(text(format_kb(process.rss_kb)), width, true).tooltip(format!(
+                    "{}% of the machine's memory",
+                    format_percent(process.mem_percent)
+                )),
                 VRAM_LABEL => {
                     let vram = process.gpu_kb.map_or(NO_VRAM.to_string(), format_kb);
-                    cell(text(vram).proportional(), width, true)
+                    cell(text(vram), width, true)
                 }
                 STATE_LABEL => cell(
-                    text(state_label(process.state))
-                        .color(state_tone(process.state))
-                        .proportional(),
+                    text(state_label(process.state)).color(state_tone(process.state)),
                     width,
                     false,
                 )
                 .tooltip(state_name(process.state)),
                 _ => cell(
-                    text(process.user.as_deref().unwrap_or("-"))
-                        .muted()
-                        .proportional(),
+                    text(process.user.as_deref().unwrap_or("-")).muted(),
                     width,
                     false,
                 ),
@@ -1152,7 +1141,7 @@ impl ProcEditor {
             true => "",
             false => process.command.as_str(),
         };
-        cells.push(cell(text(command).proportional(), None, false));
+        cells.push(cell(text(command), None, false));
         let line = table_row(cells).on_pointer_press(move |editor: &mut Self, _| {
             editor.list.view_mut().release();
             editor.move_to(at);
@@ -1168,7 +1157,7 @@ impl ProcEditor {
         let fields = |pairs: Vec<(&'static str, String)>| {
             pairs
                 .into_iter()
-                .fold(text("").proportional(), |line: Text<'_>, (label, value)| {
+                .fold(text(""), |line: Text<'_>, (label, value)| {
                     line.then(format!("{label} "))
                         .muted()
                         .then(format!("{value}   "))
@@ -1182,8 +1171,7 @@ impl ProcEditor {
             ),
             ("USER", process.user.clone().unwrap_or("-".to_string())),
             ("CPU", format!("{}%", format_percent(process.cpu_percent))),
-            ("MEM", format!("{}%", format_percent(process.mem_percent))),
-            ("RSS", format_kb(process.rss_kb)),
+            ("MEM", format_kb(process.rss_kb)),
         ];
         if let Some(gpu_kb) = process.gpu_kb {
             facts.push(("VRAM", format_kb(gpu_kb)));
@@ -1197,10 +1185,7 @@ impl ProcEditor {
         }
         let mut lines = vec![
             row([
-                text(process.name.as_str())
-                    .emphasized()
-                    .proportional()
-                    .into(),
+                text(process.name.as_str()).emphasized().into(),
                 badge(state_label(process.state), state_tone(process.state)),
             ])
             .gap(Space::Cells(DETAIL_TITLE_GAP_COLS)),
@@ -1209,7 +1194,7 @@ impl ProcEditor {
         if !places.is_empty() {
             lines.push(fields(places).into());
         }
-        lines.push(text(process.command.as_str()).muted().proportional().into());
+        lines.push(text(process.command.as_str()).muted().into());
         Some(column(lines).gap(Space::Cells(DETAIL_GAP_ROWS)))
     }
 

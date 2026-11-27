@@ -36,6 +36,7 @@ fn raw(pid: u32, ppid: u32, name: &str, ms: u64) -> RawProcess {
 
 fn sample_at(taken: Instant, ms: [u64; 3]) -> ProcessSample {
     ProcessSample {
+        cores: 1,
         entries: vec![
             raw(1, 0, "init", ms[0]),
             raw(10, 1, "server", ms[1]),
@@ -54,6 +55,11 @@ fn loaded_editor() -> ProcEditor {
         [0, 0, 0],
     ))));
     editor
+}
+
+/// Switch `editor` from the flat list it starts in to the tree.
+fn in_tree(editor: &mut ProcEditor) {
+    editor.on_key(&press(KeyCode::Char('=')));
 }
 
 fn cursor_on(editor: &mut ProcEditor, name: &str) {
@@ -99,7 +105,6 @@ fn test_the_cursor_stays_on_its_process_when_a_refresh_reorders_the_list() {
     let mut editor = ProcEditor::new();
     let start = Instant::now();
     editor.on_job(JobReply::Processes(Ok(sample_at(start, [0, 0, 0]))));
-    editor.on_key(&press(KeyCode::Char('=')));
     cursor_on(&mut editor, "worker");
     // Now the worker is the busiest and sorts to the top of the flat list.
     let later = start + Duration::from_secs(2);
@@ -250,6 +255,7 @@ fn test_a_failed_signal_says_why() {
 #[test]
 fn test_a_filter_answer_narrows_the_list_and_escape_clears_it_and_never_closes() {
     let mut editor = loaded_editor();
+    in_tree(&mut editor);
     editor.on_prompt(PromptReply {
         answer: Some(" work ".to_string()),
         tag: ASK_FILTER,
@@ -311,6 +317,7 @@ fn test_a_search_moves_to_the_match_keeps_the_list_and_n_wraps_back() {
 #[test]
 fn test_folding_hides_children_and_the_cursor_row_survives() {
     let mut editor = loaded_editor();
+    in_tree(&mut editor);
     cursor_on(&mut editor, "server");
     editor.on_key(&press(KeyCode::Tab));
     assert_eq!(editor.rows.len(), 2);
@@ -434,7 +441,7 @@ fn test_clicking_a_heading_sorts_by_that_column_in_its_starting_direction() {
         (editor.sort, editor.direction),
         (SortKey::Name, SortDirection::Ascending)
     );
-    click(&mut editor, "MEM%");
+    click(&mut editor, "MEM");
     assert_eq!(
         (editor.sort, editor.direction),
         (SortKey::Memory, SortDirection::Descending)
@@ -493,6 +500,7 @@ fn test_stepping_the_sort_skips_a_column_that_is_not_shown() {
 #[test]
 fn test_clicking_a_process_moves_the_cursor_onto_it() {
     let mut editor = loaded_editor();
+    in_tree(&mut editor);
     // Rows are init, server, worker, top down.
     click_row(&mut editor, 2);
     assert_eq!(editor.selected().unwrap().name, "worker");
@@ -544,6 +552,7 @@ fn name_cell_text(editor: &ProcEditor, name: &str) -> String {
 #[test]
 fn test_the_name_is_the_second_column_with_the_tree_in_it() {
     let mut editor = loaded_editor();
+    in_tree(&mut editor);
     let text = shown(&mut editor, &window(900));
     let pid = text.find("PID").unwrap();
     let name = text.find("NAME").unwrap();
@@ -561,6 +570,7 @@ fn long_named_editor(name: &str) -> ProcEditor {
     let mut sample = sample_at(Instant::now(), [0, 0, 0]);
     sample.entries[2].name = name.to_string();
     editor.on_job(JobReply::Processes(Ok(sample)));
+    in_tree(&mut editor);
     editor
 }
 
@@ -589,9 +599,9 @@ fn test_the_name_column_stops_growing_at_its_cap_and_never_shrinks() {
 }
 
 #[test]
-fn test_a_flat_list_shows_the_bare_name() {
-    let mut editor = loaded_editor();
-    editor.on_key(&press(KeyCode::Char('=')));
+fn test_the_list_starts_flat_with_the_bare_name() {
+    let editor = loaded_editor();
+    assert_eq!(editor.mode, ViewMode::Flat);
     assert!(name_cell_text(&editor, "worker").starts_with("worker"));
 }
 
@@ -679,7 +689,7 @@ fn test_a_narrow_pane_leaves_out_the_least_needed_columns_first() {
         "all fit: {:?}",
         labels(&editor)
     );
-    editor.content(40, 80, false);
+    editor.content(40, 75, false);
     let narrow = labels(&editor);
     assert!(
         !narrow.contains(&USER_LABEL),
@@ -703,6 +713,7 @@ fn test_a_command_repeating_the_name_is_left_blank() {
     sample.entries[0].command = "init".to_string();
     let mut editor = ProcEditor::new();
     editor.on_job(JobReply::Processes(Ok(sample)));
+    in_tree(&mut editor);
     let shown = drawn_text(&drawn(&mut editor, &TestWindow::new(1600, 900))).join("\n");
     assert!(
         shown.contains("server --serve"),
@@ -710,7 +721,7 @@ fn test_a_command_repeating_the_name_is_left_blank() {
     );
     // init's row ends at its user, with no command cell repeating its name.
     assert!(
-        shown.contains("sleep\nme\n\n10"),
+        shown.contains("sleep\nme\n10"),
         "nothing after init's user: {shown:?}"
     );
 }
@@ -763,6 +774,7 @@ fn test_enter_looks_into_the_process_and_the_list_stops_reading_meanwhile() {
 #[test]
 fn test_an_answer_for_another_process_is_not_shown_and_tab_still_folds() {
     let mut editor = loaded_editor();
+    in_tree(&mut editor);
     cursor_on(&mut editor, "server");
     editor.on_key(&press(KeyCode::Enter));
     editor.on_job(JobReply::Monitor(MonitorAnswer::Details(details_of(99))));

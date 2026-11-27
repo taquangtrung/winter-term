@@ -58,7 +58,16 @@ pub fn collect(cancel: &AtomicBool) -> Result<ProcessSample, String> {
         collect_ps(taken)?
     };
     attach_video_memory(&mut sample, query_video_memory());
+    sample.cores = logical_cores();
     Ok(sample)
+}
+
+/// How many logical cores the machine has, one where it will not say.
+fn logical_cores() -> u32 {
+    std::thread::available_parallelism()
+        .ok()
+        .and_then(|count| u32::try_from(count.get()).ok())
+        .unwrap_or(1)
 }
 
 /// Give each process in `sample` the video memory `usage` lists for it.
@@ -105,6 +114,7 @@ fn collect_proc(taken: Instant, cancel: &AtomicBool) -> Result<ProcessSample, St
         entries.extend(read_proc_entry(pid, &users));
     }
     Ok(ProcessSample {
+        cores: 1,
         entries,
         has_gpu: false,
         taken,
@@ -163,6 +173,7 @@ fn collect_ps(taken: Instant) -> Result<ProcessSample, String> {
         .and_then(|text| text.trim().parse::<u64>().ok())
         .map_or(0, |bytes| bytes / 1024);
     Ok(ProcessSample {
+        cores: 1,
         entries: parse::parse_ps_rows(&table, &names, &cwds),
         has_gpu: false,
         taken,
@@ -179,6 +190,7 @@ fn collect_windows(taken: Instant) -> Result<ProcessSample, String> {
     let (total_mem_kb, entries) = parse::parse_windows_json(&text)
         .ok_or_else(|| "PowerShell did not list the processes".to_string())?;
     Ok(ProcessSample {
+        cores: 1,
         entries,
         has_gpu: false,
         taken,

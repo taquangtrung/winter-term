@@ -48,6 +48,9 @@ pub struct RawProcess {
 /// Every process at one moment.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ProcessSample {
+    /// The machine's logical cores, at least one, so a process's share of one
+    /// core can be read as a share of the whole machine.
+    pub cores: u32,
     /// The processes, in no particular order.
     pub entries: Vec<RawProcess>,
     /// Whether a GPU editor answered, so a process missing from its list holds

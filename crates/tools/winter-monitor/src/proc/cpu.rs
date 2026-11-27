@@ -46,9 +46,11 @@ impl CpuTracker {
         Self::default()
     }
 
-    /// The processes in `sample`, each with its CPU use since the snapshot
-    /// before it, which becomes the one the next is measured against.
+    /// The processes in `sample`, each with its share of the whole machine's
+    /// CPU since the snapshot before it, which becomes the one the next is
+    /// measured against.
     pub fn rates(&mut self, sample: &ProcessSample) -> Vec<Process> {
+        let cores = f64::from(sample.cores.max(1));
         let mut baselines = HashMap::with_capacity(sample.entries.len());
         let processes = sample
             .entries
@@ -67,7 +69,7 @@ impl CpuTracker {
                         self.percent_since_last(raw.pid, millis, sample.taken)
                     }
                 };
-                Process::from_raw(raw, percent, sample.total_mem_kb)
+                Process::from_raw(raw, percent / cores, sample.total_mem_kb)
             })
             .collect();
         // Only processes still running keep a baseline, so a pid the system
@@ -76,7 +78,8 @@ impl CpuTracker {
         processes
     }
 
-    /// Share of one core used between the last snapshot and `at`, or nothing
+    /// Share of one core used between the last snapshot and `at`, which
+    /// [`CpuTracker::rates`] turns into a share of the machine, or nothing
     /// when there is no earlier reading or the counter went backwards (a new
     /// process under a reused pid).
     fn percent_since_last(&self, pid: u32, millis: u64, at: Instant) -> f64 {
@@ -121,6 +124,7 @@ mod tests {
 
     fn sample(taken: Instant, entries: Vec<RawProcess>) -> ProcessSample {
         ProcessSample {
+            cores: 1,
             entries,
             has_gpu: false,
             taken,
@@ -148,13 +152,18 @@ mod tests {
     }
 
     #[test]
-    fn test_two_busy_threads_pass_a_hundred_percent() {
+    fn test_a_share_is_of_the_whole_machine_as_btop_shows_it() {
+        // Two threads busy for a second on four cores is half the machine;
+        // as a share of one core it would read 200%.
         let mut tracker = CpuTracker::new();
         let start = Instant::now();
-        tracker.rates(&sample(start, vec![raw(1, CpuReading::Time(0))]));
-        let later = start + Duration::from_secs(1);
-        let rates = tracker.rates(&sample(later, vec![raw(1, CpuReading::Time(2000))]));
-        assert_eq!(rates[0].cpu_percent, 200.0);
+        let on_four = |taken, millis| ProcessSample {
+            cores: 4,
+            ..sample(taken, vec![raw(1, CpuReading::Time(millis))])
+        };
+        tracker.rates(&on_four(start, 0));
+        let rates = tracker.rates(&on_four(start + Duration::from_secs(1), 2000));
+        assert_eq!(rates[0].cpu_percent, 50.0);
     }
 
     #[test]
