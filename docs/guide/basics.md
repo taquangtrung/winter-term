@@ -40,8 +40,7 @@ Around the panes sit three panels: a left sidebar, a right sidebar, and a bottom
 | `Sidebar: Git` | The branch and the changed files; `s` stages and `u` unstages the file under the cursor ([Git](git.md)) |
 | `Sidebar: Outline` | The headings and symbols of the file you work on, nested as they are, each line number at the right; `l` and `h` open and close one holding others |
 | `Sidebar: Todo` | The project's TODO comments, by file ([Todo](todo.md)) |
-| `Sidebar: Agents` | The project's agents and how each stands ([Agents](agents.md)) |
-| `Sidebar: Terminals` | Every terminal open in the window, in every workspace, by what it runs or last ran; a click shows it |
+| `Sidebar: Sessions` | The project's managed agents and every open terminal across workspaces, by what each runs or last ran ([Agents](agents.md)) |
 
 - A view sits in one sidebar at a time: Outline starts on the right, the rest on the left. `View: Move View to the Other Sidebar` moves the focused one across.
 - An empty sidebar opens with Files on the left and Outline on the right.

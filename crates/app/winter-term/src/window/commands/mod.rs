@@ -76,11 +76,8 @@ pub(crate) const BUILTIN: &[Builtin] = &[
     window("sidebar_todo", "Sidebar: Todo", |app, _| {
         app.open_sidebar_view(SidebarKind::Todo)
     }),
-    window("sidebar_agents", "Sidebar: Agents", |app, _| {
-        app.open_sidebar_view(SidebarKind::Agents)
-    }),
-    window("sidebar_terminals", "Sidebar: Terminals", |app, _| {
-        app.open_sidebar_view(SidebarKind::Terminals)
+    window("sidebar_sessions", "Sidebar: Sessions", |app, _| {
+        app.open_sidebar_view(SidebarKind::Sessions)
     }),
     window("bottom_panel_output", "Bottom Panel: Output", |app, _| {
         app.open_bottom_view(BottomPanelKind::Output, true);

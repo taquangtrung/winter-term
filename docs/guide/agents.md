@@ -12,7 +12,7 @@ Winter runs AI coding agents (Claude Code, Codex, Gemini, or any other command-l
 | `Agent: Stop` | End the agent, keeping its folder to open again |
 | `Agent: Stop All` | End every agent, keeping their folders |
 | `Agent: Manage` | Move an agent you started by hand onto a branch of its own |
-| `Sidebar: Agents` | Keep the agents in view, with how each stands |
+| `Sidebar: Sessions` | Keep the project's agents and open terminals in view, with how each stands |
 
 `Review`, `Merge`, `Discard`, and `Stop` act on the agent in the tab you are in, or on its row in `Agent: List`.
 
@@ -85,13 +85,11 @@ This works for an agent in any of Winter's terminals, one `Agent: New…` starte
 
 Both ask first if the agent is still working.
 
-## The Agents sidebar
+## The Sessions sidebar
 
-`Sidebar: Agents` lists the project's agents, and those you started yourself in Winter's terminals, each with an icon for how it stands: working, waiting for you, running, or stopped (pointing at the icon says which). Under its name is the folder it works in, shortened from the left a folder at a time when the sidebar is narrow (`~/W/apps/winter-term`, then `~/W/a/winter-term`); pointing at the row shows it in full.
+`Sidebar: Sessions` groups sessions into two sections: **Agents** (managed agents and agents you started by hand in a terminal) and **Terminals** (ordinary open terminals, including those in parked workspaces), each with an icon for how it stands: working, waiting for you, running, or stopped (pointing at the icon says which). Under its name is the folder it works in, shortened from the left a folder at a time when the sidebar is narrow (`~/W/apps/winter-term`, then `~/W/a/winter-term`); pointing at the row shows it in full.
 
-Each agent opens on a few lines about it: what it is doing, as its terminal's title says, and for one started with `Agent: New…`, the branch it started from. Click the arrow after an agent, or press `h` and `l`, to fold it shut or open. Click an agent that runs, on its row or its lines, to show its terminal; a stopped one takes a double click, since that starts it again.
-
-Every terminal, agents' among them, is also in `Sidebar: Terminals` ([Basics](basics.md#sidebars)), by what it runs or last ran, so you can see and reach everything running in every workspace.
+Each managed agent opens on a few lines about it: what it is doing, as its terminal's title says, and the branch it started from. Click the arrow beside an agent, or press `h` and `l`, to fold it shut or open. Click a running agent or terminal to show it; a stopped agent takes a double click, since that starts it again.
 
 | Key | Action |
 |---|---|

@@ -54,8 +54,7 @@ const STABLE_SETS: [&str; 2] = ["apps", SYMBOL_SET];
 
 /// Editor kind to the packed icon naming it. A kind not listed gets
 /// [`FALLBACK_EDITOR_ICON`].
-const EDITOR_ICONS: [(&str, &str); 33] = [
-    ("agents", "symbols/hubot"),
+const EDITOR_ICONS: [(&str, &str); 32] = [
     ("bib", "file/file_bibtex"),
     ("bibliography", "file/file_bibtex"),
     ("bookmarks", "symbols/bookmark"),
@@ -82,9 +81,9 @@ const EDITOR_ICONS: [(&str, &str); 33] = [
     ("preview", "file/file_markdown"),
     ("proc", "file/file_binary"),
     ("reading", "symbols/book"),
+    ("sessions", "symbols/terminal"),
     ("settings", "file/file_settings"),
     ("sys", "file/file_host"),
-    ("terminals", "symbols/terminal"),
     ("today", "file/file_notepad"),
     ("todo", "file/file_todo"),
     ("writing", "file/file_markdown"),
@@ -95,8 +94,9 @@ const TERMINAL_ICON: &str = "app/winter-terminal";
 
 /// Program a terminal runs to the packed icon its tab is drawn with in place
 /// of the terminal's. A program not listed keeps the terminal's.
-const PROGRAM_ICONS: [(&str, &str); 5] = [
+const PROGRAM_ICONS: [(&str, &str); 6] = [
     ("agy", "apps/antigravity"),
+    ("antigravity", "apps/antigravity"),
     ("claude", "apps/claude"),
     ("copilot", "apps/copilot"),
     ("gemini", "apps/gemini"),
@@ -269,6 +269,13 @@ fn terminal_icon() -> String {
     TERMINAL_ICON.to_string()
 }
 
+/// Whether a dedicated bundled app icon exists for terminal program `name`.
+pub(crate) fn has_program_icon(name: &str) -> bool {
+    PROGRAM_ICONS
+        .iter()
+        .any(|(program, _)| *program == name)
+}
+
 /// The icon naming a terminal tab running program `name`: the program's own,
 /// or the terminal's for one with none bundled.
 fn program_icon(name: &str) -> String {
@@ -437,6 +444,7 @@ mod tests {
         assert_eq!(program("claude").as_deref(), Some("apps/claude"));
         assert_eq!(program("pi").as_deref(), Some("apps/pi-code"));
         assert_eq!(program("agy").as_deref(), Some("apps/antigravity"));
+        assert_eq!(program("antigravity").as_deref(), Some("apps/antigravity"));
         assert_eq!(
             program("vim"),
             name_for(&IconKind::Terminal),

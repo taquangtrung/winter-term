@@ -16,7 +16,8 @@ use winter_terminal::session::Terminal;
 
 use super::super::App;
 use super::super::notice::WindowNotice;
-use super::super::panels::views::terminals::{Ran, TerminalEntry};
+use super::super::panels::views::sessions::{Ran, TerminalEntry};
+use super::record;
 use crate::control::AgentState;
 
 // ========================================================================
@@ -72,6 +73,17 @@ impl App {
     /// agent, which the Agents section lists.
     fn terminal_entry(&self, tab: TabId, workspace: Option<&str>) -> Option<TerminalEntry> {
         let terminal = self.open_tabs.terminal(&tab)?;
+        if terminal
+            .mux_session()
+            .is_some_and(|session| record::branch_of_session(session).is_some())
+            || self
+                .tabs
+                .agents
+                .of(tab)
+                .is_some_and(|state| state != AgentState::Stopped)
+        {
+            return None;
+        }
         let facts = terminal.title_facts();
         // The last command the shell reported (OSC 133), by its first line.
         let last = terminal
@@ -113,22 +125,12 @@ impl App {
         };
         Some(TerminalEntry {
             folder: facts.cwd.map(|cwd| abbreviate_home(Path::new(&cwd))),
-            ran: self.agent_ran(tab).unwrap_or(ran),
+            program: facts.program,
+            ran,
             tab,
             task,
             workspace: workspace.map(str::to_string),
         })
-    }
-
-    /// How the agent in `tab` stands, as the Terminals view marks it: at
-    /// work, or waiting for you; `None` for a terminal running none, or one
-    /// whose agent has stopped, marked as any other.
-    fn agent_ran(&self, tab: TabId) -> Option<Ran> {
-        match self.tabs.agents.of(tab)? {
-            AgentState::Working => Some(Ran::Running),
-            AgentState::Waiting => Some(Ran::Waiting),
-            AgentState::Stopped => None,
-        }
     }
 }
 

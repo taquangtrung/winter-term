@@ -11,17 +11,17 @@
 //! [`PanelPage`]; a view says what its rows are and what opening one does
 //! ([`PanelView`]).
 
-pub(in crate::window) mod agents;
+mod cards;
 pub(in crate::window) mod files;
 pub(in crate::window) mod git;
 pub(in crate::window) mod outline;
 pub(in crate::window) mod output;
 pub(in crate::window) mod problems;
 pub(in crate::window) mod search;
-pub(in crate::window) mod terminals;
+pub(in crate::window) mod sessions;
 pub(in crate::window) mod todo;
 
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use misty::layout::Justify;
 use misty::view::{
@@ -108,7 +108,7 @@ const KEYS: KeyTable<ListAct> = KeyTable {
 /// The panels' key tables, for the Keys page and `keybindings.kdl`.
 pub(crate) const KEY_TABLES: &[&dyn Listed] = &[
     &KEYS,
-    &agents::KEYS,
+    &sessions::KEYS,
     &files::KEYS,
     &git::KEYS,
     &output::KEYS,
@@ -118,6 +118,15 @@ pub(crate) const KEY_TABLES: &[&dyn Listed] = &[
 /// The space around a row's words, in logical pixels across and down.
 const ROW_PADDING_PX: (f32, f32) = (8.0, 3.0);
 
+/// Vertical gap between a two-line row's label and its muted subtitle.
+const SUBTITLE_GAP_PX: f32 = 2.0;
+
+/// Step interval of misty's spinner animation.
+const SPINNER_FRAME: Duration = Duration::from_millis(80);
+
+/// Vertical padding on a two-line row with a subtitle, in logical pixels.
+const SUBTITLE_PADDING_Y_PX: f32 = 5.0;
+
 /// How far a row is set in for each level of depth, in logical pixels.
 const INDENT_PX: f32 = 12.0;
 
@@ -125,25 +134,22 @@ const INDENT_PX: f32 = 12.0;
 const ROW_GAP_PX: f32 = 6.0;
 
 /// The marks on a folder or group's row, open and closed.
-const OPEN_MARK: &str = "\u{25be}";
-const CLOSED_MARK: &str = "\u{25b8}";
+pub(super) const OPEN_MARK: &str = "\u{25be}";
+pub(super) const CLOSED_MARK: &str = "\u{25b8}";
 
 /// How wide and tall an icon's slot is, in logical pixels: a row square.
-const ICON_PX: f32 = 16.0;
+pub(super) const ICON_PX: f32 = 16.0;
 
 /// How many cells an icon takes in a column it shares with words.
 const ICON_CELLS: f32 = 2.0;
 
 /// How wide the slot of a folder's open or closed mark is, in logical
 /// pixels.
-const FOLD_PX: f32 = 10.0;
-
-/// How wide a trailing fold toggle button is, in logical pixels.
-const FOLD_BUTTON_PX: f32 = 18.0;
+pub(super) const FOLD_PX: f32 = 10.0;
 
 /// What a folder or group's open or closed mark does when clicked.
-const FOLD_TIP: &str = "Collapse";
-const UNFOLD_TIP: &str = "Expand";
+pub(super) const FOLD_TIP: &str = "Collapse";
+pub(super) const UNFOLD_TIP: &str = "Expand";
 
 /// What the bundled codicons put before a code symbol's kind
 /// (`symbol-class`), left out of the words it is called by.
@@ -189,6 +195,8 @@ pub(in crate::window) struct PanelList {
     rows: Vec<ListRow>,
     /// The row the cursor is on, never a heading while any row is not one.
     selected: usize,
+    /// When the list's spinners started turning, or `None` while no row spins.
+    spinner_epoch: Option<Instant>,
     /// The view's title, which keeps its rows' ids apart from another
     /// view's.
     title: String,
@@ -228,9 +236,6 @@ pub(in crate::window) struct ListRow {
     pub(in crate::window) subtitle: Option<String>,
     /// Its full wording, or what it stands for, on hover.
     pub(in crate::window) tooltip: Option<String>,
-    /// Whether the fold toggle sits at the right of the first line instead of
-    /// reserving a left column.
-    pub(in crate::window) trailing_fold: bool,
 }
 
 /// A short colored mark on a row, and what its color means in words.
@@ -355,6 +360,12 @@ impl PanelList {
         self.rows = rows;
         load_row_icons(&mut self.icons, &self.rows);
         self.columns = Columns::of(&self.rows, &self.icons);
+        match has_spinner(&self.rows) {
+            true => {
+                self.spinner_epoch.get_or_insert_with(Instant::now);
+            }
+            false => self.spinner_epoch = None,
+        }
         let again = was.and_then(|(key, heading)| {
             self.rows
                 .iter()
@@ -382,6 +393,45 @@ impl PanelList {
     /// The row the cursor is on.
     pub(in crate::window) fn selected_row(&self) -> Option<&ListRow> {
         self.rows.get(self.selected)
+    }
+
+    /// The non-heading row with `key`, for custom card views to borrow its
+    /// precomputed icon, mark, subtitle, and tooltip.
+    pub(super) fn row_for(&self, key: usize) -> Option<&ListRow> {
+        self.rows
+            .iter()
+            .find(|row| !row.heading && row.key == key)
+    }
+
+    /// Loaded icons for custom panel views.
+    pub(super) fn icons(&self) -> &IconSet {
+        &self.icons
+    }
+
+    /// When active spinners in this list started turning.
+    pub(super) fn spinner_epoch(&self) -> Option<Instant> {
+        self.spinner_epoch
+    }
+
+    /// Ensure the named bundled symbol icons are loaded into this list's icon
+    /// set (for custom card views with extra action or empty-state icons).
+    pub(super) fn ensure_symbol_icons(&mut self, names: &[&'static str]) {
+        for &name in names {
+            load_icon(&mut self.icons, &IconKind::Symbol { name });
+        }
+    }
+
+    /// When the list next needs a redraw to advance a spinner, or `None` while
+    /// hidden or idle.
+    pub(in crate::window) fn next_spinner_tick(&self, shown: bool) -> Option<Instant> {
+        if !shown {
+            return None;
+        }
+        let epoch = self.spinner_epoch?;
+        let now = Instant::now();
+        let frame_ms = SPINNER_FRAME.as_millis() as u64;
+        let step = now.saturating_duration_since(epoch).as_millis() as u64 / frame_ms + 1;
+        Some(epoch + Duration::from_millis(step * frame_ms))
     }
 
     /// Put the cursor on the row of `key`, a heading's or not.
@@ -707,17 +757,20 @@ impl Columns {
         let widest =
             |cells: Option<f32>, wide: f32| Some(cells.map_or(wide, |cells| cells.max(wide)));
         for row in rows {
-            self.fold |= row.fold.is_some() && !row.trailing_fold && !row.heading;
-            self.icon |= row.icon.is_some();
+            self.fold |= row.fold.is_some() && !row.heading;
+            self.icon |= row.icon.is_some() && !row.heading;
             if let Some(mark) = &row.mark {
-                let drawn = mark.icon.as_ref().and_then(|kind| art_name(icons, kind));
-                let wide = match drawn {
-                    Some(_) => ICON_CELLS,
-                    None => cells_of(&mark.text),
+                let is_icon = mark.icon == Some(IconKind::Spinner)
+                    || mark.icon.as_ref().and_then(|kind| art_name(icons, kind)).is_some();
+                let wide = match is_icon {
+                    true => ICON_CELLS,
+                    false => cells_of(&mark.text),
                 };
                 self.mark = widest(self.mark, wide);
             }
-            if let Some(detail) = &row.detail {
+            if !row.heading
+                && let Some(detail) = &row.detail
+            {
                 self.detail = widest(self.detail, cells_of(detail).min(MAX_DETAIL_CELLS));
             }
         }
@@ -762,21 +815,17 @@ fn row_view<S: PanelView>(list: &PanelList, at: usize) -> Element<'_, S> {
         return heading_view(list, at);
     }
     let columns = list.columns;
-    let mut parts: Vec<Element<'_, S>> = Vec::new();
-    if columns.fold {
-        let mark = match shown.fold.filter(|_| !shown.trailing_fold) {
-            Some(open) => fold_button(open, at, FOLD_PX),
-            None => blank(Extent::Px(FOLD_PX)),
-        };
-        parts.push(mark);
-    }
-    if columns.icon {
+    let leading_fold = columns.fold.then(|| match shown.fold {
+        Some(open) => fold_button(open, at, FOLD_PX),
+        None => blank(Extent::Px(FOLD_PX)),
+    });
+    let leading_icon = columns.icon.then(|| {
         let icon = shown.icon.as_ref().and_then(|icon| {
             let art = art_name(&list.icons, &icon.kind)?;
             Some(icon_view(&list.icons, art, icon.color, &icon.name))
         });
-        parts.push(icon.unwrap_or_else(|| blank(Extent::Px(ICON_PX))));
-    }
+        icon.unwrap_or_else(|| blank(Extent::Px(ICON_PX)))
+    });
     let label = match shown.heading {
         true if shown.note => text(shown.label.as_str()).muted().proportional(),
         // In capitals, so it never reads as one of the rows under it.
@@ -789,7 +838,10 @@ fn row_view<S: PanelView>(list: &PanelList, at: usize) -> Element<'_, S> {
         false => text(shown.label.as_str()).proportional(),
     };
     let trailing_mark = columns.mark.map(|cells| {
-        let mark = shown.mark.as_ref().map(|mark| mark_view(&list.icons, mark));
+        let mark = shown
+            .mark
+            .as_ref()
+            .map(|mark| mark_view(&list.icons, list.spinner_epoch, mark));
         let slot = mark.unwrap_or_else(|| blank(Extent::Px(ICON_PX)));
         row([slot]).width(Extent::Cells(cells))
     });
@@ -800,42 +852,26 @@ fn row_view<S: PanelView>(list: &PanelList, at: usize) -> Element<'_, S> {
             .justify(Justify::End)
             .width(Extent::Cells(cells))
     });
-    let trailing_fold = shown
-        .fold
-        .filter(|_| shown.trailing_fold)
-        .map(|open| fold_button(open, at, FOLD_BUTTON_PX));
-    match (&shown.subtitle, shown.trailing_fold) {
-        (Some(subtitle), true) => {
-            let mut first_line = vec![Element::from(label).grow(1.0)];
-            first_line.extend(trailing_mark);
-            first_line.extend(trailing_detail);
-            first_line.extend(trailing_fold);
-            let stack = column([
-                row(first_line).gap(Space::Px(ROW_GAP_PX)),
-                Element::from(text(subtitle).muted()),
-            ]);
-            parts.push(stack.grow(1.0));
-        }
-        (Some(subtitle), false) => {
-            parts.push(
-                column([Element::from(label), Element::from(text(subtitle).muted())]).grow(1.0),
-            );
-            parts.extend(trailing_mark);
-            parts.extend(trailing_detail);
-        }
-        (None, _) => {
-            parts.push(Element::from(label).grow(1.0));
-            parts.extend(trailing_mark);
-            parts.extend(trailing_detail);
-            parts.extend(trailing_fold);
-        }
-    }
-    let mut built = row(parts)
-        .gap(Space::Px(ROW_GAP_PX))
-        .padding_px(
-            ROW_PADDING_PX.0 + INDENT_PX * shown.depth as f32,
-            ROW_PADDING_PX.1,
-        )
+    let mut first_line: Vec<Element<'_, S>> = Vec::new();
+    first_line.extend(leading_fold);
+    first_line.extend(leading_icon);
+    first_line.push(Element::from(label).grow(1.0));
+    first_line.extend(trailing_mark);
+    first_line.extend(trailing_detail);
+    let body = match &shown.subtitle {
+        Some(subtitle) => column([
+            row(first_line).gap(Space::Px(ROW_GAP_PX)),
+            Element::from(text(subtitle).muted()),
+        ])
+        .gap(Space::Px(SUBTITLE_GAP_PX)),
+        None => row(first_line).gap(Space::Px(ROW_GAP_PX)),
+    };
+    let pad_y = match shown.subtitle.is_some() {
+        true => SUBTITLE_PADDING_Y_PX,
+        false => ROW_PADDING_PX.1,
+    };
+    let mut built = body
+        .padding_px(ROW_PADDING_PX.0 + INDENT_PX * shown.depth as f32, pad_y)
         // Outlined rather than filled under the pointer, so the selected
         // row's fill still shows and the two never read alike.
         .hover_border(ThemeToken::Border)
@@ -874,7 +910,7 @@ fn heading_view<S: PanelView>(list: &PanelList, at: usize) -> Element<'_, S> {
         header = header.count(detail.as_str());
     }
     if let Some(mark) = &shown.mark {
-        header = header.trailing(mark_view(&list.icons, mark));
+        header = header.trailing(mark_view(&list.icons, list.spinner_epoch, mark));
     }
     if let Some(tooltip) = &shown.tooltip {
         header = header.tooltip(tooltip.as_str());
@@ -903,9 +939,18 @@ fn fold_button<S: PanelView>(open: bool, at: usize, width: f32) -> Element<'stat
         .on_pointer_press(move |state: &mut S, _| state.list_mut().click_fold(at))
 }
 
-/// `mark` as its icon where the artwork is bundled, else as its words, in
-/// its color either way.
-fn mark_view<'a, S: PanelView>(icons: &'a IconSet, mark: &'a Mark) -> Element<'a, S> {
+/// `mark` as a live spinner, its bundled icon, or its fallback text, in its
+/// color either way.
+pub(super) fn mark_view<'a, S: PanelView>(
+    icons: &'a IconSet,
+    spinner_epoch: Option<Instant>,
+    mark: &'a Mark,
+) -> Element<'a, S> {
+    if mark.icon == Some(IconKind::Spinner)
+        && let Some(epoch) = spinner_epoch
+    {
+        return spinner_view(epoch, mark.color, &mark.meaning);
+    }
     let art = mark.icon.as_ref().and_then(|kind| art_name(icons, kind));
     match art {
         Some(art) => icon_view(icons, art, mark.color, &mark.meaning),
@@ -914,9 +959,40 @@ fn mark_view<'a, S: PanelView>(icons: &'a IconSet, mark: &'a Mark) -> Element<'a
     }
 }
 
+/// A live spinner started at `epoch`, centered in an icon square and tinted
+/// `color`.
+pub(super) fn spinner_view<'a, S: PanelView>(
+    epoch: Instant,
+    color: ThemeToken,
+    name: &'a str,
+) -> Element<'a, S> {
+    let drawn = canvas(move |frame: &mut MistyFrame, area: Rect, theme: &Theme| {
+        let top = area.y + ((area.height - frame.cell_metrics().height) / 2.0).round();
+        frame.draw_spinner(epoch, area, top, theme.color(color));
+    })
+    .name(name);
+    Element::from(drawn)
+        .width(Extent::Px(ICON_PX))
+        .height(Extent::Px(ICON_PX))
+        .tooltip(name)
+}
+
+/// Whether any row in `rows` displays a live spinner.
+fn has_spinner(rows: &[ListRow]) -> bool {
+    rows.iter().any(|row| {
+        row.mark
+            .as_ref()
+            .is_some_and(|mark| mark.icon == Some(IconKind::Spinner))
+            || row
+                .icon
+                .as_ref()
+                .is_some_and(|icon| icon.kind == IconKind::Spinner)
+    })
+}
+
 /// The icon `art` of `icons`, a row square, tinted `color` where it takes
 /// one, called `name` to a screen reader and to the pointer.
-fn icon_view<'a, S: PanelView>(
+pub(super) fn icon_view<'a, S: PanelView>(
     icons: &'a IconSet,
     art: String,
     color: ThemeToken,
@@ -946,7 +1022,7 @@ fn blank<'a, S: PanelView>(width: Extent) -> Element<'a, S> {
 }
 
 /// The name `kind`'s artwork has in `icons`, where it was loaded.
-fn art_name(icons: &IconSet, kind: &IconKind) -> Option<String> {
+pub(super) fn art_name(icons: &IconSet, kind: &IconKind) -> Option<String> {
     icons::name_for(kind).filter(|name| icons.get(name).is_some())
 }
 

@@ -17,8 +17,8 @@ use winter_emulator::Grid;
 use winter_model::layout::TabId;
 use winter_model::path::abbreviate_home;
 
-use super::super::panels::views::agents::{Detected, Standing};
 use super::super::App;
+use super::super::panels::views::sessions::{Detected, Standing};
 use super::record;
 use crate::config::AgentKind;
 use crate::control::{AgentReport, AgentState};
@@ -171,9 +171,9 @@ impl App {
         task_of(self.tabs.program_title(tab)?)
     }
 
-    /// The terminals running an agent started by hand, by their tabs'
-    /// names, with how each stands. A managed agent has a row of its own,
-    /// and one that stopped left a shell behind, so neither is among them.
+    /// Terminals running an agent started by hand, with how each stands.
+    /// Managed agents have their own rows, and stopped agents leave plain
+    /// shells behind for the Terminals section.
     pub(in crate::window) fn detected_agents(&self) -> Vec<Detected> {
         let mut detected: Vec<Detected> = self
             .tabs
@@ -195,7 +195,6 @@ impl App {
                 };
                 let facts = self.open_tabs.terminal(tab)?.title_facts();
                 let folder = facts.cwd.map(|cwd| abbreviate_home(Path::new(&cwd)));
-                // Known by its hook alone, it goes by its tab's name.
                 let agent = facts
                     .program
                     .and_then(|program| self.agent_kind_of_program(&program))
@@ -209,7 +208,6 @@ impl App {
                 })
             })
             .collect();
-        // The map keeps no order; the rows should not shuffle.
         detected.sort_by_key(|detected| detected.tab.0);
         detected
     }

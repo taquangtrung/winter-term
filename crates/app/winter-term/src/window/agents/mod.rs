@@ -37,7 +37,7 @@ pub(in crate::window) use status::AgentStates;
 
 use super::App;
 use super::notice::WindowNotice;
-use super::panels::views::agents::Standing;
+use super::panels::views::sessions::Standing;
 use super::picker::sources::listing::ListingAction;
 use super::picker::sources::{Entry, Listing};
 use super::picker::{AgentRequest, WindowOutcome};

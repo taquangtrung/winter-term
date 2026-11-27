@@ -101,16 +101,14 @@ pub struct DockSnapshot<K> {
 /// What a sidebar shows.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum SidebarKind {
-    /// The project's managed agents, and how each stands.
-    Agents,
     /// The project's folders as a tree.
     Files,
     /// The project's git status.
     Git,
     /// The headings and symbols of the main tab last worked in.
     Outline,
-    /// Every terminal open in the window, and what each runs.
-    Terminals,
+    /// The project's managed agents and open terminals across workspaces.
+    Sessions,
     /// The project's TODO comments.
     Todo,
 }

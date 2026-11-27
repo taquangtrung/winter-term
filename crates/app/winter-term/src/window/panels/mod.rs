@@ -30,14 +30,13 @@ use crate::window::App;
 use crate::window::agents::Agent;
 use crate::window::editor::EditorKind;
 use crate::window::notice::WindowNotice;
-use views::agents::{AgentsView, Managed};
 use views::files::FilesView;
 use views::git::GitView;
 use views::outline::OutlineView;
 use views::output::{OutputView, Run};
 use views::problems::{ProblemsView, Source};
 use views::search::{ResultSet, SearchView};
-use views::terminals::TerminalsView;
+use views::sessions::{Managed, SessionsView};
 use views::todo::TodoView;
 use views::{PanelPage, PanelView};
 
@@ -49,13 +48,12 @@ use views::{PanelPage, PanelView};
 const LANGUAGE_SERVER: &str = "Language server";
 
 /// Every sidebar view, in the order each sidebar lists those it starts with.
-const SIDEBAR_KINDS: [SidebarKind; 6] = [
+const SIDEBAR_KINDS: [SidebarKind; 5] = [
     SidebarKind::Files,
     SidebarKind::Git,
     SidebarKind::Outline,
     SidebarKind::Todo,
-    SidebarKind::Agents,
-    SidebarKind::Terminals,
+    SidebarKind::Sessions,
 ];
 
 /// Every bottom panel view, in the order the bottom panel lists them.
@@ -91,8 +89,7 @@ impl ViewKind {
             ViewKind::Sidebar(SidebarKind::Git) => "git",
             ViewKind::Sidebar(SidebarKind::Outline) => "outline",
             ViewKind::Sidebar(SidebarKind::Todo) => "todo",
-            ViewKind::Sidebar(SidebarKind::Agents) => "agents",
-            ViewKind::Sidebar(SidebarKind::Terminals) => "terminals",
+            ViewKind::Sidebar(SidebarKind::Sessions) => "sessions",
         }
     }
 
@@ -106,8 +103,7 @@ impl ViewKind {
             ViewKind::Sidebar(SidebarKind::Git) => "sidebar_git",
             ViewKind::Sidebar(SidebarKind::Outline) => "sidebar_outline",
             ViewKind::Sidebar(SidebarKind::Todo) => "sidebar_todo",
-            ViewKind::Sidebar(SidebarKind::Agents) => "sidebar_agents",
-            ViewKind::Sidebar(SidebarKind::Terminals) => "sidebar_terminals",
+            ViewKind::Sidebar(SidebarKind::Sessions) => "sidebar_sessions",
         }
     }
 
@@ -121,8 +117,7 @@ impl ViewKind {
             ViewKind::Sidebar(SidebarKind::Git) => "Git",
             ViewKind::Sidebar(SidebarKind::Outline) => "Outline",
             ViewKind::Sidebar(SidebarKind::Todo) => "Todo",
-            ViewKind::Sidebar(SidebarKind::Agents) => "Agents",
-            ViewKind::Sidebar(SidebarKind::Terminals) => "Terminals",
+            ViewKind::Sidebar(SidebarKind::Sessions) => "Sessions",
         }
     }
 }
@@ -407,109 +402,79 @@ impl App {
             self.focus_main_area();
             self.show_editor(EditorKind::List, Box::new(editor));
         }
-        self.take_agents_view_requests();
-        self.take_terminals_view_requests();
+        self.take_sessions_view_requests();
     }
 
-    /// What the Terminals view asked: a terminal shown, or the view filled
-    /// as it comes into sight.
-    fn take_terminals_view_requests(&mut self) {
-        let Some(tab) = self.sidebar_view(SidebarKind::Terminals) else {
+    /// What the Sessions view asked: an agent or terminal shown or acted on,
+    /// or the view refreshed as it comes into sight.
+    fn take_sessions_view_requests(&mut self) {
+        let Some(tab) = self.sidebar_view(SidebarKind::Sessions) else {
             return;
         };
-        if let Some(shown) = self.view_mut(tab, TerminalsView::take_request).flatten() {
-            self.focus_main_area();
-            self.reveal_tab(shown);
-        }
-        if self.view_mut(tab, TerminalsView::take_stale) == Some(true) {
-            self.sync_terminals_view();
-        }
-    }
-
-    /// What the Agents view asked: an agent shown or acted on, or the
-    /// agents looked for again.
-    fn take_agents_view_requests(&mut self) {
-        let Some(tab) = self.sidebar_view(SidebarKind::Agents) else {
-            return;
-        };
-        let asked = self.view_mut(tab, AgentsView::take_request).flatten();
+        let asked = self.view_mut(tab, SessionsView::take_request).flatten();
         if let Some(request) = asked {
             let focused = self.layout().focused();
             self.focus_main_area();
             self.carry_out_agent(request, focused);
         }
-        if self.view_mut(tab, AgentsView::take_stale) == Some(true) {
+        if self.view_mut(tab, SessionsView::take_stale) == Some(true) {
+            self.sync_sessions_view();
             self.look_for_agents_view();
         }
     }
 
-    /// Fill the Agents view with `agents`, the managed agents found, and
-    /// the agents started by hand.
+    /// Fill the Sessions view with `agents`, the managed agents found, and
+    /// open terminals.
     pub(in crate::window) fn fill_agents_view(&mut self, agents: Vec<Agent>) {
-        let Some(tab) = self.sidebar_view(SidebarKind::Agents) else {
+        let Some(tab) = self.sidebar_view(SidebarKind::Sessions) else {
             return;
         };
         let managed = self.managed_in_view(agents);
         self.take_in_running_agents();
         let detected = self.detected_agents();
-        self.view_mut(tab, |view: &mut AgentsView| {
+        let entries = self.terminal_entries();
+        self.view_mut(tab, |view: &mut SessionsView| {
             view.set_agents(managed);
             view.set_detected(detected);
+            view.set_terminals(entries);
         });
         self.dirty = true;
     }
 
-    /// Bring the views of what runs in the terminals up to date, those in
-    /// sight: an agent started, stopped, or changed how it stands, a
-    /// terminal retitled, ran something, opened, or closed.
+    /// Bring the views of what runs in the terminals up to date, when in sight:
+    /// an agent started, stopped, or changed how it stands, a terminal
+    /// retitled, ran something, opened, or closed.
     pub(in crate::window) fn sync_live_views(&mut self) {
-        self.sync_agents_view();
-        self.sync_terminals_view();
+        self.sync_sessions_view();
     }
 
-    /// Bring the Terminals view up to date, when it is in sight.
-    fn sync_terminals_view(&mut self) {
-        let Some(tab) = self.sidebar_view(SidebarKind::Terminals) else {
+    /// Bring the Sessions view up to date, when it is in sight.
+    fn sync_sessions_view(&mut self) {
+        let Some(tab) = self.sidebar_view(SidebarKind::Sessions) else {
             return;
         };
-        let shown = self.view_mut(tab, |view: &mut TerminalsView| view.is_shown());
-        if shown != Some(true) {
-            return;
-        }
-        self.take_in_running_agents();
-        let entries = self.terminal_entries();
-        self.view_mut(tab, |view: &mut TerminalsView| view.set_terminals(entries));
-        self.dirty = true;
-    }
-
-    /// Bring the Agents view up to date, when it is in sight: an agent
-    /// started by hand, stopped, changed how it stands, or retitled its
-    /// terminal with what it is doing.
-    fn sync_agents_view(&mut self) {
-        let Some(tab) = self.sidebar_view(SidebarKind::Agents) else {
-            return;
-        };
-        let shown = self.view_mut(tab, |view: &mut AgentsView| view.is_shown());
+        let shown = self.view_mut(tab, |view: &mut SessionsView| view.is_shown());
         if shown != Some(true) {
             return;
         }
         self.take_in_running_agents();
         let agents = self
-            .view_mut(tab, |view: &mut AgentsView| view.managed_agents())
+            .view_mut(tab, |view: &mut SessionsView| view.managed_agents())
             .flatten();
         let managed = agents.map(|agents| self.managed_in_view(agents));
         let detected = self.detected_agents();
-        self.view_mut(tab, |view: &mut AgentsView| {
-            // Still looking for the managed ones: the thread fills them.
+        let entries = self.terminal_entries();
+        self.view_mut(tab, |view: &mut SessionsView| {
             if let Some(managed) = managed {
                 view.set_agents(managed);
             }
             view.set_detected(detected);
+            view.set_terminals(entries);
         });
         self.dirty = true;
     }
 
-    /// `agents` as the Agents view shows them: each standing as its tab
+    /// `agents` as the Sessions view shows them: each standing as its tab
     /// last said, or as its session is, and doing what its tab's title says.
     fn managed_in_view(&self, agents: Vec<Agent>) -> Vec<Managed> {
         agents
@@ -522,11 +487,11 @@ impl App {
             .collect()
     }
 
-    /// Have the Agents view look again, when it is in sight: an agent was
+    /// Have the Sessions view look again, when it is in sight: an agent was
     /// started, or ended.
     pub(in crate::window) fn refresh_agents_view(&mut self) {
-        if let Some(tab) = self.sidebar_view(SidebarKind::Agents) {
-            self.view_mut(tab, AgentsView::mark_stale);
+        if let Some(tab) = self.sidebar_view(SidebarKind::Sessions) {
+            self.view_mut(tab, SessionsView::mark_stale);
         }
     }
 
@@ -744,11 +709,8 @@ impl App {
                 root,
                 &self.config.todo_keywords,
             ))),
-            ViewKind::Sidebar(SidebarKind::Agents) => {
-                Box::new(PanelPage::new(AgentsView::default()))
-            }
-            ViewKind::Sidebar(SidebarKind::Terminals) => {
-                Box::new(PanelPage::new(TerminalsView::default()))
+            ViewKind::Sidebar(SidebarKind::Sessions) => {
+                Box::new(PanelPage::new(SessionsView::default()))
             }
         }
     }
@@ -877,10 +839,9 @@ impl App {
 fn start_edge(kind: SidebarKind) -> Edge {
     match kind {
         SidebarKind::Outline => Edge::Right,
-        SidebarKind::Agents
-        | SidebarKind::Files
+        SidebarKind::Files
         | SidebarKind::Git
-        | SidebarKind::Terminals
+        | SidebarKind::Sessions
         | SidebarKind::Todo => Edge::Left,
     }
 }
@@ -1126,8 +1087,7 @@ mod tests {
                 SidebarKind::Files,
                 SidebarKind::Git,
                 SidebarKind::Todo,
-                SidebarKind::Agents,
-                SidebarKind::Terminals
+                SidebarKind::Sessions
             ]
         );
         assert_eq!(
@@ -1163,8 +1123,7 @@ mod tests {
             [
                 SidebarKind::Git,
                 SidebarKind::Todo,
-                SidebarKind::Agents,
-                SidebarKind::Terminals
+                SidebarKind::Sessions
             ]
         );
         assert_eq!(

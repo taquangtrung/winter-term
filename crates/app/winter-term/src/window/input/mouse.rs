@@ -1997,7 +1997,7 @@ mod tests {
     #[test]
     fn test_cursor_icon_is_default_over_sidebar_view_pages() {
         let mut app = App::new();
-        app.open_sidebar_view(winter_model::layout::SidebarKind::Agents);
+        app.open_sidebar_view(winter_model::layout::SidebarKind::Sessions);
         let agents = app
             .layout()
             .sidebar(winter_model::layout::Edge::Left)
