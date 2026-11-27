@@ -22,10 +22,8 @@ use misty::view::{
     HostedView, SettingChange, SettingEdit as MistyEdit, SettingScope, SettingsPage as MistyPage,
     settings_page,
 };
-use misty::{
-    AccessAction, Element, EventCx, Frame as MistyFrame, Input, Key, KeyCode, Mods, NumberRange,
-    Rect, Setting, SettingValue, SettingsSection, Strings, Theme,
-};
+use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, Input, Key, KeyCode, Mods, Rect, Setting, SettingValue, SettingsSection, Strings, Theme};
+use misty::widgets::NumberRange;
 
 use winter_model::editor::{
     EditorOutcome, EditorRequest, EditorStatus, Page, PageView, SettingEdit,

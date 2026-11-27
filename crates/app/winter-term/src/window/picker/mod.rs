@@ -23,7 +23,8 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use misty::picker::{self, History, Parked, Picker, PreviewKind, Recency, Reply, Source};
-use misty::{EventCx, QueryStyle, QuickPick};
+use misty::EventCx;
+use misty::widgets::{QueryStyle, QuickPick};
 use winter_field::misty_key;
 use winter_model::input::Key;
 use winter_model::input::table::find;

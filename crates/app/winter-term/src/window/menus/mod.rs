@@ -7,7 +7,7 @@
 pub(in crate::window) mod context;
 
 use crate::render::MenuStyle;
-use misty::{Menu, MenuEntry, MenuItem, PopupSide};
+use misty::widgets::{Menu, MenuEntry, MenuItem, PopupSide};
 
 use winter_model::input::{Keymap, format_key};
 

@@ -367,14 +367,14 @@ pub(in crate::window) struct WindowParts {
     pub(in crate::window) notifier: Notifier,
     /// The notifier's cards and tasks, as misty draws them in the top-right
     /// corner.
-    pub(in crate::window) cards: misty::Toasts,
+    pub(in crate::window) cards: misty::widgets::Toasts,
     /// The status bar misty draws along the window's bottom.
-    pub(in crate::window) status_bar: misty::StatusBar,
+    pub(in crate::window) status_bar: misty::widgets::StatusBar,
     /// The title bar misty draws along the window's top, and the shape the
     /// settings gave it; `None` before the first frame.
-    pub(in crate::window) title_bar: Option<(frame::title_bar::TitleBarShape, misty::TitleBar)>,
+    pub(in crate::window) title_bar: Option<(frame::title_bar::TitleBarShape, misty::widgets::TitleBar)>,
     /// The tooltip misty hangs under what the pointer rests on.
-    pub(in crate::window) tooltip: misty::Tooltip,
+    pub(in crate::window) tooltip: misty::widgets::Tooltip,
     /// The tooltip that hangs off the pointer, as what it says and where
     /// the pointer first rested, so it stays put while the pointer moves.
     pub(in crate::window) pointer_tip: Option<(String, misty::Rect)>,
@@ -418,14 +418,14 @@ pub(in crate::window) struct WindowParts {
     /// A tab dragged off its strip, while one is.
     pub(in crate::window) tab_drag: Option<strip::view::TabDragging>,
     /// The key menu misty draws, while one is up.
-    pub(in crate::window) transient: Option<misty::Transient>,
+    pub(in crate::window) transient: Option<misty::widgets::Transient>,
     /// The title of the key menu up, to tell a new menu from the same one.
     pub(in crate::window) transient_title: Option<String>,
     /// The key menu as the last frame worked it out, for misty to draw and
     /// take the pointer by.
     pub(in crate::window) drawn_transient: Option<crate::render::TransientView>,
     /// The which-key popup misty draws.
-    pub(in crate::window) which_key: misty::WhichKey,
+    pub(in crate::window) which_key: misty::widgets::WhichKey,
     /// The which-key popup as the last frame worked it out, for misty to
     /// draw and take clicks by.
     pub(in crate::window) drawn_which_key: Option<crate::render::WhichKeyView>,
@@ -434,7 +434,7 @@ pub(in crate::window) struct WindowParts {
     pub(in crate::window) pane_popups: Vec<frame::pane_popups::PanePopups>,
     /// The status bar the last frame built, for misty's bar to draw and
     /// take the pointer by.
-    pub(in crate::window) drawn_status: Option<misty::StatusLine>,
+    pub(in crate::window) drawn_status: Option<misty::widgets::StatusLine>,
     /// What holds the keyboard over the panes, if anything: a palette, a
     /// question, a name being typed, the settings page (see [`Overlay`]).
     pub(in crate::window) overlay: Option<Overlay>,

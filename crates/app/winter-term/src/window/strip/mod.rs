@@ -7,7 +7,8 @@ pub(in crate::window) mod busy;
 mod sidebar;
 pub(in crate::window) mod view;
 
-use misty::{CellMetrics, Rect, TabStrip};
+use misty::{CellMetrics, Rect};
+use misty::widgets::TabStrip;
 
 use winter_model::layout::{FocusDir, PaneArea, Region, TabId};
 use winter_model::paint::IconKind;

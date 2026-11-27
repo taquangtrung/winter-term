@@ -3,7 +3,8 @@
 //! scopes it sits in, outermost first, hung by the cursor.
 
 use crate::render::TokenInspectView;
-use misty::{Frame, InfoCard, Rect, Rgb, Span, StyledText, TextColor, ThemeToken, Widget};
+use misty::{Frame, Rect, Rgb, Span, StyledText, TextColor, ThemeToken, Widget};
+use misty::widgets::InfoCard;
 
 use crate::window::App;
 use crate::window::appearance::ui_theme;

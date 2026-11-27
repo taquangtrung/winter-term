@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use crate::render::PickerPlacement;
 use misty::Rgb;
 use misty::picker::{PickerAct, RowKey};
-use misty::{EventCx, Frame, Input, QuickPickPlacement, Rect, Widget};
+use misty::{EventCx, Frame, Input, Rect, Widget};
+use misty::widgets::QuickPickPlacement;
 
 use super::keys::KEYS;
 use crate::window::App;
@@ -124,7 +125,7 @@ fn runs(colors: &[(usize, crate::render::ThemeRgb)]) -> Vec<(usize, Rgb)> {
 }
 
 /// Every icon name the picker's rows and their buttons draw.
-fn icon_names(quick: &misty::QuickPick<super::WindowOutcome, super::Preview>) -> Vec<String> {
+fn icon_names(quick: &misty::widgets::QuickPick<super::WindowOutcome, super::Preview>) -> Vec<String> {
     quick
         .picker()
         .view()

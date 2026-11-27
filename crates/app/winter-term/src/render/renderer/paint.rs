@@ -11,7 +11,8 @@ use super::colors::{
 use super::display::shown_cell;
 use super::frame::{CURRENT_MATCH_FG, SEARCH_MATCH_FG, pane_cell_extent, strip_panes};
 use super::{GpuRenderer, PaneView, grid_area};
-use misty::{Attributes, CellColor, CellHighlight, CellStyle, SolidFill};
+use misty::SolidFill;
+use misty::grid::{Attributes, CellColor, CellHighlight, CellStyle};
 use winter_emulator::{Cell, CellWidth, Color as GridColor, UnderlineStyle};
 use winter_model::paint::INDENT_GUIDE;
 use winter_theme::DIM_FACTOR;
@@ -36,7 +37,7 @@ pub struct PanePaint {
     pub blinks: bool,
     /// Every cell, row by row, `cols` to a row: its glyph, color, and face
     /// on the default background (its own background is among the fills).
-    pub cells: Vec<misty::Cell>,
+    pub cells: Vec<misty::grid::Cell>,
     /// How many columns.
     pub cols: usize,
     /// What is drawn over the cells and their glyphs, in order: a bar or
@@ -96,7 +97,7 @@ impl GpuRenderer {
         &self,
         pane: &PaneView,
         (room_cols, room_rows): (usize, usize),
-    ) -> Vec<misty::Cell> {
+    ) -> Vec<misty::grid::Cell> {
         let grid = pane.grid;
         let theme = self.themes.winter();
         let presentation = pane.presentation();
@@ -141,9 +142,9 @@ impl GpuRenderer {
                 let shown = shown_cell(grid, pane.overlay, row, col, presentation);
                 let cell = shown.as_deref();
                 let width = match cell.map(|cell| cell.width) {
-                    Some(CellWidth::Spacer) => misty::CellWidth::Continuation,
-                    Some(CellWidth::Wide) => misty::CellWidth::Wide,
-                    _ => misty::CellWidth::Single,
+                    Some(CellWidth::Spacer) => misty::grid::CellWidth::Continuation,
+                    Some(CellWidth::Wide) => misty::grid::CellWidth::Wide,
+                    _ => misty::grid::CellWidth::Single,
                 };
                 let cursor_fg = block_cursor
                     .filter(|&at| at == (row, col))
@@ -204,10 +205,10 @@ impl GpuRenderer {
                     .filter(|cell| cell.style.underline == UnderlineStyle::Curly)
                     .map(|cell| dim(underline_color(cell, theme)))
                 {
-                    Some(color) => (misty::UnderlineStyle::Curly, cell_rgb(color)),
-                    None => (misty::UnderlineStyle::None, CellColor::Default),
+                    Some(color) => (misty::grid::UnderlineStyle::Curly, cell_rgb(color)),
+                    None => (misty::grid::UnderlineStyle::None, CellColor::Default),
                 };
-                cells.push(misty::Cell {
+                cells.push(misty::grid::Cell {
                     ch,
                     style: CellStyle {
                         attributes,

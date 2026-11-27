@@ -9,7 +9,8 @@ mod title;
 use std::path::Path;
 
 use crate::render::{Region, StatusHover};
-use misty::{Rect, TitleBarHit, TooltipPlacement, WindowButton};
+use misty::Rect;
+use misty::widgets::{TitleBarHit, TooltipPlacement, WindowButton};
 
 use winter_model::layout::TabId;
 use winter_model::path::abbreviate_home;

@@ -5,10 +5,8 @@
 //! hands back the button clicked; the window answers it as the button's key
 //! would, so a click and a key take the same path.
 
-use misty::{
-    BoxStyle, Dialog, DialogButton, DialogResponse, EventCx, Frame, Input, Paragraph, Point, Rect,
-    Rgba, Severity, StyledText, TextColor, Theme, ThemeToken, Widget,
-};
+use misty::{BoxStyle, EventCx, Frame, Input, Paragraph, Point, Rect, Rgba, Severity, StyledText, TextColor, Theme, ThemeToken, Widget};
+use misty::widgets::{Dialog, DialogButton, DialogResponse};
 use winter_model::input::{Key, KeyCode};
 
 use crate::render::{InputView, NoticeKind};

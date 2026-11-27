@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use misty::QuickPick;
+use misty::widgets::QuickPick;
 use misty::picker::Picker;
 use winter_field::Field;
 use winter_model::button::{Button, ButtonGroup};

@@ -16,7 +16,8 @@
 
 use std::path::{Path, PathBuf};
 
-use misty::{Menu, MenuEntry, MenuItem, PopupSide, Rect};
+use misty::Rect;
+use misty::widgets::{Menu, MenuEntry, MenuItem, PopupSide};
 
 use winter_model::editor::{EditorMenuItem, MenuRun};
 use winter_model::input::Key;

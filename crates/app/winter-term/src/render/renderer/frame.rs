@@ -10,7 +10,8 @@ use super::background::{
 };
 use super::{GridStrip, PaneView, grid_area};
 use crate::render::image::ImagePlacement;
-use misty::{CellHighlight, Rect, SolidFill};
+use misty::{Rect, SolidFill};
+use misty::grid::CellHighlight;
 use winter_emulator::CursorShape;
 use winter_theme::Rgb;
 

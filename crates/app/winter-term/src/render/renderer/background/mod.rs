@@ -20,7 +20,8 @@ use std::collections::HashSet;
 use super::display::{CellOverlay, ScreenPresentation, shown_cell};
 use cell_color::{CellBgOverlays, FLASH_PEAK_ALPHA, cell_bg_color, lerp_to_bg};
 use decoration::{DecorationStyle, push_decorations};
-use misty::{CellHighlight, Rect, Rgba, SolidFill};
+use misty::{Rect, Rgba, SolidFill};
+use misty::grid::CellHighlight;
 use scrollbar::{ScrollbarParams, scrollbar_quads};
 use winter_emulator::{Color as GridColor, CursorShape, Grid};
 use winter_theme::Theme;
@@ -78,7 +79,7 @@ pub(super) struct BgParams<'a> {
     pub(super) presentation: ScreenPresentation,
     pub(super) offset_y: f32,
     /// The inclusive span of viewport rows to paint with [`Theme::cursor_line_bg`]
-    ///: the Normal-mode cursor's logical line, which covers every row of a
+    /// : the Normal-mode cursor's logical line, which covers every row of a
     /// soft-wrapped line. `None` outside Normal/Visual mode.
     pub(super) cursor_line: Option<(usize, usize)>,
     /// The inclusive span of viewport rows to paint with [`Theme::jump_target_bg`]

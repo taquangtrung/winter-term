@@ -3,7 +3,8 @@
 //! pointer handed to it.
 
 use crate::render::StatusHover;
-use misty::{Frame, Input, StatusBarResponse, Widget};
+use misty::{Frame, Input, Widget};
+use misty::widgets::StatusBarResponse;
 
 use super::{BELL_ID, BRANCH_ID, HOST_ID, MODE_ID, PROJECT_ID, SEGMENT_IDS};
 
@@ -106,7 +107,7 @@ impl App {
             StatusHover::Branch => BRANCH_ID,
             StatusHover::Host => HOST_ID,
             StatusHover::Mode => MODE_ID,
-            StatusHover::Progress => misty::StatusSegment::PROGRESS_ID,
+            StatusHover::Progress => misty::widgets::StatusSegment::PROGRESS_ID,
             StatusHover::Project => PROJECT_ID,
             StatusHover::Segment(index) => SEGMENT_IDS.get(index)?,
         };
@@ -125,7 +126,7 @@ impl App {
         let window = self.window.as_ref()?;
         let scale_factor = window.scale_factor();
         let metrics = self.small_ui_font().cell_metrics(scale_factor);
-        Some(misty::StatusBar::height(metrics, scale_factor))
+        Some(misty::widgets::StatusBar::height(metrics, scale_factor))
     }
 }
 
@@ -141,7 +142,7 @@ fn status_hover(id: &str) -> Option<StatusHover> {
         HOST_ID => Some(StatusHover::Host),
         MODE_ID => Some(StatusHover::Mode),
         PROJECT_ID => Some(StatusHover::Project),
-        misty::StatusSegment::PROGRESS_ID => Some(StatusHover::Progress),
+        misty::widgets::StatusSegment::PROGRESS_ID => Some(StatusHover::Progress),
         _ => SEGMENT_IDS
             .iter()
             .position(|segment| *segment == id)
@@ -163,7 +164,7 @@ mod tests {
         assert_eq!(status_hover(MODE_ID), Some(StatusHover::Mode));
         assert_eq!(status_hover(SEGMENT_IDS[3]), Some(StatusHover::Segment(3)));
         assert_eq!(
-            status_hover(misty::StatusSegment::PROGRESS_ID),
+            status_hover(misty::widgets::StatusSegment::PROGRESS_ID),
             Some(StatusHover::Progress)
         );
     }

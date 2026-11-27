@@ -4,10 +4,8 @@
 //! each shows and where; misty draws them over the window.
 
 use crate::render::{CompletionView, DropListView, InfoView};
-use misty::{
-    CompletionList, CompletionRow, DropList, DropRow, Frame, InfoCard, Rect, StyledText, TextColor,
-    Widget,
-};
+use misty::{Frame, Rect, StyledText, TextColor, Widget};
+use misty::widgets::{CompletionList, CompletionRow, DropList, DropRow, InfoCard};
 
 use crate::window::App;
 use crate::window::appearance::ui_theme;

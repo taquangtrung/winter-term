@@ -5,10 +5,8 @@
 //! whatever the pointer rests on, in the bar or anywhere else.
 
 use crate::render::{ControlsSide, MenuStyle};
-use misty::{
-    CellMetrics, EventCx, Frame, Input, Point, Rect, TitleAlign, TitleBar, TitleBarHit,
-    TitleBarResponse, Widget, WindowButtons,
-};
+use misty::{CellMetrics, EventCx, Frame, Input, Point, Rect, Widget};
+use misty::widgets::{TitleAlign, TitleBar, TitleBarHit, TitleBarResponse, WindowButtons};
 
 use crate::config::TitleBarStyle;
 use crate::window::App;

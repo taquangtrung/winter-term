@@ -3,10 +3,9 @@
 //! rounded hover pills on clickable items, column names aligned over their
 //! columns, and hit spans kept for pointer interaction and tooltips.
 
-use misty::{
-    BoxStyle, CellColor, Frame, IconSet, Point, Rect, Rgba, Span, StyledText, Svg, TextColor,
-    Theme, ThemeToken, draw_styled_label, styled_label_width,
-};
+use misty::{BoxStyle, Frame, IconSet, Point, Rect, Rgba, Span, StyledText, Svg, TextColor, Theme, ThemeToken};
+use misty::grid::CellColor;
+use misty::widgets::{draw_styled_label, styled_label_width};
 
 use crate::icons;
 use crate::render::{ColumnAlign, ToolbarItem, ToolbarTone, ToolbarView};

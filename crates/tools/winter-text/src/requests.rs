@@ -12,7 +12,8 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use cherry::Utf16Position;
-use misty::{Frame, InfoCard, Rect, StyledText, TextColor, Theme, ThemeToken, Widget};
+use misty::{Frame, Rect, StyledText, TextColor, Theme, ThemeToken, Widget};
+use misty::widgets::InfoCard;
 use serde_json::{Value, json};
 use winter_lsp::protocol::{self, CodeAction, FileEdits, Location, TextEdit};
 use winter_lsp::{Port, ServerId};

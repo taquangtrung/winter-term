@@ -4,7 +4,8 @@
 //! the keys it moves by (the arrows, Enter, Escape); a choice runs its
 //! command, and a press outside puts the menu away.
 
-use misty::{EventCx, Frame, Input, MenuResponse, TitleBarHit, Widget};
+use misty::{EventCx, Frame, Input, Widget};
+use misty::widgets::{MenuResponse, TitleBarHit};
 
 use crate::window::App;
 use crate::window::appearance::ui_theme;

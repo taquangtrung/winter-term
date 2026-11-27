@@ -175,16 +175,16 @@ impl App {
         Self {
             config,
             parts: WindowParts {
-                cards: misty::Toasts::new()
-                    .with_corner(misty::Corner::TopRight)
-                    .with_severity_mark(misty::SeverityMark::Icon),
-                which_key: misty::WhichKey::new()
-                    .with_placement(misty::WhichKeyPlacement::Centered),
-                tooltip: misty::Tooltip::new()
-                    .with_placement(misty::TooltipPlacement::CenteredAbove),
+                cards: misty::widgets::Toasts::new()
+                    .with_corner(misty::widgets::Corner::TopRight)
+                    .with_severity_mark(misty::widgets::SeverityMark::Icon),
+                which_key: misty::widgets::WhichKey::new()
+                    .with_placement(misty::widgets::WhichKeyPlacement::Centered),
+                tooltip: misty::widgets::Tooltip::new()
+                    .with_placement(misty::widgets::TooltipPlacement::CenteredAbove),
                 // The bar on the terminal's own background, as part of the
                 // content above it.
-                status_bar: misty::StatusBar::new()
+                status_bar: misty::widgets::StatusBar::new()
                     .with_background(misty::ThemeToken::Background)
                     .with_icons(status_bar_icons()),
                 ..WindowParts::default()
