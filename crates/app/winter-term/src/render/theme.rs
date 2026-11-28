@@ -127,6 +127,7 @@ fn misty_theme(theme: &Theme) -> MistyTheme {
     };
     misty.spacing = Spacing {
         page_inset: PANE_H_PAD as u16,
+        ..Spacing::STANDARD
     };
     // A picker's hints line in Winter's words.
     misty.strings.picker_actions = Cow::Borrowed(PICKER_ACTIONS);
