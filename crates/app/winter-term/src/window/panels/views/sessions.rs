@@ -682,7 +682,7 @@ fn managed_card<'a>(
 
     let mut lines: Vec<Element<'a, SessionsView>> = vec![row(header).gap(cards::inline_gap())];
     if let Some(subtitle) = list_row.subtitle.as_deref() {
-        lines.push(Element::from(text(subtitle).monospace().muted()));
+        lines.push(Element::from(text(subtitle).muted()));
     }
     if has_details {
         let branch = agent.branch.clone();
@@ -793,7 +793,7 @@ fn detected_card<'a>(
 
     let mut lines: Vec<Element<'a, SessionsView>> = vec![row(header).gap(cards::inline_gap())];
     if let Some(subtitle) = list_row.subtitle.as_deref() {
-        lines.push(Element::from(text(subtitle).monospace().muted()));
+        lines.push(Element::from(text(subtitle).muted()));
     }
     if has_details {
         let tab = detected.tab;
@@ -838,7 +838,7 @@ fn terminal_card<'a>(
 
     let mut lines: Vec<Element<'a, SessionsView>> = vec![row(header).gap(cards::inline_gap())];
     if let Some(subtitle) = list_row.subtitle.as_deref() {
-        lines.push(Element::from(text(subtitle).monospace().muted()));
+        lines.push(Element::from(text(subtitle).muted()));
     }
     let tab = entry.tab;
     cards::card_shell(
