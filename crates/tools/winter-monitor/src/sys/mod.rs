@@ -35,7 +35,7 @@ use winter_model::vim::nav::{VimKey, VimNav};
 
 use self::traffic::{TrafficRate, TrafficTracker};
 use self::usage::{Usage, UsageTracker};
-use self::view::{History, Rates, card_ids, dashboard, machine_facts, tenths_of};
+use self::view::{History, Rates, card_columns, card_ids, dashboard, machine_facts, tenths_of};
 use crate::header::{RESOURCE_MONITOR, SummaryPart, monitor_page};
 
 // ========================================================================
@@ -161,6 +161,9 @@ pub struct SysEditor {
 /// from.
 #[derive(Debug)]
 struct Machine {
+    /// How many text columns the page is wide, which says how many columns
+    /// of cards fit.
+    cols: usize,
     /// The disks' counters last seen.
     disk_tracker: TrafficTracker,
     /// Why the last snapshot failed, until one succeeds.
@@ -189,6 +192,7 @@ impl SysEditor {
     /// the next tick.
     pub fn new() -> Self {
         let machine = Machine {
+            cols: 0,
             disk_tracker: TrafficTracker::default(),
             error: None,
             history: History::default(),
@@ -352,7 +356,15 @@ impl HostedView for Machine {
             .content_padding(Space::Cells(CONTENT_PADDING_ROWS));
         match &self.sample {
             Some(sample) => {
-                shown.scrolling(dashboard(sample, &self.usage, &self.rates, &self.history))
+                let columns = card_columns(self.cols);
+                let history = &self.history;
+                shown.scrolling(dashboard(
+                    sample,
+                    &self.usage,
+                    &self.rates,
+                    history,
+                    columns,
+                ))
             }
             None => shown.scrolling(text(self.error.as_deref().unwrap_or(READING)).muted()),
         }
@@ -409,7 +421,10 @@ impl Page for SysEditor {
     }
 
     /// Misty draws the page; the grid under it is empty.
-    fn content(&mut self, _rows: usize, _cols: usize, _wrap: bool) -> Frame {
+    /// Misty draws the page; the grid under it is empty, its width kept for
+    /// how many columns of cards fit.
+    fn content(&mut self, _rows: usize, cols: usize, _wrap: bool) -> Frame {
+        self.view.state_mut().cols = cols;
         Frame::new(vec![Row::new()])
     }
 

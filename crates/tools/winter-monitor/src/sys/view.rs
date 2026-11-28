@@ -59,6 +59,16 @@ const MIN_RATE_CEILING: f32 = 64.0 * 1024.0;
 /// How wide a traffic rate's cell is, in text columns.
 const RATE_COLS: f32 = 11.0;
 
+/// The narrowest a column of cards is, in text columns, so a card's labels
+/// and amounts keep their room.
+const CARD_COLS: usize = 56;
+
+/// The most columns of cards a page lays out, however wide.
+const MAX_CARD_COLUMNS: usize = 3;
+
+/// The text columns between two columns of cards.
+const CARD_GAP_COLS: f32 = 2.0;
+
 /// What the load in the CPU card means, for its tooltip.
 const LOAD_ABOUT: &str = "Load: how many processes are running or waiting to, on average over the last 1, 5, and \
      15 minutes";
@@ -180,18 +190,25 @@ pub fn machine_facts(sample: &SystemSample) -> String {
     facts.join(FACT_SEPARATOR)
 }
 
-/// The dashboard for `sample`: its cards stacked in a single column so
-/// labels and amounts keep their room, with history lines from `history`.
+/// How many columns of cards a page `cols` text columns wide holds: as many
+/// as keep [`CARD_COLS`] each, at least one and at most
+/// [`MAX_CARD_COLUMNS`].
+pub fn card_columns(cols: usize) -> usize {
+    (cols / CARD_COLS).clamp(1, MAX_CARD_COLUMNS)
+}
+
+/// The dashboard for `sample` in `columns` columns: the processor's card
+/// across the top, its cores wanting the width, then the others dealt into
+/// the columns in turn, each stacked so a tall card leaves no gap beside a
+/// short one. History lines come from `history`.
 pub fn dashboard<'a, A: 'static>(
     sample: &'a SystemSample,
     usage: &'a Usage,
     rates: &'a Rates,
     history: &'a History,
+    columns: usize,
 ) -> Element<'a, A> {
-    let mut cards = vec![
-        cpu_card(sample, usage, history),
-        memory_card(&sample.memory, history),
-    ];
+    let mut cards = vec![memory_card(&sample.memory, history)];
     if !sample.network.is_empty() {
         cards.push(traffic_card(
             NETWORK,
@@ -214,7 +231,20 @@ pub fn dashboard<'a, A: 'static>(
     if !sample.gpus.is_empty() {
         cards.push(gpu_card(&sample.gpus));
     }
-    column(cards)
+    let columns = columns.max(1);
+    let mut stacks: Vec<Vec<Element<'a, A>>> = (0..columns).map(|_| Vec::new()).collect();
+    for (at, card) in cards.into_iter().enumerate() {
+        stacks[at % columns].push(card);
+    }
+    let stacks = stacks
+        .into_iter()
+        .map(|stack| column(stack).grow(1.0));
+    column([
+        cpu_card(sample, usage, history),
+        row(stacks)
+            .gap(Space::Cells(CARD_GAP_COLS))
+            .align(Align::Start),
+    ])
 }
 
 /// A duration as `3d 4h 5m`, leaving off the units that are zero at the front.

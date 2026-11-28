@@ -122,6 +122,15 @@ fn test_a_hidden_page_asks_for_nothing_and_reads_at_once_when_shown() {
 }
 
 #[test]
+fn test_a_wider_page_holds_more_columns_of_cards_up_to_three() {
+    use super::view::card_columns;
+    assert_eq!(card_columns(0), 1, "one before the width is known");
+    assert_eq!(card_columns(80), 1, "a narrow pane keeps one");
+    assert_eq!(card_columns(120), 2);
+    assert_eq!(card_columns(1000), 3, "never more than three");
+}
+
+#[test]
 fn test_a_snapshot_fills_the_page_with_its_cards() {
     let mut editor = loaded_editor();
     let text = draw(&mut editor, &window(1600));
