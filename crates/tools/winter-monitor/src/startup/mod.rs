@@ -29,7 +29,7 @@ use winter_model::monitor::{MonitorAnswer, MonitorQuery, StartupEntry, StartupKi
 use winter_model::paint::{Frame, Row};
 use winter_model::vim::nav::{VimKey, VimNav};
 
-use crate::table::{cell, fit, heading_row, marked, table_row};
+use crate::table::{cell, fit, marked, table_row};
 
 use self::notice::StartupNotice;
 
@@ -376,7 +376,7 @@ impl StartupEditor {
         let head = |label: &'static str, about: &'static str, width: Option<usize>| {
             cell(text(label).muted(), width, false).tooltip(about)
         };
-        heading_row(vec![
+        table_row(vec![
             head("ON", "Whether it is set to start", Some(STATE_WIDTH)),
             head("KIND", "What starts it", Some(KIND_WIDTH)),
             head(

@@ -28,7 +28,7 @@ use winter_model::vim::nav::{VimKey, VimNav};
 use crate::proc::act::{self, Signal, TAG_SIGNAL};
 use crate::proc::notice::{Acting, ProcNotice, Signalled};
 use crate::proc::view::SortDirection;
-use crate::table::{cell, fit, heading, heading_row, marked, table_row};
+use crate::table::{cell, fit, heading, marked, table_row};
 
 // ========================================================================
 // Constants
@@ -545,7 +545,7 @@ impl PortsEditor {
                 },
             )
         };
-        heading_row(vec![
+        table_row(vec![
             head(
                 "PROTO",
                 "TCP or UDP",

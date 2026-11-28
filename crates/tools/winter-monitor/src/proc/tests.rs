@@ -398,15 +398,17 @@ fn click(editor: &mut ProcEditor, label: &str) {
     click_at(editor, &mut window, point);
 }
 
-/// Click list row `at`, counted from the first row drawn: a text row each,
-/// under the headings and the line under them.
+/// Click list row `at`, counted from the first row drawn: a text row and
+/// the theme's row padding above and below each, under the headings and
+/// the line under them.
 fn click_row(editor: &mut ProcEditor, at: usize) {
     let mut window = window(900);
     let frame = drawn(editor, &window);
-    let row = frame.cell_metrics().height;
+    let line = frame.cell_metrics().height;
     let heading = heading_at(&frame, "PID");
     let padding = f32::from(misty::Theme::dark().shape.row_padding);
-    let below = row / 2.0 + padding + 1.0;
+    let row = line + 2.0 * padding;
+    let below = line / 2.0 + padding + 1.0;
     let y = heading.y + below + (at as f32 + 0.5) * row;
     click_at(editor, &mut window, Point::new(heading.x, y));
 }
