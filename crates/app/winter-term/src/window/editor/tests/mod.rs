@@ -6,8 +6,6 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::Duration;
 
-use winter_model::button::ButtonGroup;
-
 use winter_model::editor::{
     CommandRequest, EditorOutcome, GitViewRequest, JobRequest, Notice, PromptMode, PromptReply,
     PromptRequest,
@@ -470,12 +468,17 @@ impl Page for AskingEditor {
             label: "Name: ".to_string(),
             mode: PromptMode::Text,
             tag: "ask",
-            title: None,
         })
     }
 
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
         self.heard.borrow_mut().push(reply.answer);
+        EditorOutcome::Consumed
+    }
+
+    /// A confirmation's answer, heard as `y` for a yes and nothing for a no.
+    fn on_confirm(&mut self, yes: bool) -> EditorOutcome {
+        self.heard.borrow_mut().push(yes.then(|| "y".to_string()));
         EditorOutcome::Consumed
     }
 }

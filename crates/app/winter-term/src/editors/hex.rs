@@ -678,7 +678,6 @@ impl HexEditor {
                     label: "Go to offset: ".to_string(),
                     mode: PromptMode::Text,
                     tag: ASK_OFFSET,
-                    title: None,
                 });
             }
             Act::RowEnd => self.move_to(self.cursor - self.cursor % PER_ROW + PER_ROW - 1),

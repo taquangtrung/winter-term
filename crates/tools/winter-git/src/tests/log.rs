@@ -48,21 +48,18 @@ fn test_the_refs_view_reads_a_branch_s_log_and_deletes_each_kind_of_ref() {
         ("v1", vec!["tag", "--delete", "v1"]),
     ] {
         on(&mut editor, name);
-        let EditorOutcome::Prompt(asked) = editor.on_key(&press_char('x')) else {
+        let EditorOutcome::Confirm(asked) = editor.on_key(&press_char('x')) else {
             panic!("{name}: asked first");
         };
         // A remote branch's deletion reaches the server, and the question
         // says so rather than reading like the local list's.
         assert_eq!(
-            asked.label.contains("server origin"),
+            asked.message().contains("on origin, for everyone"),
             name == "origin/old",
             "{}",
-            asked.label
+            asked.message()
         );
-        let command = command_of(&editor.on_prompt(PromptReply {
-            answer: Some("y".to_string()),
-            tag: ASK_DISCARD,
-        }));
+        let command = command_of(&editor.on_confirm(true));
         assert_eq!(command.args, args, "{name}");
     }
 }
@@ -261,7 +258,14 @@ fn test_a_command_run_from_the_log_reads_the_log_again_and_keeps_the_place() {
 fn test_j_and_k_step_through_a_wrapped_output_line_by_screen_rows() {
     let mut editor = loaded_editor();
     let long = "message ".repeat(12);
-    let shown = ["commit abc1234567890", "", &format!("    {long}"), "", "    after"].join("\n");
+    let shown = [
+        "commit abc1234567890",
+        "",
+        &format!("    {long}"),
+        "",
+        "    after",
+    ]
+    .join("\n");
     editor.on_job(reply(exec::TAG_SHOW, &shown));
     let output = editor.output.as_mut().expect("the commit");
     let at = output

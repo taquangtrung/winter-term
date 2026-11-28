@@ -11,7 +11,10 @@ fn test_closing_an_editor_tab_buries_its_buffer_as_it_was() {
     app.close_editor(tab);
     assert!(!app.layout().contains(tab), "no pane shows it");
     assert_eq!(app.open_tabs.buried(), [tab]);
-    assert!(app.parts.close_prompt().is_none(), "and nothing was asked");
+    assert!(
+        app.parts.confirm_prompt().is_none(),
+        "and nothing was asked"
+    );
 
     app.show_buffer(tab);
     assert_eq!(app.layout().focused(), tab, "back, under the tab it had");
@@ -249,7 +252,7 @@ fn test_closing_one_view_leaves_the_buffer_to_the_other() {
     app.show_buffer(there);
     let here = app.layout().focused();
     app.close_tab(here);
-    assert!(app.parts.close_prompt().is_none(), "nothing is lost");
+    assert!(app.parts.confirm_prompt().is_none(), "nothing is lost");
     assert!(
         app.open_tabs.buried().is_empty(),
         "nor buried: it is still shown"

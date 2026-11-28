@@ -112,7 +112,6 @@ const ASK_BRANCH_DELETE_FORCE: &str = "branch-delete-force";
 const ASK_CHERRY_PICK: &str = "cherry-pick";
 const ASK_CUSTOM: &str = "custom";
 const ASK_DIFF_REV: &str = "diff-rev";
-const ASK_DISCARD: &str = "discard";
 const ASK_FETCH_REMOTE: &str = "fetch-remote";
 const ASK_FIXUP: &str = "fixup";
 const ASK_LOG_OTHER: &str = "log-other";
@@ -1636,6 +1635,11 @@ impl Page for GitEditor {
 
     fn keys(&self) -> Vec<KeyHelp> {
         self.key_help()
+    }
+
+    fn on_confirm(&mut self, yes: bool) -> EditorOutcome {
+        let outcome = self.answer_confirmation(yes);
+        self.note_view(outcome)
     }
 
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {

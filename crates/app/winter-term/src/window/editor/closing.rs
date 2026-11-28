@@ -8,12 +8,10 @@
 //! which runs on out of sight; at its prompt the shell has nothing to lose
 //! and ends. Killing the terminal ends it whatever runs.
 
-use winter_model::button::ButtonGroup;
-use winter_model::input::Key;
+use misty::Confirmation;
 use winter_model::layout::TabId;
 
 use crate::window::App;
-use crate::window::input::overlay::{ClosePrompt, Overlay};
 
 use crate::window::EditorHost;
 
@@ -342,23 +340,6 @@ impl App {
             .collect()
     }
 
-    /// Ask `question` under `title`, `yes` going on with `pending`: for what
-    /// is no close, as an agent's merge.
-    pub(in crate::window) fn ask_yes_no(
-        &mut self,
-        title: &'static str,
-        yes: &str,
-        question: String,
-        pending: PendingClose,
-    ) {
-        self.open_overlay(Overlay::Close(ClosePrompt {
-            buttons: ButtonGroup::confirm_as(yes),
-            label: question,
-            pending,
-            title,
-        }));
-    }
-
     /// Ask whether to close `what`, naming what would be `lost`; nothing is
     /// asked when nothing would be. Returns whether the question was put.
     fn ask_close(&mut self, lost: Vec<Loss>, what: &str, pending: PendingClose) -> bool {
@@ -366,12 +347,8 @@ impl App {
             return false;
         }
         let (title, yes) = close_words(&lost);
-        self.open_overlay(Overlay::Close(ClosePrompt {
-            buttons: ButtonGroup::confirm_as(yes),
-            label: close_message(&lost, what),
-            pending,
-            title,
-        }));
+        let asked = Confirmation::destructive(title, close_message(&lost, what), yes);
+        self.confirm_for_window(asked, pending);
         true
     }
 
@@ -468,27 +445,6 @@ impl App {
                 }
             };
             self.runtime.exit.quit_confirmed = !elsewhere_lost;
-        }
-    }
-
-    /// Route one key into the host's close question: `Tab` cycles between buttons,
-    /// `Enter` confirms the focused button, direct shortcuts (`y`, `n`, `Esc`) activate immediately.
-    pub(in crate::window) fn handle_close_prompt_key(&mut self, key: &Key) {
-        let Some(Overlay::Close(prompt)) = &mut self.parts.overlay else {
-            return;
-        };
-        if let Some(yes) = prompt.buttons.on_key(key) {
-            let Some(Overlay::Close(prompt)) = self
-                .parts
-                .overlay
-                .take_if(|o| matches!(o, Overlay::Close(_)))
-            else {
-                return;
-            };
-            self.dirty = true;
-            self.answer_close_prompt(prompt.pending, yes);
-        } else {
-            self.dirty = true;
         }
     }
 }

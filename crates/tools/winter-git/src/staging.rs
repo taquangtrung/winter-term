@@ -5,11 +5,12 @@ use std::ops::RangeInclusive;
 
 use crate::exec::{self, Pathspec, Rev};
 use crate::parse::{RefKind, Section};
-use winter_model::editor::{EditorOutcome, PromptRequest};
+use winter_model::editor::EditorOutcome;
 
 use super::notice::GitNotice;
+use super::notice::{Files, GitConfirmation};
 use super::rows::{FileRow, HunkRow, Item};
-use super::{ASK_DISCARD, Discard, GitEditor, RowsAct};
+use super::{Discard, GitEditor, RowsAct};
 
 // ========================================================================
 // GitEditor: staging and discarding
@@ -262,30 +263,36 @@ impl GitEditor {
         let Some(discard) = &self.menus.pending_discard else {
             return EditorOutcome::Consumed;
         };
-        let label = match discard {
+        let files = |paths: &[Pathspec]| match paths {
+            [path] => Files::One(path.as_str().to_string()),
+            _ => Files::Many(paths.len()),
+        };
+        let asked = match discard {
             // A remote branch goes from the server, for everyone, not only
             // from this clone's list: the question says so.
             Discard::Ref(entry) => match (entry.kind, self.repo.split_remote(&entry.name)) {
-                (RefKind::Remote, Some((remote, branch))) => {
-                    format!("Delete branch {branch} on the server {remote}, for everyone?")
-                }
-                (RefKind::Head | RefKind::Local | RefKind::Remote | RefKind::Tag, _) => {
-                    format!("Delete {}?", entry.name)
+                (RefKind::Remote, Some((remote, branch))) => GitConfirmation::DeleteRemoteBranch {
+                    branch: branch.to_string(),
+                    remote: remote.to_string(),
+                },
+                (RefKind::Tag, _) => GitConfirmation::DeleteTag(entry.name.clone()),
+                (RefKind::Head | RefKind::Local | RefKind::Remote, _) => {
+                    GitConfirmation::DeleteBranch(entry.name.clone())
                 }
             },
-            Discard::Stash(name) => format!("Drop {}?", name.as_str()),
-            Discard::Stashes => "Drop every stash?".to_string(),
-            Discard::Hunk(_) => format!(
-                "Discard this hunk of {}?",
-                self.targets().first().map_or("the file", String::as_str)
+            Discard::Stash(name) => GitConfirmation::DropStash(name.as_str().to_string()),
+            Discard::Stashes => GitConfirmation::DropStashes,
+            Discard::Hunk(_) => GitConfirmation::DiscardHunk(
+                self.targets()
+                    .first()
+                    .map_or("the file", String::as_str)
+                    .to_string(),
             ),
-            Discard::Lines(_) => "Discard the selected lines?".to_string(),
-            Discard::Tracked(paths) | Discard::Untracked(paths) => match &paths[..] {
-                [path] => format!("Discard changes to {}?", path.as_str()),
-                _ => format!("Discard changes to {} files?", paths.len()),
-            },
+            Discard::Lines(_) => GitConfirmation::DiscardLines,
+            Discard::Tracked(paths) => GitConfirmation::DiscardChanges(files(paths)),
+            Discard::Untracked(paths) => GitConfirmation::DeleteUntracked(files(paths)),
         };
-        EditorOutcome::Prompt(PromptRequest::confirm(ASK_DISCARD, &label))
+        EditorOutcome::Confirm(asked.to_confirmation())
     }
 
     /// What discarding at the cursor would throw away: the hunk under it, or

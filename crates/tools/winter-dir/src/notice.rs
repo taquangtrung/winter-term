@@ -1,11 +1,13 @@
-//! What a listing tells the user, kept typed until the window takes it.
+//! What a listing tells the user, kept typed until the window takes it,
+//! and what it asks before an action.
 //!
 //! The listing stores a [`DirNotice`] and turns it into a misty [`Notice`]
-//! only in `take_notice`, so its wording and severity are decided in one
-//! `match` and tests compare variants rather than sentences.
+//! only in `take_notice`, and asks a [`DirConfirmation`] as a misty
+//! [`Confirmation`], so the wording and severity are decided in one `match`
+//! each and tests compare variants rather than sentences.
 
 use winter_field::FieldNotice;
-use winter_model::editor::Notice;
+use winter_model::editor::{Confirmation, Notice};
 use winter_model::notice::SearchMiss;
 
 // ========================================================================
@@ -21,6 +23,32 @@ const GIT_FAILED: &str = "git failed";
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// A question the listing asks before an action, kept until it is
+/// answered.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DirConfirmation {
+    /// Deleting the targets past recovering (`X`).
+    Delete(Entries),
+    /// Renaming several entries as edit mode left them.
+    RenameEntries {
+        /// How many are renamed.
+        count: usize,
+        /// The renames, shortened to fit.
+        summary: String,
+    },
+    /// Sending the targets to the trash (`x`).
+    Trash(Entries),
+}
+
+/// The entries a question is about: one by its name, or how many.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum Entries {
+    /// Several, by how many.
+    Many(usize),
+    /// One, by its name.
+    One(String),
+}
 
 /// One message for the status bar.
 #[derive(Clone, Debug, PartialEq)]
@@ -86,6 +114,61 @@ pub(crate) struct PartFailure {
     pub(crate) done: usize,
     /// Why it stopped.
     pub(crate) error: String,
+}
+
+// ========================================================================
+// DirConfirmation
+// ========================================================================
+
+impl DirConfirmation {
+    /// The question the window asks: the one place its wording and whether
+    /// it warns are decided. The trash gives back what it takes, so only a
+    /// delete for good warns.
+    pub(crate) fn to_confirmation(&self) -> Confirmation {
+        match self {
+            Self::Delete(entries) => Confirmation::destructive(
+                "Delete Permanently?",
+                format!(
+                    "Deletes {} for good. This cannot be undone.",
+                    entries.name()
+                ),
+                "Delete",
+            ),
+            Self::RenameEntries { count, summary } => Confirmation::new(
+                "Rename Entries?",
+                format!("Rename {count} entries: {summary}?"),
+                "Rename",
+            ),
+            Self::Trash(entries) => {
+                let pronoun = match entries {
+                    Entries::One(_) => "it",
+                    Entries::Many(_) => "they",
+                };
+                Confirmation::new(
+                    "Move to Trash?",
+                    format!(
+                        "Moves {} to the trash, where {pronoun} can be restored.",
+                        entries.name()
+                    ),
+                    "Move to Trash",
+                )
+            }
+        }
+    }
+}
+
+// ========================================================================
+// Entries
+// ========================================================================
+
+impl Entries {
+    /// The entries in words: the one's name, or `3 entries`.
+    fn name(&self) -> String {
+        match self {
+            Self::Many(count) => format!("{count} entries"),
+            Self::One(name) => name.clone(),
+        }
+    }
 }
 
 // ========================================================================

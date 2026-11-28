@@ -32,6 +32,7 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 pub use super::notify::Notice;
+pub use misty::Confirmation;
 
 use super::guard::Guarded;
 use super::path::{path_part_label, path_parts};
@@ -139,6 +140,10 @@ pub enum EditorOutcome {
     /// The editor holds a place for what is chosen to open there, and it
     /// is chosen: the host opens it in the editor's tab, in its directory.
     Launch(Launch),
+    /// The editor asks the host to have the user confirm an action it is
+    /// about to take; the answer comes back to [`Editor::on_confirm`], and
+    /// the editor keeps what it asked to act on it.
+    Confirm(Confirmation),
     /// The editor asks the host to read an answer from the user.
     Prompt(PromptRequest),
     /// The editor asks the host to have the user choose from a list, rather
@@ -595,6 +600,13 @@ pub trait Page: AsAny {
     /// Hand back the answer to a prompt the editor asked for. Editors that never
     /// ask never implement it.
     fn on_prompt(&mut self, _reply: PromptReply) -> EditorOutcome {
+        EditorOutcome::Consumed
+    }
+
+    /// Hand back the answer to the confirmation the editor asked for last
+    /// (see [`EditorOutcome::Confirm`]): `yes` to go ahead. Editors that
+    /// never ask never implement it.
+    fn on_confirm(&mut self, _yes: bool) -> EditorOutcome {
         EditorOutcome::Consumed
     }
 
@@ -1332,19 +1344,6 @@ mod tests {
         page.path = None;
         assert!(page.header().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn test_a_yes_or_no_question_starts_with_a_capital_and_ends_with_its_keys() {
-        // Built by hand in seven editors, two of which capitalized by byte
-        // slicing, which panics on a question starting with `é`.
-        let asked = PromptRequest::confirm("t", "kill 42 (vim)?");
-        assert_eq!(asked.label, "Kill 42 (vim)? (y/n) ");
-        assert_eq!(asked.mode, PromptMode::Confirm);
-        assert_eq!(
-            PromptRequest::confirm("t", "éteindre?").label,
-            "Éteindre? (y/n) "
-        );
     }
 
     #[test]

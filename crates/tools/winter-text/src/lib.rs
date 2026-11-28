@@ -33,8 +33,8 @@ use winter_lsp::{Event, Incoming, Port};
 use winter_model::editor::EditPoint;
 use winter_model::editor::{
     Editor, EditorCommand, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus, FILE_REVERT,
-    FileEdit, JobReply, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptReply, PromptRequest,
-    SAVE_ALL, ScrollPosition, SharedText, TOGGLE_SWATCHES, TargetStyles, menu_groups,
+    FileEdit, JobReply, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptReply, SAVE_ALL,
+    ScrollPosition, SharedText, TOGGLE_SWATCHES, TargetStyles, menu_groups,
 };
 use winter_model::input::{Key, KeyContext};
 use winter_model::modal::EditMode;
@@ -67,7 +67,7 @@ pub use cherry::misty::HighlightStyle;
 pub use inline::{InlineAsk, InlineCall, InlineTold};
 pub use keys::{KEY_TABLES, is_cherry_block, set_user_keys};
 pub use language::known_languages;
-use notice::{FileFailure, TextNotice};
+use notice::{FileFailure, TextConfirmation, TextNotice};
 pub use session::save_through;
 pub use settings::history_dir;
 
@@ -78,9 +78,6 @@ pub use settings::history_dir;
 /// The text editor's commands the palette runs by name: none of Winter's
 /// own, as Cherry runs every editing command.
 pub const COMMANDS: &[EditorCommand] = &[];
-
-/// The question asked before a revert drops unsaved edits.
-const ASK_REVERT: &str = "text-revert";
 
 /// What a tab's title ends with while its file has edits not written.
 pub const DIRTY_MARK: &str = " [+]";
@@ -150,6 +147,8 @@ pub struct TextEditor {
     languages: BTreeMap<String, String>,
     /// Where recalling earlier commit messages has got to.
     recall: git_files::MessageRecall,
+    /// The question asked before an action, until it is answered.
+    asking: Option<TextConfirmation>,
     /// A notice for the window, not yet taken.
     notice: Option<TextNotice>,
     /// Where the file is.
@@ -233,6 +232,7 @@ impl TextEditor {
             jump_walk: (None, Vec::new()),
             languages: BTreeMap::new(),
             problems_seen: None,
+            asking: None,
             notice: None,
             recall: git_files::MessageRecall::default(),
             path,
@@ -671,15 +671,14 @@ impl TextEditor {
             self.revert();
             return EditorOutcome::Consumed;
         }
-        let question = format!(
-            "{} has unsaved edits. Reverting drops them; an undo brings them back.",
-            name_of(&self.path)
-        );
-        EditorOutcome::Prompt(
-            PromptRequest::confirm(ASK_REVERT, &question)
-                .titled("Discard Unsaved Changes?", "Revert")
-                .destructive(),
-        )
+        self.confirm(TextConfirmation::Revert)
+    }
+
+    /// Asks `asked` before the action it is about, which `on_confirm` takes
+    /// once the user says yes.
+    fn confirm(&mut self, asked: TextConfirmation) -> EditorOutcome {
+        self.asking = Some(asked);
+        EditorOutcome::Confirm(asked.to_confirmation(&name_of(&self.path)))
     }
 
     /// Reads the file again over the text, saying why where it cannot.
@@ -1068,15 +1067,19 @@ impl Page for TextEditor {
             .unwrap_or(EditorOutcome::Consumed)
     }
 
-    fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
-        if reply.tag == ASK_REVERT {
-            if reply.answer.is_some() {
+    fn on_confirm(&mut self, yes: bool) -> EditorOutcome {
+        match (self.asking.take(), yes) {
+            (Some(TextConfirmation::AbortGitFile(_)), true) => self.empty_and_close(),
+            (Some(TextConfirmation::Revert), true) => {
                 self.revert();
+                EditorOutcome::Consumed
             }
-            return EditorOutcome::Consumed;
+            (_, _) => EditorOutcome::Consumed,
         }
+    }
+
+    fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
         self.on_conflict_prompt(&reply)
-            .or_else(|| self.on_git_prompt(&reply))
             .or_else(|| self.on_lsp_prompt(&reply))
             .unwrap_or(EditorOutcome::Ignored)
     }
@@ -1605,30 +1608,19 @@ mod tests {
         editor.on_key(&Key::plain(KeyCode::Escape));
 
         let asked = editor.run_command(FILE_REVERT);
-        let Some(EditorOutcome::Prompt(question)) = asked else {
+        let Some(EditorOutcome::Confirm(question)) = asked else {
             panic!("asks first: {asked:?}");
         };
-        assert_eq!(question.tag, ASK_REVERT);
-        assert!(
-            question
-                .title
-                .as_ref()
-                .is_some_and(|title| title.destructive)
-        );
-        editor.on_prompt(PromptReply {
-            answer: None,
-            tag: ASK_REVERT,
-        });
+        assert!(question.is_destructive());
+        editor.on_confirm(false);
         assert_eq!(
             editor.document().expect("a document").1,
             "one!",
             "a no keeps it"
         );
 
-        editor.on_prompt(PromptReply {
-            answer: Some("y".to_string()),
-            tag: ASK_REVERT,
-        });
+        editor.run_command(FILE_REVERT);
+        editor.on_confirm(true);
         assert_eq!(editor.document().expect("a document").1, "one");
         assert!(!editor.is_dirty(), "the text is the file's");
         let _ = std::fs::remove_file(&path);

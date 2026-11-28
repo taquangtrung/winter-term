@@ -128,7 +128,6 @@ impl DirEditor {
             label: "Compress to (.zip, .tar.gz, .tar.xz, .7z …): ".to_string(),
             mode: PromptMode::Text,
             tag: ASK_COMPRESS,
-            title: None,
         })
     }
 

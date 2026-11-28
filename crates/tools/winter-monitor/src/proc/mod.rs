@@ -59,15 +59,13 @@ use self::view::{
 use crate::header::{PROCESS_MONITOR, SummaryPart, monitor_page};
 use crate::table::{ROW_PADDING_COLS, cell, fit, heading as sort_heading, marked, table_row};
 use crate::units::{format_kb, format_percent};
-use notice::{Acting, ProcNotice, Renice, Signalled};
+use notice::{Acting, ProcConfirmation, ProcNotice, Renice, Signalled};
 
 // ========================================================================
 // Constants
 // ========================================================================
 
 /// The questions the editor asks.
-const ASK_CONFIRM: &str = "proc-confirm";
-
 const ASK_FILTER: &str = "proc-filter";
 const ASK_RENICE: &str = "proc-renice-value";
 const ASK_SEARCH: &str = "proc-search";
@@ -822,13 +820,7 @@ impl ProcEditor {
             signal,
             tree,
         });
-        let question = format!("{} {what}?", signal.verb());
-        let request =
-            PromptRequest::confirm(ASK_CONFIRM, &question).titled(signal.title(), signal.button());
-        EditorOutcome::Prompt(match signal.ends() {
-            true => request.destructive(),
-            false => request,
-        })
+        EditorOutcome::Confirm(ProcConfirmation::Signal { signal, what }.to_confirmation())
     }
 
     /// Run a signal that has been decided on.
@@ -892,7 +884,6 @@ impl ProcEditor {
             label: label.to_string(),
             mode: PromptMode::Text,
             tag: ASK_RENICE,
-            title: None,
         })
     }
 
@@ -936,7 +927,6 @@ impl ProcEditor {
             label: "filter: ".to_string(),
             mode: PromptMode::Text,
             tag: ASK_FILTER,
-            title: None,
         })
     }
 
@@ -1440,17 +1430,18 @@ impl Page for ProcEditor {
         rows
     }
 
+    fn on_confirm(&mut self, yes: bool) -> EditorOutcome {
+        self.list.view_mut().release();
+        match (self.pending_signal.take(), yes) {
+            (Some(pending), true) => self.send_signal(pending),
+            (_, _) => EditorOutcome::Consumed,
+        }
+    }
+
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
         self.list.view_mut().release();
         let answer = reply.answer;
         match reply.tag {
-            ASK_CONFIRM => {
-                let pending = self.pending_signal.take();
-                match (answer, pending) {
-                    (Some(_), Some(pending)) => self.send_signal(pending),
-                    _ => EditorOutcome::Consumed,
-                }
-            }
             ASK_FILTER => {
                 if let Some(text) = answer {
                     self.filter = text.trim().to_string();

@@ -1,13 +1,14 @@
 //! What the process monitor tells the user, kept typed until the window
-//! takes it.
+//! takes it, and what it asks before signalling a process.
 //!
 //! The monitor stores a [`ProcNotice`] and turns it into a misty [`Notice`]
-//! only in `take_notice`, so its wording and severity are decided in one
-//! `match` and tests compare variants rather than sentences.
+//! only in `take_notice`, and asks a [`ProcConfirmation`] as a misty
+//! [`Confirmation`], so the wording and severity are decided in one `match`
+//! each and tests compare variants rather than sentences.
 
 use std::fmt;
 
-use winter_model::editor::Notice;
+use winter_model::editor::{Confirmation, Notice};
 use winter_model::notice::SearchMiss;
 
 use super::act::{NICE_RANGE, Signal};
@@ -23,6 +24,18 @@ const COMMAND_FAILED: &str = "the command failed";
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// A question the monitor asks before signalling a process.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ProcConfirmation {
+    /// Sending `signal` to what `what` names (`vim (pid 42)`).
+    Signal {
+        /// The signal to send.
+        signal: Signal,
+        /// The process, named for the question.
+        what: String,
+    },
+}
 
 /// One message for the status bar.
 #[derive(Clone, Debug, PartialEq)]
@@ -79,6 +92,26 @@ pub enum ActRefusal {
     NotNiceValue(String),
     /// What was typed is no Windows priority class.
     NotPriorityClass(String),
+}
+
+// ========================================================================
+// ProcConfirmation
+// ========================================================================
+
+impl ProcConfirmation {
+    /// The question the window asks: the one place its wording and whether
+    /// it warns are decided. A signal that ends the process warns.
+    pub(crate) fn to_confirmation(&self) -> Confirmation {
+        match self {
+            Self::Signal { signal, what } => {
+                let message = format!("{} {what}?", signal.verb());
+                match signal.ends() {
+                    true => Confirmation::destructive(signal.title(), message, signal.button()),
+                    false => Confirmation::new(signal.title(), message, signal.button()),
+                }
+            }
+        }
+    }
 }
 
 // ========================================================================

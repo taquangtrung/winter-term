@@ -20,13 +20,13 @@
 use std::path::Path;
 
 use cherry::{Decoration, DecorationKind, DocumentId, Editor, Mode};
-use winter_model::editor::{EditorOutcome, JobRequest, PromptReply, PromptRequest};
+use winter_model::editor::{EditorOutcome, JobRequest};
 use winter_vcs::exec;
 
 use super::TextEditor;
 use super::language::{MERGE_MESSAGE, MESSAGE_FILES, REBASE_TODO, TAG_MESSAGE};
 use super::session::{self, Session};
-use crate::notice::TextNotice;
+use crate::notice::{GitFileKind, TextConfirmation, TextNotice};
 
 // ========================================================================
 // Constants
@@ -81,9 +81,6 @@ const REBASE_ABORT: &str = "git-rebase-abort";
 const REBASE_DOWN: &str = "git-rebase-move-down";
 const REBASE_UP: &str = "git-rebase-move-up";
 const REBASE_SET: &str = "git-rebase-";
-
-/// The question asked before `C-c C-k` throws a message or a plan away.
-const ASK_ABORT: &str = "git-file-abort";
 
 /// The keys of a message's commands and of a plan's, in every mode they
 /// are typed in.
@@ -294,7 +291,9 @@ impl TextEditor {
     pub(super) fn run_git_command(&mut self, id: &str) -> Option<EditorOutcome> {
         Some(match id {
             MESSAGE_FINISH => self.write_and_close(),
-            MESSAGE_CANCEL | REBASE_ABORT => EditorOutcome::Prompt(abort_question(&self.path)),
+            MESSAGE_CANCEL | REBASE_ABORT => {
+                self.confirm(TextConfirmation::AbortGitFile(git_file_kind(&self.path)))
+            }
             MESSAGE_EARLIER => self.recall_message(true),
             MESSAGE_LATER => self.recall_message(false),
             REBASE_FINISH => match plan_problem(&self.lines()) {
@@ -318,18 +317,6 @@ impl TextEditor {
     /// `None` for any other file.
     pub(super) fn cancel_message(&mut self) -> Option<EditorOutcome> {
         self.holds_message().then(|| self.empty_and_close())
-    }
-
-    /// The answer to the question `C-c C-k` asks, where `reply` answers it:
-    /// a yes empties the file and closes the tab, a no leaves it be.
-    pub(super) fn on_git_prompt(&mut self, reply: &PromptReply) -> Option<EditorOutcome> {
-        if reply.tag != ASK_ABORT {
-            return None;
-        }
-        Some(match reply.answer {
-            Some(_) => self.empty_and_close(),
-            None => EditorOutcome::Consumed,
-        })
     }
 
     /// Takes the messages git answered a recall's read with, where `tag`
@@ -357,7 +344,7 @@ impl TextEditor {
 
     /// Empties the file, writes it, and closes the tab: how git is told to
     /// stop, at an empty message or an empty plan.
-    fn empty_and_close(&mut self) -> EditorOutcome {
+    pub(super) fn empty_and_close(&mut self) -> EditorOutcome {
         self.replace_lines(0, usize::MAX, "");
         self.write_and_close()
     }
@@ -474,36 +461,15 @@ fn git_file(path: &Path) -> Option<GitFile> {
     }
 }
 
-/// What `C-c C-k` asks before it throws away the file at `path`, a message
-/// or a plan: what git gives up, and that what was typed is lost.
-fn abort_question(path: &Path) -> PromptRequest {
-    let name = path.file_name().and_then(|name| name.to_str());
-    let (title, yes, question) = match name {
-        Some(MERGE_MESSAGE) => (
-            "Abort Merge Commit?",
-            "Abort Commit",
-            "git stops without committing the merge, and the message is lost",
-        ),
-        Some(TAG_MESSAGE) => (
-            "Abort Tag?",
-            "Abort Tag",
-            "git stops without making the tag, and the message is lost",
-        ),
-        Some(REBASE_TODO) => (
-            "Abort Rebase?",
-            "Abort Rebase",
-            "git stops without rebasing, and the plan's changes are lost",
-        ),
-        // A commit's message.
-        _ => (
-            "Abort Commit?",
-            "Abort Commit",
-            "git stops without committing, and the message is lost",
-        ),
-    };
-    PromptRequest::confirm(ASK_ABORT, question)
-        .titled(title, yes)
-        .destructive()
+/// What git handed the editor at `path` to write, by the file's name: a
+/// commit's message for any message file it does not name otherwise.
+fn git_file_kind(path: &Path) -> GitFileKind {
+    match path.file_name().and_then(|name| name.to_str()) {
+        Some(MERGE_MESSAGE) => GitFileKind::MergeCommit,
+        Some(REBASE_TODO) => GitFileKind::Rebase,
+        Some(TAG_MESSAGE) => GitFileKind::Tag,
+        _ => GitFileKind::Commit,
+    }
 }
 
 /// Binds `keys` to the host command `id` in `mode` in `document` alone.
@@ -692,28 +658,16 @@ mod tests {
         let text = "half a thought\n# Please enter\n";
         let path = git_file_at("cancel", MESSAGE_FILES[0], text);
         let mut editor = TextEditor::new(path.clone(), None).expect("opens");
-        let EditorOutcome::Prompt(question) = chord(&mut editor, 'k', true) else {
+        let EditorOutcome::Confirm(asked) = chord(&mut editor, 'k', true) else {
             panic!("asks first");
         };
-        assert_eq!(question.tag, ASK_ABORT);
-        assert!(
-            question
-                .title
-                .as_ref()
-                .is_some_and(|title| title.destructive && title.title == "Abort Commit?")
-        );
-        let no = PromptReply {
-            answer: None,
-            tag: ASK_ABORT,
-        };
-        assert_eq!(editor.on_git_prompt(&no), Some(EditorOutcome::Consumed));
+        assert!(asked.is_destructive());
+        assert_eq!(asked.title(), "Abort Commit?");
+        assert_eq!(editor.on_confirm(false), EditorOutcome::Consumed);
         assert_eq!(editor.lines()[0], "half a thought", "a no keeps it");
         assert_eq!(std::fs::read_to_string(&path).expect("read"), text);
-        let yes = PromptReply {
-            answer: Some("y".to_string()),
-            tag: ASK_ABORT,
-        };
-        assert_eq!(editor.on_git_prompt(&yes), Some(EditorOutcome::Close));
+        chord(&mut editor, 'k', true);
+        assert_eq!(editor.on_confirm(true), EditorOutcome::Close);
         assert_eq!(std::fs::read_to_string(&path).expect("read").trim(), "");
         let _ = std::fs::remove_file(path);
     }
@@ -721,16 +675,24 @@ mod tests {
     #[test]
     fn test_aborting_asks_in_the_words_of_what_git_gives_up() {
         let title = |name: &str| {
-            let question = abort_question(Path::new(name));
-            question.title.map(|title| (title.title, title.yes))
+            let kind = git_file_kind(Path::new(name));
+            TextConfirmation::AbortGitFile(kind).to_confirmation(name)
         };
-        let pair = |title: &str, yes: &str| Some((title.to_string(), yes.to_string()));
+        let words = |name: &str| {
+            let asked = title(name);
+            (asked.title().to_string(), asked.yes().to_string())
+        };
+        let pair = |title: &str, yes: &str| (title.to_string(), yes.to_string());
         assert_eq!(
-            title(MERGE_MESSAGE),
+            words(MESSAGE_FILES[0]),
+            pair("Abort Commit?", "Abort Commit")
+        );
+        assert_eq!(
+            words(MERGE_MESSAGE),
             pair("Abort Merge Commit?", "Abort Commit")
         );
-        assert_eq!(title(TAG_MESSAGE), pair("Abort Tag?", "Abort Tag"));
-        assert_eq!(title(REBASE_TODO), pair("Abort Rebase?", "Abort Rebase"));
+        assert_eq!(words(TAG_MESSAGE), pair("Abort Tag?", "Abort Tag"));
+        assert_eq!(words(REBASE_TODO), pair("Abort Rebase?", "Abort Rebase"));
     }
 
     #[test]

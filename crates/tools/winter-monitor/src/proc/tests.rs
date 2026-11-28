@@ -131,12 +131,20 @@ fn test_a_process_that_exits_leaves_the_cursor_on_the_same_row() {
 fn test_terminating_asks_first_and_names_the_process() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "server");
-    let EditorOutcome::Prompt(request) = editor.on_key(&press(KeyCode::Char('x'))) else {
+    let EditorOutcome::Confirm(request) = editor.on_key(&press(KeyCode::Char('x'))) else {
         panic!("expected a confirmation");
     };
-    assert_eq!(request.mode, PromptMode::Confirm);
-    assert!(request.label.contains("server"), "got {:?}", request.label);
-    assert!(request.label.contains("10"), "got {:?}", request.label);
+    assert!(request.is_destructive(), "ending a process warns");
+    assert!(
+        request.message().contains("server"),
+        "got {:?}",
+        request.message()
+    );
+    assert!(
+        request.message().contains("10"),
+        "got {:?}",
+        request.message()
+    );
 }
 
 #[cfg(unix)]
@@ -145,10 +153,7 @@ fn test_confirming_sends_the_signal_to_the_selected_pid_only() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "server");
     editor.on_key(&press(KeyCode::Char('x')));
-    let request = command_of(editor.on_prompt(PromptReply {
-        answer: Some("y".to_string()),
-        tag: ASK_CONFIRM,
-    }));
+    let request = command_of(editor.on_confirm(true));
     assert_eq!(request.args, ["-TERM", "10"]);
 }
 
@@ -162,10 +167,7 @@ fn test_a_pid_handed_to_another_program_while_asking_is_not_signalled() {
     let mut reused = sample_at(Instant::now(), [0, 0, 0]);
     reused.entries[1] = raw(10, 1, "editor", 0);
     editor.on_job(JobReply::Processes(Ok(reused)));
-    let outcome = editor.on_prompt(PromptReply {
-        answer: Some("y".to_string()),
-        tag: ASK_CONFIRM,
-    });
+    let outcome = editor.on_confirm(true);
     assert_eq!(outcome, EditorOutcome::Consumed, "nothing was signalled");
 }
 
@@ -175,10 +177,7 @@ fn test_a_tree_kill_reaches_the_children_first() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "server");
     editor.on_key(&press(KeyCode::Char('T')));
-    let request = command_of(editor.on_prompt(PromptReply {
-        answer: Some("y".to_string()),
-        tag: ASK_CONFIRM,
-    }));
+    let request = command_of(editor.on_confirm(true));
     assert_eq!(request.args, ["-KILL", "11", "10"]);
 }
 
@@ -187,17 +186,11 @@ fn test_declining_the_confirmation_runs_nothing() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "server");
     editor.on_key(&press(KeyCode::Char('X')));
-    let outcome = editor.on_prompt(PromptReply {
-        answer: None,
-        tag: ASK_CONFIRM,
-    });
+    let outcome = editor.on_confirm(false);
     assert_eq!(outcome, EditorOutcome::Consumed);
     // And the declined kill must not linger to be fired by a later,
     // unrelated answer.
-    let stray = editor.on_prompt(PromptReply {
-        answer: Some("y".to_string()),
-        tag: ASK_CONFIRM,
-    });
+    let stray = editor.on_confirm(true);
     assert_eq!(stray, EditorOutcome::Consumed);
 }
 

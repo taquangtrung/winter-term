@@ -25,14 +25,15 @@ fn test_dropping_a_stash_from_the_menu_asks_first() {
     // `z x` dropped the newest stash on the spot, while `x` on the same
     // stash asked: a stash dropped cannot be taken back.
     let mut editor = stash_editor_on(Item::StashHeading);
-    let EditorOutcome::Prompt(request) = choose(&mut editor, 'z', 'x') else {
+    let EditorOutcome::Confirm(request) = choose(&mut editor, 'z', 'x') else {
         panic!("the drop asks first");
     };
-    assert!(request.label.contains("stash@{0}"), "{}", request.label);
-    let command = command_of(&editor.on_prompt(PromptReply {
-        answer: Some("y".to_string()),
-        tag: request.tag,
-    }));
+    assert!(
+        request.message().contains("stash@{0}"),
+        "{}",
+        request.message()
+    );
+    let command = command_of(&editor.on_confirm(true));
     assert_eq!(command.args, ["stash", "drop", "stash@{0}"]);
 }
 
@@ -117,13 +118,10 @@ fn test_x_over_a_stash_drops_it_and_over_the_heading_drops_them_all_once_confirm
         let mut editor = stash_editor_on(item);
         let asked = editor.on_key(&press_char('x'));
         assert!(
-            matches!(asked, EditorOutcome::Prompt(_)),
+            matches!(asked, EditorOutcome::Confirm(_)),
             "asks first: {asked:?}"
         );
-        let command = command_of(&editor.on_prompt(PromptReply {
-            answer: Some("y".to_string()),
-            tag: ASK_DISCARD,
-        }));
+        let command = command_of(&editor.on_confirm(true));
         assert_eq!(command.args, args);
     }
 }

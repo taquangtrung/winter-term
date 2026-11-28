@@ -17,6 +17,7 @@
 
 use std::path::{Path, PathBuf};
 
+use misty::Confirmation;
 use winter_model::editor::GitViewRequest;
 use winter_vcs::exec::{self, Rev};
 
@@ -187,13 +188,17 @@ impl App {
         agent: Agent,
         question: String,
     ) {
-        let yes = match action {
-            AgentAction::Discard => "Discard",
-            AgentAction::Merge => "Merge",
-            AgentAction::Review | AgentAction::Stop => "Go On",
+        let asked = match action {
+            AgentAction::Discard => {
+                Confirmation::destructive("Discard Agent?", question, "Discard")
+            }
+            AgentAction::Merge => Confirmation::new("Merge Agent?", question, "Merge"),
+            AgentAction::Review | AgentAction::Stop => {
+                Confirmation::new("Go On with Agent?", question, "Go On")
+            }
         };
         self.runtime.agents.asked = Some(Asked::Act(action, agent));
-        self.ask_yes_no("Agent", yes, question, PendingClose::Agent);
+        self.confirm_for_window(asked, PendingClose::Agent);
     }
 
     /// The user said yes to the question about an agent: go on, allowed

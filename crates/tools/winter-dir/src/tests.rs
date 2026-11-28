@@ -624,8 +624,14 @@ fn test_o_hands_the_entry_to_the_system_handler() {
 
 /// Answer whichever way the question was asked: a destination is offered
 /// as a list of the directories in reach, everything else as a prompt,
-/// and both are answered under the same tag.
+/// and both are answered under the same tag; a confirmation is answered
+/// yes.
 fn answer(editor: &mut DirEditor, outcome: EditorOutcome, text: &str) {
+    if let EditorOutcome::Confirm(_) = outcome {
+        let outcome = editor.on_confirm(true);
+        settle(editor, outcome);
+        return;
+    }
     let tag = match outcome {
         EditorOutcome::Prompt(request) => request.tag,
         EditorOutcome::Pick(request) => request.tag,
@@ -756,11 +762,14 @@ fn test_a_delete_prompt_says_how_many_it_will_take() {
     editor.on_key(&press(KeyCode::Char('m')));
     editor.on_key(&press(KeyCode::Char('m')));
 
-    let EditorOutcome::Prompt(request) = editor.on_key(&press(KeyCode::Char('x'))) else {
-        panic!("expected a prompt");
+    let EditorOutcome::Confirm(request) = editor.on_key(&press(KeyCode::Char('x'))) else {
+        panic!("expected a confirmation");
     };
-    assert!(request.label.contains('2'), "got {:?}", request.label);
-    assert_eq!(request.mode, PromptMode::Confirm);
+    assert!(
+        request.message().contains('2'),
+        "got {:?}",
+        request.message()
+    );
 }
 
 #[test]
@@ -769,13 +778,10 @@ fn test_declining_a_delete_keeps_the_files() {
     tree.touch("keep.txt");
     let mut editor = DirEditor::new(tree.0.clone());
 
-    let EditorOutcome::Prompt(request) = editor.on_key(&press(KeyCode::Char('x'))) else {
-        panic!("expected a prompt");
+    let EditorOutcome::Confirm(_) = editor.on_key(&press(KeyCode::Char('x'))) else {
+        panic!("expected a confirmation");
     };
-    editor.on_prompt(PromptReply {
-        answer: None,
-        tag: request.tag,
-    });
+    editor.on_confirm(false);
     assert!(tree.path("keep.txt").exists());
 }
 
@@ -2107,13 +2113,11 @@ fn test_a_delete_runs_as_a_job_and_reports_when_it_lands() {
     let tree = TempTree::new("delete-job");
     tree.touch("gone.txt");
     let mut editor = DirEditor::new(tree.0.clone());
-    let EditorOutcome::Prompt(request) = editor.on_key(&press(KeyCode::Char('X'))) else {
+    let EditorOutcome::Confirm(request) = editor.on_key(&press(KeyCode::Char('X'))) else {
         panic!("expected the delete question");
     };
-    let outcome = editor.on_prompt(PromptReply {
-        answer: Some("y".to_string()),
-        tag: request.tag,
-    });
+    assert!(request.is_destructive(), "a delete for good warns");
+    let outcome = editor.on_confirm(true);
     assert!(
         matches!(
             outcome,
@@ -2183,14 +2187,11 @@ fn test_a_delete_acts_on_what_its_question_named() {
     tree.touch("b");
     let mut editor = DirEditor::new(tree.0.clone());
     select(&mut editor, "a");
-    let EditorOutcome::Prompt(request) = editor.on_key(&press(KeyCode::Char('X'))) else {
+    let EditorOutcome::Confirm(_) = editor.on_key(&press(KeyCode::Char('X'))) else {
         panic!("expected a confirmation");
     };
     select(&mut editor, "b");
-    let outcome = editor.on_prompt(PromptReply {
-        answer: Some("y".to_string()),
-        tag: request.tag,
-    });
+    let outcome = editor.on_confirm(true);
     assert_eq!(
         outcome,
         EditorOutcome::Job(JobRequest::FileOps(FileOps::Delete(vec![tree.path("a")])))

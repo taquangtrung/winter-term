@@ -8,14 +8,12 @@
 
 use std::path::{Path, PathBuf};
 
-use winter_model::editor::{
-    EditorOutcome, FileOps, JobRequest, OpenTarget, PickQuestion, PromptRequest,
-};
+use winter_model::editor::{EditorOutcome, FileOps, JobRequest, OpenTarget, PickQuestion};
 
-use super::notice::{DirNotice, PartFailure};
+use super::notice::{DirConfirmation, DirNotice, Entries, PartFailure};
 use super::{
-    ASK_COPY, ASK_DELETE, ASK_GIT_MOVE, ASK_MKDIR, ASK_MODE, ASK_MOVE, ASK_NEW_FILE, ASK_RENAME,
-    ASK_TRASH, DirEditor, name_of, ops, vcs,
+    ASK_COPY, ASK_GIT_MOVE, ASK_MKDIR, ASK_MODE, ASK_MOVE, ASK_NEW_FILE, ASK_RENAME, DirEditor,
+    name_of, ops, vcs,
 };
 
 // ========================================================================
@@ -76,31 +74,30 @@ impl DirEditor {
     /// delete them past recovering (`X`), naming how many there are so a
     /// marked set is never removed on a glance at one filename.
     pub(super) fn ask_delete(&mut self, for_good: bool) -> EditorOutcome {
-        let (tag, title, yes) = match for_good {
-            true => (ASK_DELETE, "Delete Permanently?", "Delete"),
-            false => (ASK_TRASH, "Move to Trash?", "Move to Trash"),
-        };
         let targets = self.targets();
-        let what = match targets.len() {
-            0 => return EditorOutcome::Consumed,
-            1 => name_of(&targets[0]),
-            count => format!("{count} entries"),
-        };
-        let pronoun = match targets.len() {
-            1 => "it",
-            _ => "they",
-        };
-        let label = match for_good {
-            true => format!("Deletes {what} for good. This cannot be undone."),
-            false => format!("Moves {what} to the trash, where {pronoun} can be restored."),
+        let entries = match &targets[..] {
+            [] => return EditorOutcome::Consumed,
+            [one] => Entries::One(name_of(one)),
+            many => Entries::Many(many.len()),
         };
         self.pending_targets = Some(targets);
-        // The trash gives back what it takes; a delete for good does not.
-        let request = PromptRequest::confirm(tag, &label).titled(title, yes);
-        EditorOutcome::Prompt(match for_good {
-            true => request.destructive(),
-            false => request,
+        self.confirm(match for_good {
+            true => DirConfirmation::Delete(entries),
+            false => DirConfirmation::Trash(entries),
         })
+    }
+
+    /// Delete the targets the question was about, for good where
+    /// `for_good`, else to the trash: as a job, off the window's thread.
+    pub(super) fn remove_targets(&mut self, for_good: bool) -> EditorOutcome {
+        let targets = self.pending_targets.take().unwrap_or_default();
+        if targets.is_empty() {
+            return EditorOutcome::Consumed;
+        }
+        EditorOutcome::Job(JobRequest::FileOps(match for_good {
+            true => FileOps::Delete(targets),
+            false => FileOps::Trash(targets),
+        }))
     }
 
     /// Ask where the targets go, for a copy or a move.
@@ -165,8 +162,6 @@ impl DirEditor {
         let work = match tag {
             ASK_COPY => Some(self.transfer_pairs(&targets, answer).map(FileOps::Copy)),
             ASK_MOVE => Some(self.transfer_pairs(&targets, answer).map(FileOps::Move)),
-            ASK_DELETE => Some(Ok(FileOps::Delete(targets.clone()))),
-            ASK_TRASH => Some(Ok(FileOps::Trash(targets.clone()))),
             _ => None,
         };
         match work {

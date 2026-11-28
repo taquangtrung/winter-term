@@ -166,7 +166,6 @@ impl PdfEditor {
             label: format!("Page (1-{}): ", self.page_count()),
             mode: PromptMode::Text,
             tag: ASK_PAGE,
-            title: None,
         })
     }
 
@@ -178,7 +177,6 @@ impl PdfEditor {
             label: "Zoom (%, or w width, h height, p page): ".to_string(),
             mode: PromptMode::Text,
             tag: ASK_ZOOM,
-            title: None,
         })
     }
 

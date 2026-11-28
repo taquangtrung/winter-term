@@ -1797,7 +1797,6 @@ mod tests {
     #[test]
     fn test_a_press_behind_a_dialog_answers_nothing_and_reaches_nothing() {
         use crate::window::editor::PendingClose;
-        use crate::window::input::overlay::{ClosePrompt, Overlay};
 
         let mut app = App::new();
         let editor = Box::new(MockScrollableEditor {
@@ -1812,12 +1811,12 @@ mod tests {
             .find(|(id, _)| *id == tab)
             .unwrap();
         let pr = App::layout_rect_to_pane(rect);
-        app.open_overlay(Overlay::Close(ClosePrompt {
-            buttons: winter_model::button::ButtonGroup::confirm_as("Discard"),
-            label: "Unsaved edits in main.rs. Close the tab? (y/n) ".to_string(),
-            pending: PendingClose::Tab(tab),
-            title: "Discard Unsaved Changes?",
-        }));
+        let asked = misty::Confirmation::destructive(
+            "Discard Unsaved Changes?",
+            "Unsaved edits in main.rs.",
+            "Discard",
+        );
+        app.confirm_for_window(asked, PendingClose::Tab(tab));
 
         // A press on the pane's scrollbar, behind the dialog.
         let (sb_x, mid_y) = (pr.x + pr.width - 2.0, pr.y + pr.height * 0.5);
@@ -1829,7 +1828,7 @@ mod tests {
             "the pane took no press"
         );
         assert!(
-            app.parts.close_prompt().is_some(),
+            app.parts.confirm_prompt().is_some(),
             "a stray press off the dialog answers nothing: the question stays"
         );
         assert!(app.open_tabs.page(&tab).is_some(), "and closes nothing");

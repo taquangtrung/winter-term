@@ -29,7 +29,7 @@ use winter_model::vim::nav::{VimKey, VimNav};
 
 use crate::header::{PORT_MONITOR, SummaryPart, monitor_page};
 use crate::proc::act::{self, Signal, TAG_SIGNAL};
-use crate::proc::notice::{Acting, ProcNotice, Signalled};
+use crate::proc::notice::{Acting, ProcConfirmation, ProcNotice, Signalled};
 use crate::proc::view::SortDirection;
 use crate::table::{ROW_PADDING_COLS, cell, fit, heading, marked, table_row};
 
@@ -41,7 +41,6 @@ use crate::table::{ROW_PADDING_COLS, cell, fit, heading, marked, table_row};
 const TITLE: &str = "Port Monitor";
 
 /// The questions the monitor asks.
-const ASK_CONFIRM: &str = "ports-confirm";
 const ASK_FILTER: &str = "ports-filter";
 const ASK_SEARCH: &str = "ports-search";
 
@@ -365,15 +364,9 @@ impl PortsEditor {
             return EditorOutcome::Consumed;
         };
         let name = socket.program.clone().unwrap_or_else(|| pid.to_string());
-        let question = format!(
-            "{} {name} (pid {pid}), which holds {}?",
-            signal.verb(),
-            socket.local
-        );
+        let what = format!("{name} (pid {pid}), which holds {}", socket.local);
         self.pending = Some((pid, name, signal));
-        let request =
-            PromptRequest::confirm(ASK_CONFIRM, &question).titled(signal.title(), signal.button());
-        EditorOutcome::Prompt(request.destructive())
+        EditorOutcome::Confirm(ProcConfirmation::Signal { signal, what }.to_confirmation())
     }
 
     /// Send the signal said yes to, if the process still holds a socket.
@@ -452,7 +445,6 @@ impl PortsEditor {
                 label: "filter: ".to_string(),
                 mode: PromptMode::Text,
                 tag: ASK_FILTER,
-                title: None,
             }),
             Act::ClearFilter if self.filter.is_empty() => return None,
             Act::ClearFilter => {
@@ -830,17 +822,17 @@ impl Page for PortsEditor {
         rows
     }
 
+    fn on_confirm(&mut self, yes: bool) -> EditorOutcome {
+        self.list.view_mut().release();
+        match (self.pending.take(), yes) {
+            (Some(pending), true) => self.send_signal(pending),
+            (_, _) => EditorOutcome::Consumed,
+        }
+    }
+
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
         self.list.view_mut().release();
         match (reply.tag, reply.answer) {
-            (ASK_CONFIRM, Some(_)) => match self.pending.take() {
-                Some(pending) => self.send_signal(pending),
-                None => EditorOutcome::Consumed,
-            },
-            (ASK_CONFIRM, None) => {
-                self.pending = None;
-                EditorOutcome::Consumed
-            }
             (ASK_FILTER, Some(answer)) => {
                 self.filter = answer.trim().to_string();
                 self.rebuild();

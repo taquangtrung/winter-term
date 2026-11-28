@@ -1111,7 +1111,6 @@ impl CompileEditor {
             label: "Compile: ".to_string(),
             mode: PromptMode::Text,
             tag: ASK_COMMAND,
-            title: None,
         })
     }
 
@@ -1125,7 +1124,6 @@ impl CompileEditor {
             label: "Type to the build: ".to_string(),
             mode: PromptMode::Text,
             tag: ASK_INPUT,
-            title: None,
         })
     }
 

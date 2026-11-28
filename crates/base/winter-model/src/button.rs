@@ -1,5 +1,7 @@
 //! Modular button groups: button state, focus navigation, and keyboard dispatch.
 
+use misty::Confirmation;
+
 use crate::view::ButtonView;
 
 use crate::input::{Key, KeyCode, Mods};
@@ -194,31 +196,16 @@ impl<T: Clone> ButtonGroup<T> {
 }
 
 impl ButtonGroup<bool> {
-    /// A standard confirmation button group: `Yes` (primary, 'y') and `No` ('n').
-    pub fn confirm() -> Self {
-        Self::new(vec![
-            Button::new("Yes", true)
-                .with_shortcut('y', "y")
-                .primary(true),
-            Button::new("No", false).with_shortcut('n', "n"),
-        ])
-    }
-
-    /// A confirmation whose yes button says what it does (`Discard`, `Move to
-    /// Trash`), with `Cancel` beside it. Each is pressed by its label's first
-    /// letter, shown on it (`d`, `c`); `y` and `n` answer as ever, unshown.
+    /// The buttons that answer `asked`: its yes, saying what it does
+    /// (`Discard`, `Move to Trash`), then `Cancel`. Each is pressed by the
+    /// letter shown on it, the yes's first letter and `c`, as misty's
+    /// confirmation dialog draws them; `y` and `n` answer as ever, unshown.
     /// The focus starts on the yes, as every confirmation's does: `Enter`
     /// gives what was asked for, `Esc` keeps what is there.
-    pub fn confirm_as(yes: &str) -> Self {
-        // A yes starting as `Cancel` does takes `y` for its own letter.
-        let letter = yes
-            .chars()
-            .next()
-            .map(|c| c.to_ascii_lowercase())
-            .filter(|c| c.is_ascii_alphabetic() && *c != CANCEL_LETTER)
-            .unwrap_or('y');
+    pub fn confirming(asked: &Confirmation) -> Self {
+        let letter = asked.yes_letter();
         Self::new(vec![
-            Button::new(yes, true)
+            Button::new(asked.yes(), true)
                 .with_shortcut(letter, letter.to_string())
                 .with_alias('y')
                 .primary(true),
@@ -265,9 +252,14 @@ mod tests {
         }
     }
 
+    /// The buttons of a confirmation whose yes says `yes`.
+    fn confirming(yes: &str) -> ButtonGroup<bool> {
+        ButtonGroup::confirming(&Confirmation::new("Go?", "", yes))
+    }
+
     #[test]
     fn test_a_labeled_confirmation_answers_to_its_letters_and_to_y_and_n() {
-        let group = ButtonGroup::confirm_as("Discard");
+        let group = confirming("Discard");
         let answer = |c| group.clone().on_key(&press(KeyCode::Char(c)));
         assert_eq!(
             group.buttons()[0].shortcut_hint.as_deref(),
@@ -277,7 +269,7 @@ mod tests {
         assert_eq!((answer('d'), answer('y')), (Some(true), Some(true)));
         assert_eq!((answer('c'), answer('n')), (Some(false), Some(false)));
         assert_eq!(group.clone().on_key(&press(KeyCode::Escape)), Some(false));
-        let cancel_like = ButtonGroup::confirm_as("Close");
+        let cancel_like = confirming("Close");
         assert_eq!(
             cancel_like.buttons()[0].shortcut_char,
             Some('y'),
@@ -287,7 +279,7 @@ mod tests {
 
     #[test]
     fn test_tab_cycles_focus_forward_and_shift_tab_backward() {
-        let mut group = ButtonGroup::confirm();
+        let mut group = confirming("Go");
         assert_eq!(group.focused(), 0);
 
         // Tab -> focus moves to No (index 1)
@@ -309,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_arrow_keys_cycle_focus() {
-        let mut group = ButtonGroup::confirm();
+        let mut group = confirming("Go");
         assert_eq!(group.focused(), 0);
 
         // Right arrow moves to No
@@ -323,38 +315,38 @@ mod tests {
 
     #[test]
     fn test_enter_activates_currently_focused_button() {
-        let mut group = ButtonGroup::confirm();
+        let mut group = confirming("Go");
 
         // Yes is focused initially; Enter confirms true
         assert_eq!(group.on_key(&press(KeyCode::Enter)), Some(true));
 
         // Move to No; Enter confirms false
-        let mut group = ButtonGroup::confirm();
+        let mut group = confirming("Go");
         group.focus_next();
         assert_eq!(group.on_key(&press(KeyCode::Enter)), Some(false));
     }
 
     #[test]
     fn test_shortcut_keys_activate_directly_regardless_of_focus() {
-        let mut group = ButtonGroup::confirm();
+        let mut group = confirming("Go");
         // Even when Yes is focused, pressing 'n' directly answers false
         assert_eq!(group.on_key(&press(KeyCode::Char('n'))), Some(false));
 
         // Even when No is focused, pressing 'y' directly answers true
-        let mut group = ButtonGroup::confirm();
+        let mut group = confirming("Go");
         group.focus_next();
         assert_eq!(group.on_key(&press(KeyCode::Char('y'))), Some(true));
     }
 
     #[test]
     fn test_escape_activates_cancel() {
-        let mut group = ButtonGroup::confirm();
+        let mut group = confirming("Go");
         assert_eq!(group.on_key(&press(KeyCode::Escape)), Some(false));
     }
 
     #[test]
     fn test_ctrl_g_cancels_as_escape_does() {
-        let mut group = ButtonGroup::confirm();
+        let mut group = confirming("Go");
         group.focus_next();
         let ctrl_g = Key {
             ctrl: true,
@@ -365,7 +357,7 @@ mod tests {
 
     #[test]
     fn test_to_view_reflects_current_focus() {
-        let mut group = ButtonGroup::confirm();
+        let mut group = confirming("Go");
         let views = group.to_view();
         assert!(views[0].focused);
         assert!(!views[1].focused);

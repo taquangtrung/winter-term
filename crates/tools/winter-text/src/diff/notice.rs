@@ -1,15 +1,16 @@
 //! What the diff and merge editor tells the user, kept typed until the
-//! window takes it.
+//! window takes it, and what it asks before an action.
 //!
 //! The editor stores a [`DiffNotice`] and turns it into a misty [`Notice`]
-//! only in `take_notice`, so its wording and severity are decided in one
-//! `match` and tests compare variants rather than sentences.
+//! only in `take_notice`, and asks a [`DiffConfirmation`] as a misty
+//! [`Confirmation`], so the wording and severity are decided in one `match`
+//! each and tests compare variants rather than sentences.
 
 use std::fmt;
 use std::path::PathBuf;
 
 use cherry::NoticeRequest;
-use winter_model::editor::Notice;
+use winter_model::editor::{Confirmation, Notice};
 
 use super::letter_of;
 use crate::notice::{FileFailure, cherry_notice};
@@ -17,6 +18,13 @@ use crate::notice::{FileFailure, cherry_notice};
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// A question the editor asks before an action, kept until it is answered.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum DiffConfirmation {
+    /// Quitting with edits not written, on these sides (`A`, `B`).
+    Quit(Vec<&'static str>),
+}
 
 /// One message for the status bar.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -83,6 +91,27 @@ pub(crate) struct DiffStatus {
     pub(crate) conflicts_left: Option<usize>,
     /// Whether whitespace is left out.
     pub(crate) whitespace_left_out: bool,
+}
+
+// ========================================================================
+// DiffConfirmation
+// ========================================================================
+
+impl DiffConfirmation {
+    /// The question the window asks: the one place its wording and whether
+    /// it warns are decided.
+    pub(crate) fn to_confirmation(&self) -> Confirmation {
+        match self {
+            Self::Quit(sides) => Confirmation::destructive(
+                "Discard Unsaved Changes?",
+                format!(
+                    "Not written: side {}. Quitting loses those edits.",
+                    sides.join(", ")
+                ),
+                "Discard",
+            ),
+        }
+    }
 }
 
 // ========================================================================

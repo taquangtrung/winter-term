@@ -135,63 +135,9 @@ pub struct PromptRequest {
     pub mode: PromptMode,
     /// Which question this is, so the editor knows what the answer belongs to.
     pub tag: &'static str,
-    /// The dialog's own words: its title and what its yes button says;
-    /// `None` for one the host names by the question's kind alone.
-    pub title: Option<ConfirmText>,
-}
-
-/// A confirmation's own words, both naming what a yes does: the title asks
-/// it ("Move to Trash?") and the yes button says it ("Move to Trash"), so
-/// the answer reads without the message.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct ConfirmText {
-    /// Whether a yes loses something (edits, files, a running program): the
-    /// dialog warns rather than asks. Its focus starts on the yes all the
-    /// same, as every confirmation's does.
-    pub destructive: bool,
-    pub title: String,
-    pub yes: String,
 }
 
 impl PromptRequest {
-    /// A yes-or-no question for what cannot be undone: `question` with its
-    /// first letter a capital, and the keys that answer it after.
-    pub fn confirm(tag: &'static str, question: &str) -> Self {
-        let mut chars = question.chars();
-        let label = match chars.next() {
-            Some(first) => format!("{}{} (y/n) ", first.to_uppercase(), chars.as_str()),
-            None => "(y/n) ".to_string(),
-        };
-        Self {
-            initial: String::new(),
-            label,
-            mode: PromptMode::Confirm,
-            tag,
-            title: None,
-        }
-    }
-
-    /// The question titled `title`, which asks in a few words what a yes
-    /// does, its yes button saying `yes`, so the dialog reads before its
-    /// message is.
-    pub fn titled(mut self, title: &str, yes: &str) -> Self {
-        self.title = Some(ConfirmText {
-            destructive: false,
-            title: title.to_string(),
-            yes: yes.to_string(),
-        });
-        self
-    }
-
-    /// The question, its yes losing something: the dialog warns rather than
-    /// asks.
-    pub fn destructive(mut self) -> Self {
-        if let Some(text) = self.title.as_mut() {
-            text.destructive = true;
-        }
-        self
-    }
-
     /// The `/` prompt, searching forward through what the editor shows.
     pub fn search(tag: &'static str) -> Self {
         Self {
@@ -199,7 +145,6 @@ impl PromptRequest {
             label: "/".to_string(),
             mode: PromptMode::Search { reverse: false },
             tag,
-            title: None,
         }
     }
 }
@@ -216,9 +161,6 @@ pub struct PromptReply {
 /// How a prompt collects its answer.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum PromptMode {
-    /// One key: `y` confirms, anything else cancels. For a question whose wrong
-    /// answer cannot be undone.
-    Confirm,
     /// Single-key query-replace choice: `y` (yes), `n` (no), `!` (all), `.` (replace & exit), `q` (quit).
     QueryReplace,
     /// A line of text to search for, ending at `Enter`: the host highlights

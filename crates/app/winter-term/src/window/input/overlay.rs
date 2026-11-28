@@ -5,6 +5,7 @@
 
 use std::path::PathBuf;
 
+use misty::Confirmation;
 use misty::picker::Picker;
 use misty::widgets::QuickPick;
 use winter_field::Field;
@@ -41,8 +42,9 @@ const NO_LETTER: char = 'n';
 
 /// The one thing holding the keyboard over the panes, while one does.
 pub(in crate::window) enum Overlay {
-    /// The host's own question, before closing what would lose something.
-    Close(ClosePrompt),
+    /// A confirmation, asked by the window before closing what would lose
+    /// something, or by an editor before an action of its own.
+    Confirm(ConfirmPrompt),
     /// The picker, or a list an editor asked to be picked from.
     Picker(Box<PickerOverlay>),
     /// A tab's new name being typed.
@@ -90,16 +92,30 @@ pub(in crate::window) enum ErrorChoice {
     Dismiss,
 }
 
-/// The host asking whether to go ahead with a close, and what it would close.
-/// Answered by confirmation buttons (with Tab navigation) or direct keys.
-pub(in crate::window) struct ClosePrompt {
+/// A confirmation being asked, and who acts on its answer. Answered by its
+/// buttons (with Tab navigation) or their letters.
+pub(in crate::window) struct ConfirmPrompt {
+    /// What is asked.
+    pub(in crate::window) asked: Confirmation,
+    /// Its yes and its Cancel, which take the keys.
     pub(in crate::window) buttons: ButtonGroup<bool>,
-    /// The question, naming what would be lost.
-    pub(in crate::window) label: String,
-    /// What closes on a yes.
-    pub(in crate::window) pending: PendingClose,
-    /// The dialog's title: what a yes gives up.
-    pub(in crate::window) title: &'static str,
+    /// Who acts on the answer.
+    pub(in crate::window) then: Asker,
+}
+
+/// Who asked a confirmation, and so acts on its answer.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(in crate::window) enum Asker {
+    /// An editor, which hears the answer in `on_confirm`.
+    Editor {
+        /// The card of the transient whose choice asked it, which it opens
+        /// on, as `(x, y, w, h)` in surface pixels.
+        card: Option<(f32, f32, f32, f32)>,
+        /// The editor's tab.
+        tab: TabId,
+    },
+    /// The window, which carries out what waits on a yes.
+    Window(PendingClose),
 }
 
 /// The picker, and the editor question it answers while it shows a list of
@@ -149,7 +165,7 @@ impl Overlay {
     fn is_dialog(&self) -> bool {
         match self {
             Self::EditorPrompt(prompt) => prompt.typed_search().is_none(),
-            Self::Close(_)
+            Self::Confirm(_)
             | Self::Error(_)
             | Self::Password(_)
             | Self::Secret(_)
@@ -160,12 +176,12 @@ impl Overlay {
 
     /// Whether a prompt or pick of tab `tab`'s editor may take the keyboard
     /// from this one. A dialog stays up until it is answered, giving way
-    /// only to the editor that asked it, asking again; the host's close
-    /// question gives way to none, since it waits on its answer to close
+    /// only to the editor that asked it, asking again; the window's own
+    /// confirmation gives way to none, since it waits on its answer to close
     /// anything.
     fn yields_to_editor(&self, tab: TabId) -> bool {
         match self {
-            Self::Close(_) => false,
+            Self::Confirm(prompt) if matches!(prompt.then, Asker::Window(_)) => false,
             overlay => !overlay.is_dialog() || overlay.belongs_to(tab),
         }
     }
@@ -173,7 +189,10 @@ impl Overlay {
     /// Whether this belongs to tab `tab`, so it goes when the tab does.
     fn belongs_to(&self, tab: TabId) -> bool {
         match self {
-            Self::Close(prompt) => prompt.pending.subject() == Some(tab),
+            Self::Confirm(prompt) => match prompt.then {
+                Asker::Editor { tab: asker, .. } => asker == tab,
+                Asker::Window(pending) => pending.subject() == Some(tab),
+            },
             Self::Picker(overlay) => overlay.pick.as_ref().is_some_and(|pick| pick.tab == tab),
             Self::Rename(input) => input.tab == tab,
             Self::EditorPrompt(prompt) => prompt.tab == tab,
@@ -183,6 +202,17 @@ impl Overlay {
 
     /// The editor question this leaves unanswered when it goes, if any: the
     /// tab that asked, and the reply that tells it there was no answer.
+    /// The tab whose editor asked this, if an editor did.
+    fn editor_tab(&self) -> Option<TabId> {
+        match self {
+            Self::Confirm(ConfirmPrompt {
+                then: Asker::Editor { tab, .. },
+                ..
+            }) => Some(*tab),
+            overlay => overlay.unanswered().map(|(tab, _)| tab),
+        }
+    }
+
     fn unanswered(&self) -> Option<(TabId, PromptReply)> {
         let (tab, tag) = match self {
             Self::Picker(overlay) => {
@@ -190,7 +220,7 @@ impl Overlay {
                 (pick.tab, pick.tag)
             }
             Self::EditorPrompt(prompt) => (prompt.tab, prompt.request.tag),
-            Self::Close(_)
+            Self::Confirm(_)
             | Self::Error(_)
             | Self::Password(_)
             | Self::Rename(_)
@@ -303,7 +333,7 @@ impl App {
     /// nobody can see. An editor's own question or list cannot take the keyboard
     /// from the host's: it is answered with nothing at once instead.
     pub(in crate::window) fn open_overlay(&mut self, overlay: Overlay) {
-        let asker = overlay.unanswered().map(|(tab, _)| tab);
+        let asker = overlay.editor_tab();
         let refused = asker.is_some_and(|tab| {
             self.parts
                 .overlay
@@ -385,6 +415,20 @@ impl App {
 
     /// Answer the editor question `overlay` holds, if any, with nothing.
     fn answer_unasked(&mut self, overlay: &Overlay) {
+        if let Overlay::Confirm(ConfirmPrompt {
+            then: Asker::Editor { tab, .. },
+            ..
+        }) = overlay
+        {
+            self.answer_confirmation(
+                Asker::Editor {
+                    card: None,
+                    tab: *tab,
+                },
+                false,
+            );
+            return;
+        }
         let Some((tab, reply)) = overlay.unanswered() else {
             return;
         };
@@ -450,9 +494,9 @@ impl WindowParts {
         Some(prompt)
     }
 
-    /// The host's close question, while it is asked.
-    pub(in crate::window) fn close_prompt(&self) -> Option<&ClosePrompt> {
-        let Some(Overlay::Close(prompt)) = &self.overlay else {
+    /// The confirmation being asked, while one is.
+    pub(in crate::window) fn confirm_prompt(&self) -> Option<&ConfirmPrompt> {
+        let Some(Overlay::Confirm(prompt)) = &self.overlay else {
             return None;
         };
         Some(prompt)

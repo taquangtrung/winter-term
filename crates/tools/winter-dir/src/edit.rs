@@ -2,15 +2,16 @@
 //! the renames an edit session comes to.
 
 use winter_field::Rows;
-use winter_model::editor::{EditorOutcome, PromptRequest};
+use winter_model::editor::EditorOutcome;
 use winter_model::input::table::{self, TableMatch};
 use winter_model::input::{Key, KeyCode, Mods};
 use winter_model::modal::{EditMode, EditOutcome};
 
 use super::keys::{Act, EDIT_KEYS};
+use super::notice::DirConfirmation;
 use super::notice::DirNotice;
 use super::tree::Row;
-use super::{ASK_APPLY_EDITS, DirEditor, name_of, ops, rows};
+use super::{DirEditor, name_of, ops, rows};
 
 // ========================================================================
 // Constants
@@ -178,15 +179,12 @@ impl DirEditor {
         if renames.len() == 1 {
             return self.run_renames(renames);
         }
-        let label = format!(
-            "Rename {} entries: {}?",
-            renames.len(),
-            rename_summary(&renames)
-        );
+        let asked = DirConfirmation::RenameEntries {
+            count: renames.len(),
+            summary: rename_summary(&renames),
+        };
         self.rename_plan = Some(renames);
-        EditorOutcome::Prompt(
-            PromptRequest::confirm(ASK_APPLY_EDITS, &label).titled("Rename Entries?", "Rename"),
-        )
+        self.confirm(asked)
     }
 
     /// Carry out a checked batch of renames and leave edit mode.

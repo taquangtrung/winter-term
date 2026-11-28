@@ -120,14 +120,13 @@ fn test_unstaging_uses_the_staged_copy_of_a_file_changed_on_both_sides() {
 fn test_discarding_asks_first_and_names_the_file() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "working.rs");
-    let EditorOutcome::Prompt(request) = editor.on_key(&press(KeyCode::Char('x'))) else {
+    let EditorOutcome::Confirm(request) = editor.on_key(&press(KeyCode::Char('x'))) else {
         panic!("expected a confirmation");
     };
-    assert_eq!(request.mode, PromptMode::Confirm);
     assert!(
-        request.label.contains("working.rs"),
+        request.message().contains("working.rs"),
         "got {:?}",
-        request.label
+        request.message()
     );
 }
 
@@ -151,10 +150,7 @@ fn test_discarding_an_untracked_file_deletes_it_instead_of_restoring() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "new.rs");
     editor.on_key(&press(KeyCode::Char('x')));
-    let command = command_of(&editor.on_prompt(PromptReply {
-        answer: Some("y".to_string()),
-        tag: ASK_DISCARD,
-    }));
+    let command = command_of(&editor.on_confirm(true));
     assert_eq!(command.args, ["clean", "--force", "-d", "--", "new.rs"]);
 }
 
@@ -163,10 +159,7 @@ fn test_declining_the_confirmation_runs_nothing() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "working.rs");
     editor.on_key(&press(KeyCode::Char('x')));
-    let outcome = editor.on_prompt(PromptReply {
-        answer: None,
-        tag: ASK_DISCARD,
-    });
+    let outcome = editor.on_confirm(false);
     assert_eq!(outcome, EditorOutcome::Consumed);
 }
 
@@ -294,7 +287,7 @@ fn test_a_selection_over_files_stages_unstages_or_discards_them_all() {
     assert!(
         matches!(
             editor.on_selected_rows_key(&press_char('x'), working..=working),
-            Some(EditorOutcome::Prompt(_))
+            Some(EditorOutcome::Confirm(_))
         ),
         "asks before discarding"
     );
@@ -364,10 +357,7 @@ fn test_discarding_a_hunk_reverses_it_out_of_the_working_tree() {
     let mut editor = editor_with_diff();
     cursor_on_hunk(&mut editor, 0);
     editor.on_key(&press(KeyCode::Char('x')));
-    let command = command_of(&editor.on_prompt(PromptReply {
-        answer: Some("y".to_string()),
-        tag: ASK_DISCARD,
-    }));
+    let command = command_of(&editor.on_confirm(true));
     assert_eq!(command.args, ["apply", "--reverse", "-"]);
 }
 
@@ -418,11 +408,14 @@ fn test_the_file_menu_asks_before_discarding() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "working.rs");
     let outcome = choose(&mut editor, '.', 'x');
-    let EditorOutcome::Prompt(request) = outcome else {
+    let EditorOutcome::Confirm(request) = outcome else {
         panic!("expected a confirmation, got {outcome:?}");
     };
-    assert_eq!(request.mode, PromptMode::Confirm);
-    assert!(request.label.contains("working.rs"), "{:?}", request.label);
+    assert!(
+        request.message().contains("working.rs"),
+        "{:?}",
+        request.message()
+    );
 }
 
 #[test]
@@ -432,7 +425,7 @@ fn test_a_confirmed_discard_acts_on_what_the_question_named() {
     // the file it was asked about.
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "working.rs");
-    let EditorOutcome::Prompt(request) = editor.on_key(&press_char('x')) else {
+    let EditorOutcome::Confirm(_) = editor.on_key(&press_char('x')) else {
         panic!("expected a confirmation");
     };
     let moved = STATUS_OUTPUT.replace(
@@ -441,7 +434,7 @@ fn test_a_confirmed_discard_acts_on_what_the_question_named() {
          1 .M N... 100644 100644 100644 aaa bbb working.rs",
     );
     editor.on_job(reply(exec::TAG_STATUS, &moved));
-    let command = command_of(&editor.on_prompt(yes(request.tag)));
+    let command = command_of(&editor.on_confirm(true));
     assert_eq!(command.args, ["restore", "--worktree", "--", "working.rs"]);
 }
 
@@ -449,15 +442,12 @@ fn test_a_confirmed_discard_acts_on_what_the_question_named() {
 fn test_a_discard_turned_down_is_forgotten() {
     let mut editor = loaded_editor();
     cursor_on(&mut editor, "working.rs");
-    let EditorOutcome::Prompt(request) = editor.on_key(&press_char('x')) else {
+    let EditorOutcome::Confirm(_) = editor.on_key(&press_char('x')) else {
         panic!("expected a confirmation");
     };
-    editor.on_prompt(PromptReply {
-        answer: None,
-        tag: request.tag,
-    });
+    editor.on_confirm(false);
     assert_eq!(
-        editor.on_prompt(yes(request.tag)),
+        editor.on_confirm(true),
         EditorOutcome::Consumed,
         "a stray yes later discards nothing"
     );

@@ -328,7 +328,6 @@ impl StartupEditor {
                 label: "filter: ".to_string(),
                 mode: PromptMode::Text,
                 tag: ASK_FILTER,
-                title: None,
             }),
             Act::ClearFilter if self.filter.is_empty() => return None,
             Act::ClearFilter => {

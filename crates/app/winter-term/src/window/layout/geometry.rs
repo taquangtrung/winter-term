@@ -380,7 +380,6 @@ mod tests {
 
         let prompt = editor::ActivePrompt {
             origin: None,
-            buttons: None,
             query_buttons: None,
             field: winter_field::Field::line("query"),
             recall: winter_model::recall::Recall::default(),
@@ -390,7 +389,6 @@ mod tests {
                 label: "search: ".to_string(),
                 mode: winter_model::editor::PromptMode::Text,
                 tag: "search",
-                title: None,
             },
         };
         app.parts.overlay = Some(Overlay::EditorPrompt(Box::new(prompt)));

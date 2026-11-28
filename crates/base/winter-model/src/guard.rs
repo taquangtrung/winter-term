@@ -425,6 +425,10 @@ impl<H: Held> Page for Guarded<H> {
         self.write_once(|editor| editor.on_prompt(reply), EditorOutcome::Consumed)
     }
 
+    fn on_confirm(&mut self, yes: bool) -> EditorOutcome {
+        self.write_once(|editor| editor.on_confirm(yes), EditorOutcome::Consumed)
+    }
+
     fn on_notice_action(&mut self, id: &'static str) -> EditorOutcome {
         self.write_once(
             |editor| editor.on_notice_action(id),

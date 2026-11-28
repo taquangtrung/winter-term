@@ -975,7 +975,7 @@ mod tests {
 
         // A program running in it is no reason to ask: nothing is closed.
         scratch.app.switch_workspace("b").expect("goes through");
-        assert!(scratch.app.parts.close_prompt().is_none());
+        assert!(scratch.app.parts.confirm_prompt().is_none());
         assert_eq!(scratch.app.workspace.active.as_deref(), Some("b"));
         assert_eq!(scratch.app.layout().members().len(), 1, "b's one shell");
         for tab in &a_tabs {
@@ -1184,7 +1184,7 @@ mod tests {
         let shell = scratch.app.layout().focused();
         scratch.app.switch_workspace("b").expect("goes through");
         assert!(
-            scratch.app.parts.close_prompt().is_none(),
+            scratch.app.parts.confirm_prompt().is_none(),
             "nothing is lost"
         );
         assert_eq!(scratch.app.workspace.active.as_deref(), Some("b"));

@@ -29,7 +29,7 @@ use winter_model::input::Key;
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed};
 use winter_model::paint::{Frame, Row};
 
-use super::notice::ExtensionsNotice;
+use super::notice::{ExtensionsConfirmation, ExtensionsNotice};
 use crate::extensions::manage::{self, Installed, Places, Standing};
 use crate::extensions::package::GrantKind;
 
@@ -87,9 +87,8 @@ const BUTTON_TAKE_BACK: &str = "Take Back";
 /// The clicks in a row that do what `RET` does on it.
 const DOUBLE_CLICK: u8 = 2;
 
-/// The prompts' tags.
+/// The prompt's tag.
 const ASK_DIR: &str = "extension_grant_dir";
-const ASK_REMOVE: &str = "extension_remove";
 
 /// The page's keys, block `extensions`.
 const KEYS: KeyTable<Act> = KeyTable {
@@ -160,6 +159,8 @@ struct Shown {
     asking: Option<GrantPlace>,
     /// The ids of the extensions compiled into Winter, listed apart.
     built_in: Vec<&'static str>,
+    /// The question asked before an action, until it is answered.
+    confirming: Option<ExtensionsConfirmation>,
     /// The rows, top to bottom.
     lines: Vec<Line>,
     /// What to tell the user, until the window takes it.
@@ -223,6 +224,7 @@ impl ExtensionsPage {
         let mut shown = Shown {
             asking: None,
             built_in: crate::extensions::compiled_ids(),
+            confirming: None,
             lines: Vec::new(),
             notice: None,
             outcome: None,
@@ -282,6 +284,10 @@ impl Page for ExtensionsPage {
             Some(act) => self.view.state_mut().run(act),
             None => EditorOutcome::Ignored,
         }
+    }
+
+    fn on_confirm(&mut self, yes: bool) -> EditorOutcome {
+        self.view.state_mut().confirmed(yes)
     }
 
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
@@ -357,13 +363,10 @@ impl Shown {
                 let Some(id) = line.and_then(|line| line.extension.clone()) else {
                     return EditorOutcome::Consumed;
                 };
-                return EditorOutcome::Prompt(PromptRequest {
-                    initial: String::new(),
-                    label: format!("Remove {id} and forget what it was granted? (y/n)"),
-                    mode: PromptMode::Confirm,
-                    tag: ASK_REMOVE,
-                    title: None,
-                });
+                let asked = ExtensionsConfirmation::Remove(id);
+                let confirmation = asked.to_confirmation();
+                self.confirming = Some(asked);
+                return EditorOutcome::Confirm(confirmation);
             }
             Act::Revoke => {
                 if let Some(LineAct::Granted(grant)) = line.and_then(|line| line.act.clone()) {
@@ -387,7 +390,6 @@ impl Shown {
                         label,
                         mode: PromptMode::Text,
                         tag: ASK_DIR,
-                        title: None,
                     });
                 }
                 Some(LineAct::Install) => {
@@ -405,33 +407,28 @@ impl Shown {
         EditorOutcome::Consumed
     }
 
+    /// Take the answer the confirmation the page asked was given: a yes
+    /// removes the extension it named, whatever row is selected now.
+    fn confirmed(&mut self, yes: bool) -> EditorOutcome {
+        if let (Some(ExtensionsConfirmation::Remove(id)), true) = (self.confirming.take(), yes) {
+            let done = manage::remove(&self.places, &id);
+            self.after(done.map(|()| format!("removed {id}")));
+        }
+        EditorOutcome::Consumed
+    }
+
     /// Take the answer a prompt the page opened was given.
     fn answer(&mut self, reply: PromptReply) -> EditorOutcome {
         let Some(answer) = reply.answer else {
             self.asking = None;
             return EditorOutcome::Consumed;
         };
-        match reply.tag {
-            ASK_DIR => {
-                if let Some(place) = self.asking.take() {
-                    let dir = answer.trim().trim_end_matches('/').to_string();
-                    let done = manage::grant(&self.places, &place.id, place.kind, &dir);
-                    self.after(
-                        done.map(|_| format!("{} may {} {dir}", place.id, place.kind.name())),
-                    );
-                }
-            }
-            ASK_REMOVE => {
-                let id = self
-                    .lines
-                    .get(self.selected)
-                    .and_then(|line| line.extension.clone());
-                if let Some(id) = id {
-                    let done = manage::remove(&self.places, &id);
-                    self.after(done.map(|()| format!("removed {id}")));
-                }
-            }
-            _ => {}
+        if reply.tag == ASK_DIR
+            && let Some(place) = self.asking.take()
+        {
+            let dir = answer.trim().trim_end_matches('/').to_string();
+            let done = manage::grant(&self.places, &place.id, place.kind, &dir);
+            self.after(done.map(|_| format!("{} may {} {dir}", place.id, place.kind.name())));
         }
         EditorOutcome::Consumed
     }

@@ -105,18 +105,15 @@ fn test_x_asks_before_ending_the_holder_and_a_socket_with_none_says_so() {
     );
     assert!(matches!(editor.notice, Some(ProcNotice::Failed(_))));
     editor.on_key(&press(KeyCode::Char('j')));
-    let EditorOutcome::Prompt(question) = editor.on_key(&press(KeyCode::Char('x'))) else {
+    let EditorOutcome::Confirm(question) = editor.on_key(&press(KeyCode::Char('x'))) else {
         panic!("ending a process asks first");
     };
     assert!(
-        question.label.contains("node (pid 812)"),
+        question.message().contains("node (pid 812)"),
         "{:?}",
-        question.label
+        question.message()
     );
-    let outcome = editor.on_prompt(PromptReply {
-        answer: Some(String::new()),
-        tag: ASK_CONFIRM,
-    });
+    let outcome = editor.on_confirm(true);
     let EditorOutcome::Job(JobRequest::Command(request)) = outcome else {
         panic!("said yes to, the signal is sent: {outcome:?}");
     };

@@ -391,7 +391,7 @@ impl App {
     /// up to take it.
     pub(in crate::window) fn dialog_key(&mut self, key: &Key) -> bool {
         match &mut self.parts.overlay {
-            Some(Overlay::Close(_)) => self.handle_close_prompt_key(key),
+            Some(Overlay::Confirm(_)) => self.handle_confirm_key(key),
             Some(Overlay::Error(_)) => self.handle_error_dialog_key(key),
             Some(Overlay::EditorPrompt(_)) => self.handle_prompt_key(key),
             Some(Overlay::Password(_)) => self.handle_password_key(key),

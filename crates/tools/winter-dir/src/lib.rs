@@ -35,7 +35,7 @@ mod watch;
 pub use keys::KEY_TABLES;
 pub use watch::DirWatch;
 
-use notice::DirNotice;
+use notice::{DirConfirmation, DirNotice};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -110,9 +110,6 @@ const LISTING_WAIT: Duration = Duration::from_secs(10);
 
 /// Prompt tags, one per question the listing asks.
 const ASK_COPY: &str = "copy";
-const ASK_APPLY_EDITS: &str = "apply-edits";
-const ASK_DELETE: &str = "delete";
-const ASK_TRASH: &str = "trash";
 const ASK_MKDIR: &str = "mkdir";
 const ASK_MODE: &str = "mode";
 const ASK_MOVE: &str = "move";
@@ -195,6 +192,8 @@ pub struct DirEditor {
     neighbors: Vec<PathBuf>,
     /// What the last operation reported, waiting for the status bar to take it.
     notice: Option<DirNotice>,
+    /// The question asked before an action, until it is answered.
+    asking: Option<DirConfirmation>,
     /// The shared Vim motion state: the `g` prefix, and the layer the
     /// listing's unclaimed keys fall through to.
     nav: VimNav,
@@ -277,6 +276,7 @@ impl DirEditor {
             marks: Marks::new(),
             neighbors: Vec::new(),
             notice: None,
+            asking: None,
             nav: VimNav::new(),
             pending: None,
             pending_targets: None,
@@ -828,13 +828,20 @@ impl DirEditor {
     // --------------------------------------------------------------------
 
     /// Ask a question, carrying the tag that says what the answer is for.
+    /// Ask `asked` before the action it is about, which `on_confirm` takes
+    /// once the user says yes.
+    fn confirm(&mut self, asked: DirConfirmation) -> EditorOutcome {
+        let confirmation = asked.to_confirmation();
+        self.asking = Some(asked);
+        EditorOutcome::Confirm(confirmation)
+    }
+
     fn ask(&self, tag: &'static str, label: String, initial: String) -> EditorOutcome {
         EditorOutcome::Prompt(PromptRequest {
             initial,
             label,
             mode: PromptMode::Text,
             tag,
-            title: None,
         })
     }
 
@@ -1060,6 +1067,39 @@ impl Page for DirEditor {
         self.request_next_size()
     }
 
+    fn on_confirm(&mut self, yes: bool) -> EditorOutcome {
+        self.list.view_mut().release();
+        let asked_by_menu = std::mem::take(&mut self.actions_asked);
+        let Some(asked) = self.asking.take() else {
+            return EditorOutcome::Consumed;
+        };
+        match (asked, yes) {
+            (DirConfirmation::Delete(_), true) => return self.remove_targets(true),
+            (DirConfirmation::Trash(_), true) => return self.remove_targets(false),
+            (DirConfirmation::RenameEntries { .. }, true) => {
+                return match self.rename_plan.take() {
+                    Some(plan) => self.run_renames(plan),
+                    None => EditorOutcome::Consumed,
+                };
+            }
+            // A batch turned down stays on screen to be fixed or applied.
+            (DirConfirmation::RenameEntries { .. }, false) => {
+                self.rename_plan = None;
+                self.notice = Some(DirNotice::StillEditing);
+            }
+            // Turned down, a question the actions menu asked goes back to
+            // the menu, as `Esc` in a submenu goes back to its parent.
+            (DirConfirmation::Delete(_) | DirConfirmation::Trash(_), false) => {
+                self.pending_targets = None;
+                match asked_by_menu {
+                    true => self.actions_menu = true,
+                    false => self.notice = Some(DirNotice::Cancelled),
+                }
+            }
+        }
+        EditorOutcome::Consumed
+    }
+
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
         self.list.view_mut().release();
         let asked_by_menu = std::mem::take(&mut self.actions_asked);
@@ -1068,17 +1108,6 @@ impl Page for DirEditor {
             // the marks or re-read the listing the way an operation does.
             Some(answer) if reply.tag == ASK_SEARCH => return self.search_for(&answer),
             Some(answer) if reply.tag == archive::ASK_COMPRESS => return self.compress_to(&answer),
-            Some(_) if reply.tag == ASK_APPLY_EDITS => {
-                return match self.rename_plan.take() {
-                    Some(plan) => self.run_renames(plan),
-                    None => EditorOutcome::Consumed,
-                };
-            }
-            // A batch turned down stays on screen to be fixed or applied.
-            None if reply.tag == ASK_APPLY_EDITS => {
-                self.rename_plan = None;
-                self.notice = Some(DirNotice::StillEditing);
-            }
             Some(answer) => return self.apply_answer(reply.tag, &answer),
             // Turned down, a question the actions menu asked goes back to
             // the menu, as `Esc` in a submenu goes back to its parent.

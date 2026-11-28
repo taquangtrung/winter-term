@@ -712,7 +712,6 @@ impl PdfEditor {
                 true => ASK_SEARCH,
                 false => ASK_SEARCH_BACK,
             },
-            title: None,
         })
     }
 

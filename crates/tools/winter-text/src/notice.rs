@@ -1,19 +1,43 @@
 //! What the text editor tells the user, kept typed until the window takes
-//! it.
+//! it, and what it asks before an action.
 //!
 //! The editor stores a [`TextNotice`] and turns it into a misty [`Notice`]
-//! only in `take_notice`, so its wording and severity are decided in one
-//! `match` and tests compare variants rather than sentences. What Cherry, a
-//! language server, or the system said travels as a variant's data.
+//! only in `take_notice`, and asks a [`TextConfirmation`] as a misty
+//! [`Confirmation`] it words in one place too, so the wording and severity
+//! are decided in one `match` each and tests compare variants rather than
+//! sentences. What Cherry, a language server, or the system said travels as
+//! a variant's data.
 
 use std::path::PathBuf;
 
 use cherry::{NoticeLevel, NoticeRequest};
-use winter_model::editor::Notice;
+use winter_model::editor::{Confirmation, Notice};
 
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// A question the editor asks before an action, kept until it is answered.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum TextConfirmation {
+    /// Throwing away what git handed the editor, which stops git.
+    AbortGitFile(GitFileKind),
+    /// Reading the file again over unsaved edits.
+    Revert,
+}
+
+/// What git handed the editor to write.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum GitFileKind {
+    /// A commit's message.
+    Commit,
+    /// A merge commit's message.
+    MergeCommit,
+    /// An interactive rebase's plan.
+    Rebase,
+    /// An annotated tag's message.
+    Tag,
+}
 
 /// One message for the status bar.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -111,6 +135,44 @@ pub(crate) struct FileFailure {
     pub(crate) error: String,
     /// The file.
     pub(crate) path: PathBuf,
+}
+
+// ========================================================================
+// TextConfirmation
+// ========================================================================
+
+impl TextConfirmation {
+    /// The question the window asks: the one place its wording and whether
+    /// it warns are decided. `name` is the file's.
+    pub(crate) fn to_confirmation(self, name: &str) -> Confirmation {
+        match self {
+            Self::AbortGitFile(kind) => {
+                let (title, yes, lost) = match kind {
+                    GitFileKind::Commit => ("Abort Commit?", "Abort Commit", "committing"),
+                    GitFileKind::MergeCommit => (
+                        "Abort Merge Commit?",
+                        "Abort Commit",
+                        "committing the merge",
+                    ),
+                    GitFileKind::Rebase => ("Abort Rebase?", "Abort Rebase", "rebasing"),
+                    GitFileKind::Tag => ("Abort Tag?", "Abort Tag", "making the tag"),
+                };
+                let what = match kind {
+                    GitFileKind::Rebase => "the plan's changes are",
+                    _ => "the message is",
+                };
+                let message = format!("Git stops without {lost}, and {what} lost.");
+                Confirmation::destructive(title, message, yes)
+            }
+            Self::Revert => Confirmation::destructive(
+                "Discard Unsaved Changes?",
+                format!(
+                    "{name} has unsaved edits. Reverting drops them; an undo brings them back."
+                ),
+                "Revert",
+            ),
+        }
+    }
 }
 
 // ========================================================================

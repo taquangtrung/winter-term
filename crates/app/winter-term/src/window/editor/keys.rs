@@ -103,7 +103,10 @@ impl App {
 
     /// The card of the transient `tab_id`'s last key closed, for the list or
     /// question that key asked for: spent on the first that comes.
-    fn take_transient_card(&mut self, tab_id: TabId) -> Option<(f32, f32, f32, f32)> {
+    pub(in crate::window) fn take_transient_card(
+        &mut self,
+        tab_id: TabId,
+    ) -> Option<(f32, f32, f32, f32)> {
         self.parts
             .transient_card
             .take()
@@ -451,6 +454,10 @@ impl App {
             }
             EditorOutcome::Copy { notice, text } => {
                 self.copy_for_editor(&text, notice);
+                true
+            }
+            EditorOutcome::Confirm(asked) => {
+                self.confirm_for_editor(tab_id, asked);
                 true
             }
             EditorOutcome::Prompt(request) => {

@@ -37,7 +37,7 @@ use winter_field::misty_key;
 
 use super::{edit_mode_of, session};
 use model::{A, ANCESTOR, Aligned, B, C, Kind, Session, Side, SideText, Variant};
-use notice::{Copied, DiffNotice, DiffStatus};
+use notice::{Copied, DiffConfirmation, DiffNotice, DiffStatus};
 use paint::{Column, DIVIDER, Widths};
 
 use crate::notice::FileFailure;
@@ -46,13 +46,12 @@ use crate::notice::FileFailure;
 // Constants
 // ========================================================================
 
-/// Prompt tags: the region to jump to, and leaving with edits unwritten.
 /// Numbers each output diff's copies, so two diffs of files with the same
 /// name, at once in this process, do not write over each other's.
 static COPY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
+/// The prompt asking which region to jump to.
 const ASK_JUMP: &str = "diff-jump";
-const ASK_QUIT: &str = "diff-quit";
 
 /// How many columns `<` and `>` scroll sideways.
 const HSCROLL_STEP: usize = 8;
@@ -497,6 +496,8 @@ pub struct DiffEditor {
     edit_pending: Vec<Key>,
     hscroll: usize,
     layout: Layout,
+    /// The question asked before an action, until it is answered.
+    asking: Option<DiffConfirmation>,
     notice: Option<DiffNotice>,
     /// The keys of a sequence typed so far (`w`, `#`, `a` with three
     /// texts), while they wait for the rest.
@@ -567,6 +568,7 @@ impl DiffEditor {
             edit_pending: Vec::new(),
             hscroll: 0,
             layout: Layout::Columns,
+            asking: None,
             notice: None,
             pending: Vec::new(),
             view: Viewport::new(),
@@ -715,7 +717,6 @@ impl DiffEditor {
                     label: format!("Region (1-{}): ", self.session.regions.len()),
                     mode: PromptMode::Text,
                     tag: ASK_JUMP,
-                    title: None,
                 });
             }
             Act::Keep(Variant::Ancestor) if self.session.ancestor.is_none() => {}
@@ -1068,15 +1069,10 @@ impl DiffEditor {
         if dirty.is_empty() {
             return EditorOutcome::Close;
         }
-        let question = format!(
-            "Not written: side {}. Quitting loses those edits.",
-            dirty.join(", ")
-        );
-        EditorOutcome::Prompt(
-            PromptRequest::confirm(ASK_QUIT, &question)
-                .titled("Discard Unsaved Changes?", "Discard")
-                .destructive(),
-        )
+        let asked = DiffConfirmation::Quit(dirty);
+        let confirmation = asked.to_confirmation();
+        self.asking = Some(asked);
+        EditorOutcome::Confirm(confirmation)
     }
 }
 
@@ -1464,6 +1460,13 @@ impl Page for DiffEditor {
         EditorOutcome::Consumed
     }
 
+    fn on_confirm(&mut self, yes: bool) -> EditorOutcome {
+        match (self.asking.take(), yes) {
+            (Some(DiffConfirmation::Quit(_)), true) => EditorOutcome::Close,
+            (_, _) => EditorOutcome::Consumed,
+        }
+    }
+
     fn on_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
         match (reply.tag, reply.answer) {
             (ASK_JUMP, Some(answer)) => {
@@ -1481,7 +1484,6 @@ impl Page for DiffEditor {
                 }
                 EditorOutcome::Consumed
             }
-            (ASK_QUIT, Some(_)) => EditorOutcome::Close,
             _ => EditorOutcome::Consumed,
         }
     }

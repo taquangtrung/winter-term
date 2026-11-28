@@ -5,7 +5,7 @@ use super::reply::browser_url;
 use super::*;
 use crate::exec;
 use crate::parse;
-use winter_model::editor::{CommandOutput, CommandRequest, GitViewRequest, PromptMode};
+use winter_model::editor::{CommandOutput, CommandRequest, GitViewRequest};
 use winter_model::notice::SearchMiss;
 
 mod commits;
@@ -407,13 +407,6 @@ fn push_menu(config: &str) -> GitEditor {
 }
 
 const PUSH_CONFIG: &str = "remote.origin.url git@x:a.git\nremote.fork.url git@x:b.git\n";
-
-fn yes(tag: &'static str) -> PromptReply {
-    PromptReply {
-        answer: Some("y".to_string()),
-        tag,
-    }
-}
 
 /// What `git diff --no-index` says of a copy of `main.rs` against the file,
 /// run from the filesystem's root.

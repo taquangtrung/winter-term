@@ -23,8 +23,6 @@ pub enum NoticeKind {
     Info,
     /// Work still under way, drawn muted in the status bar.
     Progress,
-    /// A question whose yes loses nothing, drawn in blue.
-    Question,
     /// Something worth knowing that is not a failure, drawn in yellow.
     Warning,
 }
@@ -35,7 +33,6 @@ impl NoticeKind {
         match self {
             Self::Error => "\u{ea87}",
             Self::Info | Self::Progress => "\u{ea74}",
-            Self::Question => "\u{eb32}",
             Self::Warning => "\u{ea6c}",
         }
     }
@@ -44,7 +41,7 @@ impl NoticeKind {
     pub fn color(&self, theme: &Theme) -> Rgb {
         match self {
             Self::Error => theme.ansi[1],
-            Self::Info | Self::Question => theme.ansi[4],
+            Self::Info => theme.ansi[4],
             Self::Progress => theme.ansi[8],
             Self::Warning => theme.ansi[3],
         }
@@ -356,7 +353,7 @@ pub struct ButtonView {
 
 /// A question being answered in a floating dialog: what is being asked, what
 /// has been typed so far, and how to answer it.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct InputView {
     /// Buttons drawn along the dialog foot, if any.
     pub buttons: Vec<ButtonView>,
@@ -366,6 +363,9 @@ pub struct InputView {
     /// Whether the caret is in its shown phase (see
     /// [`PickerView::caret_visible`]).
     pub caret_visible: bool,
+    /// The confirmation asked, drawn as misty's standard confirmation
+    /// dialog; `None` for any other question.
+    pub confirmation: Option<misty::Confirmation>,
     /// What has been typed, drawn in a field with a caret after it.
     /// `None` for a question answered by one key, which has no line to type
     /// on.

@@ -1,14 +1,15 @@
 //! What Winter's own pages tell the user, kept typed until the window takes
 //! it: one enum per page, each turned into a misty [`Notice`] only in the
-//! page's `take_notice`, so the wording and severity are decided here and
-//! tests compare variants rather than sentences.
+//! page's `take_notice`, and what a page asks before an action, as a misty
+//! [`Confirmation`], so the wording and severity are decided here and tests
+//! compare variants rather than sentences.
 //!
 //! What the system or a program said (an error reading a file, a build's
 //! end) travels as a variant's data.
 
 use std::path::PathBuf;
 
-use winter_model::editor::Notice;
+use winter_model::editor::{Confirmation, Notice};
 use winter_model::notice::SearchMiss;
 
 // ========================================================================
@@ -78,6 +79,13 @@ pub(crate) struct Walked {
 pub(crate) enum ExtensionViewNotice {
     /// The extension panicked and was stopped, by its name.
     Stopped(String),
+}
+
+/// What the Extensions page asks before an action.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ExtensionsConfirmation {
+    /// Removing the extension with this id, and what it was granted.
+    Remove(String),
 }
 
 /// What the Extensions page says.
@@ -207,6 +215,23 @@ impl ExtensionViewNotice {
     pub(crate) fn into_notice(self) -> Notice {
         match self {
             Self::Stopped(extension) => Notice::error(super::extension::failure(&extension)),
+        }
+    }
+}
+
+// ========================================================================
+// ExtensionsConfirmation
+// ========================================================================
+
+impl ExtensionsConfirmation {
+    /// The question the window asks: the one place its wording is decided.
+    pub(crate) fn to_confirmation(&self) -> Confirmation {
+        match self {
+            Self::Remove(id) => Confirmation::destructive(
+                "Remove Extension?",
+                format!("{id} is removed, and what it was granted is forgotten."),
+                "Remove",
+            ),
         }
     }
 }

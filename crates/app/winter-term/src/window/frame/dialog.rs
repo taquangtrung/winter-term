@@ -1,5 +1,6 @@
 //! The dialog, a misty [`Dialog`]: a question with the field it is answered
-//! in and its OK and Cancel, an error, or a confirmation with its buttons.
+//! in and its OK and Cancel, an error, or a confirmation, as misty's
+//! [`Dialog::confirm`] asks one.
 //! It opens on the card of the transient or editor that asked, else centred
 //! on the window. misty draws it, lights the button under the pointer, and
 //! hands back the button clicked; the window answers it as the button's key
@@ -176,8 +177,21 @@ fn shape_of(view: &InputView) -> InputView {
 }
 
 /// misty's dialog for `view`: its title, its message, its kind's mark, and
-/// its buttons, or an OK and a Cancel for a question typed into.
+/// its buttons, or an OK and a Cancel for a question typed into. A
+/// confirmation is misty's own, its yes and Cancel the window's buttons 0
+/// and 1.
 fn open_dialog(view: &InputView, shape: InputView) -> OpenDialog {
+    if let Some(asked) = &view.confirmation {
+        let mut dialog = Dialog::confirm(asked, 0, 1);
+        if let Some(focused) = view.buttons.iter().position(|button| button.focused) {
+            dialog.set_focus(focused);
+        }
+        return OpenDialog {
+            actions: vec![DialogAction::Button(0), DialogAction::Button(1)],
+            dialog,
+            shape,
+        };
+    }
     let (title, message) = match &view.title {
         Some(title) => (title.clone(), view.label.clone()),
         None if view.input.is_some() => (view.label.clone(), String::new()),
@@ -236,9 +250,7 @@ fn default_title(kind: Option<NoticeKind>) -> &'static str {
     match kind {
         Some(NoticeKind::Error) => ERROR_TITLE,
         Some(NoticeKind::Warning) => WARNING_TITLE,
-        Some(NoticeKind::Info | NoticeKind::Progress | NoticeKind::Question) | None => {
-            CONFIRM_TITLE
-        }
+        Some(NoticeKind::Info | NoticeKind::Progress) | None => CONFIRM_TITLE,
     }
 }
 
@@ -248,7 +260,7 @@ fn severity_of(kind: NoticeKind) -> Option<Severity> {
     match kind {
         NoticeKind::Error => Some(Severity::Error),
         NoticeKind::Warning => Some(Severity::Warning),
-        NoticeKind::Info | NoticeKind::Question => Some(Severity::Info),
+        NoticeKind::Info => Some(Severity::Info),
         NoticeKind::Progress => None,
     }
 }

@@ -184,7 +184,6 @@ impl TextEditor {
                 label: "Rename to: ".to_owned(),
                 mode: PromptMode::Text,
                 tag: ASK_RENAME,
-                title: None,
             }),
             LSP_CODE_ACTION => self.ask_fixes(),
             LSP_FORMAT => {

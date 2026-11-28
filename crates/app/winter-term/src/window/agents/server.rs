@@ -12,6 +12,7 @@ use std::sync::mpsc::Sender;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use misty::Confirmation;
 use winter_model::layout::TabId;
 use winter_mux::client::{MuxClient, Probe};
 use winter_mux::server::{default_socket_path, server_pid};
@@ -49,7 +50,8 @@ impl App {
              under it. Restart it? Every mux session ends, an agent at work too, and this \
              repository's agents start again with their resume lines."
         );
-        self.ask_yes_no("Mux Server", "Restart", question, PendingClose::Agent);
+        let asked = Confirmation::destructive("Restart Mux Server?", question, "Restart");
+        self.confirm_for_window(asked, PendingClose::Agent);
     }
 
     /// End the mux server, start this version's, and open the agents of the

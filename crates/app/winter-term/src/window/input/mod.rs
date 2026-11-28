@@ -5,6 +5,7 @@
 //! rather than running it.
 
 pub(crate) mod actions;
+pub(in crate::window) mod confirm;
 pub(in crate::window) mod describe;
 pub(crate) mod focus;
 pub(in crate::window) mod ime;

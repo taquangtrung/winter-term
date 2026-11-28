@@ -300,7 +300,6 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
 
     let prompt = editor::ActivePrompt {
         origin: None,
-        buttons: None,
         query_buttons: None,
         field: winter_field::Field::line("hello"),
         recall: winter_model::recall::Recall::default(),
@@ -310,7 +309,6 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
             label: "find".to_string(),
             mode: winter_model::editor::PromptMode::Text,
             tag: "search",
-            title: None,
         },
     };
     app.parts.overlay = Some(Overlay::EditorPrompt(Box::new(prompt)));
@@ -329,7 +327,6 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
     // An editor's search is typed in the find popup, not a dialog.
     app.parts.overlay = Some(Overlay::EditorPrompt(Box::new(editor::ActivePrompt {
         origin: None,
-        buttons: None,
         query_buttons: None,
         field: winter_field::Field::line("needle"),
         recall: winter_model::recall::Recall::default(),
@@ -339,7 +336,6 @@ fn test_questions_are_asked_in_the_dialog_and_searches_in_the_find_popup() {
             label: "?".to_string(),
             mode: winter_model::editor::PromptMode::Search { reverse: true },
             tag: "search-back",
-            title: None,
         },
     })));
     assert!(app.input_view().is_none(), "no dialog for a search");

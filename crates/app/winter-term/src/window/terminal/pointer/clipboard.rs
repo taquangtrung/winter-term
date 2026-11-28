@@ -401,14 +401,14 @@ impl App {
         let line = text.lines().next().unwrap_or_default();
         self.dirty = true;
         match &mut self.parts.overlay {
-            Some(Overlay::Close(_) | Overlay::Error(_)) => {}
+            Some(Overlay::Confirm(_) | Overlay::Error(_)) => {}
             Some(Overlay::Picker(_)) => self.paste_into_palette(line),
             Some(Overlay::Password(input)) => input.field.paste(text),
             Some(Overlay::Rename(input)) => input.field.paste(text),
             Some(Overlay::Secret(input)) => input.field.paste(text),
             Some(Overlay::ThemeName(field)) => field.paste(text),
             Some(Overlay::EditorPrompt(prompt)) => match prompt.request.mode {
-                PromptMode::Confirm | PromptMode::QueryReplace => {}
+                PromptMode::QueryReplace => {}
                 PromptMode::Secret => prompt.field.paste(text),
                 PromptMode::Search { .. } | PromptMode::Text => {
                     prompt.field.paste(text);
@@ -569,10 +569,6 @@ mod tests {
     fn prompt(mode: PromptMode) -> Overlay {
         Overlay::EditorPrompt(Box::new(ActivePrompt {
             origin: None,
-            buttons: match mode {
-                PromptMode::Confirm => Some(winter_model::button::ButtonGroup::confirm()),
-                _ => None,
-            },
             query_buttons: match mode {
                 PromptMode::QueryReplace => {
                     Some(winter_model::button::ButtonGroup::query_replace())
@@ -587,7 +583,6 @@ mod tests {
                 label: "find".to_string(),
                 mode,
                 tag: "search",
-                title: None,
             },
         }))
     }
@@ -600,7 +595,7 @@ mod tests {
             Overlay::ThemeName(field) => Some(field.text().to_string()),
             Overlay::EditorPrompt(prompt) => Some(prompt.field.text().to_string()),
             Overlay::Picker(overlay) => Some(overlay.quick.picker().query().to_string()),
-            Overlay::Close(_) | Overlay::Error(_) => None,
+            Overlay::Confirm(_) | Overlay::Error(_) => None,
         }
     }
 
@@ -644,7 +639,7 @@ mod tests {
         );
 
         let mut app = App::new();
-        app.parts.overlay = Some(prompt(PromptMode::Confirm));
+        app.parts.overlay = Some(prompt(PromptMode::QueryReplace));
         app.paste_into_focus(CLIPBOARD);
         assert_eq!(
             field_text(&app).as_deref(),

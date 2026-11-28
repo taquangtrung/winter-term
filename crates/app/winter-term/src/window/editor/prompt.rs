@@ -21,10 +21,6 @@ use crate::window::{App, SEARCH_DEBOUNCE_MILLIS};
 // Constants
 // ========================================================================
 
-/// The answers to a question taken by one key, as the key and the button it
-/// is drawn as: the one asked for first.
-const CONFIRM_KEYS: [(&str, &str); 2] = [("y", "Yes"), ("any key", "No")];
-
 /// The keys that answer an error's report.
 const ERROR_KEYS: [(&str, &str); 2] = [("Enter/Esc", "OK"), ("Tab", "next button")];
 
@@ -67,8 +63,6 @@ pub(in crate::window) struct Prompts {
 
 /// A question an editor asked, and the answer being typed for it.
 pub(in crate::window) struct ActivePrompt {
-    /// Optional button group for interactive confirmation dialogs.
-    pub(in crate::window) buttons: Option<ButtonGroup<bool>>,
     /// Optional button group for interactive query replace.
     pub(in crate::window) query_buttons: Option<ButtonGroup<String>>,
     /// What has been typed, edited with the same keys as any other text.
@@ -114,20 +108,11 @@ pub(in crate::window) struct TransientCard {
 impl ActivePrompt {
     /// Create an active prompt for `request` on `tab`.
     pub(in crate::window) fn new(tab: TabId, request: PromptRequest) -> Self {
-        let buttons = match request.mode {
-            // A question with words of its own says them on its yes button.
-            PromptMode::Confirm => Some(match &request.title {
-                Some(text) => ButtonGroup::confirm_as(&text.yes),
-                None => ButtonGroup::confirm(),
-            }),
-            _ => None,
-        };
         let query_buttons = match request.mode {
             PromptMode::QueryReplace => Some(ButtonGroup::query_replace()),
             _ => None,
         };
         Self {
-            buttons,
             query_buttons,
             field: Field::line(&request.initial),
             origin: None,
@@ -142,10 +127,7 @@ impl ActivePrompt {
     pub(in crate::window) fn typed_search(&self) -> Option<(String, bool)> {
         match self.request.mode {
             PromptMode::Search { reverse } => Some((self.field.text(), reverse)),
-            PromptMode::Confirm
-            | PromptMode::QueryReplace
-            | PromptMode::Secret
-            | PromptMode::Text => None,
+            PromptMode::QueryReplace | PromptMode::Secret | PromptMode::Text => None,
         }
     }
 }
@@ -179,12 +161,11 @@ pub(in crate::window) fn input_dialog(
         caret,
         caret_visible: true,
         input: match mode {
-            PromptMode::Confirm | PromptMode::QueryReplace => None,
+            PromptMode::QueryReplace => None,
             PromptMode::Secret => Some(input.chars().map(|_| SECRET_MASK).collect()),
             PromptMode::Search { .. } | PromptMode::Text => Some(input.to_string()),
         },
         keys: match mode {
-            PromptMode::Confirm => &CONFIRM_KEYS[..],
             PromptMode::QueryReplace => &QUERY_REPLACE_KEYS[..],
             PromptMode::Search { .. } | PromptMode::Secret | PromptMode::Text => &TEXT_KEYS[..],
         }
@@ -200,13 +181,7 @@ pub(in crate::window) fn input_dialog(
             .trim_end()
             .trim_end_matches(':')
             .to_string(),
-        title: None,
-        kind: match mode {
-            PromptMode::Confirm => Some(crate::render::NoticeKind::Warning),
-            _ => None,
-        },
-        card: None,
-        pane: None,
+        ..InputView::default()
     }
 }
 
@@ -247,20 +222,6 @@ impl App {
                 return;
             };
             match (prompt.request.mode, key.chord()) {
-                (PromptMode::Confirm, _) => {
-                    if let Some(buttons) = &mut prompt.buttons {
-                        buttons.on_key(key).map(|yes| yes.then(|| "y".to_string()))
-                    } else {
-                        match key.chord() {
-                            (Mods::NONE, KeyCode::Escape) | (Mods::CTRL, KeyCode::Char('g')) => {
-                                Some(None)
-                            }
-                            (Mods::NONE, KeyCode::Char('y' | 'Y')) => Some(Some("y".to_string())),
-                            (Mods::NONE, KeyCode::Char(_)) => Some(None),
-                            _ => None,
-                        }
-                    }
-                }
                 (PromptMode::QueryReplace, _) => match key.chord() {
                     (Mods::NONE, KeyCode::Escape)
                     | (Mods::CTRL, KeyCode::Char('g'))
@@ -366,34 +327,16 @@ impl App {
                     self.choose_on_error_dialog(button.value);
                 }
             }
-            Some(Overlay::Close(prompt)) => {
-                let Some(btn) = prompt.buttons.buttons().get(idx) else {
-                    return;
-                };
-                let yes = btn.value;
-                let Some(Overlay::Close(prompt)) = self
-                    .parts
-                    .overlay
-                    .take_if(|o| matches!(o, Overlay::Close(_)))
-                else {
-                    return;
-                };
-                self.dirty = true;
-                self.answer_close_prompt(prompt.pending, yes);
-            }
+            Some(Overlay::Confirm(_)) => self.press_confirm_button(idx),
             Some(Overlay::EditorPrompt(prompt)) => {
-                // A confirmation's buttons answer yes or no; a query replace's
-                // each answer as its key does (`y`, `n`, `!`, `q`).
-                let answer = match (&prompt.buttons, &prompt.query_buttons) {
-                    (Some(buttons), _) => match buttons.buttons().get(idx) {
-                        Some(btn) => btn.value.then(|| "y".to_string()),
-                        None => return,
-                    },
-                    (None, Some(buttons)) => match buttons.buttons().get(idx) {
+                // A query replace's buttons each answer as its key does
+                // (`y`, `n`, `!`, `q`).
+                let answer = match &prompt.query_buttons {
+                    Some(buttons) => match buttons.buttons().get(idx) {
                         Some(btn) => Some(btn.value.clone()),
                         None => return,
                     },
-                    (None, None) => return,
+                    None => return,
                 };
                 self.term.search.match_index = 0;
                 self.term.search.match_total = 0;
@@ -463,10 +406,9 @@ impl App {
             .filter(|prompt| prompt.typed_search().is_none())
         {
             let buttons = prompt
-                .buttons
+                .query_buttons
                 .as_ref()
                 .map(|b| b.to_view())
-                .or_else(|| prompt.query_buttons.as_ref().map(|b| b.to_view()))
                 .unwrap_or_default();
             let mut view = input_dialog(
                 &prompt.request.label,
@@ -475,45 +417,24 @@ impl App {
                 prompt.request.mode,
                 buttons,
             );
-            view.title = prompt.request.title.as_ref().map(|text| text.title.clone());
             view.card = prompt.origin;
-            // A question that loses nothing asks; one that does warns.
-            if prompt
-                .request
-                .title
-                .as_ref()
-                .is_some_and(|text| !text.destructive)
-            {
-                view.kind = Some(crate::render::NoticeKind::Question);
-            }
             return Some(view);
         }
         if let Some(dialog) = self.parts.error_dialog() {
-            let mut view = input_dialog(
-                &dialog.message(),
-                "",
-                0,
-                PromptMode::Confirm,
-                dialog.buttons.to_view(),
-            );
-            view.keys = ERROR_KEYS
-                .iter()
-                .map(|(key, does)| (key.to_string(), does.to_string()))
-                .collect();
-            view.title = Some(dialog.shown_title());
-            view.kind = Some(crate::render::NoticeKind::Error);
-            return Some(view);
+            return Some(InputView {
+                buttons: dialog.buttons.to_view(),
+                caret_visible: true,
+                keys: ERROR_KEYS
+                    .iter()
+                    .map(|(key, does)| (key.to_string(), does.to_string()))
+                    .collect(),
+                kind: Some(crate::render::NoticeKind::Error),
+                label: dialog.message(),
+                title: Some(dialog.shown_title()),
+                ..InputView::default()
+            });
         }
-        if let Some(prompt) = self.parts.close_prompt() {
-            let mut view = input_dialog(
-                &prompt.label,
-                "",
-                0,
-                PromptMode::Confirm,
-                prompt.buttons.to_view(),
-            );
-            view.title = Some(prompt.title.to_string());
-            view.kind = Some(crate::render::NoticeKind::Warning);
+        if let Some(view) = self.confirm_view() {
             return Some(view);
         }
         if let Some(input) = self.parts.password_input() {

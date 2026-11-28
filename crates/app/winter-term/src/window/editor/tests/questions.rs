@@ -1,7 +1,10 @@
 //! The window's editor tests: prompts, lists, and the close and quit questions.
 
 use super::*;
+use misty::Confirmation;
+
 use crate::window::editor::prompt::TransientCard;
+use crate::window::input::overlay::Asker;
 
 #[test]
 fn test_closing_a_pane_buries_its_editors_and_asks_nothing_about_them() {
@@ -13,7 +16,7 @@ fn test_closing_a_pane_buries_its_editors_and_asks_nothing_about_them() {
 
     app.close_pane(tab);
     assert!(
-        app.parts.close_prompt().is_none(),
+        app.parts.confirm_prompt().is_none(),
         "unsaved text is not lost"
     );
     assert_eq!(app.layout().shown_tabs(), vec![sibling], "the pane closed");
@@ -34,17 +37,17 @@ fn test_kill_buffer_asks_about_unsaved_text_then_lets_it_go() {
     let tab = app.show_editor(EditorKind::Text, Box::new(UnsavedEditor("main.rs")));
 
     app.kill_buffer(tab);
-    let asked = app.parts.close_prompt().expect("the question is up");
+    let asked = app.parts.confirm_prompt().expect("the question is up");
     assert!(
-        asked.label.contains("main.rs"),
+        asked.asked.message().contains("main.rs"),
         "naming it: {}",
-        asked.label
+        asked.asked.message()
     );
     let view = app.input_view().expect("input view is up");
     assert_eq!(view.kind, Some(crate::render::NoticeKind::Warning));
     assert_eq!(view.title.as_deref(), Some("Discard Unsaved Changes?"));
     assert_eq!(
-        asked.label,
+        asked.asked.message(),
         "Not saved: main.rs. Closing the buffer loses the edits."
     );
     assert_eq!(
@@ -52,11 +55,11 @@ fn test_kill_buffer_asks_about_unsaved_text_then_lets_it_go() {
         0,
         "Enter gives what was asked for, as every confirmation does"
     );
-    app.handle_close_prompt_key(&press(KeyCode::Char('n')));
+    app.handle_confirm_key(&press(KeyCode::Char('n')));
     assert!(app.layout().contains(tab), "no leaves it be");
 
     app.kill_buffer(tab);
-    app.handle_close_prompt_key(&press(KeyCode::Char('y')));
+    app.handle_confirm_key(&press(KeyCode::Char('y')));
     assert!(!app.layout().contains(tab));
     assert!(!app.open_tabs.is_page(&tab), "and yes lets it go");
     assert!(app.open_tabs.buried().is_empty(), "rather than burying it");
@@ -71,11 +74,11 @@ fn test_quitting_asks_about_unsaved_text_in_a_buried_buffer() {
         app.ask_before_quitting(),
         "the buried edits are asked about"
     );
-    let asked = app.parts.close_prompt().expect("the question is up");
+    let asked = app.parts.confirm_prompt().expect("the question is up");
     assert!(
-        asked.label.contains("main.rs"),
+        asked.asked.message().contains("main.rs"),
         "naming it: {}",
-        asked.label
+        asked.asked.message()
     );
 }
 
@@ -98,7 +101,13 @@ fn test_closing_a_tab_with_a_program_running_buries_it_and_killing_it_asks_first
     assert!(busy.buries(tab, Closing::Keep));
 
     busy.kill_buffer(tab);
-    let label = busy.parts.close_prompt().expect("asked").label.clone();
+    let label = busy
+        .parts
+        .confirm_prompt()
+        .expect("asked")
+        .asked
+        .message()
+        .to_string();
     assert!(label.starts_with("Still running: "), "label: {label}");
     assert!(
         label.ends_with("Closing the terminal stops it."),
@@ -120,7 +129,7 @@ fn test_closing_a_tab_with_a_program_running_buries_it_and_killing_it_asks_first
     );
     let focused = busy
         .parts
-        .close_prompt()
+        .confirm_prompt()
         .map(|prompt| prompt.buttons.focused());
     assert_eq!(
         focused,
@@ -128,8 +137,8 @@ fn test_closing_a_tab_with_a_program_running_buries_it_and_killing_it_asks_first
         "Enter stops it: stopping it is what killing the terminal asks"
     );
     assert_eq!(
-        busy.parts.close_prompt().map(|prompt| prompt.pending),
-        Some(PendingClose::Kill(tab))
+        busy.parts.confirm_prompt().map(|prompt| prompt.then),
+        Some(Asker::Window(PendingClose::Kill(tab)))
     );
 }
 
@@ -161,7 +170,7 @@ fn test_a_buried_program_runs_on_comes_back_and_is_killed_from_burial() {
 
     app.close_tab(tab);
     app.kill_buffer(tab);
-    app.handle_close_prompt_key(&Key::plain(KeyCode::Char('y')));
+    app.handle_confirm_key(&Key::plain(KeyCode::Char('y')));
     assert!(app.open_tabs.terminal(&tab).is_none(), "killed");
     assert!(app.open_tabs.buried().is_empty());
     assert_eq!(app.layout().members(), [other]);
@@ -206,12 +215,12 @@ fn test_quitting_with_a_program_running_asks_and_a_yes_goes_through_without_aski
 
     assert!(app.ask_before_quitting());
     assert_eq!(
-        app.parts.close_prompt().map(|prompt| prompt.pending),
-        Some(PendingClose::Quit)
+        app.parts.confirm_prompt().map(|prompt| prompt.then),
+        Some(Asker::Window(PendingClose::Quit))
     );
     assert!(!app.runtime.exit.requested, "nothing has been closed yet");
 
-    app.handle_close_prompt_key(&Key::plain(KeyCode::Char('y')));
+    app.handle_confirm_key(&Key::plain(KeyCode::Char('y')));
 
     assert!(app.runtime.exit.requested);
     assert!(
@@ -226,11 +235,11 @@ fn test_quitting_declined_keeps_the_window() {
     terminal_tab(&mut app, true);
     app.ask_before_quitting();
 
-    app.handle_close_prompt_key(&Key::plain(KeyCode::Char('n')));
+    app.handle_confirm_key(&Key::plain(KeyCode::Char('n')));
 
     assert!(!app.runtime.exit.requested);
     assert!(!app.runtime.exit.quit_confirmed);
-    assert!(app.parts.close_prompt().is_none());
+    assert!(app.parts.confirm_prompt().is_none());
 }
 
 #[test]
@@ -289,7 +298,7 @@ fn test_a_close_question_goes_with_the_tab_it_was_about() {
     assert!(app.ask_before_closing_tab(unsaved));
     app.close_tab_now(unsaved, Closing::Keep);
     assert!(
-        app.parts.close_prompt().is_none(),
+        app.parts.confirm_prompt().is_none(),
         "nothing left to ask about"
     );
 
@@ -308,7 +317,7 @@ fn test_an_editor_question_cannot_hide_the_hosts_close_question() {
 
     app.offer_key_to_editor(asking, &press(KeyCode::Char('x')));
     assert!(
-        app.parts.close_prompt().is_some(),
+        app.parts.confirm_prompt().is_some(),
         "the host's question stays up"
     );
     assert_eq!(
@@ -333,7 +342,7 @@ fn test_the_hosts_question_waits_for_the_editor_question_it_finds_open() {
     app.handle_prompt_key(&press(KeyCode::Escape));
     app.open_held_dialog();
     assert!(
-        app.parts.close_prompt().is_some(),
+        app.parts.confirm_prompt().is_some(),
         "the close question follows"
     );
 }
@@ -349,10 +358,16 @@ fn test_a_reload_over_unsaved_edits_asks_first_and_a_yes_carries_it_out() {
     );
     app.show_editor(EditorKind::Text, Box::new(UnsavedEditor("main.rs")));
     assert!(app.ask_before_reloading());
-    let label = app.parts.close_prompt().expect("asked").label.clone();
+    let label = app
+        .parts
+        .confirm_prompt()
+        .expect("asked")
+        .asked
+        .message()
+        .to_string();
     assert!(label.contains("main.rs"), "label: {label}");
 
-    app.handle_close_prompt_key(&press(KeyCode::Char('y')));
+    app.handle_confirm_key(&press(KeyCode::Char('y')));
     assert!(app.runtime.exit.reload_pending, "the reload goes ahead");
     assert!(app.runtime.exit.reload_confirmed, "without asking again");
 }
@@ -371,22 +386,14 @@ fn test_a_question_answered_by_one_key_offers_no_line_to_type_on() {
     let text = input_dialog("Name: ", "seed", 4, PromptMode::Text, Vec::new());
     assert_eq!(text.input.as_deref(), Some("seed"));
 
-    let confirm = input_dialog(
-        "Delete 3 entries? (y/n) ",
-        "",
-        0,
-        PromptMode::Confirm,
-        ButtonGroup::confirm().to_view(),
-    );
+    let (mut app, pane, _) = app_asking();
+    let asked = Confirmation::destructive("Delete Entries?", "Deletes 3 entries.", "Delete");
+    app.act_on_editor_outcome(pane, EditorOutcome::Confirm(asked.clone()));
+    let confirm = app.input_view().expect("the confirmation");
     assert_eq!(confirm.input, None);
-    assert_eq!(confirm.label, "Delete 3 entries?", "the buttons say y/n");
-    assert_eq!(confirm.buttons.len(), 2, "confirmation has buttons");
-    assert!(confirm.buttons[0].focused, "first button is focused");
-    assert_eq!(
-        confirm.keys.first().map(|(key, _)| key.as_str()),
-        Some("y"),
-        "a dialog taking one key says which"
-    );
+    assert_eq!(confirm.confirmation, Some(asked), "drawn as misty's own");
+    assert_eq!(confirm.buttons.len(), 2, "its yes and Cancel");
+    assert!(confirm.buttons[0].focused, "the yes is focused");
 }
 
 #[test]
@@ -431,35 +438,43 @@ fn test_a_prompt_answer_takes_the_emacs_editing_keys() {
 #[test]
 fn test_confirmation_prompt_tab_switches_buttons_and_enter_submits_focused() {
     let (mut app, pane, heard) = app_asking();
-    app.act_on_editor_outcome(
-        pane,
-        EditorOutcome::Prompt(PromptRequest {
-            initial: String::new(),
-            label: "Delete file?".to_string(),
-            mode: PromptMode::Confirm,
-            tag: "delete",
-            title: None,
-        }),
-    );
+    let asked = Confirmation::destructive("Delete File?", "It is lost.", "Delete");
+    app.act_on_editor_outcome(pane, EditorOutcome::Confirm(asked));
     heard.borrow_mut().clear();
     let view = app.input_view().expect("confirmation dialog");
     assert_eq!(view.buttons.len(), 2);
-    assert!(view.buttons[0].focused, "Yes starts focused");
+    assert!(view.buttons[0].focused, "the yes starts focused");
 
-    // Tab moves focus to No
-    app.handle_prompt_key(&press(KeyCode::Tab));
+    // Tab moves focus to Cancel
+    app.handle_confirm_key(&press(KeyCode::Tab));
     let view = app.input_view().expect("still open");
     assert!(!view.buttons[0].focused);
-    assert!(view.buttons[1].focused, "No is now focused");
+    assert!(view.buttons[1].focused, "Cancel is now focused");
 
-    // Enter submits the focused button (No -> None)
-    app.handle_prompt_key(&press(KeyCode::Enter));
+    // Enter submits the focused button: Cancel, a no
+    app.handle_confirm_key(&press(KeyCode::Enter));
     assert!(app.input_view().is_none(), "dialog closed");
-    assert_eq!(
-        heard.borrow().as_slice(),
-        [None],
-        "declined via focused No button"
+    assert_eq!(heard.borrow().as_slice(), [None], "declined via Cancel");
+
+    // Its letter answers at once, and the editor hears the yes
+    app.act_on_editor_outcome(
+        pane,
+        EditorOutcome::Confirm(Confirmation::new("Rename?", "", "Rename")),
     );
+    app.handle_confirm_key(&press(KeyCode::Char('r')));
+    assert_eq!(heard.borrow().as_slice(), [None, Some("y".to_string())]);
+}
+
+#[test]
+fn test_a_confirmation_put_away_unanswered_tells_its_editor_no() {
+    // Esc via the window's own dismissal, or the tab's question asked
+    // again, leaves no editor waiting on an answer that never comes.
+    let (mut app, pane, heard) = app_asking();
+    let asked = Confirmation::new("Go?", "", "Go");
+    app.act_on_editor_outcome(pane, EditorOutcome::Confirm(asked));
+    heard.borrow_mut().clear();
+    app.dismiss_overlay();
+    assert_eq!(heard.borrow().as_slice(), [None]);
 }
 
 #[test]
@@ -467,7 +482,7 @@ fn test_close_prompt_tab_switches_buttons_and_enter_submits_focused() {
     let mut app = App::new();
     let tab = app.show_editor(EditorKind::Text, Box::new(WaitedEditor));
     app.close_pane(tab);
-    assert!(app.parts.close_prompt().is_some());
+    assert!(app.parts.confirm_prompt().is_some());
     let view = app.input_view().expect("dialog open");
     assert!(
         view.buttons[0].focused,
@@ -475,13 +490,13 @@ fn test_close_prompt_tab_switches_buttons_and_enter_submits_focused() {
     );
 
     // Tab moves to Cancel
-    app.handle_close_prompt_key(&press(KeyCode::Tab));
+    app.handle_confirm_key(&press(KeyCode::Tab));
     let view = app.input_view().expect("dialog stays open");
     assert!(view.buttons[1].focused, "Cancel is now focused");
 
     // Enter on Cancel cancels the close
-    app.handle_close_prompt_key(&press(KeyCode::Enter));
-    assert!(app.parts.close_prompt().is_none(), "dialog closed");
+    app.handle_confirm_key(&press(KeyCode::Enter));
+    assert!(app.parts.confirm_prompt().is_none(), "dialog closed");
     assert_eq!(app.layout().shown_tabs().len(), 1, "pane was not closed");
 }
 
@@ -494,21 +509,24 @@ fn test_close_prompt_mouse_click() {
         .split(Direction::Vertical, SPLIT_RATIO, sibling);
 
     app.close_pane(tab);
-    assert!(app.parts.close_prompt().is_some());
+    assert!(app.parts.confirm_prompt().is_some());
     let view = app.input_view().expect("dialog open");
     assert!(view.buttons[0].focused, "the yes starts focused");
 
     // Click button 1 (No) cancels the close
     app.click_dialog_button(1);
-    assert!(app.parts.close_prompt().is_none(), "dialog closed on click");
+    assert!(
+        app.parts.confirm_prompt().is_none(),
+        "dialog closed on click"
+    );
     assert_eq!(app.layout().shown_tabs().len(), 2, "pane was kept");
 
     // Try again with click button 0 (Yes)
     app.close_pane(tab);
-    assert!(app.parts.close_prompt().is_some());
+    assert!(app.parts.confirm_prompt().is_some());
     app.click_dialog_button(0);
     assert!(
-        app.parts.close_prompt().is_none(),
+        app.parts.confirm_prompt().is_none(),
         "dialog closed on Yes click"
     );
     assert_eq!(app.layout().shown_tabs(), vec![sibling], "pane was closed");
@@ -524,7 +542,6 @@ fn test_up_brings_back_the_last_answer_to_the_same_question() {
         label: "Name: ".to_string(),
         mode: PromptMode::Text,
         tag: "ask",
-        title: None,
     };
     app.act_on_editor_outcome(pane, EditorOutcome::Prompt(asked()));
     app.handle_prompt_key(&press(KeyCode::Up));
@@ -551,7 +568,6 @@ fn test_a_secret_prompt_shows_dots_and_is_never_recalled() {
         label: "Password: ".to_string(),
         mode: PromptMode::Secret,
         tag: "ask",
-        title: None,
     };
     app.act_on_editor_outcome(pane, EditorOutcome::Prompt(secret()));
     for c in "pw".chars() {
@@ -660,7 +676,6 @@ fn test_a_question_a_transient_asked_opens_on_its_card() {
             label: "Create and checkout: ".to_string(),
             mode: PromptMode::Text,
             tag: "ask",
-            title: None,
         }),
     );
     assert_eq!(app.input_view().and_then(|view| view.card), Some(card));
@@ -759,17 +774,16 @@ fn test_a_dialog_stays_up_when_another_editor_asks_something() {
     let mut app = App::new();
     let tab = app.show_editor(EditorKind::Text, Box::new(UnsavedEditor("main.rs")));
     let other = app.show_editor(EditorKind::Text, Box::new(UnsavedEditor("notes")));
-    let ask = |label: &str| {
-        EditorOutcome::Prompt(winter_model::editor::PromptRequest::confirm("ask", label))
-    };
-    app.act_on_editor_outcome(tab, ask("first?"));
-    app.act_on_editor_outcome(other, ask("second?"));
-    let label = app
+    let ask = |title: &str| EditorOutcome::Confirm(Confirmation::new(title, "", "Go"));
+    app.act_on_editor_outcome(tab, ask("First?"));
+    app.act_on_editor_outcome(other, ask("Second?"));
+    let title = app
         .parts
-        .editor_prompt()
-        .map(|prompt| prompt.request.label.clone());
-    assert!(
-        label.is_some_and(|label| label.starts_with("First?")),
+        .confirm_prompt()
+        .map(|prompt| prompt.asked.title().to_string());
+    assert_eq!(
+        title.as_deref(),
+        Some("First?"),
         "the first question is still up"
     );
 }
@@ -779,13 +793,16 @@ fn test_a_dialog_of_the_window_s_own_waits_for_the_open_one() {
     let mut app = App::new();
     let tab = app.show_editor(EditorKind::Text, Box::new(UnsavedEditor("main.rs")));
     app.kill_buffer(tab);
-    assert!(app.parts.close_prompt().is_some());
+    assert!(app.parts.confirm_prompt().is_some());
     app.open_overlay(crate::window::Overlay::ThemeName(
         winter_field::Field::line(""),
     ));
-    assert!(app.parts.close_prompt().is_some(), "the open dialog stays");
-    app.handle_close_prompt_key(&press(KeyCode::Char('c')));
-    assert!(app.parts.close_prompt().is_none(), "c cancels");
+    assert!(
+        app.parts.confirm_prompt().is_some(),
+        "the open dialog stays"
+    );
+    app.handle_confirm_key(&press(KeyCode::Char('c')));
+    assert!(app.parts.confirm_prompt().is_none(), "c cancels");
     app.open_held_dialog();
     assert!(
         app.parts.theme_name_input().is_some(),
@@ -813,7 +830,6 @@ impl Page for QueryingEditor {
             label: "Replace this one? ".to_string(),
             mode: PromptMode::QueryReplace,
             tag: "query",
-            title: None,
         })
     }
 

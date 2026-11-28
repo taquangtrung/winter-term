@@ -6,12 +6,12 @@ use crate::exec::{self, LogScope, ResetMode, Rev};
 use winter_model::editor::{EditorOutcome, PickQuestion, PromptMode, PromptReply, PromptRequest};
 
 use super::notice::GitNotice;
-use super::popup::Popup;
+use super::popup::{Popup, PopupState};
 use super::{
     ASK_BRANCH_CHECKOUT, ASK_BRANCH_CREATE, ASK_BRANCH_CREATE_HERE, ASK_BRANCH_DELETE,
     ASK_BRANCH_DELETE_FORCE, ASK_BRANCH_RENAME, ASK_CHERRY_PICK, ASK_CUSTOM, ASK_DIFF_BRANCH,
-    ASK_DIFF_RANGE, ASK_DIFF_REV, ASK_DISCARD, ASK_FETCH_REMOTE, ASK_FIXUP, ASK_INSTANT_FIXUP,
-    ASK_LOG_OTHER, ASK_LOG_PICKAXE, ASK_LOG_REGEX, ASK_MERGE, ASK_MERGE_EDIT, ASK_MERGE_NO_COMMIT,
+    ASK_DIFF_RANGE, ASK_DIFF_REV, ASK_FETCH_REMOTE, ASK_FIXUP, ASK_INSTANT_FIXUP, ASK_LOG_OTHER,
+    ASK_LOG_PICKAXE, ASK_LOG_REGEX, ASK_MERGE, ASK_MERGE_EDIT, ASK_MERGE_NO_COMMIT,
     ASK_MERGE_SQUASH, ASK_PULL_FROM, ASK_REBASE, ASK_REMOTE_ADD, ASK_REMOTE_PRUNE,
     ASK_REMOTE_REMOVE, ASK_RESET_HARD, ASK_RESET_INDEX, ASK_RESET_MIXED, ASK_RESET_SOFT,
     ASK_RESET_WORKTREE, ASK_REVERT, ASK_SEARCH, ASK_SHOW_COMMIT, ASK_SPIN_OFF, ASK_STASH,
@@ -49,7 +49,6 @@ impl GitEditor {
             label: label.to_string(),
             mode: PromptMode::Text,
             tag,
-            title: None,
         })
     }
 
@@ -58,25 +57,40 @@ impl GitEditor {
         EditorOutcome::Prompt(PromptRequest::search(ASK_SEARCH))
     }
 
+    /// Discard what waits on the confirmation once the user says yes; what
+    /// goes was decided when it was asked.
+    pub(super) fn answer_confirmation(&mut self, yes: bool) -> EditorOutcome {
+        self.release_wheel();
+        let asked_from = std::mem::take(&mut self.menus.asked_from);
+        match yes {
+            true => self.discard(),
+            false => {
+                // A discard turned down is gone with the question that asked.
+                self.menus.pending_discard = None;
+                self.turned_down(asked_from)
+            }
+        }
+    }
+
+    /// A question turned down: one a menu's choice asked, from `asked_from`,
+    /// goes back to the menu, as `Esc` in a submenu goes back to its parent.
+    fn turned_down(&mut self, asked_from: Vec<PopupState>) -> EditorOutcome {
+        if !asked_from.is_empty() {
+            self.menus.stack = asked_from;
+            self.menus.selected = 0;
+            self.menus.sync();
+            return EditorOutcome::Consumed;
+        }
+        self.notice = Some(GitNotice::Cancelled);
+        EditorOutcome::Consumed
+    }
+
     /// Run what an answered question asks for.
     pub(super) fn answer_prompt(&mut self, reply: PromptReply) -> EditorOutcome {
         self.release_wheel();
         let asked_from = std::mem::take(&mut self.menus.asked_from);
         let Some(answer) = reply.answer else {
-            // A discard turned down is gone with the question that asked.
-            if reply.tag == ASK_DISCARD {
-                self.menus.pending_discard = None;
-            }
-            // A question a menu's choice asked goes back to the menu, as
-            // `Esc` in a submenu goes back to its parent.
-            if !asked_from.is_empty() {
-                self.menus.stack = asked_from;
-                self.menus.selected = 0;
-                self.menus.sync();
-                return EditorOutcome::Consumed;
-            }
-            self.notice = Some(GitNotice::Cancelled);
-            return EditorOutcome::Consumed;
+            return self.turned_down(asked_from);
         };
         // A search is the one question that asks nothing of git, so it is
         // answered before the repository is required.
@@ -87,13 +101,9 @@ impl GitEditor {
             return EditorOutcome::Consumed;
         };
         let answer = answer.trim().to_string();
-        match reply.tag {
-            // A confirmation's answer is only its yes; what it confirms was
-            // decided when it was asked.
-            ASK_DISCARD => return self.discard(),
-            // The one question an empty answer means something for.
-            ASK_STASH => return EditorOutcome::Job(exec::stash_push(&root, &answer)),
-            _ => {}
+        // The one question an empty answer means something for.
+        if reply.tag == ASK_STASH {
+            return EditorOutcome::Job(exec::stash_push(&root, &answer));
         }
         if answer.is_empty() {
             return EditorOutcome::Consumed;
