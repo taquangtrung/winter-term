@@ -106,9 +106,9 @@ impl App {
     /// them.
     pub(in crate::window) fn ui_font_at(&self, size: f32) -> misty::UiFont {
         // The user's own size, scaled as a zoom scales the terminal's.
-        let size = match self.config.ui_font_size {
-            Some(ui_size) if self.config.font_size > 0.0 => ui_size * size / self.config.font_size,
-            Some(_) | None => size * UI_FONT_RATIO,
+        let size = match self.config.font_size > 0.0 {
+            true => self.config.ui_font_size * size / self.config.font_size,
+            false => self.config.ui_font_size,
         };
         let font = misty::UiFont::new(size).with_weights(
             regular_weight(self.config.font_weight.as_deref()),

@@ -191,15 +191,17 @@ impl App {
             )
             .in_section("Text")
             .with_note("Pages, menus, and the bars; the desktop's interface font when empty"),
-            SettingsField::text(
+            SettingsField::number(
                 "ui_font_size",
                 "Interface font size",
-                self.config
-                    .ui_font_size
-                    .map_or_else(String::new, |size| size.to_string()),
+                self.config.ui_font_size,
+                MIN_FONT_SIZE,
+                MAX_FONT_SIZE,
+                FONT_SIZE_STEP,
+                0,
             )
             .in_section("Text")
-            .with_note("Pages, menus, and the bars; the font size when empty"),
+            .with_note("Pages, menus, and the bars"),
             SettingsField::toggle("ligatures", "Ligatures", self.config.ligatures)
                 .in_section("Text")
                 .with_note("Render -> and => as arrows. Off by default, so every glyph stays at its own cell"),
@@ -579,18 +581,12 @@ impl App {
                 self.config.ui_font_family = (!trimmed.is_empty()).then(|| trimmed.to_string());
                 self.apply_ui_font();
             }
-            "ui_font_size" => match value.trim() {
-                "" => {
-                    self.config.ui_font_size = None;
+            "ui_font_size" => match value.trim().parse::<f32>() {
+                Ok(size) => {
+                    self.config.ui_font_size = crate::render::clamp_font_size(size);
                     self.apply_ui_font();
                 }
-                text => match text.parse::<f32>() {
-                    Ok(size) => {
-                        self.config.ui_font_size = Some(crate::render::clamp_font_size(size));
-                        self.apply_ui_font();
-                    }
-                    Err(_) => return false,
-                },
+                Err(_) => return false,
             },
             // Held to what the renderer can draw before it is saved: a zero
             // or negative size written to settings.kdl would stop every launch.

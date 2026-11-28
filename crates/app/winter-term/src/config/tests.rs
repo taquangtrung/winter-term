@@ -129,6 +129,12 @@ fn test_default_font_family_is_none() {
 }
 
 #[test]
+fn test_the_interface_font_is_13_whatever_the_terminal_font_size() {
+    assert_eq!(Config::parse("font-size 20").ui_font_size, 13.0);
+    assert_eq!(Config::parse("ui-font-size 11").ui_font_size, 11.0);
+}
+
+#[test]
 fn test_parse_scrollback_lines() {
     let config = Config::parse("scrollback-lines 50000");
     assert_eq!(config.scrollback_lines, Some(50_000));
@@ -1145,7 +1151,7 @@ fn test_every_setting_survives_a_save() {
         font_weight: Some("regular".to_string()),
         font_weight_bold: Some("bold".to_string()),
         ui_font_family: Some("Noto Sans".to_string()),
-        ui_font_size: Some(13.0),
+        ui_font_size: 13.0,
         scrollback_lines: Some(5_000),
         shell: Some("/bin/zsh".to_string()),
         shell_linux: Some("/bin/zsh".to_string()),
@@ -1188,7 +1194,7 @@ fn test_the_builtin_settings_give_every_setting_a_value_but_those_unset_by_defau
     // A setting the built-in file leaves commented out is read over
     // settings that set nothing: off, zero, or empty, not its default.
     // Only the ones whose default is to have no value may be left so.
-    const UNSET_BY_DEFAULT: [&str; 11] = [
+    const UNSET_BY_DEFAULT: [&str; 10] = [
         "colors",
         "font",
         "font-weight",
@@ -1199,7 +1205,6 @@ fn test_the_builtin_settings_give_every_setting_a_value_but_those_unset_by_defau
         "shell-macos",
         "shell-windows",
         "ui-font",
-        "ui-font-size",
     ];
     let schema = include_str!("schema.rs");
     let builtin = include_str!("../../builtin/settings.kdl");

@@ -58,9 +58,7 @@ impl Config {
         if let Some(font) = &self.ui_font_family {
             out.push_str(&format!("ui-font {}\n", kdl_string(font)));
         }
-        if let Some(size) = self.ui_font_size {
-            out.push_str(&format!("ui-font-size {size}\n"));
-        }
+        out.push_str(&format!("ui-font-size {}\n", self.ui_font_size));
         out.push_str(&format!("opacity {}\n", self.opacity));
         out.push_str(&format!(
             "option-as-alt {}\n",

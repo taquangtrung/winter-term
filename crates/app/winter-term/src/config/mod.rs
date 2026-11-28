@@ -365,9 +365,9 @@ pub struct Config {
     /// The family pages, menus, and the bars set their words in; the
     /// desktop's interface font when absent.
     pub ui_font_family: Option<String>,
-    /// The size, in points, pages, menus, and the bars set their words at;
-    /// the terminal's font size when absent.
-    pub ui_font_size: Option<f32>,
+    /// The size, in points, pages, menus, and the bars set their words at,
+    /// which a zoom scales with the terminal's text.
+    pub ui_font_size: f32,
     /// Whether the text editor draws a faint line at each level of a line's
     /// indentation. Default: on.
     pub editor_indent_guides: bool,
@@ -769,7 +769,7 @@ impl Config {
             gutter_side: GutterSide::default(),
             terminal_gutter: false,
             ui_font_family: None,
-            ui_font_size: None,
+            ui_font_size: 0.0,
             editor_indent_guides: true,
             editor_format_on_save: false,
             editor_wrap_indent: winter_model::paint::WrapIndent::default(),

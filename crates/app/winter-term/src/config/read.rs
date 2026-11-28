@@ -280,8 +280,7 @@ fn read_settings(
         ui_font_family: named(kdl.ui_font, &base.ui_font_family),
         ui_font_size: kdl
             .ui_font_size
-            .map(crate::render::clamp_font_size)
-            .or(base.ui_font_size),
+            .map_or(base.ui_font_size, crate::render::clamp_font_size),
         editor_indent_guides: kdl
             .editor_indent_guides
             .unwrap_or(base.editor_indent_guides),

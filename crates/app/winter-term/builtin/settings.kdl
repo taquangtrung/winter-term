@@ -46,8 +46,8 @@ font-size 15
 // ui-font "Noto Sans"
 
 // The point size pages, menus, and the bars set their words at, which a
-// zoom scales with the terminal's text. Falls back to font-size when not set.
-// ui-font-size 13
+// zoom scales with the terminal's text.
+ui-font-size 13
 
 // Enable OpenType ligatures (e.g. -> and => rendered as arrows). Default: false:
 // like most terminals, winter keeps every glyph at its nominal cell position, so
