@@ -444,6 +444,7 @@ mod tests {
         assert_eq!(name("agy"), Some("antigravity"), "by its command's program");
         assert_eq!(name("kiro-cli"), Some("kiro"));
         assert_eq!(name("pi"), Some("pi"));
+        assert_eq!(name("summer"), Some("summer"));
         assert_eq!(name("vim"), None);
     }
 

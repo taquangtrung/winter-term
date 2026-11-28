@@ -121,6 +121,6 @@ agents {
 }
 ```
 
-Claude Code, Codex, Gemini, Antigravity, GitHub Copilot, Kiro, opencode, and pi are built in; an entry with the same name changes one, and a new name adds an agent. `worktrees "../{repo}.worktrees"` in the same block says where the agents' folders go, relative to the repository, `{repo}` standing for its folder's name.
+Claude Code, Codex, Gemini, Antigravity, GitHub Copilot, Kiro, opencode, pi, and Summer are built in; an entry with the same name changes one, and a new name adds an agent. `worktrees "../{repo}.worktrees"` in the same block says where the agents' folders go, relative to the repository, `{repo}` standing for its folder's name.
 
 A new folder holds only what git tracks: files git ignores, such as `.env`, installed packages, or build output, are not in it, so the first build there starts from nothing.

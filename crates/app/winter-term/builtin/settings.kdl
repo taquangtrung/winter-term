@@ -535,6 +535,10 @@ agents {
         command "pi"
         resume "pi --continue"
     }
+    agent "summer" {
+        command "summer"
+        resume "summer --continue"
+    }
 }
 
 // Which line-editor bindings your shell answers to, for Vim operators on the
