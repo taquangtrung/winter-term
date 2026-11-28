@@ -417,6 +417,7 @@ fn rate_history_line<'a, A: 'static>(history: &'a [f32], id: &str) -> Element<'a
     let peak = history.iter().copied().fold(0.0, f32::max);
     let line = column([sparkline(
         history,
+        super::HISTORY_LEN,
         peak.max(MIN_RATE_CEILING),
         ThemeToken::Data,
     )])
@@ -554,9 +555,14 @@ fn amounts(used: u64, total: u64) -> String {
 /// there from the first reading so the card keeps its shape, drawn once
 /// there are two readings to draw it between.
 fn history_line<'a, A: 'static>(history: &'a [f32], id: &'static str) -> Element<'a, A> {
-    let line = column([sparkline(history, HISTORY_CEILING, ThemeToken::Data)])
-        .padding(READING_PADDING.0, READING_PADDING.1)
-        .id(id);
+    let line = column([sparkline(
+        history,
+        super::HISTORY_LEN,
+        HISTORY_CEILING,
+        ThemeToken::Data,
+    )])
+    .padding(READING_PADDING.0, READING_PADDING.1)
+    .id(id);
     if history.len() < MIN_HISTORY {
         return line;
     }
