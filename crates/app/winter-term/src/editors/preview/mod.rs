@@ -747,7 +747,7 @@ impl Page for PreviewEditor {
         EditorOutcome::Consumed
     }
 
-    fn crumb_path(&self) -> Option<PathBuf> {
+    fn header_path(&self) -> Option<PathBuf> {
         Some(self.path.clone())
     }
 

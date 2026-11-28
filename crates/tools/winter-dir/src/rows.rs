@@ -1,5 +1,5 @@
-//! Painting a listing: the header line, one line per entry, and the detail
-//! columns behind the details toggle.
+//! Painting a listing: the names of its columns for the header, one line
+//! per entry, and the detail columns behind the details toggle.
 
 use std::time::{Duration, SystemTime};
 

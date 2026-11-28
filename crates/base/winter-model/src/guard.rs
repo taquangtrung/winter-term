@@ -18,16 +18,14 @@ use std::time::{Duration, Instant};
 
 use super::editor::{
     Appearance, Editor, EditorHint, EditorMenuItem, EditorOutcome, EditorRequest, EditorStatus,
-    JobReply, JumpStep, JumpTarget, Notice, OpenTarget, Page, Popups, PromptReply, ScrollPosition,
-    SearchReport, TargetStyles, TokenInspectData, Toolbar,
+    Header, JobReply, JumpStep, JumpTarget, Notice, OpenTarget, Page, Popups, PromptReply,
+    ScrollPosition, SearchReport, TargetStyles, TokenInspectData, Toolbar,
 };
 use super::input::table::KeyHelp;
 use super::input::{Key, KeyContext};
 use super::list::Viewport;
 use super::notice;
-use super::paint::{
-    Caret, ColumnName, DiagnosticLevel, Frame, GutterLane, IconKind, Point, Span, Style,
-};
+use super::paint::{Caret, DiagnosticLevel, Frame, GutterLane, IconKind, Point, Span, Style};
 use super::picture::{Picture, Tile};
 
 // The guard catches panics as they unwind; built to abort instead, it
@@ -550,20 +548,20 @@ impl<H: Held> Page for Guarded<H> {
         self.read(|editor| editor.popups())
     }
 
-    fn crumb_path(&self) -> Option<PathBuf> {
-        self.read(|editor| editor.crumb_path())
+    fn header_path(&self) -> Option<PathBuf> {
+        self.read(|editor| editor.header_path())
     }
 
-    fn crumbs(&self) -> Vec<String> {
-        self.read(|editor| editor.crumbs())
+    fn header(&self) -> Header {
+        self.read(|editor| editor.header())
     }
 
-    fn on_crumb(&mut self, index: usize) -> EditorOutcome {
-        self.write(|editor| editor.on_crumb(index))
+    fn on_path_part(&mut self, index: usize) -> EditorOutcome {
+        self.write(|editor| editor.on_path_part(index))
     }
 
-    fn column_header(&self) -> Vec<ColumnName> {
-        self.read(|editor| editor.column_header())
+    fn on_header_part(&mut self, action: u16) -> EditorOutcome {
+        self.write(|editor| editor.on_header_part(action))
     }
 
     fn toolbar(&self) -> Option<Toolbar> {

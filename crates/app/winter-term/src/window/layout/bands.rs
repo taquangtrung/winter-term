@@ -1,11 +1,13 @@
-//! A pane's bands: an editor's breadcrumb row over its rows (where it is,
-//! and the names of its columns), and the strip a pane's gutter draws in beside
-//! the grid its content draws in, laid out in pixels so that each stands where it reads
-//! best rather than on the content's grid: the gutter a fraction of a column
-//! off the text, the breadcrumbs in the window's own font.
+//! A pane's bands: an editor's header over its rows (where it is, the names
+//! of its columns, and a summary of what it shows), and the strip a pane's
+//! gutter draws in beside the grid its content draws in, laid out in pixels
+//! so that each stands where it reads best rather than on the content's
+//! grid: the gutter a fraction of a column off the text, the header in the
+//! window's own font.
 
 use crate::render::{ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView};
 use misty::Rect;
+use winter_model::editor::{HEADER_ROWS, Header, HeaderPart, PATH_SEPARATOR};
 use winter_model::layout::TabId;
 use winter_model::paint::{Gutter, GutterSide, IconKind};
 
@@ -16,17 +18,13 @@ use crate::window::{APPROX_CELL_HEIGHT, APPROX_CELL_WIDTH, App};
 // Constants
 // ========================================================================
 
-/// How tall the breadcrumb row is, in rows of cells: a little taller than
-/// a row, so it reads as the pane's furniture rather than a line of it.
-const CRUMB_ROW_CELLS: f32 = 1.2;
+/// The first toolbar button a part of a header's summary is told back as,
+/// past every button an editor's own toolbar numbers.
+const PART_BUTTON_BASE: u16 = 0x4000;
 
-/// The first toolbar button a crumb is told back as, past every button an
-/// editor's own toolbar numbers, so a press on the breadcrumb row is told
-/// apart from one on the toolbar.
-const CRUMB_BUTTON_BASE: u16 = 0x8000;
-
-/// What stands between two crumbs.
-const CRUMB_SEPARATOR: &str = "\u{203a}";
+/// The first toolbar button a part of a header's path is told back as, past
+/// every part of its summary.
+const PATH_BUTTON_BASE: u16 = PART_BUTTON_BASE + HeaderPart::MAX_ACTION + 1;
 
 // ========================================================================
 // Data Structures
@@ -35,15 +33,15 @@ const CRUMB_SEPARATOR: &str = "\u{203a}";
 /// Where the parts of a pane draw, in surface pixels.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(in crate::window) struct PaneBands {
-    /// The whole of the pane below its strip, the breadcrumb row and the
-    /// gutter included.
+    /// The whole of the pane below its strip, the header and the gutter
+    /// included.
     pub(in crate::window) bounds: Rect,
-    /// The grid the pane's content is painted into: what the breadcrumb row
-    /// and the gutter leave.
+    /// The grid the pane's content is painted into: what the header and the
+    /// gutter leave.
     pub(in crate::window) content: Rect,
-    /// The row an editor's breadcrumbs and column names are drawn in, across
-    /// the top of the pane; `None` for one with neither.
-    pub(in crate::window) crumbs: Option<Rect>,
+    /// The editor's header, across the top of the pane; `None` for one with
+    /// nothing to show there.
+    pub(in crate::window) header: Option<Rect>,
     /// The strip the pane's gutter is painted into; `None` for a tab that is
     /// neither an editor nor a terminal.
     pub(in crate::window) gutter: Option<Rect>,
@@ -52,12 +50,19 @@ pub(in crate::window) struct PaneBands {
 /// What a pane holds besides its content, which decides its bands.
 #[derive(Clone, Debug, PartialEq)]
 struct Parts {
-    /// Whether it names its columns.
-    columns: bool,
-    /// Whether it has breadcrumbs.
-    crumbs: bool,
     /// Its gutter.
     gutter: Gutter,
+    /// Whether it has a header.
+    header: bool,
+}
+
+/// What a press on a header's button is.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(in crate::window) enum HeaderButton {
+    /// A part of its summary, told back as this action.
+    Part(u16),
+    /// The part of its path at this index.
+    Path(usize),
 }
 
 // ========================================================================
@@ -66,7 +71,7 @@ struct Parts {
 
 impl App {
     /// Each shown tab paired with the whole of its pane below the strip,
-    /// its breadcrumb row and gutter included: what the pointer is over.
+    /// its header and gutter included: what the pointer is over.
     pub(in crate::window) fn pane_bounds(&self) -> Vec<(TabId, Rect)> {
         self.pane_bounds_in(self.viewport_rect())
     }
@@ -77,26 +82,24 @@ impl App {
         let side = self.config.gutter_side;
         let parts = match self.open_tabs.page(&tab) {
             Some(slot) => Parts {
-                columns: !slot.page.column_header().is_empty(),
-                crumbs: !slot.page.crumbs().is_empty(),
                 gutter: Gutter::new(slot.page.gutter_lanes(), side),
+                header: !slot.page.header().is_empty(),
             },
             // A terminal's gutter holds its commands' marks, while it is
-            // shown; it has no breadcrumbs, its sticky header being drawn
-            // over its rows.
+            // shown; it has no header, its sticky header being drawn over
+            // its rows.
             None if self.config.terminal_gutter && self.open_tabs.terminal(&tab).is_some() => {
                 Parts {
-                    columns: false,
-                    crumbs: false,
                     gutter: Gutter::new(command_marks::gutter_lanes(), side),
+                    header: false,
                 }
             }
             None => {
                 return PaneBands {
                     bounds,
                     content: bounds,
-                    crumbs: None,
                     gutter: None,
+                    header: None,
                 };
             }
         };
@@ -112,26 +115,28 @@ impl App {
 // Free functions
 // ========================================================================
 
-/// The breadcrumb row of tab `owner` over `rect`, drawn as a toolbar: each
-/// of `crumbs` a button, ancestors muted and the last (where the editor is)
-/// in normal foreground with `icon`, a separator between two, and the names
-/// of its `columns` over them.
-pub(in crate::window) fn crumb_bar(
+/// The header `header` of tab `owner` over `rect`, drawn as a toolbar:
+/// each part of its path a button, ancestors muted and the last (where the
+/// editor is) in normal foreground with `icon`, a separator between two, the
+/// names of its columns over them as `columns` places them, and its summary
+/// at the right.
+pub(in crate::window) fn header_bar(
     owner: TabId,
-    crumbs: &[String],
+    header: &Header,
     icon: Option<IconKind>,
     columns: Vec<ToolbarColumn>,
     rect: Rect,
 ) -> ToolbarView {
-    let last = crumbs.len().saturating_sub(1);
-    let mut left = Vec::with_capacity(crumbs.len() * 2);
-    for (index, crumb) in crumbs.iter().enumerate() {
+    let path = header.path();
+    let last = path.len().saturating_sub(1);
+    let mut left = Vec::with_capacity(path.len() * 2);
+    for (index, part) in path.iter().enumerate() {
         if index > 0 {
             left.push(ToolbarItem {
                 button: None,
                 icon: None,
                 shrinks: false,
-                text: CRUMB_SEPARATOR.to_string(),
+                text: PATH_SEPARATOR.to_string(),
                 tone: ToolbarTone::Dim,
             });
         }
@@ -139,49 +144,65 @@ pub(in crate::window) fn crumb_bar(
         left.push(ToolbarItem {
             button: u16::try_from(index)
                 .ok()
-                .map(|index| CRUMB_BUTTON_BASE.saturating_add(index)),
+                .map(|index| PATH_BUTTON_BASE.saturating_add(index)),
             icon: match is_last {
                 true => icon.clone(),
                 false => None,
             },
             shrinks: true,
-            text: crumb.clone(),
+            text: part.clone(),
             tone: match is_last {
                 true => ToolbarTone::Normal,
                 false => ToolbarTone::Dim,
             },
         });
     }
+    let right = header
+        .summary()
+        .map(|part| ToolbarItem {
+            button: part
+                .action
+                .filter(|action| *action <= HeaderPart::MAX_ACTION)
+                .map(|action| PART_BUTTON_BASE + action),
+            icon: None,
+            shrinks: false,
+            text: part.text.clone(),
+            tone: part.tone,
+        })
+        .collect();
     ToolbarView {
         columns,
         left,
         owner: owner.0,
         rect: (rect.x, rect.y, rect.width, rect.height),
-        right: Vec::new(),
+        right,
     }
 }
 
-/// Which crumb toolbar button `button` is, or `None` for a button of the
-/// editor's own toolbar.
-pub(in crate::window) fn crumb_of(button: u16) -> Option<usize> {
-    button.checked_sub(CRUMB_BUTTON_BASE).map(usize::from)
+/// Which part of a header toolbar button `button` is, or `None` for a
+/// button of the editor's own toolbar.
+pub(in crate::window) fn header_button(button: u16) -> Option<HeaderButton> {
+    match button {
+        PATH_BUTTON_BASE.. => Some(HeaderButton::Path(usize::from(button - PATH_BUTTON_BASE))),
+        PART_BUTTON_BASE.. => Some(HeaderButton::Part(button - PART_BUTTON_BASE)),
+        _ => None,
+    }
 }
 
 /// `bounds` split between the parts of an editor pane, for cells `cell`
-/// wide and tall and side padding `pad`: the breadcrumb row across the top,
-/// for an editor with breadcrumbs or columns to name, then the content beside
-/// the gutter.
+/// wide and tall and side padding `pad`: the header across the top, for an
+/// editor with one, then the content beside the gutter.
 fn bands(
     parts: &Parts,
     bounds: Rect,
     (cell_width, cell_height): (f32, f32),
     pad: f32,
 ) -> PaneBands {
-    let crumbs = (parts.crumbs || parts.columns).then(|| {
-        let height = (cell_height * CRUMB_ROW_CELLS).round().min(bounds.height);
+    let header = parts.header.then(|| {
+        let height = (cell_height * HEADER_ROWS).round().min(bounds.height);
         Rect::new(bounds.x, bounds.y, bounds.width, height)
     });
-    let top = crumbs.map_or(bounds.y, |row| row.y + row.height);
+    let top = header.map_or(bounds.y, |line| line.y + line.height);
     let below = Rect::new(bounds.x, top, bounds.width, bounds.y + bounds.height - top);
     // A gutter with no lanes takes no room: the rows run to the pane's edge.
     let (content, gutter) = match parts.gutter.is_empty() {
@@ -194,8 +215,8 @@ fn bands(
     PaneBands {
         bounds,
         content,
-        crumbs,
         gutter,
+        header,
     }
 }
 
@@ -236,6 +257,7 @@ fn split_gutter(gutter: &Gutter, rect: Rect, cell_width: f32, pad: f32) -> (Rect
 #[cfg(test)]
 mod tests {
     use crate::render::PANE_H_PAD;
+    use winter_model::editor::HeaderSegment;
     use winter_model::paint::GutterLane;
 
     use super::*;
@@ -244,9 +266,8 @@ mod tests {
 
     fn numbers(side: GutterSide) -> Parts {
         Parts {
-            columns: false,
-            crumbs: false,
             gutter: Gutter::new(vec![GutterLane::Text { width: 3 }], side),
+            header: false,
         }
     }
 
@@ -307,21 +328,21 @@ mod tests {
     }
 
     #[test]
-    fn test_an_editor_naming_columns_gets_a_breadcrumb_row_above_its_rows() {
+    fn test_an_editor_with_a_header_gets_it_above_its_rows() {
         let parts = Parts {
-            columns: true,
+            header: true,
             ..numbers(GutterSide::Left)
         };
         let bounds = Rect::new(0.0, 0.0, 400.0, 210.0);
         let PaneBands {
             content,
-            crumbs,
             gutter,
+            header,
             ..
         } = bands(&parts, bounds, CELL, PANE_H_PAD);
-        let crumbs = crumbs.expect("a row for the names");
+        let line = header.expect("a header");
         assert_eq!(
-            (crumbs.y, crumbs.height),
+            (line.y, line.height),
             (0.0, 24.0),
             "a fifth taller than a row"
         );
@@ -334,34 +355,68 @@ mod tests {
     }
 
     #[test]
-    fn test_a_press_on_a_crumb_is_told_apart_from_the_toolbar_s_buttons() {
-        let crumbs = ["/".to_string(), "tmp".to_string(), "vt".to_string()];
-        let bar = crumb_bar(
+    fn test_a_header_s_summary_goes_at_the_right_each_press_told_apart() {
+        let header = Header::new(vec![
+            HeaderSegment::Path(vec!["home".to_string()]),
+            HeaderSegment::Summary(vec![
+                HeaderPart::label("12 processes", ToolbarTone::Normal),
+                HeaderPart::button("tree", ToolbarTone::Dim, 3, "Listed as a tree"),
+            ]),
+        ]);
+        let bar = header_bar(
             TabId(1),
-            &crumbs,
+            &header,
             None,
             Vec::new(),
             Rect::new(0.0, 0.0, 400.0, 24.0),
         );
-        let pressed: Vec<Option<usize>> = bar
+        let texts: Vec<&str> = bar.right.iter().map(|item| item.text.as_str()).collect();
+        assert_eq!(texts, ["12 processes", "tree"]);
+        let pressed: Vec<Option<HeaderButton>> = bar
             .left
             .iter()
+            .chain(&bar.right)
             .filter_map(|item| item.button)
-            .map(crumb_of)
+            .map(header_button)
             .collect();
-        assert_eq!(pressed, [Some(0), Some(1), Some(2)]);
-        assert_eq!(crumb_of(3), None, "the editor's own button");
+        assert_eq!(
+            pressed,
+            [Some(HeaderButton::Path(0)), Some(HeaderButton::Part(3))]
+        );
     }
 
     #[test]
-    fn test_crumb_bar_dims_ancestors_and_highlights_active_crumb() {
-        let crumbs = ["/".to_string(), "tmp".to_string(), "vt".to_string()];
+    fn test_a_press_on_a_path_part_is_told_apart_from_the_toolbar_s_buttons() {
+        let path = vec!["/".to_string(), "tmp".to_string(), "vt".to_string()];
+        let header = Header::new(vec![HeaderSegment::Path(path)]);
+        let bar = header_bar(
+            TabId(1),
+            &header,
+            None,
+            Vec::new(),
+            Rect::new(0.0, 0.0, 400.0, 24.0),
+        );
+        let pressed: Vec<Option<HeaderButton>> = bar
+            .left
+            .iter()
+            .filter_map(|item| item.button)
+            .map(header_button)
+            .collect();
+        let parts = [0, 1, 2].map(|at| Some(HeaderButton::Path(at)));
+        assert_eq!(pressed, parts);
+        assert_eq!(header_button(3), None, "the editor's own button");
+    }
+
+    #[test]
+    fn test_header_bar_dims_ancestors_and_highlights_where_it_is() {
+        let path = vec!["/".to_string(), "tmp".to_string(), "vt".to_string()];
+        let header = Header::new(vec![HeaderSegment::Path(path)]);
         let file_icon = IconKind::File {
             name: "vt".to_string(),
         };
-        let bar = crumb_bar(
+        let bar = header_bar(
             TabId(1),
-            &crumbs,
+            &header,
             Some(file_icon.clone()),
             Vec::new(),
             Rect::new(0.0, 0.0, 400.0, 24.0),
@@ -389,9 +444,9 @@ mod tests {
     fn test_an_editor_with_no_header_keeps_the_whole_height() {
         let bounds = Rect::new(0.0, 0.0, 400.0, 210.0);
         let PaneBands {
-            content, crumbs, ..
+            content, header, ..
         } = bands(&numbers(GutterSide::Left), bounds, CELL, PANE_H_PAD);
-        assert_eq!(crumbs, None);
+        assert_eq!(header, None);
         assert_eq!((content.y, content.height), (0.0, 210.0));
     }
 

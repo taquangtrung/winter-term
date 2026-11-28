@@ -8,6 +8,7 @@
 //!
 //! - `commands`: the names of the commands editors take.
 //! - `compare`: comparing and merging texts.
+//! - `header`: the line across the top of a tab, made of segments.
 //! - `jobs`: the work an editor asks the host to run, and its replies.
 //! - `popup`: completion, info cards, and toolbars drawn over the rows.
 //! - `prompt`: the questions an editor asks.
@@ -16,6 +17,7 @@
 
 mod commands;
 mod compare;
+mod header;
 mod jobs;
 mod menu;
 mod popup;
@@ -32,17 +34,20 @@ use std::time::{Duration, Instant};
 pub use super::notify::Notice;
 
 use super::guard::Guarded;
-use super::path::{crumb_label, crumb_paths};
+use super::path::{path_part_label, path_parts};
 
 use super::input::table::KeyHelp;
 use super::input::{Key, KeyContext, MacroStep};
 use super::list::Viewport;
 pub use super::modal::EditorStatus;
-use super::paint::{Caret, ColumnName, Frame, GutterLane, IconKind, Point, Row};
+use super::paint::{Caret, Frame, GutterLane, IconKind, Point, Row};
 use super::picture::{Picture, Tile};
 
 pub use commands::*;
 pub use compare::{CompareRequest, DiffMerge, DiffRequest, DiffText, FileShape, GitViewRequest};
+pub use header::{
+    HEADER_ROWS, Header, HeaderPart, HeaderSegment, PATH_SEPARATOR, PATH_TRAIL, header_view,
+};
 pub use jobs::{
     BuildStart, CommandOutput, CommandRequest, DirTotal, FileOps, JobReply, JobRequest,
     SpawnRequest,
@@ -796,41 +801,43 @@ pub trait Page: AsAny {
         Popups::default()
     }
 
-    /// The file or folder the editor shows, which its breadcrumbs lead to:
-    /// `None` for an editor tied to no one place on disk.
-    fn crumb_path(&self) -> Option<PathBuf> {
+    /// The file or folder the editor shows, which its header's path leads
+    /// to: `None` for an editor tied to no one place on disk.
+    fn header_path(&self) -> Option<PathBuf> {
         None
     }
 
-    /// Where the editor is, outermost first (a directory's path, one crumb to
-    /// a folder): the breadcrumb row of the band the window draws over the
-    /// editor's rows, off its grid, each crumb a press away (see
-    /// [`Page::on_crumb`]). By default [`Page::crumb_path`] and the folders
-    /// above it. Empty for an editor with no breadcrumbs, which gets no row.
-    fn crumbs(&self) -> Vec<String> {
-        self.crumb_path()
+    /// The header the window draws across the top of the tab, under its
+    /// strip and off its grid: by default the path to
+    /// [`Page::header_path`], each folder a press away (see
+    /// [`Page::on_path_part`]). Empty for a tab with no header. A tab with a
+    /// [`Page::toolbar`] draws that instead.
+    fn header(&self) -> Header {
+        let parts = self
+            .header_path()
             .map(|path| {
-                crumb_paths(&path)
+                path_parts(&path)
                     .iter()
-                    .map(|crumb| crumb_label(crumb))
+                    .map(|part| path_part_label(part))
                     .collect()
             })
-            .unwrap_or_default()
+            .unwrap_or_default();
+        Header::new(vec![HeaderSegment::Path(parts)])
     }
 
-    /// A press on crumb `index` of [`Page::crumbs`]: by default the folder
-    /// it names listed in Dir, a file's own crumb its folder.
-    fn on_crumb(&mut self, index: usize) -> EditorOutcome {
-        let Some(path) = self.crumb_path() else {
+    /// A press on part `index` of the header's path: by default the folder
+    /// it names listed in Dir, a file's own part its folder.
+    fn on_path_part(&mut self, index: usize) -> EditorOutcome {
+        let Some(path) = self.header_path() else {
             return EditorOutcome::Ignored;
         };
-        let crumbs = crumb_paths(&path);
-        let Some(crumb) = crumbs.get(index) else {
+        let parts = path_parts(&path);
+        let Some(part) = parts.get(index) else {
             return EditorOutcome::Ignored;
         };
-        let folder = match index + 1 == crumbs.len() && !crumb.is_dir() {
-            true => crumbs.get(index.wrapping_sub(1)).unwrap_or(crumb),
-            false => crumb,
+        let folder = match index + 1 == parts.len() && !part.is_dir() {
+            true => parts.get(index.wrapping_sub(1)).unwrap_or(part),
+            false => part,
         };
         EditorOutcome::OpenPath(OpenTarget {
             column: None,
@@ -839,11 +846,9 @@ pub trait Page: AsAny {
         })
     }
 
-    /// The names of the editor's columns, drawn on the breadcrumb row each
-    /// over the content columns it names, and kept in place as the rows
-    /// scroll. Empty for an editor with no columns to name.
-    fn column_header(&self) -> Vec<ColumnName> {
-        Vec::new()
+    /// A press on the part of the header's summary told back as `action`.
+    fn on_header_part(&mut self, _action: u16) -> EditorOutcome {
+        EditorOutcome::Ignored
     }
 
     /// The bar the editor wants drawn over its top rows in the window's own
@@ -1254,7 +1259,7 @@ impl OpenTarget {
 mod tests {
     use super::*;
 
-    /// A page showing `path`, for its breadcrumbs.
+    /// A page showing `path`, for its header.
     struct Shown {
         path: Option<PathBuf>,
     }
@@ -1276,14 +1281,14 @@ mod tests {
             EditorOutcome::Ignored
         }
 
-        fn crumb_path(&self) -> Option<PathBuf> {
+        fn header_path(&self) -> Option<PathBuf> {
             self.path.clone()
         }
     }
 
     #[test]
-    fn test_a_crumb_lists_its_folder_and_a_files_own_crumb_the_folder_it_is_in() {
-        let dir = std::env::temp_dir().join(format!("winter-crumbs-{}", std::process::id()));
+    fn test_a_path_part_lists_its_folder_and_a_files_own_part_the_folder_it_is_in() {
+        let dir = std::env::temp_dir().join(format!("winter-path-parts-{}", std::process::id()));
         std::fs::create_dir_all(&dir).expect("a folder");
         let file = dir.join("notes.md");
         std::fs::write(&file, "").expect("a file");
@@ -1291,8 +1296,8 @@ mod tests {
             let mut page = Shown {
                 path: Some(path.to_path_buf()),
             };
-            let at = page.crumbs().len() - 1 - index;
-            match page.on_crumb(at) {
+            let at = page.header().path().len() - 1 - index;
+            match page.on_path_part(at) {
                 EditorOutcome::OpenPath(target) => Some(target.path),
                 _ => None,
             }
@@ -1300,7 +1305,10 @@ mod tests {
         let mut page = Shown {
             path: Some(file.clone()),
         };
-        assert_eq!(page.crumbs().last().map(String::as_str), Some("notes.md"));
+        assert_eq!(
+            page.header().path().last().map(String::as_str),
+            Some("notes.md")
+        );
         assert_eq!(
             opened(&file, 0).as_deref(),
             Some(dir.as_path()),
@@ -1316,9 +1324,12 @@ mod tests {
             Some(dir.as_path()),
             "a folder's own"
         );
-        assert!(matches!(page.on_crumb(usize::MAX), EditorOutcome::Ignored));
+        assert!(matches!(
+            page.on_path_part(usize::MAX),
+            EditorOutcome::Ignored
+        ));
         page.path = None;
-        assert!(page.crumbs().is_empty());
+        assert!(page.header().is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

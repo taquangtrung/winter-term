@@ -1438,7 +1438,7 @@ impl Page for CompileEditor {
         menu_groups([place, task.into_iter().chain(running).collect(), pdf])
     }
 
-    fn crumb_path(&self) -> Option<PathBuf> {
+    fn header_path(&self) -> Option<PathBuf> {
         Some(self.task.dir.clone())
     }
 

@@ -2012,7 +2012,7 @@ impl Page for GitEditor {
     }
 
     /// The repository, whichever file the cursor is on.
-    fn crumb_path(&self) -> Option<PathBuf> {
+    fn header_path(&self) -> Option<PathBuf> {
         self.repo.root.clone()
     }
 

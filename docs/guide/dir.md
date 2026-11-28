@@ -1,6 +1,6 @@
 # Dir
 
-Dir (`C-S-d`, or `Dir: Open Working Directory`) lists a directory as a foldable tree, starting where the pane was working. The path runs along the top as breadcrumbs; click a folder to list it. `../` goes up and `./` reads the listing again.
+Dir (`C-S-d`, or `Dir: Open Working Directory`) lists a directory as a foldable tree, starting where the pane was working. The path runs along the header; click a folder to list it. `../` goes up and `./` reads the listing again.
 
 `Sidebar: Files` keeps a lighter tree of the project in a sidebar, for opening files; `t` there opens the project in Dir (see [Sidebars](basics.md#sidebars)).
 

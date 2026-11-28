@@ -271,12 +271,16 @@ pub struct InfoView {
 pub enum ToolbarTone {
     /// In the accent color: a button that is on.
     Accent,
+    /// In the danger color: something that failed.
+    Danger,
     /// Receded: a separator, or a label with nothing to press.
     Dim,
     /// In the text color.
     Normal,
     /// In the text color, heavier: a button that does something.
     Strong,
+    /// In the warning color: a state to notice, such as readings paused.
+    Warning,
 }
 
 /// Which edge of its column a [`ToolbarColumn`]'s name stands against.

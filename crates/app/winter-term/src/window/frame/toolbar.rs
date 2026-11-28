@@ -1,11 +1,14 @@
-//! The pane toolbars and breadcrumb rows, drawn by misty in the UI font:
+//! The pane toolbars and headers, drawn by misty in the UI font:
 //! a band matching the pane background with a subtle hairline below it,
 //! rounded hover pills on clickable items, column names aligned over their
 //! columns, and hit spans kept for pointer interaction and tooltips.
 
-use misty::{BoxStyle, Frame, IconSet, Point, Rect, Rgba, Span, StyledText, Svg, TextColor, Theme, ThemeToken};
 use misty::grid::CellColor;
 use misty::widgets::{draw_styled_label, styled_label_width};
+use misty::{
+    BoxStyle, Frame, IconSet, Point, Rect, Rgba, Span, StyledText, Svg, TextColor, Theme,
+    ThemeToken,
+};
 
 use crate::icons;
 use crate::render::{ColumnAlign, ToolbarItem, ToolbarTone, ToolbarView};
@@ -63,7 +66,7 @@ const SEPARATOR_FADE_SHARE: f32 = 0.45;
 /// Prefix of bundled monochrome symbol icons, tinted to the text color.
 const SYMBOL_PREFIX: &str = "symbols/";
 
-/// Toolbar and breadcrumb font size as a share of `config.font_size`.
+/// Toolbar and header font size as a share of `config.font_size`.
 const TOOLBAR_FONT_RATIO: f32 = 0.95;
 
 // ========================================================================
@@ -282,7 +285,7 @@ fn draw_toolbar(
         left_end = left_end.min(start);
     }
 
-    // Align the first crumb's text with `edge_pad` even when its hover pill
+    // Align the first path part's text with `edge_pad` even when its hover pill
     // pads to the left of the text.
     let left_start = match bar.left.first().is_some_and(|item| item.button.is_some()) {
         true => (metrics.edge_pad - metrics.pill_h_pad).max(metrics.gap),
@@ -336,7 +339,7 @@ fn fit_left_texts(
             continue;
         }
         if Some(index) != last_shrinking {
-            texts[index] = short_crumb(&item.text);
+            texts[index] = short_part(&item.text);
             continue;
         }
         let chars: Vec<char> = item.text.chars().collect();
@@ -352,7 +355,7 @@ fn fit_left_texts(
 
 /// Short form of an ancestor segment: its first character, or two characters
 /// when dot-prefixed so hidden folders stay distinguishable.
-fn short_crumb(text: &str) -> String {
+fn short_part(text: &str) -> String {
     let keep = match text.starts_with('.') {
         true => DOT_SHORT_CHARS,
         false => 1,
@@ -461,8 +464,10 @@ fn slot_width(
 fn color(tone: ToolbarTone) -> TextColor {
     match tone {
         ToolbarTone::Accent => TextColor::Token(ThemeToken::Accent),
+        ToolbarTone::Danger => TextColor::Token(ThemeToken::Danger),
         ToolbarTone::Dim => TextColor::Token(ThemeToken::Muted),
         ToolbarTone::Normal | ToolbarTone::Strong => TextColor::Token(ThemeToken::Foreground),
+        ToolbarTone::Warning => TextColor::Token(ThemeToken::Warning),
     }
 }
 
@@ -530,7 +535,7 @@ mod tests {
         );
     }
 
-    fn crumb(text: &str) -> ToolbarItem {
+    fn part(text: &str) -> ToolbarItem {
         ToolbarItem {
             button: Some(0x8000),
             icon: None,
@@ -556,13 +561,7 @@ mod tests {
 
     #[test]
     fn test_fit_left_texts_shortens_ancestors_to_initials_and_keeps_dot_prefix() {
-        let items = vec![
-            crumb("home"),
-            sep(),
-            crumb(".cargo"),
-            sep(),
-            crumb("bands.rs"),
-        ];
+        let items = vec![part("home"), sep(), part(".cargo"), sep(), part("bands.rs")];
         // Full width is 4 + 1 + 6 + 1 + 8 = 20; room 15 fits `h › .c › bands.rs` (13).
         let fitted = fit_left_texts(&items, 15.0, 0.0, char_width);
         assert_eq!(fitted, ["h", "›", ".c", "›", "bands.rs"]);
@@ -570,7 +569,7 @@ mod tests {
 
     #[test]
     fn test_fit_left_texts_truncates_last_segment_with_ellipsis_when_still_tight() {
-        let items = vec![crumb("home"), sep(), crumb("bands.rs")];
+        let items = vec![part("home"), sep(), part("bands.rs")];
         // Shortened ancestor gives `h › bands.rs` (10); room 7 truncates the last segment.
         let fitted = fit_left_texts(&items, 7.0, 0.0, char_width);
         assert_eq!(fitted, ["h", "›", "band…"]);
@@ -578,7 +577,7 @@ mod tests {
 
     #[test]
     fn test_fit_left_texts_truncates_single_shrinking_item_with_ellipsis() {
-        let items = vec![crumb("Introduction")];
+        let items = vec![part("Introduction")];
         let fitted = fit_left_texts(&items, 6.0, 0.0, char_width);
         assert_eq!(fitted, ["Intro…"]);
     }

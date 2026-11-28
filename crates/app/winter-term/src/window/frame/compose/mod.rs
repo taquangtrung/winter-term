@@ -12,7 +12,7 @@ use crate::render::{
 };
 use misty::{Rect, ScrollbarFade, ScrollbarShow};
 use winter_emulator::{CursorShape, Grid};
-use winter_model::editor::{PickPlacement, ScrollPosition};
+use winter_model::editor::{Header, HeaderSegment, PickPlacement, ScrollPosition};
 use winter_model::input::PendingPrefix;
 use winter_model::layout::TabId;
 use winter_model::list::{ViewportSettings, configure_viewports};
@@ -28,7 +28,7 @@ use super::popups::{PickerLook, card_runs, key_hint_title, session_view, which_k
 use crate::window::editor::buffers::ScreenSkip;
 use crate::window::frame::pane_popups::PanePopups;
 use crate::window::input::sequence::WHICH_KEY_DELAY;
-use crate::window::layout::bands::{PaneBands, crumb_bar};
+use crate::window::layout::bands::{PaneBands, header_bar};
 use crate::window::layout::open_tabs::OpenTabs;
 use crate::window::picker::sources::{SCOUT_PICKER, color_scout_rows};
 use crate::window::terminal::blocks::native::{image_placements, refresh_block_textures};
@@ -197,8 +197,8 @@ fn paint_editors(
         });
         // Over the gutter as well as the content: the bar is the pane's.
         let whole = App::layout_rect_to_pane(bands.bounds);
-        // The breadcrumbs are drawn as a toolbar along the top of the pane,
-        // for an editor without a toolbar of its own.
+        // The header is drawn as a toolbar along the top of the pane, for an
+        // editor without a toolbar of its own.
         let toolbar = slot
             .page
             .toolbar()
@@ -210,28 +210,28 @@ fn paint_editors(
                 right: bar.right,
             })
             .or_else(|| {
-                let row = App::layout_rect_to_pane(bands.crumbs?);
+                let line = App::layout_rect_to_pane(bands.header?);
+                let header = slot.page.header();
                 // Each column's name over its content columns, where the
                 // renderer draws them.
                 let content = App::layout_rect_to_pane(*rect);
                 let col_x = |col: usize| content.x + renderer.pane_pad() + col as f32 * cell_w;
-                let columns = slot
-                    .page
-                    .column_header()
-                    .into_iter()
+                let columns = header
+                    .columns()
+                    .iter()
                     .map(|name| ToolbarColumn {
                         align: name.align,
                         left: col_x(name.cols.start),
                         right: col_x(name.cols.end),
-                        text: name.text,
+                        text: name.text.clone(),
                     })
                     .collect();
-                Some(crumb_bar(
+                Some(header_bar(
                     *id,
-                    &slot.page.crumbs(),
+                    &header,
                     Some(slot.tab_icon()),
                     columns,
-                    row,
+                    line,
                 ))
             });
         paints.push(EditorPaint {
@@ -324,7 +324,7 @@ fn gutter_paint(
 }
 
 /// Each terminal on screen whose sticky header shows: the command its top row's
-/// output belongs to, drawn as a breadcrumb over that row, across its gutter
+/// output belongs to, drawn as a header's path over that row, across its gutter
 /// too, since the header is the pane's.
 fn sticky_headers(
     open_tabs: &OpenTabs,
@@ -343,7 +343,8 @@ fn sticky_headers(
             let top = grid_area(App::layout_rect_to_pane(bands.content), cell_height).y;
             let row = Rect::new(whole.x, top, whole.width, cell_height);
             let command = block.command.replace('\n', " ");
-            Some((*id, crumb_bar(*id, &[command], None, Vec::new(), row)))
+            let header = Header::new(vec![HeaderSegment::Path(vec![command])]);
+            Some((*id, header_bar(*id, &header, None, Vec::new(), row)))
         })
         .collect()
 }
@@ -1263,7 +1264,7 @@ impl App {
         });
         self.parts.drawn_find = self.find_popup(&rects);
         // The key menus are sized to, and centred in, the focused pane: the
-        // whole of it, its gutter and breadcrumb row too, not just its text.
+        // whole of it, its gutter and header too, not just its text.
         let focused_pane = pane_rect_of(&bounds, focused);
         // Misty draws the key menu over the frame, centred in the focused
         // pane, holding where it was dragged and the size it grew to.

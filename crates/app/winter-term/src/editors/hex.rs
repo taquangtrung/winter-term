@@ -622,7 +622,7 @@ impl Page for HexEditor {
         }
     }
 
-    fn crumb_path(&self) -> Option<PathBuf> {
+    fn header_path(&self) -> Option<PathBuf> {
         Some(self.path.clone())
     }
 

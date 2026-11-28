@@ -28,3 +28,6 @@ winter-ext-api.workspace = true
 winter-keys.workspace = true
 misty.workspace = true
 winter-theme.workspace = true
+
+[dev-dependencies]
+misty = { workspace = true, features = ["testing"] }

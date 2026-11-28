@@ -15,7 +15,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use misty::ThemeToken;
-use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row, text};
+use misty::view::{LazySource, Space, badge, column, divider, lazy_column, row, text};
 use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, Theme};
 
 use winter_model::editor::{
@@ -27,9 +27,12 @@ use winter_model::input::{Key, format_key};
 use winter_model::list::{ListView, Viewport};
 use winter_model::monitor::{MonitorAnswer, MonitorQuery, StartupEntry, StartupKind, StartupScope};
 use winter_model::paint::{Frame, Row};
+use winter_model::view::ToolbarTone;
 use winter_model::vim::nav::{VimKey, VimNav};
 
-use crate::table::{cell, fit, marked, table_row};
+use crate::table::{
+    FOOTER_PADDING_ROWS, ROW_PADDING_COLS, SummaryPart, cell, fit, marked, summary_page, table_row,
+};
 
 use self::notice::StartupNotice;
 
@@ -347,28 +350,39 @@ impl StartupEditor {
     // Drawing
     // ====================================================================
 
-    /// The summary at the heading's right: how many entries and how many on.
-    fn summary(&self) -> Vec<Element<'_, Self>> {
+    /// The summary on the header: how many entries and how many on,
+    /// any filter, which a press clears, and why the last reading failed.
+    fn summary(&self) -> Vec<SummaryPart<Act>> {
         let on = self.entries.iter().filter(|entry| entry.enabled).count();
         let count = match self.loaded {
             false => "reading…".to_string(),
             true if self.filter.is_empty() => format!("{} entries, {on} on", self.entries.len()),
             true => format!("{} entries ({} shown)", self.entries.len(), self.rows.len()),
         };
-        let mut parts = vec![text(count).muted().into()];
+        let mut parts = vec![SummaryPart::label(count, ToolbarTone::Normal)];
         if !self.filter.is_empty() {
-            parts.push(
-                badge(format!("filter: {}", self.filter), ThemeToken::Accent).tooltip(format!(
-                    "Only entries matching {}; {} shows them all",
-                    self.filter,
-                    key_of(Act::ClearFilter)
-                )),
+            let matching = format!(
+                "Only entries matching {}; {} shows them all",
+                self.filter,
+                key_of(Act::ClearFilter)
             );
+            parts.push(SummaryPart::button(
+                format!("filter: {}", self.filter),
+                ToolbarTone::Accent,
+                Act::ClearFilter,
+                matching,
+            ));
         }
         if let Some(why) = &self.error {
-            parts.push(text(why.as_str()).color(ThemeToken::Danger).into());
+            parts.push(SummaryPart::label(why.as_str(), ToolbarTone::Danger));
         }
         parts
+    }
+
+    /// A press on a part of the summary: what its key does.
+    fn run_summary(&mut self, act: Act) {
+        self.list.view_mut().release();
+        self.run(act);
     }
 
     /// The column headings.
@@ -450,8 +464,8 @@ impl LazySource<StartupEditor> for StartupEditor {
 }
 
 impl HostedView for StartupEditor {
-    /// The summary over the headings and the entries, misty building those
-    /// that show, and the selected entry in the footer where there is room.
+    /// The headings over the entries, misty building those that show, and
+    /// the selected entry in the footer where there is room.
     fn view(&self) -> Element<'_, Self> {
         let mut table = vec![self.heading_view(), divider()];
         if self.rows.is_empty() && self.loaded {
@@ -462,15 +476,17 @@ impl HostedView for StartupEditor {
                 .on_shown(|editor: &mut Self, shown| editor.list.view_mut().set_shown(shown))
                 .into(),
         );
-        let mut heading = page(TITLE);
-        for part in self.summary() {
-            heading = heading.action(part);
+        // The tab names the monitor and the header sums it up, so the
+        // headings sit right under them, and the footer's text lines up
+        // with the table's.
+        let shown = summary_page(self, Self::summary, Self::run_summary)
+            .filled(column(table).gap(Space::Cells(0.0)));
+        match self.detail.then(|| self.detail_view()).flatten() {
+            Some(detail) => shown
+                .footer(detail.padding(ROW_PADDING_COLS, FOOTER_PADDING_ROWS))
+                .into(),
+            None => shown.into(),
         }
-        let mut shown = heading.filled(column(table).gap(Space::Cells(0.0)));
-        if let Some(detail) = self.detail.then(|| self.detail_view()).flatten() {
-            shown = shown.footer(detail);
-        }
-        shown.into()
     }
 }
 

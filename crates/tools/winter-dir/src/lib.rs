@@ -45,9 +45,10 @@ use winter_field::Rows;
 use winter_model::background::{self, Background};
 use winter_model::editor::{
     ARCHIVE_COMPRESS, ARCHIVE_EXTRACT, DiffRequest, DiffText, Editor, EditorCommand,
-    EditorMenuItem, EditorOutcome, EditorStatus, HIDE_SCOPES, JobReply, JobRequest, JumpStep,
-    JumpTarget, Notice, OpenTarget, Page, PromptMode, PromptReply, PromptRequest, SHOW_SCOPES,
-    ScrollPosition, SearchReport, TOGGLE_EXECUTABLE, TOGGLE_HIDDEN, TokenInspectData,
+    EditorMenuItem, EditorOutcome, EditorStatus, HIDE_SCOPES, Header, HeaderSegment, JobReply,
+    JobRequest, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptMode, PromptReply,
+    PromptRequest, SHOW_SCOPES, ScrollPosition, SearchReport, TOGGLE_EXECUTABLE, TOGGLE_HIDDEN,
+    TokenInspectData,
 };
 use winter_model::input::CursorMove;
 use winter_model::input::table::KeyHelp;
@@ -55,10 +56,11 @@ use winter_model::input::{Key, KeyCode, Mods};
 use winter_model::list::{ListPlace, ListView, Viewport};
 use winter_model::modal::EditMode;
 use winter_model::paint::{
-    Caret, ColumnName, Frame, GutterLane, GutterMark, Icon, Point, RowWindow, Span, Style,
-    row_height, row_text,
+    Caret, Frame, GutterLane, GutterMark, Icon, Point, RowWindow, Span, Style, row_height, row_text,
 };
-use winter_model::path::{abbreviate_home, crumb_label, crumb_paths, normalize_path, parent_dir};
+use winter_model::path::{
+    abbreviate_home, normalize_path, parent_dir, path_part_label, path_parts,
+};
 use winter_model::spinner;
 use winter_model::vim::nav::VimNav;
 use winter_vcs::watch::TreeWatch;
@@ -1192,15 +1194,26 @@ impl Page for DirEditor {
         self.enter()
     }
 
-    fn crumbs(&self) -> Vec<String> {
-        crumb_paths(&self.root)
+    /// The path to the listed folder, and the names of the columns over the
+    /// listing.
+    fn header(&self) -> Header {
+        let path = path_parts(&self.root)
             .iter()
-            .map(|dir| crumb_label(dir))
-            .collect()
+            .map(|dir| path_part_label(dir))
+            .collect();
+        let columns = rows::column_names(rows::HeaderFlags {
+            show_details: self.show_details,
+            show_sizes: self.show_sizes,
+            width: self.width,
+        });
+        Header::new(vec![
+            HeaderSegment::Path(path),
+            HeaderSegment::Columns(columns),
+        ])
     }
 
-    fn on_crumb(&mut self, index: usize) -> EditorOutcome {
-        let dirs = crumb_paths(&self.root);
+    fn on_path_part(&mut self, index: usize) -> EditorOutcome {
+        let dirs = path_parts(&self.root);
         let Some(dir) = dirs.get(index) else {
             return EditorOutcome::Ignored;
         };
@@ -1208,14 +1221,6 @@ impl Page for DirEditor {
         self.select_after_read = dirs.get(index + 1).cloned();
         self.set_root(dir.clone());
         EditorOutcome::Consumed
-    }
-
-    fn column_header(&self) -> Vec<ColumnName> {
-        rows::column_names(rows::HeaderFlags {
-            show_details: self.show_details,
-            show_sizes: self.show_sizes,
-            width: self.width,
-        })
     }
 
     /// One icon lane, always: a row's mark for an operation, else its git

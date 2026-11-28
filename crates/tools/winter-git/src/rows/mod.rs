@@ -470,7 +470,7 @@ fn upstream_commit<'a>(
     None
 }
 
-/// One labelled header line: the label padded to [`LABEL_WIDTH`], then `value`.
+/// One labelled line of the header: the label padded to [`LABEL_WIDTH`], then `value`.
 fn label_row(label: &str, value: Vec<Span>) -> ViewRow {
     let mut spans = vec![Span::new(
         Style::HeadingPlain,

@@ -372,7 +372,8 @@ pub(in crate::window) struct WindowParts {
     pub(in crate::window) status_bar: misty::widgets::StatusBar,
     /// The title bar misty draws along the window's top, and the shape the
     /// settings gave it; `None` before the first frame.
-    pub(in crate::window) title_bar: Option<(frame::title_bar::TitleBarShape, misty::widgets::TitleBar)>,
+    pub(in crate::window) title_bar:
+        Option<(frame::title_bar::TitleBarShape, misty::widgets::TitleBar)>,
     /// The tooltip misty hangs under what the pointer rests on.
     pub(in crate::window) tooltip: misty::widgets::Tooltip,
     /// The tooltip that hangs off the pointer, as what it says and where
@@ -399,7 +400,7 @@ pub(in crate::window) struct WindowParts {
     pub(in crate::window) drawn_toolbars: Vec<crate::render::ToolbarView>,
     /// Where misty drew the toolbars' buttons, for the pointer.
     pub(in crate::window) toolbar_hits: Vec<frame::toolbar::ToolbarHits>,
-    /// Bundled icons cached for pane toolbars and breadcrumbs.
+    /// Bundled icons cached for pane toolbars and headers.
     pub(in crate::window) toolbar_icons: misty::IconSet,
     /// The find card the last frame worked out, for misty to draw.
     pub(in crate::window) drawn_find: Option<crate::render::FindView>,

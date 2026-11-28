@@ -3,8 +3,10 @@
 //! to fit a cell.
 
 use misty::layout::Align;
-use misty::view::{Extent, Space, Text, column, row, text};
+use misty::view::{Extent, Page, Space, Text, column, row, text, untitled_page};
 use misty::{Element, ThemeToken};
+use winter_model::editor::{Header, HeaderPart, HeaderSegment, header_view};
+use winter_model::view::ToolbarTone;
 
 // ========================================================================
 // Constants
@@ -17,9 +19,103 @@ const ELLIPSIS: char = '\u{2026}';
 /// row takes; what lines up with the table's text pads by as much.
 pub const ROW_PADDING_COLS: f32 = 1.0;
 
+/// The rows above and below a footer's text, which a [`summary_page`]
+/// leaves to the footer.
+pub const FOOTER_PADDING_ROWS: f32 = 0.5;
+
+// ========================================================================
+// Data Structures
+// ========================================================================
+
+/// One part of a monitor's summary, on its header: what it says and in
+/// what tone, and for a part a press does something with, what it runs and
+/// the tooltip saying so.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SummaryPart<A> {
+    /// What a press runs, and the tooltip saying what the part means and
+    /// which key runs it too; `None` for a part with nothing to press.
+    pub press: Option<(A, String)>,
+    /// What it says.
+    pub text: String,
+    /// How it is drawn.
+    pub tone: ToolbarTone,
+}
+
+// ========================================================================
+// SummaryPart
+// ========================================================================
+
+impl<A> SummaryPart<A> {
+    /// A part saying `text` in `tone`, with nothing to press.
+    pub fn label(text: impl Into<String>, tone: ToolbarTone) -> Self {
+        Self {
+            press: None,
+            text: text.into(),
+            tone,
+        }
+    }
+
+    /// A part saying `text` in `tone` that runs `act` on a press, its
+    /// tooltip `about`.
+    pub fn button(text: impl Into<String>, tone: ToolbarTone, act: A, about: String) -> Self {
+        Self {
+            press: Some((act, about)),
+            text: text.into(),
+            tone,
+        }
+    }
+}
+
 // ========================================================================
 // Functions
 // ========================================================================
+
+/// An untitled page for `monitor`, its header the summary `summary` gives,
+/// a press on a part of it running `run` with what the part runs: no header
+/// while the summary is empty. The header is as tall as Winter's, so a
+/// footer given it pads itself by [`FOOTER_PADDING_ROWS`].
+pub fn summary_page<'a, A: 'static, C: 'static>(
+    monitor: &A,
+    summary: fn(&A) -> Vec<SummaryPart<C>>,
+    run: fn(&mut A, C),
+) -> Page<'a, A> {
+    let parts = summary(monitor);
+    let shown = untitled_page()
+        .content_padding(Space::Cells(0.0))
+        .band_padding(Space::Cells(0.0));
+    if parts.is_empty() {
+        return shown;
+    }
+    let pressed = move |monitor: &mut A, action: u16| {
+        if let Some(act) = summary_act(summary(monitor), action) {
+            run(monitor, act);
+        }
+    };
+    let header = summary_header(&parts);
+    shown.header(header_view(&header, |_: &mut A, _| {}, pressed))
+}
+
+/// `parts` as a header's summary, each part with a press told back as its
+/// place in `parts`.
+fn summary_header<A>(parts: &[SummaryPart<A>]) -> Header {
+    let shown = parts
+        .iter()
+        .enumerate()
+        .map(|(at, part)| match (&part.press, u16::try_from(at)) {
+            (Some((_, about)), Ok(action)) => {
+                HeaderPart::button(part.text.clone(), part.tone, action, about.clone())
+            }
+            _ => HeaderPart::label(part.text.clone(), part.tone),
+        })
+        .collect();
+    Header::new(vec![HeaderSegment::Summary(shown)])
+}
+
+/// What the part of `parts` told back as `action` runs.
+fn summary_act<A>(parts: Vec<SummaryPart<A>>, action: u16) -> Option<A> {
+    let (act, _) = parts.into_iter().nth(usize::from(action))?.press?;
+    Some(act)
+}
 
 /// A cell holding `content`: `width` text columns wide and a column more for
 /// the gap after it, or the room the others leave.
@@ -98,6 +194,29 @@ pub fn fit(text: &str, width: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_a_summary_part_is_pressed_by_the_action_it_is_drawn_with() {
+        let parts = vec![
+            SummaryPart::label("12 processes", ToolbarTone::Normal),
+            SummaryPart::button(
+                "tree",
+                ToolbarTone::Dim,
+                'v',
+                "Listed as a tree".to_string(),
+            ),
+        ];
+        let header = summary_header(&parts);
+        let actions: Vec<Option<u16>> = header.summary().map(|part| part.action).collect();
+        assert_eq!(actions, [None, Some(1)], "a label is no button");
+        assert_eq!(
+            header.part(1).and_then(|part| part.tooltip.as_deref()),
+            Some("Listed as a tree")
+        );
+        assert_eq!(summary_act(parts.clone(), 1), Some('v'));
+        assert_eq!(summary_act(parts.clone(), 0), None);
+        assert_eq!(summary_act(parts, 9), None);
+    }
 
     #[test]
     fn test_text_too_long_for_its_cell_is_cut_with_a_mark() {

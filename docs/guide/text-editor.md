@@ -1,6 +1,6 @@
 # Text editor
 
-The text editor opens a file as editable text, with Vim keys in Normal mode and Emacs keys while typing. `Enter` on a file in Dir, Git, or a saved list opens it at the line that listing knew about, in a tab next to the listing. The file's path runs along the top as breadcrumbs; click a folder to list it in Dir.
+The text editor opens a file as editable text, with Vim keys in Normal mode and Emacs keys while typing. `Enter` on a file in Dir, Git, or a saved list opens it at the line that listing knew about, in a tab next to the listing. The file's path runs along the header; click a folder to list it in Dir.
 
 ## Keys
 

@@ -10,10 +10,11 @@
 //! - [`parse`]: reading each system's process listing.
 //! - [`view`]: the order the list is shown in.
 //!
-//! Misty draws the monitor as a view: a summary over a table whose headings
-//! sort on a click and whose rows put the cursor where they are clicked,
-//! the rows that fit around the cursor built and no more, and a footer
-//! describing the process the cursor is on. `Enter` looks into that
+//! Misty draws the monitor as a view, under a summary the window puts on
+//! the header: a table whose headings sort on a click and whose rows
+//! put the cursor where they are clicked, the rows that fit around the
+//! cursor built and no more, and a footer describing the process the
+//! cursor is on. `Enter` looks into that
 //! process ([`details`], drawn by `details_view`) over the list.
 
 pub mod act;
@@ -29,9 +30,7 @@ use std::collections::HashSet;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use misty::view::{
-    LazySource, Space, Text, badge, column, divider, lazy_column, row, text, untitled_page,
-};
+use misty::view::{LazySource, Space, Text, column, divider, lazy_column, row, text};
 use misty::{
     AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, ScrollStep,
     Theme, ThemeToken,
@@ -48,6 +47,7 @@ use winter_model::list::{ListView, Viewport};
 use winter_model::monitor::{MonitorAnswer, MonitorQuery};
 use winter_model::paint::{Frame, Row};
 use winter_model::process::{ProcState, ProcessSample};
+use winter_model::view::ToolbarTone;
 use winter_model::vim::nav::{VimKey, VimNav};
 
 use self::act::{Signal, TAG_RENICE, TAG_SIGNAL};
@@ -57,7 +57,8 @@ use self::view::{
     Process, SortDirection, SortKey, ViewMode, ViewOptions, ViewRow, descendants, layout,
 };
 use crate::table::{
-    ROW_PADDING_COLS, cell, fit, heading as sort_heading, marked, table_row,
+    FOOTER_PADDING_ROWS, ROW_PADDING_COLS, SummaryPart, cell, fit, heading as sort_heading, marked,
+    summary_page, table_row,
 };
 use crate::units::{format_kb, format_percent};
 use notice::{Acting, ProcNotice, Renice, Signalled};
@@ -1034,10 +1035,14 @@ impl ProcEditor {
     // Drawing
     // ====================================================================
 
-    /// The summary at the footer's right: how many processes, how they
-    /// are listed, and whether the readings are paused, and why the last
-    /// snapshot failed.
-    fn summary(&self) -> Vec<Element<'_, Self>> {
+    /// The summary on the header: how many processes, how they are
+    /// listed and sorted, any filter, whether the readings are paused, and
+    /// why the last snapshot failed. Each part but the count and the error
+    /// runs on a press what its key does. None while the details are open.
+    fn summary(&self) -> Vec<SummaryPart<Act>> {
+        if self.details.is_some() {
+            return Vec::new();
+        }
         let count = match (self.loaded, self.processes.len()) {
             (false, _) => "reading processes…".to_string(),
             (true, count) if self.filter.is_empty() => format!("{count} processes"),
@@ -1054,9 +1059,19 @@ impl ProcEditor {
             key_of(Act::Reverse)
         );
         let mut parts = vec![
-            text(count).muted().into(),
-            badge(mode, ThemeToken::Muted).tooltip(listed.replace("{}", &key_of(Act::View))),
-            badge(format!("sort {}", self.sort.label()), ThemeToken::Muted).tooltip(sorted),
+            SummaryPart::label(count, ToolbarTone::Normal),
+            SummaryPart::button(
+                mode,
+                ToolbarTone::Dim,
+                Act::View,
+                listed.replace("{}", &key_of(Act::View)),
+            ),
+            SummaryPart::button(
+                format!("sort {}", self.sort.label()),
+                ToolbarTone::Dim,
+                Act::Sort,
+                sorted,
+            ),
         ];
         if !self.filter.is_empty() {
             let shown = format!(
@@ -1064,17 +1079,32 @@ impl ProcEditor {
                 self.filter,
                 key_of(Act::ClearFilter)
             );
-            parts
-                .push(badge(format!("filter: {}", self.filter), ThemeToken::Accent).tooltip(shown));
+            parts.push(SummaryPart::button(
+                format!("filter: {}", self.filter),
+                ToolbarTone::Accent,
+                Act::ClearFilter,
+                shown,
+            ));
         }
         if self.timer.is_paused() {
             let paused = format!("Readings paused; {} goes on", key_of(Act::Pause));
-            parts.push(badge("paused", ThemeToken::Warning).tooltip(paused));
+            parts.push(SummaryPart::button(
+                "paused",
+                ToolbarTone::Warning,
+                Act::Pause,
+                paused,
+            ));
         }
         if let Some(report) = &self.error {
-            parts.push(text(report.as_str()).color(ThemeToken::Danger).into());
+            parts.push(SummaryPart::label(report.as_str(), ToolbarTone::Danger));
         }
         parts
+    }
+
+    /// A press on a part of the summary: what its key does.
+    fn run_summary(&mut self, act: Act) {
+        self.list.view_mut().release();
+        self.run(act);
     }
 
     /// The column headings, the sorted one marked with its direction: each
@@ -1176,24 +1206,14 @@ impl ProcEditor {
         marked(line, at == self.list.cursor())
     }
 
-    /// `start` and then the summary at its right, as the footer's first
-    /// line.
-    fn summary_line<'a>(&'a self, start: Element<'a, Self>) -> Element<'a, Self> {
-        let mut parts = vec![start];
-        parts.extend(self.summary());
-        row(parts)
-            .gap(Space::Cells(DETAIL_TITLE_GAP_COLS))
-            .grow(1.0)
-    }
-
     /// The page's footer, describing the process the cursor is on: its
-    /// name and command line on the first line, the summary at its right, then a grid of its ids, its
+    /// name and command line on the first line, then a grid of its ids, its
     /// state, its shares, and its paths. Always the same three lines, so the
     /// list above keeps its height as the cursor moves.
     fn detail_view(&self) -> Element<'_, Self> {
         let Some(process) = self.selected() else {
             let blank = || [text(NO_FACT), text(NO_FACT)];
-            let title = self.summary_line(Element::from(text(NO_SELECTION).muted()).grow(1.0));
+            let title = text(NO_SELECTION).muted().into();
             return detail_grid(title, [blank(), blank(), blank(), blank(), blank()]);
         };
         let parent = process.ppid.map_or(NO_FACT.to_string(), |ppid| {
@@ -1210,11 +1230,9 @@ impl ProcEditor {
         let known = |value: &Option<String>| text(value.clone().unwrap_or(NO_FACT.to_string()));
         let title = row([
             Element::from(text(process.name.as_str()).emphasized()).shrink(0.0),
-            self.summary_line(
-                Element::from(text(process.command.as_str()).muted())
-                    .grow(1.0)
-                    .tooltip(process.command.as_str()),
-            ),
+            Element::from(text(process.command.as_str()).muted())
+                .grow(1.0)
+                .tooltip(process.command.as_str()),
         ])
         .gap(Space::Cells(DETAIL_TITLE_GAP_COLS));
         detail_grid(
@@ -1275,8 +1293,8 @@ impl LazySource<ProcEditor> for ProcEditor {
 
 impl HostedView for ProcEditor {
     /// The column headings over the processes, misty building those that
-    /// show, and the summary in the footer, with the selected process where
-    /// the pane has room for it.
+    /// show, and the selected process in the footer where the pane has room
+    /// for it.
     fn view(&self) -> Element<'_, Self> {
         let mut table = vec![self.heading_view(), divider()];
         if self.rows.is_empty() && self.loaded {
@@ -1287,19 +1305,19 @@ impl HostedView for ProcEditor {
             .on_shown(|editor: &mut Self, shown| editor.list.view_mut().set_shown(shown));
         table.push(rows.into());
         let table = column(table).gap(Space::Cells(0.0));
-        // The tab already names the monitor, so the table starts at the
-        // page's top, and the summary goes at the footer's right.
-        let footer = match self.detail {
-            true => self.detail_view(),
-            false => self.summary_line(Element::from(text("")).grow(1.0)),
-        };
-        // The headings sit right under the tab, and the footer's text lines
-        // up with the table's.
-        untitled_page()
-            .content_padding(Space::Cells(0.0))
-            .filled(table)
-            .footer(footer.padding(ROW_PADDING_COLS, 0.0))
-            .into()
+        // The tab names the monitor and the header sums it up, so the
+        // headings sit right under them, and the footer's text lines up
+        // with the table's.
+        let shown = summary_page(self, Self::summary, Self::run_summary).filled(table);
+        match self.detail {
+            true => shown
+                .footer(
+                    self.detail_view()
+                        .padding(ROW_PADDING_COLS, FOOTER_PADDING_ROWS),
+                )
+                .into(),
+            false => shown.into(),
+        }
     }
 }
 

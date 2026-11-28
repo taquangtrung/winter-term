@@ -148,18 +148,19 @@ pub fn parent_dir(path: &Path) -> Option<PathBuf> {
     }
 }
 
-/// `path` and every directory above it, outermost first: what breadcrumbs
-/// name, one crumb to each.
-pub fn crumb_paths(path: &Path) -> Vec<PathBuf> {
+/// `path` and every directory above it, outermost first: what a header's
+/// path names, one part to each.
+pub fn path_parts(path: &Path) -> Vec<PathBuf> {
     let mut paths: Vec<PathBuf> =
         std::iter::successors(Some(path.to_path_buf()), |path| parent_dir(path)).collect();
     paths.reverse();
     paths
 }
 
-/// What the crumb for `path` reads: its name, or the whole of it at the
-/// top, where it has none (`/`, a drive, a remote host's root).
-pub fn crumb_label(path: &Path) -> String {
+/// What the part of a header's path for `path` reads: its name, or the
+/// whole of it at the top, where it has none (`/`, a drive, a remote host's
+/// root).
+pub fn path_part_label(path: &Path) -> String {
     match path.file_name() {
         Some(name) => name.to_string_lossy().into_owned(),
         None => format_full_path(path),

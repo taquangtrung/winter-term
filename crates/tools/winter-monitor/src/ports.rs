@@ -3,14 +3,15 @@
 //! the process holding one a key away from being ended. What answers "what
 //! is on port 3000?".
 //!
-//! Misty draws it as the process monitor is drawn: a summary over a table
-//! whose headings sort on a click, the rows that fit built and no more, and
-//! a footer describing the socket the cursor is on.
+//! Misty draws it as the process monitor is drawn, under a summary the
+//! window puts on the header: a table whose headings sort on a click,
+//! the rows that fit built and no more, and a footer describing the socket
+//! the cursor is on.
 
 use std::time::{Duration, Instant};
 
 use misty::ThemeToken;
-use misty::view::{LazySource, Space, badge, column, divider, lazy_column, page, row, text};
+use misty::view::{LazySource, Space, column, divider, lazy_column, row, text};
 use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, Theme};
 
 use winter_model::editor::refresh::RefreshTimer;
@@ -23,12 +24,16 @@ use winter_model::input::{Key, format_key};
 use winter_model::list::{ListView, Viewport};
 use winter_model::monitor::{MonitorAnswer, MonitorQuery, Protocol, Socket};
 use winter_model::paint::{Frame, Row};
+use winter_model::view::ToolbarTone;
 use winter_model::vim::nav::{VimKey, VimNav};
 
 use crate::proc::act::{self, Signal, TAG_SIGNAL};
 use crate::proc::notice::{Acting, ProcNotice, Signalled};
 use crate::proc::view::SortDirection;
-use crate::table::{cell, fit, heading, marked, table_row};
+use crate::table::{
+    FOOTER_PADDING_ROWS, ROW_PADDING_COLS, SummaryPart, cell, fit, heading, marked, summary_page,
+    table_row,
+};
 
 // ========================================================================
 // Constants
@@ -485,9 +490,11 @@ impl PortsEditor {
     // Drawing
     // ====================================================================
 
-    /// The summary at the heading's right: how many sockets, which are
-    /// listed and how, and whether the readings are paused.
-    fn summary(&self) -> Vec<Element<'_, Self>> {
+    /// The summary on the header: how many sockets, which are listed
+    /// and how, any filter, whether the readings are paused, and why the
+    /// last reading failed. Each part but the count and the error runs on a
+    /// press what its key does.
+    fn summary(&self) -> Vec<SummaryPart<Act>> {
         let count = match (self.loaded, self.all) {
             (false, _) => "reading sockets…".to_string(),
             (true, true) => format!("{} sockets", self.rows.len()),
@@ -500,33 +507,59 @@ impl PortsEditor {
                 "Sockets waiting for connections; {} lists them all",
             ),
         };
+        let sorted = format!(
+            "Sorted by {}; {} sorts by the next column, {} turns it round",
+            self.sort.label(),
+            key_of(Act::Sort),
+            key_of(Act::Reverse)
+        );
         let mut parts = vec![
-            text(count).muted().into(),
-            badge(shown, ThemeToken::Muted).tooltip(about.replace("{}", &key_of(Act::All))),
-            badge(format!("sort {}", self.sort.label()), ThemeToken::Muted).tooltip(format!(
-                "Sorted by {}; {} sorts by the next column, {} turns it round",
-                self.sort.label(),
-                key_of(Act::Sort),
-                key_of(Act::Reverse)
-            )),
+            SummaryPart::label(count, ToolbarTone::Normal),
+            SummaryPart::button(
+                shown,
+                ToolbarTone::Dim,
+                Act::All,
+                about.replace("{}", &key_of(Act::All)),
+            ),
+            SummaryPart::button(
+                format!("sort {}", self.sort.label()),
+                ToolbarTone::Dim,
+                Act::Sort,
+                sorted,
+            ),
         ];
         if !self.filter.is_empty() {
-            parts.push(
-                badge(format!("filter: {}", self.filter), ThemeToken::Accent).tooltip(format!(
-                    "Only sockets matching {}; {} shows them all",
-                    self.filter,
-                    key_of(Act::ClearFilter)
-                )),
+            let matching = format!(
+                "Only sockets matching {}; {} shows them all",
+                self.filter,
+                key_of(Act::ClearFilter)
             );
+            parts.push(SummaryPart::button(
+                format!("filter: {}", self.filter),
+                ToolbarTone::Accent,
+                Act::ClearFilter,
+                matching,
+            ));
         }
         if self.timer.is_paused() {
             let paused = format!("Readings paused; {} goes on", key_of(Act::Pause));
-            parts.push(badge("paused", ThemeToken::Warning).tooltip(paused));
+            parts.push(SummaryPart::button(
+                "paused",
+                ToolbarTone::Warning,
+                Act::Pause,
+                paused,
+            ));
         }
         if let Some(why) = &self.error {
-            parts.push(text(why.as_str()).color(ThemeToken::Danger).into());
+            parts.push(SummaryPart::label(why.as_str(), ToolbarTone::Danger));
         }
         parts
+    }
+
+    /// A press on a part of the summary: what its key does.
+    fn run_summary(&mut self, act: Act) {
+        self.list.view_mut().release();
+        self.run(act);
     }
 
     /// The column headings, each sorting by its column on a click.
@@ -680,8 +713,8 @@ impl LazySource<PortsEditor> for PortsEditor {
 }
 
 impl HostedView for PortsEditor {
-    /// The summary over the headings and the sockets, misty building those
-    /// that show, and the selected socket in the footer where there is room.
+    /// The headings over the sockets, misty building those that show, and
+    /// the selected socket in the footer where there is room.
     fn view(&self) -> Element<'_, Self> {
         let mut table = vec![self.heading_view(), divider()];
         if self.rows.is_empty() && self.loaded {
@@ -696,15 +729,17 @@ impl HostedView for PortsEditor {
                 .on_shown(|editor: &mut Self, shown| editor.list.view_mut().set_shown(shown))
                 .into(),
         );
-        let mut heading = page(TITLE);
-        for part in self.summary() {
-            heading = heading.action(part);
+        // The tab names the monitor and the header sums it up, so the
+        // headings sit right under them, and the footer's text lines up
+        // with the table's.
+        let shown = summary_page(self, Self::summary, Self::run_summary)
+            .filled(column(table).gap(Space::Cells(0.0)));
+        match self.detail.then(|| self.detail_view()).flatten() {
+            Some(detail) => shown
+                .footer(detail.padding(ROW_PADDING_COLS, FOOTER_PADDING_ROWS))
+                .into(),
+            None => shown.into(),
         }
-        let mut shown = heading.filled(column(table).gap(Space::Cells(0.0)));
-        if let Some(detail) = self.detail.then(|| self.detail_view()).flatten() {
-            shown = shown.footer(detail);
-        }
-        shown.into()
     }
 }
 

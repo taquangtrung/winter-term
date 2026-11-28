@@ -19,9 +19,11 @@ use winter_terminal::session::TitleFacts;
 use crate::window::App;
 use crate::window::editor::EditorKind;
 use crate::window::editor::buffers::shown_path;
+use crate::window::layout::bands::{HeaderButton, header_button};
 use crate::window::panels::ViewKind;
 use crate::window::status::mode_label_and_name;
 use crate::window::strip::StripHit;
+use winter_model::editor::PATH_TRAIL;
 
 // ========================================================================
 // Constants
@@ -47,9 +49,6 @@ const WAITING: &str = "waiting for you";
 /// recorded, and typing going to every pane.
 const RECORDING: &str = "recording a macro";
 const BROADCASTING: &str = "typing into every pane";
-
-/// What parts a breadcrumb's trail in its tooltip.
-const CRUMB_TRAIL: &str = " \u{203a} ";
 
 // ========================================================================
 // Data Structures
@@ -466,16 +465,18 @@ impl App {
         (!said.is_empty()).then(|| said.join(", "))
     }
 
-    /// Tooltip text for toolbar button `button` of pane `owner`.
-    /// A breadcrumb's is the trail up to it, which the row may have cut.
+    /// Tooltip text for toolbar button `button` of pane `owner`. A part of
+    /// a header's path says the path up to it, which the header may have
+    /// cut; a part of its summary says what the page gave it.
     fn toolbar_button_tooltip(&self, owner: u64, button: u16) -> Option<String> {
         let editor = self.open_tabs.page(&TabId(owner))?;
-        match crate::window::layout::bands::crumb_of(button) {
-            Some(crumb) => {
-                let crumbs = editor.page.crumbs();
-                let trail = crumbs.get(..=crumb)?;
-                Some(trail.join(CRUMB_TRAIL))
+        match header_button(button) {
+            Some(HeaderButton::Path(at)) => {
+                let header = editor.page.header();
+                let trail = header.path().get(..=at)?;
+                Some(trail.join(PATH_TRAIL))
             }
+            Some(HeaderButton::Part(action)) => editor.page.header().part(action)?.tooltip.clone(),
             None => editor.page.toolbar_tooltip(button),
         }
     }

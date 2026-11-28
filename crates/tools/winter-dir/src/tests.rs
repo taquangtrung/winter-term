@@ -2021,22 +2021,22 @@ fn test_dir_jump_targets_includes_icons_and_depth() {
 }
 
 #[test]
-fn test_the_breadcrumbs_name_the_root_and_every_folder_above_it() {
-    let tree = TempTree::new("dir-crumbs");
+fn test_the_header_s_path_names_the_root_and_every_folder_above_it() {
+    let tree = TempTree::new("dir-path");
     let sub = tree.dir("child");
     let mut editor = DirEditor::new(sub.clone());
-    let crumbs = editor.crumbs();
-    assert_eq!(crumbs.first().map(String::as_str), Some("/"));
-    assert_eq!(crumbs.last().map(String::as_str), Some("child"));
+    let path = editor.header().path().to_vec();
+    assert_eq!(path.first().map(String::as_str), Some("/"));
+    assert_eq!(path.last().map(String::as_str), Some("child"));
     let depth = sub.ancestors().count();
-    assert_eq!(crumbs.len(), depth, "one to a folder: {crumbs:?}");
+    assert_eq!(path.len(), depth, "one to a folder: {path:?}");
 
-    // A press on the crumb above goes there, the folder it came up from
+    // A press on the part above goes there, the folder it came up from
     // selected.
-    assert_eq!(editor.on_crumb(depth - 2), EditorOutcome::Consumed);
+    assert_eq!(editor.on_path_part(depth - 2), EditorOutcome::Consumed);
     assert_eq!(editor.root_dir(), Some(tree.0.clone()));
     assert_eq!(
-        editor.on_crumb(depth),
+        editor.on_path_part(depth),
         EditorOutcome::Ignored,
         "past the last"
     );
@@ -2049,9 +2049,10 @@ fn test_the_column_names_follow_the_columns_shown() {
     let mut editor = DirEditor::new(tree.0.clone());
     let names = |editor: &DirEditor| -> Vec<(String, std::ops::Range<usize>)> {
         editor
-            .column_header()
-            .into_iter()
-            .map(|name| (name.text, name.cols))
+            .header()
+            .columns()
+            .iter()
+            .map(|name| (name.text.clone(), name.cols.clone()))
             .collect()
     };
     assert!(names(&editor).is_empty(), "no columns, no names");

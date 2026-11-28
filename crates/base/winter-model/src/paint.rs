@@ -154,10 +154,10 @@ pub enum IconKind {
     },
 }
 
-/// The name of one of an editor's columns, drawn on the breadcrumb row over
-/// the column it names (see [`Page::column_header`]).
+/// The name of one of an editor's columns, drawn on its header over
+/// the column it names (see [`HeaderSegment::Columns`]).
 ///
-/// [`Page::column_header`]: crate::editor::Page::column_header
+/// [`HeaderSegment::Columns`]: crate::editor::HeaderSegment::Columns
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ColumnName {
     /// Which edge of the column it stands against.
@@ -397,7 +397,7 @@ pub enum Style {
     /// A phrase the user highlighted, on a band of the highlight color
     /// numbered here (the palette cycles), as Emacs' hi-lock marks one.
     Highlight(u8),
-    /// A hunk's header line: the band a hunk sits under.
+    /// A hunk's header: the band a hunk sits under.
     Hunk,
     /// A level of a line's indentation, marked faintly in the space it
     /// leaves: an indentation guide.

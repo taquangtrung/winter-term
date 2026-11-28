@@ -423,6 +423,18 @@ fn test_a_failed_snapshot_is_shown_and_retried() {
     assert!(editor.next_tick().is_some());
 }
 
+#[test]
+fn test_a_click_on_the_header_s_listing_part_runs_what_its_key_does() {
+    let mut editor = loaded_editor();
+    let text = shown(&mut editor, &window(900));
+    let (header, headings) = text.split_once("\nPID\n").expect("the headings");
+    assert!(header.contains("flat"), "the header over the headings: {text:?}");
+    assert!(!headings.contains("flat"));
+    click(&mut editor, "flat");
+    assert_eq!(editor.mode, ViewMode::Tree);
+    assert!(shown(&mut editor, &window(900)).contains("tree"));
+}
+
 fn gpu_editor() -> ProcEditor {
     let mut editor = ProcEditor::new();
     let mut sample = sample_at(Instant::now(), [0, 0, 0]);
@@ -524,14 +536,16 @@ fn test_a_click_below_the_last_process_selects_nothing() {
 
 #[test]
 fn test_the_headings_sit_at_the_top_of_the_page() {
-    // The tab names the monitor, so no title band or padding comes first.
+    // The tab names the monitor, so only the header and its line come
+    // first: no title band and no padding.
     let mut editor = loaded_editor();
     let frame = drawn(&mut editor, &window(900));
     let row = frame.cell_metrics().height;
     let heading = heading_at(&frame, "PID");
+    let header = winter_model::editor::HEADER_ROWS * row;
     assert!(
-        heading.y < row,
-        "the headings' middle at {}, a row {row} tall",
+        heading.y > header && heading.y < header + row + 2.0,
+        "the headings' middle at {}, a row {row} tall, under a header {header} tall",
         heading.y
     );
 }

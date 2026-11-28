@@ -11,7 +11,7 @@ use winter_model::layout::{Edge, Panel, TabId};
 use winter_model::paint::Point;
 
 use crate::render::grid_area;
-use crate::window::layout::bands::crumb_of;
+use crate::window::layout::bands::{HeaderButton, header_button};
 use crate::window::terminal::pointer::ScrollbarDrag;
 use crate::window::{
     APPROX_CELL_HEIGHT, App, SCROLL_LINES_PER_WHEEL_NOTCH, SCROLLBAR_CLICK_WIDTH, Selection,
@@ -408,9 +408,12 @@ impl App {
                         .filter(|(owner, _)| *owner == tab_id.0);
                     if let Some((_, button)) = button {
                         if let Some(slot) = self.open_tabs.page_mut(&tab_id) {
-                            // The breadcrumbs are drawn as a toolbar too.
-                            let outcome = match crumb_of(button) {
-                                Some(crumb) => slot.page.on_crumb(crumb),
+                            // The header is drawn as a toolbar too.
+                            let outcome = match header_button(button) {
+                                Some(HeaderButton::Path(at)) => slot.page.on_path_part(at),
+                                Some(HeaderButton::Part(action)) => {
+                                    slot.page.on_header_part(action)
+                                }
                                 None => slot.page.on_toolbar(button),
                             };
                             self.act_on_editor_outcome(tab_id, outcome);
@@ -425,7 +428,7 @@ impl App {
                             return;
                         }
                     }
-                    // A press on an editor's header between its crumbs is on
+                    // A press on an editor's header between its parts is on
                     // none of its rows.
                     if y < pane_rect.y {
                         self.input.pointer.press_cell = None;

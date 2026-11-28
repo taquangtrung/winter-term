@@ -17,7 +17,7 @@ use super::{ASK_DISCARD, Discard, GitEditor, RowsAct};
 
 impl GitEditor {
     /// The hunk row `row` is in, and which line of that hunk's body it is;
-    /// `None` for the hunk's own header line, or a row that is no hunk's.
+    /// `None` for the hunk's own header, or a row that is no hunk's.
     pub(super) fn hunk_line_at(&self, row: usize) -> Option<(HunkRow, usize)> {
         let Some(Item::Hunk(hunk)) = self.rows.get(row).map(|view| view.item.clone()) else {
             return None;

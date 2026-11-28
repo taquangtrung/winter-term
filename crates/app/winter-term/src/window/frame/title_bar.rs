@@ -5,8 +5,8 @@
 //! whatever the pointer rests on, in the bar or anywhere else.
 
 use crate::render::{ControlsSide, MenuStyle};
-use misty::{CellMetrics, EventCx, Frame, Input, Point, Rect, Widget};
 use misty::widgets::{TitleAlign, TitleBar, TitleBarHit, TitleBarResponse, WindowButtons};
+use misty::{CellMetrics, EventCx, Frame, Input, Point, Rect, Widget};
 
 use crate::config::TitleBarStyle;
 use crate::window::App;
@@ -18,7 +18,7 @@ use crate::window::menus::menu_defs;
 // ========================================================================
 
 /// What the title bar reads: the app's name, whatever the focused pane
-/// shows, which its breadcrumb row names.
+/// shows, which its header names.
 const TITLE_BAR_LABEL: &str = "Winter Term";
 
 /// How tall the title bar is, in cells: the height Winter's title bar has

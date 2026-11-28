@@ -17,6 +17,8 @@ Winter uses one set of words from the UI to the code to the docs. Use them in ev
 | Buffer | An editor's contents, shared by every tab showing it and buried when its last tab closes. Never a kind of tab, never a terminal. |
 | Buried | A closed tab kept alive out of sight: an editor's buffer, or a terminal with a program running. |
 | Shown | Visible on screen: the front tab of a pane in sight, or the view a shown panel shows. A tab behind another in its strip, zoomed out of sight, or buried is not shown. A panel is shown when the user has it open. |
+| Header | The line across the top of a tab, under its strip, for the tabs that need one, made of **segments**: its **path** (where it is, never "breadcrumbs"), the names of its columns, a summary of what it shows. Never a toolbar, which replaces it. |
+| Footer | The area across the bottom of a page, showing the selection's details. |
 | Launcher | What a new split pane opens with, offering a terminal, a file, a directory, or git. |
 | Main area | The window's split tree of panes, where every tab lives. |
 | Panel | A sidebar or the bottom panel: outside the split tree, never split, showing views rather than tabs. |

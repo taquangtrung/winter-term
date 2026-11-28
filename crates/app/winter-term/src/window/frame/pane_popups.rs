@@ -1,11 +1,11 @@
 //! The popups an editor opens over its pane, drawn by misty: the completion
 //! list under the word being completed, the info card over the word it is
-//! about, and the drop list under a breadcrumb. The frame works out what
+//! about, and the drop list under a toolbar button. The frame works out what
 //! each shows and where; misty draws them over the window.
 
 use crate::render::{CompletionView, DropListView, InfoView};
-use misty::{Frame, Rect, StyledText, TextColor, Widget};
 use misty::widgets::{CompletionList, CompletionRow, DropList, DropRow, InfoCard};
+use misty::{Frame, Rect, StyledText, TextColor, Widget};
 
 use crate::window::App;
 use crate::window::appearance::ui_theme;

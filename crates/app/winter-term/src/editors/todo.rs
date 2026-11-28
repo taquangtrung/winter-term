@@ -312,7 +312,7 @@ impl Page for TodoPage {
         self.view.state_mut().notice.take()
     }
 
-    fn crumb_path(&self) -> Option<PathBuf> {
+    fn header_path(&self) -> Option<PathBuf> {
         Some(self.view.state().root.clone())
     }
 

@@ -380,7 +380,7 @@ impl Page for ImageEditor {
         self.geometry = Some(Geometry { natural, pane });
     }
 
-    fn crumb_path(&self) -> Option<PathBuf> {
+    fn header_path(&self) -> Option<PathBuf> {
         Some(self.path.clone())
     }
 

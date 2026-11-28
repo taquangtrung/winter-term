@@ -8,7 +8,7 @@ A window is split into panes, and each pane holds a strip of tabs. A tab is one 
 - A **page** shows Winter's own state: Settings, Keyboard Shortcuts, Notifications, Extensions, Processes, System, Docker, and extensions' views. A window has one of each page; opening it again goes to it.
 - An **editor** shows a file, a directory, a repository, or a build.
 
-An editor showing a file or a folder runs its path along the top as breadcrumbs; click a folder to list it in [Dir](dir.md).
+Some tabs have a header along the top. An editor showing a file or a folder shows its path there; click a folder to list it in [Dir](dir.md). A monitor shows a summary there instead.
 
 Splitting a pane (`M-S--` or `M-S-\`) opens a launcher in the new pane: `RET` or `t` for a terminal, `f` for a file, `d` for a directory, `g` for git, or click a choice.
 

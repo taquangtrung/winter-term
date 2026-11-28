@@ -1518,7 +1518,7 @@ impl Page for DiffEditor {
     }
 
     /// The first side's file.
-    fn crumb_path(&self) -> Option<PathBuf> {
+    fn header_path(&self) -> Option<PathBuf> {
         self.session.sides.iter().find_map(|text| text.path.clone())
     }
 
