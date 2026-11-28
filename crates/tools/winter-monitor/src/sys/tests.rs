@@ -1,6 +1,7 @@
 //! The system monitor's tests.
 
-use misty::testing::{TestWindow, drawn_text};
+use misty::testing::{TestWindow, access_tree, drawn_text};
+use misty::{ButtonInput, Point, PointerButton};
 use winter_model::input::KeyCode;
 use winter_model::system::{
     CoreLoad, CoreReading, CpuSample, CpuTicks, DiskReading, GpuReading, MemoryReading, Overview,
@@ -274,20 +275,74 @@ fn test_every_key_of_the_monitor_is_spelled_right() {
 }
 
 #[test]
-fn test_every_control_says_what_it_is() {
+fn test_every_control_says_what_it_is_and_lights_under_the_pointer() {
     let mut editor = loaded_editor();
-    let window = window(1600);
-    let mut frame = window.frame();
-    let bounds = frame.bounds();
-    let cell = frame.cell_metrics();
-    editor.content(
-        (bounds.height / cell.height) as usize,
-        (bounds.width / cell.width) as usize,
-        false,
-    );
-    editor.draw_view(&mut frame, bounds, &misty::Theme::dark());
+    let mut window = window(1600);
+    let draw_frame = |editor: &mut SysEditor, window: &TestWindow| {
+        let mut frame = window.frame();
+        let bounds = frame.bounds();
+        let cell = frame.cell_metrics();
+        editor.content(
+            (bounds.height / cell.height) as usize,
+            (bounds.width / cell.width) as usize,
+            false,
+        );
+        editor.draw_view(&mut frame, bounds, &misty::Theme::dark());
+        frame
+    };
+    let frame = draw_frame(&mut editor, &window);
     let unnamed = misty::testing::unnamed_controls(&frame);
     assert!(unnamed.is_empty(), "{unnamed:?}");
+    let mut state = (&mut editor, &mut window);
+    let unlit = misty::testing::unlit_controls(
+        &mut state,
+        |(editor, window), input| {
+            editor.view_input(input, &mut window.cx());
+        },
+        |(editor, window)| draw_frame(editor, window),
+    );
+    assert!(unlit.is_empty(), "{unlit:?}");
+}
+
+#[test]
+fn test_clicking_the_header_status_chip_toggles_pause() {
+    let mut editor = loaded_editor();
+    let mut window = window(1600);
+    let click_control = |editor: &mut SysEditor, window: &mut TestWindow, label: &str| {
+        let mut frame = window.frame();
+        let bounds = frame.bounds();
+        let cell = frame.cell_metrics();
+        editor.content(
+            (bounds.height / cell.height) as usize,
+            (bounds.width / cell.width) as usize,
+            false,
+        );
+        editor.draw_view(&mut frame, bounds, &misty::Theme::dark());
+        let tree = access_tree(&frame, "sys");
+        let bounds = tree
+            .nodes
+            .iter()
+            .find(|(_, node)| node.label() == Some(label))
+            .and_then(|(_, node)| node.bounds())
+            .unwrap_or_else(|| panic!("a {label:?} control"));
+        let point = Point::new(
+            ((bounds.x0 + bounds.x1) / 2.0) as f32,
+            ((bounds.y0 + bounds.y1) / 2.0) as f32,
+        );
+        for input in [
+            ButtonInput::press(PointerButton::Left, point),
+            ButtonInput::release(PointerButton::Left, point),
+        ] {
+            editor.view_input(&Input::PointerButton(input), &mut window.cx());
+        }
+    };
+    assert!(draw(&mut editor, &window).contains(LIVE));
+    click_control(&mut editor, &mut window, LIVE);
+    assert!(editor.view.state().timer.is_paused());
+    assert!(draw(&mut editor, &window).contains(PAUSED));
+    click_control(&mut editor, &mut window, PAUSED);
+    assert!(!editor.view.state().timer.is_paused());
+    assert!(draw(&mut editor, &window).contains(LIVE));
 }
 
 #[test]

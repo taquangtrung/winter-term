@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use misty::layout::Align;
-use misty::view::{Corners, Extent, Space, Text, column, menu, row, text};
+use misty::view::{Extent, Space, Text, button, column, menu, row, text};
 use misty::widgets::{ButtonVariant, MenuEntry, MenuItem};
 use misty::{Element, ThemeToken};
 
@@ -27,15 +27,24 @@ pub const PATH_SEPARATOR: &str = "\u{203a}";
 /// What stands between the parts of a path in a tooltip.
 pub const PATH_TRAIL: &str = " \u{203a} ";
 
-/// The cell columns between two parts of a header.
-const PART_GAP_COLS: f32 = 1.0;
+/// The logical pixels between adjacent parts of a path trail.
+const PATH_GAP_PX: f32 = 2.0;
 
-/// The cell columns at each side of a toggle's text, inside its fill.
-const TOGGLE_PADDING_COLS: f32 = 0.5;
+/// The logical pixels between items in the header's summary.
+const SUMMARY_GAP_PX: f32 = 10.0;
+
+/// The logical pixels between adjacent choices in a toggle pair.
+const CHOICE_GAP_PX: f32 = 2.0;
 
 // ========================================================================
 // Data Structures
 // ========================================================================
+
+/// Callback invoked when a plain path segment is pressed with its index.
+type PathCallback<A> = Rc<dyn Fn(&mut A, usize)>;
+
+/// Callback invoked when a summary part or path menu item is activated.
+type PartCallback<A> = Rc<dyn Fn(&mut A, u16)>;
 
 /// What a tab's header shows: its segments, each drawn where its kind goes,
 /// several of a side in the order given. Empty for a tab with no header.
@@ -256,27 +265,45 @@ impl PathPart {
 // Functions
 // ========================================================================
 
-/// `header` as misty draws it in a page's header
-/// ([`misty::view::Page::header`]), [`HEADER_ROWS`] tall: its path at the
-/// left, each part a button running `on_path` with its index, or a flat
-/// menu of its places running `on_part` with the one chosen, its folders
-/// muted; and its summary at the right, each part with an action a button
-/// running `on_part` with it, a choice lit when chosen. The names of
-/// columns stand over an editor's grid, which a page has none of, so they
-/// are left out.
+/// `header` as misty draws it in a page's header, [`HEADER_ROWS`] tall: its
+/// path trail at the left and its summary at the right, using Winter's flat
+/// borderless hover-pill style with grouped choice toggles.
 pub fn header_view<'a, A: 'static>(
     header: &Header,
     on_path: impl Fn(&mut A, usize) + 'static,
     on_part: impl Fn(&mut A, u16) + 'static,
 ) -> Element<'a, A> {
-    let on_path = Rc::new(on_path);
-    let on_part = Rc::new(on_part);
+    let on_path: PathCallback<A> = Rc::new(on_path);
+    let on_part: PartCallback<A> = Rc::new(on_part);
+    let mut sections: Vec<Element<'a, A>> = Vec::new();
     let path = header.path();
+    if !path.is_empty() {
+        sections.push(path_trail(path, Rc::clone(&on_path), Rc::clone(&on_part)));
+    }
+    sections.push(column(Vec::new()).grow(1.0));
+    let summary: Vec<&HeaderPart> = header.summary().collect();
+    if !summary.is_empty() {
+        sections.push(summary_strip(&summary, on_part));
+    }
+    row(sections)
+        .gap(Space::Px(SUMMARY_GAP_PX))
+        .align(Align::Center)
+        .height(Extent::Cells(HEADER_ROWS))
+}
+
+/// The left-side path trail: compact ghost crumbs separated by muted chevrons,
+/// ancestors muted until hovered and the current segment in foreground.
+fn path_trail<'a, A: 'static>(
+    path: &[PathPart],
+    on_path: PathCallback<A>,
+    on_part: PartCallback<A>,
+) -> Element<'a, A> {
     let mut parts: Vec<Element<'a, A>> = Vec::new();
     for (index, part) in path.iter().enumerate() {
         if index > 0 {
             parts.push(text(PATH_SEPARATOR).muted().into());
         }
+        let is_current = index + 1 == path.len();
         let trail = path[..=index]
             .iter()
             .map(|part| part.name.as_str())
@@ -293,51 +320,120 @@ pub fn header_view<'a, A: 'static>(
                 })
                 .collect();
             let on_part = Rc::clone(&on_part);
-            let listed = menu(part.name.clone(), entries)
+            let mut listed = menu(part.name.clone(), entries)
                 .variant(ButtonVariant::Ghost)
+                .compact()
                 .on_choose(move |page: &mut A, action| on_part(page, action));
+            if !is_current {
+                listed = listed.tone(ThemeToken::Muted);
+            }
             parts.push(Element::from(listed).tooltip(trail));
             continue;
         }
-        let shown = match index + 1 == path.len() {
-            true => text(part.name.clone()),
-            false => text(part.name.clone()).muted(),
-        };
         let on_path = Rc::clone(&on_path);
-        parts.push(
-            Element::from(shown)
-                .tooltip(trail)
-                .on_press(move |page: &mut A, _| on_path(page, index)),
-        );
+        let mut crumb = button(part.name.clone())
+            .variant(ButtonVariant::Ghost)
+            .compact()
+            .on_click(move |page: &mut A| on_path(page, index));
+        if !is_current {
+            crumb = crumb.tone(ThemeToken::Muted);
+        }
+        parts.push(Element::from(crumb).tooltip(trail));
     }
-    parts.push(column(Vec::new()).grow(1.0));
-    for part in header.summary() {
-        let shown = Element::from(tinted(&part.text, part.tone));
-        let shown = match part.chosen {
-            Some(true) => shown
-                .padding(TOGGLE_PADDING_COLS, 0.0)
-                .background(ThemeToken::Selection)
-                .corners(Corners::Control),
-            Some(false) => shown.padding(TOGGLE_PADDING_COLS, 0.0),
-            None => shown,
-        };
-        let shown = match part.action {
-            Some(action) => {
-                let on_part = Rc::clone(&on_part);
-                shown.on_press(move |page: &mut A, _| on_part(page, action))
+    row(parts).gap(Space::Px(PATH_GAP_PX)).align(Align::Center)
+}
+
+/// The right-side summary strip: adjacent choices grouped tightly together,
+/// actionable parts as compact ghost buttons, and plain facts as quiet text.
+fn summary_strip<'a, A: 'static>(
+    parts: &[&HeaderPart],
+    on_part: PartCallback<A>,
+) -> Element<'a, A> {
+    let mut items: Vec<Element<'a, A>> = Vec::new();
+    let mut index = 0;
+    while index < parts.len() {
+        if parts[index].chosen.is_some() {
+            let start = index;
+            while index < parts.len() && parts[index].chosen.is_some() {
+                index += 1;
             }
-            None => shown,
-        };
-        let shown = match &part.tooltip {
-            Some(tooltip) => shown.tooltip(tooltip.clone()),
-            None => shown,
-        };
-        parts.push(shown);
+            items.push(choice_group(&parts[start..index], Rc::clone(&on_part)));
+            continue;
+        }
+        items.push(summary_part(parts[index], Rc::clone(&on_part)));
+        index += 1;
     }
-    row(parts)
-        .gap(Space::Cells(PART_GAP_COLS))
+    row(items)
+        .gap(Space::Px(SUMMARY_GAP_PX))
         .align(Align::Center)
-        .height(Extent::Cells(HEADER_ROWS))
+}
+
+/// A tightly spaced group of mutually exclusive choices using misty's compact
+/// ghost toggle buttons.
+fn choice_group<'a, A: 'static>(
+    choices: &[&HeaderPart],
+    on_part: PartCallback<A>,
+) -> Element<'a, A> {
+    let segments: Vec<Element<'a, A>> = choices
+        .iter()
+        .map(|part| {
+            let is_chosen = part.chosen == Some(true);
+            let on_part = Rc::clone(&on_part);
+            let action = part.action;
+            let toggle = button(part.text.clone())
+                .variant(ButtonVariant::Ghost)
+                .compact()
+                .tone(ThemeToken::Muted)
+                .toggle(is_chosen)
+                .on_click(move |page: &mut A| {
+                    if let Some(action) = action {
+                        on_part(page, action);
+                    }
+                });
+            let mut element = Element::from(toggle);
+            if let Some(tooltip) = &part.tooltip {
+                element = element.tooltip(tooltip.clone());
+            }
+            element
+        })
+        .collect();
+    row(segments)
+        .gap(Space::Px(CHOICE_GAP_PX))
+        .align(Align::Center)
+}
+
+/// One non-choice summary item: a compact ghost button when pressable, or
+/// plain text.
+fn summary_part<'a, A: 'static>(part: &HeaderPart, on_part: PartCallback<A>) -> Element<'a, A> {
+    let mut shown = match part.action {
+        Some(action) => {
+            let mut btn = button(part.text.clone())
+                .variant(ButtonVariant::Ghost)
+                .compact()
+                .on_click(move |page: &mut A| on_part(page, action));
+            if let Some(token) = tone_token(part.tone) {
+                btn = btn.tone(token);
+            }
+            Element::from(btn)
+        }
+        None => Element::from(tinted(&part.text, part.tone)),
+    };
+    if let Some(tooltip) = &part.tooltip {
+        shown = shown.tooltip(tooltip.clone());
+    }
+    shown
+}
+
+/// The theme color for a ghost summary button of `tone`, or `None` for default
+/// foreground.
+fn tone_token(tone: ToolbarTone) -> Option<ThemeToken> {
+    match tone {
+        ToolbarTone::Accent => Some(ThemeToken::Accent),
+        ToolbarTone::Danger => Some(ThemeToken::Danger),
+        ToolbarTone::Dim => Some(ThemeToken::Muted),
+        ToolbarTone::Warning => Some(ThemeToken::Warning),
+        ToolbarTone::Normal | ToolbarTone::Strong => None,
+    }
 }
 
 /// `words` in the color `tone` gives them.

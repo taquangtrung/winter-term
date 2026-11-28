@@ -27,7 +27,7 @@ use winter_model::editor::{
     EditorMenuItem, EditorOutcome, JobReply, JobRequest, Page, PageView, menu_of,
 };
 use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed};
-use winter_model::input::{CursorMove, Key};
+use winter_model::input::{CursorMove, Key, format_key};
 use winter_model::paint::{Frame, Row};
 use winter_model::system::SystemSample;
 use winter_model::view::ToolbarTone;
@@ -292,17 +292,27 @@ impl Machine {
 }
 
 impl Machine {
-    /// The summary on the header: the machine in one line, whether the
-    /// readings are live, and why the last snapshot failed. Nothing in it is
-    /// pressed.
-    fn summary(&self) -> Vec<SummaryPart<()>> {
+    /// The summary on the header: the machine in one line, a live/paused toggle
+    /// chip, and why the last snapshot failed.
+    fn summary(&self) -> Vec<SummaryPart<Act>> {
         let mut parts = Vec::new();
         if let Some(sample) = &self.sample {
             parts.push(SummaryPart::label(machine_facts(sample), ToolbarTone::Dim));
         }
+        let pause_key = key_of(Act::Pause);
         parts.push(match self.timer.is_paused() {
-            true => SummaryPart::label(PAUSED, ToolbarTone::Warning),
-            false => SummaryPart::label(LIVE, ToolbarTone::Dim),
+            true => SummaryPart::button(
+                PAUSED,
+                ToolbarTone::Warning,
+                Act::Pause,
+                format!("Readings paused; {pause_key} goes on"),
+            ),
+            false => SummaryPart::button(
+                LIVE,
+                ToolbarTone::Dim,
+                Act::Pause,
+                format!("Readings live; {pause_key} pauses"),
+            ),
         });
         if let Some(report) = &self.error {
             parts.push(SummaryPart::label(
@@ -313,10 +323,22 @@ impl Machine {
         parts
     }
 
+    /// A press on a summary button: toggles live sampling.
+    fn run_summary(&mut self, act: Act) {
+        if act == Act::Pause {
+            self.timer.toggle_pause(Instant::now());
+        }
+    }
+
     /// What a press in the header asks of the window, for it to take.
     fn go(&mut self, outcome: EditorOutcome) {
         self.outcome = Some(outcome);
     }
+}
+
+/// How `act`'s first key is written for tooltips.
+fn key_of(act: Act) -> String {
+    table::menu_entry(&KEYS, act).map_or_else(String::new, |(key, _)| format_key(&key))
 }
 
 impl HostedView for Machine {
@@ -324,7 +346,7 @@ impl HostedView for Machine {
     /// readings are live, over the dashboard (or what the page waits on
     /// before the first).
     fn view(&self) -> Element<'_, Self> {
-        let shown = monitor_page(self, TITLE, Self::summary, |_, ()| {}, Self::go)
+        let shown = monitor_page(self, TITLE, Self::summary, Self::run_summary, Self::go)
             .content_padding(Space::Cells(CONTENT_PADDING_ROWS));
         match &self.sample {
             Some(sample) => {
