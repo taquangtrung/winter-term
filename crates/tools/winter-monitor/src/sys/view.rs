@@ -5,7 +5,7 @@
 use std::borrow::Cow;
 
 use misty::layout::Align;
-use misty::view::{Extent, Space, canvas, column, item, row, section, sparkline, text};
+use misty::view::{Extent, Space, canvas, column, grid, item, row, section, sparkline, text};
 use misty::{BoxStyle, Element, Rect, ThemeToken};
 
 use winter_model::system::{
@@ -68,6 +68,14 @@ const MAX_CARD_COLUMNS: usize = 3;
 
 /// The text columns between two columns of cards.
 const CARD_GAP_COLS: f32 = 2.0;
+
+/// The narrowest a card is, in text columns, before it sets two of its
+/// parts side by side: RAM beside swap, a history beside its devices' rates,
+/// two volumes beside each other.
+const SPLIT_CARD_COLS: usize = 64;
+
+/// How many volumes a card wide enough sets side by side.
+const DISK_COLUMNS: usize = 2;
 
 /// What the load in the CPU card means, for its tooltip.
 const LOAD_ABOUT: &str = "Load: how many processes are running or waiting to, on average over the last 1, 5, and \
@@ -199,18 +207,28 @@ pub fn card_columns(cols: usize) -> usize {
     (cols / CARD_COLS).clamp(1, MAX_CARD_COLUMNS)
 }
 
-/// The dashboard for `sample` in `columns` columns: the processor's card
-/// across the top, its cores wanting the width, then the others dealt into
-/// the columns in turn, each stacked so a tall card leaves no gap beside a
-/// short one. History lines come from `history`.
+/// Whether the cards of a page `cols` text columns wide are wide enough to
+/// set their parts side by side, in as many columns as fit there.
+pub fn cards_split(cols: usize) -> bool {
+    cols / card_columns(cols) >= SPLIT_CARD_COLS
+}
+
+/// The dashboard for `sample` on a page `cols` text columns wide: the
+/// processor's card across the top, its cores wanting the width, then the
+/// others dealt in turn into as many columns as fit ([`card_columns`]), each
+/// stacked so a tall card leaves no gap beside a short one, and each setting
+/// its parts side by side where it is wide enough ([`SPLIT_CARD_COLS`]).
+/// History lines come from `history`.
 pub fn dashboard<'a, A: 'static>(
     sample: &'a SystemSample,
     usage: &'a Usage,
     rates: &'a Rates,
     history: &'a History,
-    columns: usize,
+    cols: usize,
 ) -> Element<'a, A> {
-    let mut cards = vec![memory_card(&sample.memory, history)];
+    let columns = card_columns(cols);
+    let split = cards_split(cols);
+    let mut cards = vec![memory_card(&sample.memory, history, split)];
     if !sample.network.is_empty() {
         cards.push(traffic_card(
             NETWORK,
@@ -218,9 +236,10 @@ pub fn dashboard<'a, A: 'static>(
             rates.network.as_deref(),
             &history.network,
             network_rates,
+            split,
         ));
     }
-    cards.push(disk_card(&sample.disks));
+    cards.push(disk_card(&sample.disks, split));
     if !sample.disk_io.is_empty() {
         cards.push(traffic_card(
             DISK_IO,
@@ -228,12 +247,12 @@ pub fn dashboard<'a, A: 'static>(
             rates.disk_io.as_deref(),
             &history.disk_io,
             disk_rates,
+            split,
         ));
     }
     if !sample.gpus.is_empty() {
         cards.push(gpu_card(&sample.gpus));
     }
-    let columns = columns.max(1);
     let mut stacks: Vec<Vec<Element<'a, A>>> = (0..columns).map(|_| Vec::new()).collect();
     for (at, card) in cards.into_iter().enumerate() {
         stacks[at % columns].push(card);
@@ -317,9 +336,13 @@ fn cpu_summary(cpu: &CpuSample) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(FACT_SEPARATOR))
 }
 
-/// Physical memory and its history, and beside it swap and its history
-/// where there is any.
-fn memory_card<'a, A: 'static>(memory: &MemoryReading, history: &'a History) -> Element<'a, A> {
+/// Physical memory and its history, and swap and its history where there is
+/// any: beside it in a card `split` wide enough, else under it.
+fn memory_card<'a, A: 'static>(
+    memory: &MemoryReading,
+    history: &'a History,
+    split: bool,
+) -> Element<'a, A> {
     let used = memory.total_kb.saturating_sub(memory.available_kb);
     let ram = column([
         headline_reading(
@@ -341,9 +364,7 @@ fn memory_card<'a, A: 'static>(memory: &MemoryReading, history: &'a History) -> 
                 ),
                 history_line(&history.swap, "sys.memory.swap.history"),
             ]);
-            row([ram.grow(1.0), swap.grow(1.0)])
-                .gap(Space::Cells(CARD_GAP_COLS))
-                .align(Align::Start)
+            side_by_side(ram, swap, split)
         }
         false => ram,
     };
@@ -373,33 +394,41 @@ fn gpu_card<'a, A: 'static>(gpus: &'a [GpuReading]) -> Element<'a, A> {
 }
 
 /// Each mounted volume on a two-line block so mount paths and sizes keep
-/// their full text.
-fn disk_card<'a, A: 'static>(disks: &'a [DiskReading]) -> Element<'a, A> {
-    let card = match disks.is_empty() {
-        true => section(DISKS_TITLE).item(item("no local disk volumes found")),
-        false => section(DISKS_TITLE).items(disks.iter().map(|disk| {
-            let tenths = tenths_of(disk.used_kb, disk.total_kb);
-            block_reading(
-                format!("sys.disk.{}", disk.mount),
-                &disk.mount,
-                disk.fs_type.as_deref(),
-                tenths,
-                amounts(disk.used_kb, disk.total_kb),
-            )
-        })),
+/// their full text, [`DISK_COLUMNS`] side by side in a card `split` wide
+/// enough.
+fn disk_card<'a, A: 'static>(disks: &'a [DiskReading], split: bool) -> Element<'a, A> {
+    if disks.is_empty() {
+        let card = section(DISKS_TITLE).item(item("no local disk volumes found"));
+        return Element::from(card).id(DISKS);
+    }
+    let volumes = disks.iter().map(|disk| {
+        let tenths = tenths_of(disk.used_kb, disk.total_kb);
+        block_reading(
+            format!("sys.disk.{}", disk.mount),
+            &disk.mount,
+            disk.fs_type.as_deref(),
+            tenths,
+            amounts(disk.used_kb, disk.total_kb),
+        )
+    });
+    let card = match split {
+        true => section(DISKS_TITLE).item(grid(DISK_COLUMNS, volumes)),
+        false => section(DISKS_TITLE).items(volumes),
     };
     Element::from(card).id(DISKS)
 }
 
 /// A card of traffic, known as `id`: the history of every device's rate
-/// together, then a line per device with its rates as `rates_of` words
-/// them, or what it waits on before the second snapshot.
+/// together, and a line per device with its rates as `rates_of` words them,
+/// beside the history in a card `split` wide enough, else under it; or what
+/// it waits on before the second snapshot.
 fn traffic_card<'a, A: 'static>(
     id: &'static str,
     title: &'static str,
     rates: Option<&'a [TrafficRate]>,
     history: &'a [f32],
     rates_of: fn(&TrafficRate) -> [(String, String); 2],
+    split: bool,
 ) -> Element<'a, A> {
     let Some(rates) = rates else {
         return Element::from(section(title).item(item(MEASURING))).id(id);
@@ -417,12 +446,23 @@ fn traffic_card<'a, A: 'static>(
             .id(format!("{id}.{}", rate.name))
             .tooltip(about.join(", "))
     });
-    Element::from(
-        section(title)
-            .item(rate_history_line(history, id))
-            .items(lines),
-    )
-    .id(id)
+    let shown = side_by_side(rate_history_line(history, id), column(lines), split);
+    Element::from(section(title).item(shown)).id(id)
+}
+
+/// `first` and `second` side by side, each half the width, where `split`,
+/// else `second` under `first`.
+fn side_by_side<'a, A: 'static>(
+    first: Element<'a, A>,
+    second: Element<'a, A>,
+    split: bool,
+) -> Element<'a, A> {
+    match split {
+        true => row([column([first]).grow(1.0), column([second]).grow(1.0)])
+            .gap(Space::Cells(CARD_GAP_COLS))
+            .align(Align::Start),
+        false => column([first, second]),
+    }
 }
 
 /// An interface's rates as its line shows them, marked, and as its tooltip

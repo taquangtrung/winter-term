@@ -131,6 +131,15 @@ fn test_a_wider_page_holds_more_columns_of_cards_up_to_three() {
 }
 
 #[test]
+fn test_a_card_sets_its_parts_side_by_side_only_where_it_is_wide_enough() {
+    use super::view::cards_split;
+    assert!(!cards_split(60), "one narrow card stacks them");
+    assert!(cards_split(80), "one wide card splits");
+    assert!(!cards_split(120), "two cards of sixty stack them");
+    assert!(cards_split(140), "two of seventy split");
+}
+
+#[test]
 fn test_swap_stands_beside_ram_with_a_history_of_its_own() {
     let mut editor = loaded_editor();
     let with_swap = |busy, total| {

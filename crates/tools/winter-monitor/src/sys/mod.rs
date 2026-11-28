@@ -35,7 +35,7 @@ use winter_model::vim::nav::{VimKey, VimNav};
 
 use self::traffic::{TrafficRate, TrafficTracker};
 use self::usage::{Usage, UsageTracker};
-use self::view::{History, Rates, card_columns, card_ids, dashboard, machine_facts, tenths_of};
+use self::view::{History, Rates, card_ids, dashboard, machine_facts, tenths_of};
 use crate::header::{RESOURCE_MONITOR, SummaryPart, monitor_page};
 
 // ========================================================================
@@ -360,14 +360,13 @@ impl HostedView for Machine {
             .content_padding(Space::Cells(CONTENT_PADDING_ROWS));
         match &self.sample {
             Some(sample) => {
-                let columns = card_columns(self.cols);
                 let history = &self.history;
                 shown.scrolling(dashboard(
                     sample,
                     &self.usage,
                     &self.rates,
                     history,
-                    columns,
+                    self.cols,
                 ))
             }
             None => shown.scrolling(text(self.error.as_deref().unwrap_or(READING)).muted()),
