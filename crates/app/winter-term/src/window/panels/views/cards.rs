@@ -3,7 +3,7 @@
 //! compact icon action buttons.
 
 use misty::layout::Align;
-use misty::view::{Corners, Extent, Press, Space, column, row, text};
+use misty::view::{Corners, Extent, Press, Space, column, divider, row, text};
 use misty::{Element, IconSet, ThemeToken};
 
 use winter_model::paint::IconKind;
@@ -171,6 +171,18 @@ pub(super) fn card_fold_button<'a, S: PanelView>(
         .hover_border(ThemeToken::Border)
         .tooltip(tip)
         .on_pointer_press(on_press)
+}
+
+/// The line that opens a card's details, the fold arrow at its left and a
+/// rule across the rest: in the card's content under its header, so the
+/// header's icon and name stand flush whether the card is open or not.
+pub(super) fn fold_rule<'a, S: PanelView>(
+    open: bool,
+    on_press: impl Fn(&mut S, Press) + 'static,
+) -> Element<'a, S> {
+    row([card_fold_button(open, on_press), divider().grow(1.0)])
+        .gap(inline_gap())
+        .align(Align::Center)
 }
 
 /// A compact icon button for an inline card action, with a key-hint tooltip.

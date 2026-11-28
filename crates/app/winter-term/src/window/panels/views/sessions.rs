@@ -5,7 +5,7 @@
 use std::collections::HashSet;
 use std::time::Instant;
 
-use misty::view::{Press, divider, row, text};
+use misty::view::{Press, row, text};
 use misty::{Element, HostedView, IconSet, ThemeToken};
 
 use winter_model::editor::EditorOutcome;
@@ -670,15 +670,6 @@ fn managed_card<'a>(
     let agent = &managed.agent;
     let has_details = managed.task.is_some() || agent.base.is_some();
     let mut header: Vec<Element<'a, SessionsView>> = Vec::new();
-    if has_details {
-        let branch = agent.branch.clone();
-        header.push(cards::card_fold_button(
-            open,
-            move |view: &mut SessionsView, _| {
-                view.toggle_fold(Folded::Branch(branch.clone()), key);
-            },
-        ));
-    }
     if let Some(icon) = list_row.icon.as_ref()
         && let Some(drawn) = cards::leading_icon(icons, icon)
     {
@@ -693,8 +684,13 @@ fn managed_card<'a>(
     if let Some(subtitle) = list_row.subtitle.as_deref() {
         lines.push(Element::from(text(subtitle).monospace().muted()));
     }
+    if has_details {
+        let branch = agent.branch.clone();
+        lines.push(cards::fold_rule(open, move |view: &mut SessionsView, _| {
+            view.toggle_fold(Folded::Branch(branch.clone()), key);
+        }));
+    }
     if open {
-        lines.push(divider());
         if let Some(task) = managed.task.as_deref() {
             lines.push(cards::detail_line(
                 icons, TASK_ICON, "Task", task, TASK_NOTE,
@@ -785,15 +781,6 @@ fn detected_card<'a>(
 ) -> Element<'a, SessionsView> {
     let has_details = detected.task.is_some();
     let mut header: Vec<Element<'a, SessionsView>> = Vec::new();
-    if has_details {
-        let tab = detected.tab;
-        header.push(cards::card_fold_button(
-            open,
-            move |view: &mut SessionsView, _| {
-                view.toggle_fold(Folded::Tab(tab), key);
-            },
-        ));
-    }
     if let Some(icon) = list_row.icon.as_ref()
         && let Some(drawn) = cards::leading_icon(icons, icon)
     {
@@ -808,8 +795,13 @@ fn detected_card<'a>(
     if let Some(subtitle) = list_row.subtitle.as_deref() {
         lines.push(Element::from(text(subtitle).monospace().muted()));
     }
+    if has_details {
+        let tab = detected.tab;
+        lines.push(cards::fold_rule(open, move |view: &mut SessionsView, _| {
+            view.toggle_fold(Folded::Tab(tab), key);
+        }));
+    }
     if open && let Some(task) = detected.task.as_deref() {
-        lines.push(divider());
         lines.push(cards::detail_line(
             icons, TASK_ICON, "Task", task, TASK_NOTE,
         ));
@@ -1242,6 +1234,26 @@ mod tests {
         );
         view.act(ListAct::Expand);
         assert_eq!(view.list.rows.len(), 5);
+    }
+
+    #[test]
+    fn test_an_agent_s_fold_arrow_sits_under_its_name_not_beside_it() {
+        let shown = || {
+            let mut view = SessionsView::default();
+            view.set_shown(true);
+            view.set_agents(vec![managed("agent/claude-1", Standing::Working)]);
+            view
+        };
+        let drawn = misty::testing::drawn_text(&super::super::tests::drawn_view(shown()));
+        let at = |words: &str| drawn.iter().position(|line| line == words);
+        let name = at("agent/claude-1").expect("its name");
+        let arrow = at(super::super::OPEN_MARK).expect("its fold arrow");
+        assert!(arrow > name + 1, "under its name and folder: {drawn:?}");
+        let (unnamed, unlit) = super::super::tests::control_faults_in(shown());
+        assert!(
+            unnamed.is_empty() && unlit.is_empty(),
+            "{unnamed:?} {unlit:?}"
+        );
     }
 
     #[test]
