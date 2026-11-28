@@ -18,9 +18,9 @@ pub mod view;
 
 use std::time::{Duration, Instant};
 
+use misty::Theme;
 use misty::view::{Space, text};
 use misty::{Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, ScrollStep};
-use misty::Theme;
 
 use winter_model::editor::refresh::RefreshTimer;
 use winter_model::editor::{

@@ -7,16 +7,20 @@
 
 use crate::render::{ToolbarColumn, ToolbarItem, ToolbarTone, ToolbarView};
 use misty::Rect;
-use winter_model::editor::{HEADER_ROWS, Header, HeaderPart, PATH_SEPARATOR};
+use winter_model::editor::{Header, HeaderPart, PATH_SEPARATOR};
 use winter_model::layout::TabId;
 use winter_model::paint::{Gutter, GutterSide, IconKind};
 
+use crate::window::frame::toolbar::header_height;
 use crate::window::terminal::command_marks;
 use crate::window::{APPROX_CELL_HEIGHT, APPROX_CELL_WIDTH, App};
 
 // ========================================================================
 // Constants
 // ========================================================================
+
+/// How tall a header is in rows before a frame has measured misty's bars.
+const UNMEASURED_HEADER_ROWS: f32 = 1.5;
 
 /// The first toolbar button a part of a header's summary is told back as,
 /// past every button an editor's own toolbar numbers.
@@ -52,8 +56,8 @@ pub(in crate::window) struct PaneBands {
 struct Parts {
     /// Its gutter.
     gutter: Gutter,
-    /// Whether it has a header.
-    header: bool,
+    /// How tall its header is, if it has one.
+    header: Option<f32>,
 }
 
 /// What a press on a header's button is.
@@ -83,7 +87,7 @@ impl App {
         let parts = match self.open_tabs.page(&tab) {
             Some(slot) => Parts {
                 gutter: Gutter::new(slot.page.gutter_lanes(), side),
-                header: !slot.page.header().is_empty(),
+                header: (!slot.page.header().is_empty()).then(|| self.header_height()),
             },
             // A terminal's gutter holds its commands' marks, while it is
             // shown; it has no header, its sticky header being drawn over
@@ -91,7 +95,7 @@ impl App {
             None if self.config.terminal_gutter && self.open_tabs.terminal(&tab).is_some() => {
                 Parts {
                     gutter: Gutter::new(command_marks::gutter_lanes(), side),
-                    header: false,
+                    header: None,
                 }
             }
             None => {
@@ -103,11 +107,27 @@ impl App {
                 };
             }
         };
-        let cell = self.renderer.as_ref().map_or(
-            (APPROX_CELL_WIDTH as f32, APPROX_CELL_HEIGHT as f32),
-            |renderer| renderer.cell_size(),
-        );
-        bands(&parts, bounds, cell, self.pane_pad())
+        let cell_width = self
+            .renderer
+            .as_ref()
+            .map_or(APPROX_CELL_WIDTH as f32, |renderer| renderer.cell_size().0);
+        bands(&parts, bounds, cell_width, self.pane_pad())
+    }
+
+    /// How tall a pane's header is: a bar of misty's compact controls, as
+    /// the last frame measured them, so it stands as tall as misty's own
+    /// page header; a little taller than a row before the first frame.
+    fn header_height(&self) -> f32 {
+        match self.window.as_ref().and_then(|window| window.measure()) {
+            Some(cx) => header_height(&cx),
+            None => {
+                let rows = self
+                    .renderer
+                    .as_ref()
+                    .map_or(APPROX_CELL_HEIGHT as f32, |renderer| renderer.cell_size().1);
+                (rows * UNMEASURED_HEADER_ROWS).round()
+            }
+        }
     }
 }
 
@@ -189,19 +209,13 @@ pub(in crate::window) fn header_button(button: u16) -> Option<HeaderButton> {
     }
 }
 
-/// `bounds` split between the parts of an editor pane, for cells `cell`
-/// wide and tall and side padding `pad`: the header across the top, for an
+/// `bounds` split between the parts of an editor pane, for cells
+/// `cell_width` wide and side padding `pad`: the header across the top, for an
 /// editor with one, then the content beside the gutter.
-fn bands(
-    parts: &Parts,
-    bounds: Rect,
-    (cell_width, cell_height): (f32, f32),
-    pad: f32,
-) -> PaneBands {
-    let header = parts.header.then(|| {
-        let height = (cell_height * HEADER_ROWS).round().min(bounds.height);
-        Rect::new(bounds.x, bounds.y, bounds.width, height)
-    });
+fn bands(parts: &Parts, bounds: Rect, cell_width: f32, pad: f32) -> PaneBands {
+    let header = parts
+        .header
+        .map(|height| Rect::new(bounds.x, bounds.y, bounds.width, height.min(bounds.height)));
     let top = header.map_or(bounds.y, |line| line.y + line.height);
     let below = Rect::new(bounds.x, top, bounds.width, bounds.y + bounds.height - top);
     // A gutter with no lanes takes no room: the rows run to the pane's edge.
@@ -262,12 +276,12 @@ mod tests {
 
     use super::*;
 
-    const CELL: (f32, f32) = (10.0, 20.0);
+    const CELL: f32 = 10.0;
 
     fn numbers(side: GutterSide) -> Parts {
         Parts {
             gutter: Gutter::new(vec![GutterLane::Text { width: 3 }], side),
-            header: false,
+            header: None,
         }
     }
 
@@ -283,7 +297,7 @@ mod tests {
             content, gutter, ..
         } = bands(&numbers(GutterSide::Left), bounds, CELL, PANE_H_PAD);
         let gutter = gutter.expect("an editor has a gutter");
-        let lanes_end = text_edges(gutter).0 + 3.0 * CELL.0;
+        let lanes_end = text_edges(gutter).0 + 3.0 * CELL;
         assert_eq!(text_edges(content).0 - lanes_end, 10.0, "a cell");
         assert!(text_edges(gutter).1 >= lanes_end, "the numbers are not cut");
         assert_eq!(
@@ -330,7 +344,7 @@ mod tests {
     #[test]
     fn test_an_editor_with_a_header_gets_it_above_its_rows() {
         let parts = Parts {
-            header: true,
+            header: Some(24.0),
             ..numbers(GutterSide::Left)
         };
         let bounds = Rect::new(0.0, 0.0, 400.0, 210.0);
@@ -344,7 +358,7 @@ mod tests {
         assert_eq!(
             (line.y, line.height),
             (0.0, 24.0),
-            "a fifth taller than a row"
+            "as tall as it was measured"
         );
         assert_eq!(content.y, 24.0, "the rows start under it");
         assert_eq!(

@@ -7,7 +7,7 @@
 use std::cell::{Cell, RefCell};
 
 use misty::{
-    AppContext, CellMetrics, ColorScheme, CursorIcon, Font, ImeFocus, OptionAsAlt, Rect,
+    AppContext, CellMetrics, ColorScheme, CursorIcon, Font, ImeFocus, MeasureCx, OptionAsAlt, Rect,
     ResizeEdge, UiFont, WindowGeometry, WindowId,
 };
 
@@ -34,8 +34,9 @@ pub(in crate::window) struct WindowHandle {
     maximized: Cell<bool>,
     /// What is asked of the window and not yet handed to misty.
     requests: RefCell<Vec<Request>>,
-    /// The cells misty's widgets draw in, as the last frame measured them.
-    metrics: Cell<Option<CellMetrics>>,
+    /// What misty's widgets are measured in (its cells, its label line, its
+    /// spacing), as the last frame measured them.
+    measure: Cell<Option<MeasureCx>>,
     /// Physical pixels per logical pixel, as the last frame drew.
     scale_factor: Cell<f64>,
     /// The window's inner width and height in physical pixels, as the last
@@ -96,7 +97,7 @@ impl WindowHandle {
             ime: RefCell::new(ImeWanted::default()),
             ime_focus: RefCell::new(ImeFocus::new()),
             maximized: Cell::new(false),
-            metrics: Cell::new(None),
+            measure: Cell::new(None),
             requests: RefCell::new(Vec::new()),
             scale_factor: Cell::new(scale_factor),
             size: Cell::new(size),
@@ -124,12 +125,18 @@ impl WindowHandle {
 
     /// The cells misty's widgets draw in, once a frame has measured them.
     pub(in crate::window) fn cell_metrics(&self) -> Option<CellMetrics> {
-        self.metrics.get()
+        self.measure.get().map(|cx| cx.cell)
     }
 
-    /// Notes the cells misty's widgets draw in, as a frame measures them.
-    pub(in crate::window) fn note_metrics(&self, metrics: CellMetrics) {
-        self.metrics.set(Some(metrics));
+    /// What misty's widgets are measured in, once a frame has measured it:
+    /// what sizes a bar of them, as a pane's header is.
+    pub(in crate::window) fn measure(&self) -> Option<MeasureCx> {
+        self.measure.get()
+    }
+
+    /// Notes what misty's widgets are measured in, as a frame measures it.
+    pub(in crate::window) fn note_measure(&self, measure: MeasureCx) {
+        self.measure.set(Some(measure));
     }
 
     /// Whether the window is maximized.

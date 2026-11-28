@@ -6,7 +6,7 @@
 use std::rc::Rc;
 
 use misty::layout::Align;
-use misty::view::{Extent, Space, Text, button, column, menu, row, text};
+use misty::view::{Space, Text, button, column, menu, row, text};
 use misty::widgets::{ButtonVariant, MenuEntry, MenuItem};
 use misty::{Element, ThemeToken};
 
@@ -16,10 +16,6 @@ use crate::view::ToolbarTone;
 // ========================================================================
 // Constants
 // ========================================================================
-
-/// How tall a header is, in rows of cells: a little taller than a row, so
-/// it reads as the pane's furniture rather than a line of it.
-pub const HEADER_ROWS: f32 = 1.2;
 
 /// What stands between two parts of a path.
 pub const PATH_SEPARATOR: &str = "\u{203a}";
@@ -265,9 +261,10 @@ impl PathPart {
 // Functions
 // ========================================================================
 
-/// `header` as misty draws it in a page's header, [`HEADER_ROWS`] tall: its
-/// path trail at the left and its summary at the right, using Winter's flat
-/// borderless hover-pill style with grouped choice toggles.
+/// `header` as misty draws it in a page's header: its path trail at the
+/// left and its summary at the right, as misty's compact buttons, so the
+/// page's header stands as tall as a bar of them and as the window's header
+/// over an editor.
 pub fn header_view<'a, A: 'static>(
     header: &Header,
     on_path: impl Fn(&mut A, usize) + 'static,
@@ -288,7 +285,6 @@ pub fn header_view<'a, A: 'static>(
     row(sections)
         .gap(Space::Px(SUMMARY_GAP_PX))
         .align(Align::Center)
-        .height(Extent::Cells(HEADER_ROWS))
 }
 
 /// The left-side path trail: compact ghost crumbs separated by muted chevrons,

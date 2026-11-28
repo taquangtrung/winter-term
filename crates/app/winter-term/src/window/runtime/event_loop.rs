@@ -7,7 +7,8 @@ use std::panic::{self, AssertUnwindSafe};
 use std::time::{Duration, Instant};
 
 use misty::{
-    AccessAction, AppContext, Application, Frame, HangWatch, Input, KeyScheme, Widget, WindowId,
+    AccessAction, AppContext, Application, Frame, HangWatch, Input, KeyScheme, MeasureCx, Widget,
+    WindowId,
 };
 
 use winter_model::guard::{describe_panic, install_panic_hook};
@@ -15,7 +16,7 @@ use winter_model::input;
 use winter_model::mode::Mode;
 
 use crate::watchdog;
-use crate::window::appearance::theme_for;
+use crate::window::appearance::{theme_for, ui_theme};
 use crate::window::input::sequence::is_hint_redraw_due;
 use crate::window::notice::{InternalError, WindowNotice};
 use crate::window::{App, CURSOR_BLINK_PERIOD};
@@ -254,7 +255,8 @@ impl App {
         }
         let scale_factor = frame.scale_factor();
         if let Some(window) = &self.window {
-            window.note_metrics(frame.cell_metrics());
+            let theme = ui_theme(self.renderer.as_ref());
+            window.note_measure(MeasureCx::new(frame, theme));
         }
         let changed = self.window.as_ref().is_some_and(|window| {
             window.note_frame((width, height), scale_factor, frame.is_maximized())

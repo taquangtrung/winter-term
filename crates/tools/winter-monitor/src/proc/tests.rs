@@ -429,7 +429,10 @@ fn test_a_click_on_the_header_s_layout_choice_lists_the_tree() {
     let text = shown(&mut editor, &window(900));
     let (header, _) = text.split_once("\nPID\n").expect("the headings");
     assert!(header.starts_with("System\n›\nProcess Monitor"), "{text:?}");
-    assert!(header.contains("Flat\nTree"), "the choices over the headings");
+    assert!(
+        header.contains("Flat\nTree"),
+        "the choices over the headings"
+    );
     click(&mut editor, "Tree");
     assert_eq!(editor.mode, ViewMode::Tree);
     click(&mut editor, "Flat");
@@ -562,7 +565,8 @@ fn test_the_headings_sit_at_the_top_of_the_page() {
     let frame = drawn(&mut editor, &window(900));
     let row = frame.cell_metrics().height;
     let heading = heading_at(&frame, "PID");
-    let header = winter_model::editor::HEADER_ROWS * row;
+    let cx = misty::MeasureCx::new(&frame, &misty::Theme::dark());
+    let header = cx.bar_height(misty::ControlSize::Compact);
     assert!(
         heading.y > header && heading.y < header + row + 2.0,
         "the headings' middle at {}, a row {row} tall, under a header {header} tall",

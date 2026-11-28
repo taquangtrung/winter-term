@@ -6,8 +6,8 @@
 use misty::grid::CellColor;
 use misty::widgets::{draw_styled_label, styled_label_width};
 use misty::{
-    BoxStyle, Frame, IconSet, Point, Rect, Rgba, Span, StyledText, Svg, TextColor, Theme,
-    ThemeToken,
+    BoxStyle, ControlSize, Frame, IconSet, MeasureCx, Point, Rect, Rgba, Span, StyledText, Svg,
+    TextColor, Theme, ThemeToken,
 };
 
 use crate::icons;
@@ -49,15 +49,8 @@ const ITEM_GAP: f32 = 2.0;
 /// pixels.
 const MIN_LEFT_WIDTH: f32 = 40.0;
 
-/// Horizontal padding inside a clickable item's hover pill, in logical pixels.
-const PILL_H_PAD: f32 = 5.0;
-
 /// Corner radius of a clickable item's hover pill, in logical pixels.
 const PILL_RADIUS: f32 = 4.0;
-
-/// Vertical inset of a hover pill from the band's top and hairline, in logical
-/// pixels.
-const PILL_V_INSET: f32 = 3.0;
 
 /// Mix share of `theme.background` into `theme.muted` for non-button dim
 /// separators (chevrons, vertical rules) so they sit quietly between items.
@@ -65,9 +58,6 @@ const SEPARATOR_FADE_SHARE: f32 = 0.45;
 
 /// Prefix of bundled monochrome symbol icons, tinted to the text color.
 const SYMBOL_PREFIX: &str = "symbols/";
-
-/// Toolbar and header font size as a share of `config.font_size`.
-const TOOLBAR_FONT_RATIO: f32 = 0.95;
 
 // ========================================================================
 // Data Structures
@@ -113,17 +103,13 @@ impl App {
     pub(in crate::window) fn draw_toolbars(&mut self, frame: &mut Frame) {
         let theme = ui_theme(self.renderer.as_ref());
         let hovered = self.input.pointer.hovered_toolbar_button;
-        let font = self.misty_font_at(self.config.font_size * TOOLBAR_FONT_RATIO);
         let bars = std::mem::take(&mut self.parts.drawn_toolbars);
         load_toolbar_icons(&mut self.parts.toolbar_icons, &bars);
         let icons = &self.parts.toolbar_icons;
-        let mut hits = Vec::with_capacity(bars.len());
-        frame.with_font(&font, |frame| {
-            hits.extend(
-                bars.iter()
-                    .map(|bar| draw_toolbar(frame, bar, theme, icons, hovered)),
-            );
-        });
+        let hits = bars
+            .iter()
+            .map(|bar| draw_toolbar(frame, bar, theme, icons, hovered))
+            .collect();
         self.parts.toolbar_hits = hits;
         self.parts.drawn_toolbars = bars;
     }
@@ -174,7 +160,7 @@ fn draw_toolbar(
 ) -> ToolbarHits {
     let (x, y, width, height) = bar.rect;
     let band = Rect::new(x, y, width, height);
-    let metrics = band_metrics(frame, y, height);
+    let metrics = band_metrics(frame, theme, y, height);
 
     fill(frame, band, Rgba::from(theme.background), 0.0);
     let hairline = theme.border.mix(theme.background, BORDER_FADE_SHARE);
@@ -363,15 +349,23 @@ fn short_part(text: &str) -> String {
     text.chars().take(keep).collect()
 }
 
-/// Scaled layout measurements for a toolbar band at `(y, height)`.
-fn band_metrics(frame: &Frame, y: f32, height: f32) -> BandMetrics {
+/// How tall a pane's header is in `cx`: a bar of misty's compact controls
+/// and the hairline under it, so its pills stand as misty's own header's do.
+pub(in crate::window) fn header_height(cx: &MeasureCx) -> f32 {
+    cx.bar_height(ControlSize::Compact) + scale_px(HAIRLINE, cx.scale_factor as f32).max(1.0)
+}
+
+/// Scaled layout measurements for a toolbar band at `(y, height)` in
+/// `theme`: its pills misty's compact controls, centered in what the
+/// hairline leaves.
+fn band_metrics(frame: &Frame, theme: &Theme, y: f32, height: f32) -> BandMetrics {
+    let cx = MeasureCx::new(frame, theme);
     let scale = frame.scale_factor() as f32;
     let hairline_h = scale_px(HAIRLINE, scale).max(1.0);
     let inner_h = (height - hairline_h).max(0.0);
-    let text_h = frame.cell_metrics().height;
+    let text_h = cx.label_line;
     let icon_size = (text_h * ICON_HEIGHT_SHARE).round().max(1.0);
-    let pill_v_inset = scale_px(PILL_V_INSET, scale);
-    let pill_h = (inner_h - 2.0 * pill_v_inset).max(text_h).min(inner_h);
+    let pill_h = cx.control_height(ControlSize::Compact).min(inner_h);
     BandMetrics {
         edge_pad: scale_px(EDGE_PAD, scale),
         gap: scale_px(ITEM_GAP, scale),
@@ -381,7 +375,7 @@ fn band_metrics(frame: &Frame, y: f32, height: f32) -> BandMetrics {
         icon_top: y + ((inner_h - icon_size) / 2.0).round(),
         min_left: scale_px(MIN_LEFT_WIDTH, scale),
         pill_h,
-        pill_h_pad: scale_px(PILL_H_PAD, scale),
+        pill_h_pad: cx.px(cx.spacing.compact.across),
         pill_radius: scale_px(PILL_RADIUS, scale),
         pill_top: y + ((inner_h - pill_h) / 2.0).round(),
         text_top: y + ((inner_h - text_h) / 2.0).round(),

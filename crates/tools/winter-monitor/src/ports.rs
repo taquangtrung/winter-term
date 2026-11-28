@@ -27,7 +27,7 @@ use winter_model::paint::{Frame, Row};
 use winter_model::view::ToolbarTone;
 use winter_model::vim::nav::{VimKey, VimNav};
 
-use crate::header::{FOOTER_PADDING_ROWS, PORT_MONITOR, SummaryPart, monitor_page};
+use crate::header::{PORT_MONITOR, SummaryPart, monitor_page};
 use crate::proc::act::{self, Signal, TAG_SIGNAL};
 use crate::proc::notice::{Acting, ProcNotice, Signalled};
 use crate::proc::view::SortDirection;
@@ -729,9 +729,7 @@ impl HostedView for PortsEditor {
         )
         .filled(column(table).gap(Space::Cells(0.0)));
         match self.detail.then(|| self.detail_view()).flatten() {
-            Some(detail) => shown
-                .footer(detail.padding(ROW_PADDING_COLS, FOOTER_PADDING_ROWS))
-                .into(),
+            Some(detail) => shown.footer(detail.padding(ROW_PADDING_COLS, 0.0)).into(),
             None => shown.into(),
         }
     }

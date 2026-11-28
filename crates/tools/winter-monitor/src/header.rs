@@ -19,10 +19,6 @@ pub const PROCESS_MONITOR: &str = "Process Monitor";
 pub const PORT_MONITOR: &str = "Port Monitor";
 pub const STARTUP_PROGRAMS: &str = "Startup Programs";
 
-/// The rows above and below a footer's text, which a [`monitor_page`]
-/// leaves to the footer.
-pub const FOOTER_PADDING_ROWS: f32 = 0.5;
-
 /// What the path's first part is called: the group the pages are in.
 const SYSTEM: &str = "System";
 
@@ -113,8 +109,7 @@ impl<A> SummaryPart<A> {
 /// An untitled page for `monitor`, the System page called `shown`: its
 /// header the path to it, a press on either part listing every System page
 /// to go to with `go`, and the summary `summary` gives, a press on a part
-/// of it running `run` with what the part runs. The header is as tall as
-/// Winter's, so a footer given it pads itself by [`FOOTER_PADDING_ROWS`].
+/// of it running `run` with what the part runs.
 pub fn monitor_page<'a, A: 'static, C: 'static>(
     monitor: &A,
     shown: &str,
@@ -133,7 +128,6 @@ pub fn monitor_page<'a, A: 'static, C: 'static>(
     let header = monitor_header(shown, &summary(monitor));
     untitled_page()
         .content_padding(Space::Cells(0.0))
-        .band_padding(Space::Cells(0.0))
         .header(header_view(&header, |_: &mut A, _| {}, pressed))
 }
 

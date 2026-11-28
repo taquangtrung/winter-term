@@ -56,7 +56,7 @@ use self::details_view::{BODY as DETAILS_BODY, Details, SECTIONS};
 use self::view::{
     Process, SortDirection, SortKey, ViewMode, ViewOptions, ViewRow, descendants, layout,
 };
-use crate::header::{FOOTER_PADDING_ROWS, PROCESS_MONITOR, SummaryPart, monitor_page};
+use crate::header::{PROCESS_MONITOR, SummaryPart, monitor_page};
 use crate::table::{ROW_PADDING_COLS, cell, fit, heading as sort_heading, marked, table_row};
 use crate::units::{format_kb, format_percent};
 use notice::{Acting, ProcNotice, Renice, Signalled};
@@ -1323,10 +1323,7 @@ impl HostedView for ProcEditor {
         .filled(table);
         match self.detail {
             true => shown
-                .footer(
-                    self.detail_view()
-                        .padding(ROW_PADDING_COLS, FOOTER_PADDING_ROWS),
-                )
+                .footer(self.detail_view().padding(ROW_PADDING_COLS, 0.0))
                 .into(),
             false => shown.into(),
         }

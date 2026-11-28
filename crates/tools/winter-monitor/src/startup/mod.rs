@@ -30,7 +30,7 @@ use winter_model::paint::{Frame, Row};
 use winter_model::view::ToolbarTone;
 use winter_model::vim::nav::{VimKey, VimNav};
 
-use crate::header::{FOOTER_PADDING_ROWS, STARTUP_PROGRAMS, SummaryPart, monitor_page};
+use crate::header::{STARTUP_PROGRAMS, SummaryPart, monitor_page};
 use crate::table::{ROW_PADDING_COLS, cell, fit, marked, table_row};
 
 use self::notice::StartupNotice;
@@ -495,9 +495,7 @@ impl HostedView for StartupEditor {
         )
         .filled(column(table).gap(Space::Cells(0.0)));
         match self.detail.then(|| self.detail_view()).flatten() {
-            Some(detail) => shown
-                .footer(detail.padding(ROW_PADDING_COLS, FOOTER_PADDING_ROWS))
-                .into(),
+            Some(detail) => shown.footer(detail.padding(ROW_PADDING_COLS, 0.0)).into(),
             None => shown.into(),
         }
     }

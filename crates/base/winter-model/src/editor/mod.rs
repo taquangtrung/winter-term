@@ -46,8 +46,8 @@ use super::picture::{Picture, Tile};
 pub use commands::*;
 pub use compare::{CompareRequest, DiffMerge, DiffRequest, DiffText, FileShape, GitViewRequest};
 pub use header::{
-    HEADER_ROWS, Header, HeaderPart, HeaderPlace, HeaderSegment, PATH_SEPARATOR, PATH_TRAIL,
-    PathPart, header_view,
+    Header, HeaderPart, HeaderPlace, HeaderSegment, PATH_SEPARATOR, PATH_TRAIL, PathPart,
+    header_view,
 };
 pub use jobs::{
     BuildStart, CommandOutput, CommandRequest, DirTotal, FileOps, JobReply, JobRequest,
