@@ -362,16 +362,16 @@ impl Terminal {
 
         let mut command = CommandBuilder::new(resolve_shell(&shell));
         let effective_cwd = cwd.map(std::path::PathBuf::from).or({
+            // Started from a shortcut, Winter's own folder is System32:
+            // the home folder is a better place to begin.
             #[cfg(target_os = "windows")]
             {
-                if let Ok(cur) = std::env::current_dir() {
-                    let cur_str = cur.to_string_lossy();
-                    if cur_str.ends_with("System32") || cur_str.ends_with("system32") {
-                        return winter_base::paths::home_dir();
+                match std::env::current_dir() {
+                    Ok(cur) if !cur.ends_with("System32") && !cur.ends_with("system32") => {
+                        Some(cur)
                     }
-                    return Some(cur);
+                    _ => winter_base::paths::home_dir(),
                 }
-                winter_base::paths::home_dir()
             }
             #[cfg(not(target_os = "windows"))]
             {

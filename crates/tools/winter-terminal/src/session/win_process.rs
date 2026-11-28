@@ -32,7 +32,7 @@ pub(super) fn query_process_cwd(pid: u32) -> Option<String> {
         buffer: *const u16,
     }
 
-    extern "system" {
+    unsafe extern "system" {
         fn OpenProcess(desired_access: u32, inherit_handle: i32, process_id: u32) -> Handle;
         fn CloseHandle(handle: Handle) -> i32;
         fn GetModuleHandleA(module_name: *const u8) -> Handle;
