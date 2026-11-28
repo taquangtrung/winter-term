@@ -6,6 +6,7 @@
 mod byte_filter;
 mod host;
 mod performer;
+mod process;
 mod program;
 mod reports;
 mod shell;
@@ -15,8 +16,6 @@ mod win_process;
 use byte_filter::{ByteFilter, Piece, SequenceMatcher};
 pub use host::Host;
 use performer::CombinedPerformer;
-#[cfg(target_os = "linux")]
-use program::program_name;
 pub use reports::{Presentation, ThemeColors};
 #[cfg(target_os = "linux")]
 use shell::parse_foreground_process;
@@ -145,6 +144,10 @@ pub struct TitleFacts {
     pub host: Host,
     /// The program in its foreground, by name; `None` while the shell is.
     pub program: Option<String>,
+    /// That program and what it started under it, nearest first, by name:
+    /// `make`, `cargo`, then the agent a `make dev` runs. Empty while the
+    /// shell is in the foreground.
+    pub programs: Vec<String>,
 }
 
 /// When a terminal's program last printed, as [`Terminal::drain_output`]
@@ -1421,17 +1424,62 @@ impl Terminal {
     /// script an interpreter runs (see `program::program_name`). A mux
     /// terminal has no local foreground process, so it reports none.
     pub fn foreground_process_name(&self) -> Option<String> {
-        #[cfg(target_os = "linux")]
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
         {
-            let tpgid = self.foreground_group()?;
-            let argv = std::fs::read(format!("/proc/{tpgid}/cmdline"))
-                .map_or_else(|_| Vec::new(), |cmdline| command_args(&cmdline));
-            let comm = std::fs::read_to_string(format!("/proc/{tpgid}/comm")).unwrap_or_default();
-            program_name(&argv, &comm)
+            process::program_of(self.foreground_leader()?)
         }
-        #[cfg(not(target_os = "linux"))]
+        #[cfg(target_os = "windows")]
+        {
+            self.foreground_programs().into_iter().next()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
         {
             None
+        }
+    }
+
+    /// The program in this terminal's foreground and what it started under
+    /// it, nearest first, by name: `make`, `cargo`, then the agent a
+    /// `make dev` runs. Empty at the prompt, and for a mux terminal, whose
+    /// processes are the server's.
+    pub fn foreground_programs(&self) -> Vec<String> {
+        #[cfg(any(target_os = "linux", target_os = "macos"))]
+        {
+            self.foreground_leader()
+                .map(process::programs_under)
+                .unwrap_or_default()
+        }
+        #[cfg(target_os = "windows")]
+        {
+            let TerminalTransport::Local { child, .. } = &self.transport else {
+                return Vec::new();
+            };
+            child
+                .process_id()
+                .map(process::programs_under_shell)
+                .unwrap_or_default()
+        }
+        #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+        {
+            Vec::new()
+        }
+    }
+
+    /// The leader of the process group in this terminal's foreground, while
+    /// one other than the shell's owns it.
+    #[cfg(any(target_os = "linux", target_os = "macos"))]
+    fn foreground_leader(&self) -> Option<u32> {
+        #[cfg(target_os = "linux")]
+        {
+            self.foreground_group()
+                .and_then(|group| u32::try_from(group).ok())
+        }
+        #[cfg(target_os = "macos")]
+        {
+            let TerminalTransport::Local { child, master, .. } = &self.transport else {
+                return None;
+            };
+            process::foreground_leader(master.as_raw_fd()?, child.process_id()?)
         }
     }
 
@@ -1471,10 +1519,12 @@ impl Terminal {
             facts.cwd = self.combined.cwd().or(facts.cwd);
             return facts;
         }
+        let programs = self.foreground_programs();
         let facts = TitleFacts {
             cwd: self.cwd(),
             host: self.host(),
-            program: self.foreground_process_name(),
+            program: programs.first().cloned(),
+            programs,
         };
         *self.title_facts.borrow_mut() = Some(ReadFacts {
             facts: facts.clone(),

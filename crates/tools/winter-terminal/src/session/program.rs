@@ -26,17 +26,24 @@ const WRAPPERS: &[(&str, &[&str])] = &[
     ("time", &["-f", "-o", "--format", "--output"]),
 ];
 
+/// What a native binary's name may end with.
+const EXE: &str = ".exe";
+
 /// The interpreters named better by the script they run. A Python is any
 /// program whose name starts with this (`python3`, `python3.12`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const PYTHON: &str = "python";
 
 /// The other interpreters named better by the script they run.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const INTERPRETERS: &[&str] = &["bash", "node", "perl", "ruby", "sh", "zsh"];
 
 /// The interpreter option naming a module to run (`python -m http.server`).
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const MODULE_FLAG: &str = "-m";
 
 /// The interpreter options running code given inline, which has no name.
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 const INLINE_FLAGS: &[&str] = &["-c", "-e"];
 
 /// What ends a wrapper's own options, the command following it.
@@ -51,10 +58,10 @@ const END_OF_OPTIONS: &str = "--";
 /// of its path; the `-` a login shell is started with dropped. Else `comm`,
 /// which the kernel cuts to 15 characters, for a process with no command
 /// line or one that wrote its own over it (`sshd: ann`).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) fn program_name(argv: &[String], comm: &str) -> Option<String> {
     let fallback = || {
-        Some(comm.trim())
+        Some(without_exe(comm.trim()))
             .filter(|name| !name.is_empty())
             .map(str::to_string)
     };
@@ -93,9 +100,21 @@ pub(super) fn unwrapped(argv: &[String]) -> &[String] {
 }
 
 /// The program a command line's first argument names: the last part of its
-/// path, without the `-` a login shell is started with.
+/// path, without the `-` a login shell is started with or an `.exe` after
+/// it, which a native binary carries on Windows and in some packages on
+/// other systems (Claude Code's `claude.exe`).
 fn program_of(first: &str) -> &str {
-    base_name(first).trim_start_matches('-')
+    without_exe(base_name(first).trim_start_matches('-'))
+}
+
+/// `name` without an `.exe` at its end, in either case.
+pub(super) fn without_exe(name: &str) -> &str {
+    match name.len().checked_sub(EXE.len()) {
+        Some(at) if name.is_char_boundary(at) && name[at..].eq_ignore_ascii_case(EXE) => {
+            &name[..at]
+        }
+        _ => name,
+    }
 }
 
 /// Where the command wrapper `wrapper` runs starts in `argv`, its options
@@ -118,7 +137,7 @@ fn past_wrapper_options(argv: &[String], from: usize, wrapper: &str, valued: &[&
 
 /// The script or module an interpreter's arguments `args` run, by its
 /// name: `None` for code given inline, or none at all (an interactive one).
-#[cfg(target_os = "linux")]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
 fn script_of(args: &[String]) -> Option<&str> {
     let mut args = args.iter().map(String::as_str);
     while let Some(arg) = args.next() {
@@ -172,6 +191,17 @@ mod tests {
     fn name(line: &str, comm: &str) -> Option<String> {
         let argv: Vec<String> = line.split_whitespace().map(str::to_string).collect();
         program_name(&argv, comm)
+    }
+
+    #[test]
+    fn test_a_native_binary_s_exe_is_no_part_of_its_name() {
+        assert_eq!(
+            program_of("/opt/node/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe"),
+            "claude"
+        );
+        assert_eq!(program_of("Codex.EXE"), "Codex", "in either case");
+        assert_eq!(without_exe(".exe"), "", "nothing before it");
+        assert_eq!(program_of("vim"), "vim");
     }
 
     #[cfg(target_os = "linux")]

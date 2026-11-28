@@ -555,6 +555,7 @@ mod tests {
             cwd: Some("/srv/dev/winter-term".to_string()),
             host: winter_terminal::session::Host::Local,
             program: program.map(str::to_string),
+            programs: program.map(str::to_string).into_iter().collect(),
         };
         let short_place = clean_cwd("/srv/dev/winter-term");
         assert_eq!(

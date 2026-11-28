@@ -117,11 +117,8 @@ impl App {
         let managed = terminal
             .mux_session()
             .is_some_and(|session| session.starts_with(record::SESSION_PREFIX));
-        let program = terminal.title_facts().program;
-        let known = managed
-            || program
-                .as_deref()
-                .is_some_and(|program| self.agent_kind_of_program(program).is_some());
+        let programs = terminal.title_facts().programs;
+        let known = managed || self.agent_kind_in(&programs).is_some();
         let spinning = screen_spinning(terminal.grid());
         let before = self.tabs.agents.of(tab);
         let state = match (known, before) {
@@ -150,10 +147,8 @@ impl App {
             .terminals()
             .filter(|(tab, _)| self.tabs.agents.of(**tab).is_none())
             .filter(|(_, terminal)| {
-                terminal
-                    .title_facts()
-                    .program
-                    .is_some_and(|program| self.agent_kind_of_program(&program).is_some())
+                self.agent_kind_in(&terminal.title_facts().programs)
+                    .is_some()
             })
             .map(|(tab, _)| {
                 let title = self.tabs.program_title(*tab).unwrap_or_default();
@@ -195,9 +190,8 @@ impl App {
                 };
                 let facts = self.open_tabs.terminal(tab)?.title_facts();
                 let folder = facts.cwd.map(|cwd| abbreviate_home(Path::new(&cwd)));
-                let agent = facts
-                    .program
-                    .and_then(|program| self.agent_kind_of_program(&program))
+                let agent = self
+                    .agent_kind_in(&facts.programs)
                     .map_or_else(|| self.tab_full_name(*tab), |kind| kind.name.clone());
                 Some(Detected {
                     agent,
@@ -228,10 +222,9 @@ impl App {
             .agents
             .of(tab)
             .is_some_and(|state| state != AgentState::Stopped)
-            || terminal
-                .title_facts()
-                .program
-                .is_some_and(|program| self.agent_kind_of_program(&program).is_some());
+            || self
+                .agent_kind_in(&terminal.title_facts().programs)
+                .is_some();
         if !known {
             return;
         }
@@ -248,6 +241,15 @@ impl App {
                 self.sync_live_views();
             }
         }
+    }
+
+    /// The first of `programs`, a terminal's foreground program and what it
+    /// started under it, nearest first, that is an agent `settings.kdl`
+    /// offers: the agent a `make dev` runs under `make` and `cargo`.
+    pub(super) fn agent_kind_in(&self, programs: &[String]) -> Option<&AgentKind> {
+        programs
+            .iter()
+            .find_map(|program| self.agent_kind_of_program(program))
     }
 
     /// Which of the agents `settings.kdl` offers `program`, a terminal's
@@ -446,6 +448,19 @@ mod tests {
         assert_eq!(name("pi"), Some("pi"));
         assert_eq!(name("summer"), Some("summer"));
         assert_eq!(name("vim"), None);
+    }
+
+    #[test]
+    fn test_an_agent_is_found_under_the_programs_it_runs_through() {
+        let app = App::new();
+        let found = |programs: &[&str]| {
+            let programs: Vec<String> = programs.iter().map(|name| name.to_string()).collect();
+            app.agent_kind_in(&programs).map(|kind| kind.name.clone())
+        };
+        let under_make = found(&["make", "cargo", "summer"]);
+        assert_eq!(under_make.as_deref(), Some("summer"), "a `make dev`");
+        assert_eq!(found(&["claude", "node"]).as_deref(), Some("claude"));
+        assert_eq!(found(&["make", "cc"]), None, "a build runs no agent");
     }
 
     #[test]

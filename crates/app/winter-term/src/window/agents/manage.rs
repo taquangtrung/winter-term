@@ -72,10 +72,10 @@ impl App {
         {
             return Err("this agent has a branch of its own already".to_string());
         }
+        let programs = terminal.foreground_programs();
         let (group, kind) = terminal
             .foreground_group()
-            .zip(terminal.foreground_process_name())
-            .and_then(|(group, program)| Some((group, self.agent_kind_of_program(&program)?)))
+            .zip(self.agent_kind_in(&programs))
             .ok_or_else(|| "this tab runs no agent settings.kdl offers".to_string())?;
         if self.tabs.agents.of(tab) == Some(AgentState::Working) {
             return Err(format!(
