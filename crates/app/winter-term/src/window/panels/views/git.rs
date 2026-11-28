@@ -265,6 +265,7 @@ impl PanelView for GitView {
             | ListAct::Expand
             | ListAct::First
             | ListAct::Last
+            | ListAct::Toggle
             | ListAct::Up => EditorOutcome::Consumed,
         }
     }

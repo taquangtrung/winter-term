@@ -270,7 +270,12 @@ impl PanelView for OutputView {
             }
             (ListAct::Collapse | ListAct::Expand, _)
             | (
-                ListAct::Down | ListAct::First | ListAct::Last | ListAct::Refresh | ListAct::Up,
+                ListAct::Down
+                | ListAct::First
+                | ListAct::Last
+                | ListAct::Refresh
+                | ListAct::Toggle
+                | ListAct::Up,
                 _,
             ) => {}
         }

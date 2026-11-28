@@ -213,7 +213,7 @@ impl PanelView for TodoView {
             ListAct::Collapse => self.fold(false),
             ListAct::Refresh => return self.search(),
             ListAct::OpenTool => return EditorOutcome::RunAction(TODO_COMMAND.to_string()),
-            ListAct::Down | ListAct::First | ListAct::Last | ListAct::Up => {}
+            ListAct::Down | ListAct::First | ListAct::Last | ListAct::Toggle | ListAct::Up => {}
         }
         EditorOutcome::Consumed
     }

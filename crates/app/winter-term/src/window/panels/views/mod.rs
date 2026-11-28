@@ -89,6 +89,12 @@ const KEYS: KeyTable<ListAct> = KeyTable {
             label: "Close the Folder or Group",
         },
         Binding {
+            action: ListAct::Toggle,
+            id: "toggle_fold",
+            keys: &["TAB"],
+            label: "Open or Close the Folder or Group",
+        },
+        Binding {
             action: ListAct::Refresh,
             id: "refresh",
             keys: &["r", "C-r", "M-S-r"],
@@ -179,6 +185,7 @@ pub(in crate::window) enum ListAct {
     Open,
     OpenTool,
     Refresh,
+    Toggle,
     Up,
 }
 
@@ -296,6 +303,16 @@ pub(in crate::window) trait PanelView: HostedView + 'static {
 
     /// Do `act` on the row the cursor is on: what the window is to do of it.
     fn act(&mut self, act: ListAct) -> EditorOutcome;
+
+    /// Open the folder or group the cursor is on, or close it if it is open
+    /// (`TAB`); nothing on a row that is neither.
+    fn toggle(&mut self) -> EditorOutcome {
+        match self.list().selected_row().and_then(|row| row.fold) {
+            Some(true) => self.act(ListAct::Collapse),
+            Some(false) => self.act(ListAct::Expand),
+            None => EditorOutcome::Consumed,
+        }
+    }
 
     /// Note that `rows` cell rows, `cols` cells across, fit the panel, for
     /// what it shows beside its list or how much of its words fit.
@@ -484,7 +501,8 @@ impl PanelList {
             | ListAct::Expand
             | ListAct::Open
             | ListAct::OpenTool
-            | ListAct::Refresh => return false,
+            | ListAct::Refresh
+            | ListAct::Toggle => return false,
         }
         true
     }
@@ -642,6 +660,7 @@ impl<S: PanelView> Page for PanelPage<S> {
             return outcome;
         }
         match state.list_mut().on_key(key) {
+            KeyResult::Act(ListAct::Toggle) => state.toggle(),
             KeyResult::Act(act) => state.act(act),
             KeyResult::Missed => EditorOutcome::Ignored,
             KeyResult::Moved => EditorOutcome::Consumed,
@@ -1130,6 +1149,60 @@ mod tests {
             heading: true,
             ..item(key)
         }
+    }
+
+    /// A view of one row, keeping what it was asked to do.
+    #[derive(Default)]
+    struct Asked {
+        acts: Vec<ListAct>,
+        list: PanelList,
+    }
+
+    impl HostedView for Asked {
+        fn view(&self) -> Element<'_, Self> {
+            row(Vec::new())
+        }
+    }
+
+    impl PanelView for Asked {
+        fn title(&self) -> String {
+            "Asked".to_string()
+        }
+
+        fn list(&self) -> &PanelList {
+            &self.list
+        }
+
+        fn list_mut(&mut self) -> &mut PanelList {
+            &mut self.list
+        }
+
+        fn act(&mut self, act: ListAct) -> EditorOutcome {
+            self.acts.push(act);
+            EditorOutcome::Consumed
+        }
+    }
+
+    #[test]
+    fn test_tab_opens_or_closes_the_folder_the_cursor_is_on_and_nothing_else() {
+        let tab = Key::plain(winter_model::input::KeyCode::Tab);
+        let asked = |fold: Option<bool>| {
+            let mut view = Asked::default();
+            view.list.set_rows(vec![ListRow { fold, ..item(0) }]);
+            let mut page = PanelPage::new(view);
+            page.on_key(&tab);
+            page.view.state().acts.clone()
+        };
+        assert_eq!(
+            asked(Some(true)),
+            [ListAct::Collapse],
+            "an open folder closes"
+        );
+        assert_eq!(asked(Some(false)), [ListAct::Expand], "a closed one opens");
+        assert!(
+            asked(None).is_empty(),
+            "a row that is no folder is left alone"
+        );
     }
 
     #[test]

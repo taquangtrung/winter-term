@@ -89,11 +89,12 @@ Both ask first if the agent is still working.
 
 `Sidebar: Sessions` groups sessions into two sections: **Agents** (managed agents and agents you started by hand in a terminal) and **Terminals** (ordinary open terminals, including those in parked workspaces), each with an icon for how it stands: working, waiting for you, running, or stopped (pointing at the icon says which). Under its name is the folder it works in, shortened from the left a folder at a time when the sidebar is narrow (`~/W/apps/winter-term`, then `~/W/a/winter-term`); pointing at the row shows it in full.
 
-Each managed agent opens on a few lines about it: what it is doing, as its terminal's title says, and the branch it started from. Click the arrow beside an agent, or press `h` and `l`, to fold it shut or open. Click a running agent or terminal to show it; a stopped agent takes a double click, since that starts it again.
+Each managed agent opens on a few lines about it: what it is doing, as its terminal's title says, and the branch it started from. Click the arrow beside an agent, or press `TAB` on any of its lines, to fold it shut or open it again; `h` and `l` fold it and open it. Click a running agent or terminal to show it; a stopped agent takes a double click, since that starts it again.
 
 | Key | Action |
 |---|---|
 | `Enter` | Show the agent's terminal, or open a stopped one again |
+| `TAB` | Fold the agent shut, or open it again |
 | `h` / `l` | Fold the agent shut, or open |
 | `r` | Review its work |
 | `m` | Merge it |

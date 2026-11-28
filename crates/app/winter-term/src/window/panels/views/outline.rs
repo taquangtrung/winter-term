@@ -272,6 +272,7 @@ impl PanelView for OutlineView {
             | ListAct::Last
             | ListAct::OpenTool
             | ListAct::Refresh
+            | ListAct::Toggle
             | ListAct::Up => EditorOutcome::Consumed,
         }
     }

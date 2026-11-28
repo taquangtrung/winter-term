@@ -508,7 +508,23 @@ impl PanelView for SessionsView {
             ListAct::Collapse => self.fold(true),
             ListAct::Expand => self.fold(false),
             ListAct::Refresh => self.stale = true,
-            ListAct::Down | ListAct::First | ListAct::Last | ListAct::OpenTool | ListAct::Up => {}
+            ListAct::Down
+            | ListAct::First
+            | ListAct::Last
+            | ListAct::OpenTool
+            | ListAct::Toggle
+            | ListAct::Up => {}
+        }
+        EditorOutcome::Consumed
+    }
+
+    /// Fold the agent the cursor is in, on its card or any row of it, or
+    /// unfold it if it is folded.
+    fn toggle(&mut self) -> EditorOutcome {
+        let folded = self.selected_key().and_then(|key| self.folded_at(key));
+        if let Some(folded) = folded {
+            let shut = !self.folded.contains(&folded);
+            self.fold(shut);
         }
         EditorOutcome::Consumed
     }
@@ -1226,6 +1242,24 @@ mod tests {
         );
         view.act(ListAct::Expand);
         assert_eq!(view.list.rows.len(), 5);
+    }
+
+    #[test]
+    fn test_tab_folds_the_agent_the_cursor_is_in_and_unfolds_it_again() {
+        let mut view = SessionsView::default();
+        view.set_shown(true);
+        view.set_agents(vec![managed("agent/claude-1", Standing::Working)]);
+        let open = view.list.rows.len();
+        view.list.select_key(1, false);
+        view.toggle();
+        assert!(view.list.rows.len() < open, "folded from a detail row");
+        assert_eq!(
+            view.list.selected_row().map(|row| row.key),
+            Some(0),
+            "the cursor on its card"
+        );
+        view.toggle();
+        assert_eq!(view.list.rows.len(), open, "unfolded from its card");
     }
 
     #[test]

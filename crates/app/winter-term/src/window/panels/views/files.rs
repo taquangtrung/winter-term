@@ -364,7 +364,7 @@ impl PanelView for FilesView {
             ListAct::OpenTool => {
                 return EditorOutcome::OpenPath(OpenTarget::file(self.root.clone()));
             }
-            ListAct::Down | ListAct::First | ListAct::Last | ListAct::Up => {}
+            ListAct::Down | ListAct::First | ListAct::Last | ListAct::Toggle | ListAct::Up => {}
         }
         EditorOutcome::Consumed
     }

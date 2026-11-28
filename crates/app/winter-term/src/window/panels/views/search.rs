@@ -140,6 +140,7 @@ impl PanelView for SearchView {
             | ListAct::First
             | ListAct::Last
             | ListAct::Refresh
+            | ListAct::Toggle
             | ListAct::Up => {}
         }
         EditorOutcome::Consumed

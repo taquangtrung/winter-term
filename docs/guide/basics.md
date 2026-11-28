@@ -26,7 +26,7 @@ Around the panes sit three panels: a left sidebar, a right sidebar, and a bottom
 
 - A panel's key shows it and moves the keyboard there; pressed again while the panel shows, it hides it, wherever the keyboard is. It shows the view it last showed.
 - `M-h/j/k/l` moves into a panel and back out, to the pane you came from.
-- In a view, `j`/`k` move, `RET` opens, `l`/`h` open and close a folder or group, `r` looks again, and `t` opens the view's tool among the panes.
+- In a view, `j`/`k` move, `RET` opens, `l`/`h` open and close a folder or group and `TAB` does either, `r` looks again, and `t` opens the view's tool among the panes.
 - What a view opens, a file or a line, opens in the pane you last worked in.
 - Every view is ready in its panel from the start, listed on the switcher along its top: click one to show it. A sidebar's switcher shows each view as an icon; point at it for its name and key. Next and previous tab move between them; closing one hides the panel.
 - Drag a panel's edge to resize it. When the window is too small, the right sidebar gives way first, then the left, then the bottom panel; they come back as the window grows.
