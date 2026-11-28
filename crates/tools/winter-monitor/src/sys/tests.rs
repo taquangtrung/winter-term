@@ -131,6 +131,23 @@ fn test_a_wider_page_holds_more_columns_of_cards_up_to_three() {
 }
 
 #[test]
+fn test_swap_stands_beside_ram_with_a_history_of_its_own() {
+    let mut editor = loaded_editor();
+    let with_swap = |busy, total| {
+        let mut reading = sample(busy, total);
+        reading.memory.swap_total_kb = 4096;
+        reading.memory.swap_used_kb = 1024;
+        reading
+    };
+    editor.on_job(JobReply::System(Ok(with_swap(300, 1200))));
+    editor.on_job(JobReply::System(Ok(with_swap(340, 1300))));
+    assert_eq!(editor.view.state().history.swap.last(), Some(&25.0));
+    let text = draw(&mut editor, &window(1600));
+    let (ram, swap) = (text.find("RAM"), text.find("Swap"));
+    assert!(ram.is_some() && swap.is_some(), "both readings: {text:?}");
+}
+
+#[test]
 fn test_a_snapshot_fills_the_page_with_its_cards() {
     let mut editor = loaded_editor();
     let text = draw(&mut editor, &window(1600));

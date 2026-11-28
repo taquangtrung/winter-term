@@ -61,7 +61,7 @@ It is read once when opened; `r` reads it again. Another user's process keeps mo
 The Resource Monitor is a dashboard of the whole machine, refreshed every second. The CPU card runs across the top; the others sit in up to three columns under it, as many as the pane is wide enough for. Each history line fills from the right as readings come in, two minutes across:
 
 - **CPU:** model, core count, load averages, total use with its recent history, and a vertical bar chart of each core.
-- **Memory:** RAM use with its recent history, and swap use when present.
+- **Memory:** RAM use with its recent history, and beside it swap use with its own, when there is swap.
 - **Network:** each interface's receive (`↓`) and send (`↑`) rates, with the recent history of both together.
 - **Disks:** each mounted volume's path, file system, size, and capacity bar.
 - **Disk Activity:** each disk's read and write rates, with their recent history.

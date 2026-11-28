@@ -289,6 +289,10 @@ impl Machine {
                     &mut self.history.memory,
                     tenths_of_percent(tenths_of(used, memory.total_kb)),
                 );
+                push_capped(
+                    &mut self.history.swap,
+                    tenths_of_percent(tenths_of(memory.swap_used_kb, memory.swap_total_kb)),
+                );
                 self.sample = Some(sample);
                 self.error = None;
             }

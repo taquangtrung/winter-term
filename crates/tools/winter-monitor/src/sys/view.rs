@@ -147,6 +147,8 @@ pub struct History {
     pub memory: Vec<f32>,
     /// Every interface's bytes a second, received and sent together.
     pub network: Vec<f32>,
+    /// The share of swap in use.
+    pub swap: Vec<f32>,
 }
 
 /// How fast each interface and disk moved bytes, `None` until two snapshots
@@ -236,9 +238,7 @@ pub fn dashboard<'a, A: 'static>(
     for (at, card) in cards.into_iter().enumerate() {
         stacks[at % columns].push(card);
     }
-    let stacks = stacks
-        .into_iter()
-        .map(|stack| column(stack).grow(1.0));
+    let stacks = stacks.into_iter().map(|stack| column(stack).grow(1.0));
     column([
         cpu_card(sample, usage, history),
         row(stacks)
@@ -317,26 +317,37 @@ fn cpu_summary(cpu: &CpuSample) -> Option<String> {
     (!parts.is_empty()).then(|| parts.join(FACT_SEPARATOR))
 }
 
-/// Physical memory and its history, and swap where there is any.
+/// Physical memory and its history, and beside it swap and its history
+/// where there is any.
 fn memory_card<'a, A: 'static>(memory: &MemoryReading, history: &'a History) -> Element<'a, A> {
     let used = memory.total_kb.saturating_sub(memory.available_kb);
-    let mut card = section(MEMORY_TITLE)
-        .item(headline_reading(
+    let ram = column([
+        headline_reading(
             "sys.memory.ram",
             "RAM",
             tenths_of(used, memory.total_kb),
             Some(amounts(used, memory.total_kb)),
-        ))
-        .item(history_line(&history.memory, "sys.memory.history"));
-    if memory.swap_total_kb > 0 {
-        card = card.item(compact_reading(
-            "sys.memory.swap",
-            "Swap",
-            tenths_of(memory.swap_used_kb, memory.swap_total_kb),
-            amounts(memory.swap_used_kb, memory.swap_total_kb),
-        ));
-    }
-    Element::from(card).id(MEMORY)
+        ),
+        history_line(&history.memory, "sys.memory.history"),
+    ]);
+    let readings = match memory.swap_total_kb > 0 {
+        true => {
+            let swap = column([
+                headline_reading(
+                    "sys.memory.swap",
+                    "Swap",
+                    tenths_of(memory.swap_used_kb, memory.swap_total_kb),
+                    Some(amounts(memory.swap_used_kb, memory.swap_total_kb)),
+                ),
+                history_line(&history.swap, "sys.memory.swap.history"),
+            ]);
+            row([ram.grow(1.0), swap.grow(1.0)])
+                .gap(Space::Cells(CARD_GAP_COLS))
+                .align(Align::Start)
+        }
+        false => ram,
+    };
+    Element::from(section(MEMORY_TITLE).item(readings)).id(MEMORY)
 }
 
 /// Each card's name, video memory, load, and temperature on a two-line block.
@@ -481,28 +492,6 @@ fn headline_reading<'a, A: 'static>(
     ];
     row(cells.drain(..))
         .gap(Space::Cells(ROW_GAP_COLS))
-        .padding(READING_PADDING.0, READING_PADDING.1)
-        .id(id)
-}
-
-/// A compact single-line reading for short labels (`Swap`) with a thin
-/// flat capacity bar underneath.
-fn compact_reading<'a, A: 'static>(
-    id: impl Into<Cow<'a, str>>,
-    label: &str,
-    tenths: u32,
-    facts: String,
-) -> Element<'a, A> {
-    let tone = tone(tenths);
-    let header = row([
-        Element::from(text(label.to_string())).width(Extent::Cells(SHORT_LABEL_COLS)),
-        Element::from(text(facts).muted()).grow(1.0),
-        share_cell(tenths, tone),
-    ])
-    .gap(Space::Cells(ROW_GAP_COLS));
-
-    column([header, flat_bar(share(tenths), tone)])
-        .gap(Space::Cells(BLOCK_GAP_ROWS))
         .padding(READING_PADDING.0, READING_PADDING.1)
         .id(id)
 }
