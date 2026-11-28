@@ -23,6 +23,9 @@ const GIT_FAILED: &str = "git failed";
 /// One message for the status bar.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum GitNotice {
+    /// The user aborted a change in the editor git opened for it (`commit`,
+    /// `rebase`).
+    Aborted(&'static str),
     /// A change starting, named as it runs (`git push origin main`), and
     /// left out of the history, which hears how it ended.
     Announced(String),
@@ -114,6 +117,7 @@ impl GitNotice {
     /// severity are decided.
     pub(crate) fn into_notice(self) -> Notice {
         match self {
+            Self::Aborted(what) => Notice::info(format!("{what} aborted")),
             Self::Announced(command) => Notice::info(command).unlogged(),
             Self::Cancelled => Notice::info("cancelled"),
             Self::Changed(detail) => Notice::info(detail),

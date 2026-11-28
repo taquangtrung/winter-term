@@ -53,9 +53,15 @@ const LANGUAGES: &[(&str, &str)] = &[
 /// The file git opens an editor on for a commit's message.
 const COMMIT_MESSAGE: &str = "COMMIT_EDITMSG";
 
+/// The file git opens an editor on for a merge commit's message.
+pub(super) const MERGE_MESSAGE: &str = "MERGE_MSG";
+
+/// The file git opens an editor on for an annotated tag's message.
+pub(super) const TAG_MESSAGE: &str = "TAG_EDITMSG";
+
 /// Files git opens an editor on for a message, read with the commit
 /// message grammar.
-pub(super) const MESSAGE_FILES: [&str; 3] = [COMMIT_MESSAGE, "MERGE_MSG", "TAG_EDITMSG"];
+pub(super) const MESSAGE_FILES: [&str; 3] = [COMMIT_MESSAGE, MERGE_MESSAGE, TAG_MESSAGE];
 
 /// The file git opens an editor on for an interactive rebase's plan.
 pub(super) const REBASE_TODO: &str = "git-rebase-todo";

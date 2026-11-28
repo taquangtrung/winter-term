@@ -18,6 +18,16 @@ use crate::parse;
 /// whose failure can still have changed the repository.
 const PART_WAY_TAGS: [&str; 2] = [exec::TAG_CHANGED, exec::TAG_PULL];
 
+/// What git says when the message or the plan it opened in an editor came
+/// back empty, and what it gave up then: the user aborted it there, which is
+/// no failure. Git runs in one locale, so these are always its words.
+const ABORTED_IN_EDITOR: [(&str, &str); 4] = [
+    ("Aborting commit due to empty commit message.", "commit"),
+    ("error: Empty commit message.", "merge commit"),
+    ("error: nothing to do", "rebase"),
+    ("fatal: no tag message?", "tag"),
+];
+
 // ========================================================================
 // GitEditor: replies
 // ========================================================================
@@ -83,7 +93,13 @@ impl GitEditor {
             // the placeholder would hide the failure it is waiting out.
             self.repo.loaded = true;
             self.watch.watching = None;
-            self.notice = Some(self.failure(&output));
+            self.notice = Some(match aborted_in_editor(&output) {
+                Some(what) => {
+                    self.announced = None;
+                    GitNotice::Aborted(what)
+                }
+                None => self.failure(&output),
+            });
             // A change that can stop part-way can fail having changed the
             // repository: a rebase whose plan was cancelled has let go of its
             // state, and one stopped on a conflict has left it. The view
@@ -474,4 +490,17 @@ fn report_for(tag: &'static str, output: &CommandOutput) -> Option<GitNotice> {
         exec::TAG_DISCARD | exec::TAG_STAGE | exec::TAG_UNSTAGE => None,
         _ => Some(GitNotice::Changed(detail.to_string())),
     }
+}
+
+/// What the user aborted in the editor git opened, where the change
+/// `output` answers stopped there: `commit`, `rebase`.
+fn aborted_in_editor(output: &CommandOutput) -> Option<&'static str> {
+    if !exec::CHANGE_TAGS.contains(&output.tag) {
+        return None;
+    }
+    let said = |words: &str| output.stderr.lines().any(|line| line.trim() == words);
+    ABORTED_IN_EDITOR
+        .iter()
+        .find(|(words, _)| said(words))
+        .map(|(_, what)| *what)
 }

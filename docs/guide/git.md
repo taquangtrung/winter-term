@@ -73,7 +73,8 @@ In a Winter pane, `git commit` opens its message in the text editor, ready to ty
 | Key | Action |
 |---|---|
 | `C-c C-c`, `C-S-c`, or `ZZ` | Commit |
-| `C-c C-k`, `C-S-k`, or `ZQ` | Cancel the commit |
+| `C-c C-k` | Abort the commit, once you say yes |
+| `ZQ` or `:q!` | Abort the commit at once |
 | `C-M-p` / `C-M-n` | An earlier message from the history, back again |
 
-An interactive rebase's plan opens the same way. In Normal mode, `p` `r` `e` `s` `f` `d` set the line's action (pick, reword, edit, squash, fixup, drop), `C-c j` and `C-c k` move the line, and `C-c C-c` or `ZZ` finishes. Closing the plan any other way (`C-S-q`, `ZQ`, or `C-c C-k`) aborts the rebase.
+An interactive rebase's plan opens the same way. In Normal mode, `p` `r` `e` `s` `f` `d` set the line's action (pick, reword, edit, squash, fixup, drop), `C-c j` and `C-c k` move the line, and `C-c C-c` or `ZZ` finishes. `C-c C-k` aborts the rebase once you say yes; closing the plan any other way (`C-S-q`, `ZQ`) aborts it at once.

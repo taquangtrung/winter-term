@@ -482,10 +482,37 @@ fn test_a_rebase_whose_plan_was_cancelled_reads_the_status_again() {
     // `C-c C-k` empties the plan, which git answers by giving up.
     let outcome = editor.on_job(failed_change("error: nothing to do\n"));
     assert_eq!(command_of(&outcome).tag, exec::TAG_STATUS);
-    assert!(
-        matches!(git_notice(&mut editor), Some(GitNotice::Failed(_))),
-        "the failure is still reported"
+    assert_eq!(
+        git_notice(&mut editor),
+        Some(GitNotice::Aborted("rebase")),
+        "aborted, not failed"
     );
+}
+
+#[test]
+fn test_a_commit_whose_message_was_aborted_is_no_failure() {
+    let mut editor = loaded_editor();
+    let aborted = JobReply::Command(CommandOutput {
+        id: 0,
+        code: Some(1),
+        stderr: "Aborting commit due to empty commit message.\n".to_string(),
+        stdout: String::new(),
+        tag: exec::TAG_COMMIT,
+    });
+    editor.on_job(aborted);
+    assert_eq!(git_notice(&mut editor), Some(GitNotice::Aborted("commit")));
+    // The same words from a read are no change of the user's to abort.
+    editor.on_job(JobReply::Command(CommandOutput {
+        id: 0,
+        code: Some(1),
+        stderr: "error: nothing to do\n".to_string(),
+        stdout: String::new(),
+        tag: exec::TAG_LOG,
+    }));
+    assert!(matches!(
+        git_notice(&mut editor),
+        Some(GitNotice::Failed(_))
+    ));
 }
 
 #[test]

@@ -1076,6 +1076,7 @@ impl Page for TextEditor {
             return EditorOutcome::Consumed;
         }
         self.on_conflict_prompt(&reply)
+            .or_else(|| self.on_git_prompt(&reply))
             .or_else(|| self.on_lsp_prompt(&reply))
             .unwrap_or(EditorOutcome::Ignored)
     }
