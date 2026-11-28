@@ -8,8 +8,8 @@
 use std::time::Instant;
 
 use crate::render::{ImagePlacement, PAGE_DIM_MIX, PanePaint, mix};
-use misty::{Frame, GpuTexture, Point, Rect, Rgba};
 use misty::grid::{Cell, CellHighlight, CellSource, Cursor};
+use misty::{Frame, GpuTexture, Point, Rect, Rgba};
 
 use crate::window::App;
 

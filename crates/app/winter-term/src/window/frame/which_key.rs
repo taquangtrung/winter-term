@@ -5,8 +5,8 @@
 //! types its key, and a click outside puts the popup away.
 
 use crate::render::WhichKeyView;
-use misty::{EventCx, Frame, Input, Rect, Widget};
 use misty::widgets::{WhichKeyEntry, WhichKeyResponse};
+use misty::{EventCx, Frame, Input, Rect, Widget};
 
 use crate::window::App;
 use crate::window::appearance::ui_theme;

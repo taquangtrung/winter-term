@@ -18,8 +18,8 @@
 use std::time::Instant;
 
 use misty::view::{Item, Press, badge, button, column, item, page, section};
-use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect};
 use misty::widgets::ButtonVariant;
+use misty::{AccessAction, Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect};
 use misty::{Theme, ThemeToken};
 
 use winter_model::editor::{

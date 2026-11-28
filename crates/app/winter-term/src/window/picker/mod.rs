@@ -22,8 +22,8 @@ pub(in crate::window) use preview::{FilePreview, PanelState, Preview};
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use misty::picker::{self, History, Parked, Picker, PreviewKind, Recency, Reply, Source};
 use misty::EventCx;
+use misty::picker::{self, History, Parked, Picker, PreviewKind, Recency, Reply, Source};
 use misty::widgets::{QueryStyle, QuickPick};
 use winter_field::misty_key;
 use winter_model::input::Key;

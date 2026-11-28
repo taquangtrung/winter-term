@@ -3,8 +3,8 @@
 //! pointer handed to it.
 
 use crate::render::StatusHover;
-use misty::{Frame, Input, Widget};
 use misty::widgets::StatusBarResponse;
+use misty::{Frame, Input, Widget};
 
 use super::{BELL_ID, BRANCH_ID, HOST_ID, MODE_ID, PROJECT_ID, SEGMENT_IDS};
 

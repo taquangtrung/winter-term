@@ -14,8 +14,8 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use misty::{Rgba, Span, StyledText, TextColor, ThemeToken};
 use misty::widgets::{StatusLine, StatusSegment};
+use misty::{Rgba, Span, StyledText, TextColor, ThemeToken};
 use winter_base::paths::is_local_host;
 use winter_ext_api::Status;
 

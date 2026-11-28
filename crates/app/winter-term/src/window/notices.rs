@@ -8,8 +8,8 @@ use std::time::{Instant, SystemTime};
 use crate::render::{NoticeKind, StatusBell, StatusNotice};
 
 use crate::editors::notifications::NotificationsEditor;
-use misty::{Routing, Widget};
 use misty::widgets::ToastsResponse;
+use misty::{Routing, Widget};
 use winter_model::input::Key;
 use winter_model::layout::TabId;
 use winter_model::notify::{LoggedNotice, Notice, Severity};

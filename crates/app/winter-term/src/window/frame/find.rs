@@ -2,9 +2,9 @@
 //! the top-right corner of the pane being searched, the way an editor's
 //! find widget is. How far the search has got stays in the status bar.
 
-use misty::{BoxStyle, Frame, Point, Rect, Span, StyledText, TextColor, ThemeToken};
 use misty::grid::text_width;
 use misty::widgets::{Popup, PopupSide};
+use misty::{BoxStyle, Frame, Point, Rect, Span, StyledText, TextColor, ThemeToken};
 
 use crate::window::App;
 use crate::window::appearance::ui_theme;

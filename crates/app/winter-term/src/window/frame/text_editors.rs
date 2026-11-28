@@ -6,8 +6,8 @@
 
 use std::time::Instant;
 
-use misty::{EventCx, Frame, Input, Rect, Rgb};
 use misty::grid::Attributes;
+use misty::{EventCx, Frame, Input, Rect, Rgb};
 use winter_emulator::{Color, Style};
 use winter_model::layout::TabId;
 use winter_text::{HighlightStyle, TextEditor};

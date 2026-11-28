@@ -5,8 +5,10 @@
 //! key, and a click outside puts the menu away.
 
 use crate::render::TransientView;
+use misty::widgets::{
+    Transient, TransientCommand, TransientResponse, TransientRow, TransientSwitch,
+};
 use misty::{EventCx, Frame, Input, Rect, Widget};
-use misty::widgets::{Transient, TransientCommand, TransientResponse, TransientRow, TransientSwitch};
 
 use crate::window::App;
 use crate::window::appearance::ui_theme;

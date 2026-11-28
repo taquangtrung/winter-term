@@ -3,9 +3,7 @@
 
 use misty::Rect;
 
-use super::{
-    Direction, FocusDir, LayoutTree, PaneArea, PaneTree, Region, TabId,
-};
+use super::{Direction, FocusDir, LayoutTree, PaneArea, PaneTree, Region, TabId};
 
 // ========================================================================
 // Constants
@@ -317,17 +315,11 @@ pub(super) fn divider_hit_in(
     let on_divider = match split.direction {
         Direction::Vertical => {
             let div_x = area.x + first_area.width;
-            px >= div_x - reach
-                && px <= div_x + reach
-                && py >= area.y
-                && py < area.y + area.height
+            px >= div_x - reach && px <= div_x + reach && py >= area.y && py < area.y + area.height
         }
         Direction::Horizontal => {
             let div_y = area.y + first_area.height;
-            py >= div_y - reach
-                && py <= div_y + reach
-                && px >= area.x
-                && px < area.x + area.width
+            py >= div_y - reach && py <= div_y + reach && px >= area.x && px < area.x + area.width
         }
     };
     if on_divider {
@@ -389,8 +381,23 @@ pub(super) fn drag_in(
         split.ratio = (split.ratio + delta).clamp(RATIO_MIN, RATIO_MAX);
         return true;
     }
-    drag_in(&mut split.first, first_area, start_x, start_y, dx, dy, reach)
-        || drag_in(&mut split.second, second_area, start_x, start_y, dx, dy, reach)
+    drag_in(
+        &mut split.first,
+        first_area,
+        start_x,
+        start_y,
+        dx,
+        dy,
+        reach,
+    ) || drag_in(
+        &mut split.second,
+        second_area,
+        start_x,
+        start_y,
+        dx,
+        dy,
+        reach,
+    )
 }
 
 pub(super) fn leaf_holds(node: &Node, target: TabId) -> bool {

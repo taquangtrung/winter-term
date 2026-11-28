@@ -8,8 +8,11 @@
 
 use std::time::Instant;
 
+use misty::widgets::{
+    DropZone, TabClose, TabDrag, TabId as MistyTab, TabStrip, TabStripHit, TabStripResponse,
+    TabStyle, TabWidth, draw_drop_target,
+};
 use misty::{AccessAction, EventCx, FocusId, Frame, Input, Point, Rect, SolidFill, Widget};
-use misty::widgets::{DropZone, TabClose, TabDrag, TabId as MistyTab, TabStrip, TabStripHit, TabStripResponse, TabStyle, TabWidth, draw_drop_target};
 
 use winter_model::layout::{FocusDir, Panel, Region, TabId};
 
