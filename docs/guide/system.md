@@ -58,7 +58,7 @@ It is read once when opened; `r` reads it again. Another user's process keeps mo
 
 ## Resource Monitor
 
-The Resource Monitor is a dashboard of the whole machine, refreshed every two seconds. Its cards stack in one column:
+The Resource Monitor is a dashboard of the whole machine, refreshed every second. Its cards stack in one column:
 
 - **CPU:** model, core count, load averages, total use with its recent history, and a vertical bar chart of each core.
 - **Memory:** RAM use with its recent history, and swap use when present.

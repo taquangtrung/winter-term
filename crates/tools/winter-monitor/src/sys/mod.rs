@@ -43,8 +43,9 @@ use crate::header::{RESOURCE_MONITOR, SummaryPart, monitor_page};
 // ========================================================================
 
 /// How long after a snapshot arrives the next is asked for. Long enough for a
-/// processor share to mean something, short enough to feel live.
-const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
+/// processor share to mean something, short enough to feel live; a hidden
+/// page asks for none.
+const REFRESH_INTERVAL: Duration = Duration::from_secs(1);
 
 /// How long a snapshot may be outstanding before it is given up on and asked
 /// for again. The runner drops a request when it is busy.
@@ -61,12 +62,13 @@ const BODY: &str = "sys.body";
 
 /// What the heading says of the readings, and what the page says before
 /// the first.
-const LIVE: &str = "live (2s)";
+const LIVE: &str = "live (1s)";
 const PAUSED: &str = "paused";
 const READING: &str = "reading the machine…";
 
-/// How many readings the history lines hold: two minutes' worth.
-const HISTORY_LEN: usize = 60;
+/// How many readings the history lines hold: two minutes' worth, one a
+/// [`REFRESH_INTERVAL`].
+const HISTORY_LEN: usize = 120;
 
 /// How far past a section's top the body must be for `[` to go back to
 /// that section rather than the one before it, in pixels.

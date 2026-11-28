@@ -104,6 +104,24 @@ fn test_the_first_tick_asks_for_a_snapshot() {
 }
 
 #[test]
+fn test_a_hidden_page_asks_for_nothing_and_reads_at_once_when_shown() {
+    let mut editor = loaded_editor();
+    let due = editor.next_tick().expect("live while shown");
+    assert!(due <= Instant::now() + REFRESH_INTERVAL, "a second apart");
+    editor.set_shown(false);
+    assert_eq!(editor.next_tick(), None, "no tick while hidden");
+    let later = Instant::now() + 10 * REFRESH_INTERVAL;
+    assert_eq!(editor.on_tick(later), EditorOutcome::Consumed, "nor a read");
+    editor.set_shown(true);
+    let due = editor.next_tick().expect("live again");
+    assert!(due <= Instant::now(), "at once, to catch up");
+    assert_eq!(
+        editor.on_tick(Instant::now()),
+        EditorOutcome::Job(JobRequest::System)
+    );
+}
+
+#[test]
 fn test_a_snapshot_fills_the_page_with_its_cards() {
     let mut editor = loaded_editor();
     let text = draw(&mut editor, &window(1600));
