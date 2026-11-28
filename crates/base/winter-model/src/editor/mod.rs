@@ -46,7 +46,8 @@ use super::picture::{Picture, Tile};
 pub use commands::*;
 pub use compare::{CompareRequest, DiffMerge, DiffRequest, DiffText, FileShape, GitViewRequest};
 pub use header::{
-    HEADER_ROWS, Header, HeaderPart, HeaderSegment, PATH_SEPARATOR, PATH_TRAIL, header_view,
+    HEADER_ROWS, Header, HeaderPart, HeaderPlace, HeaderSegment, PATH_SEPARATOR, PATH_TRAIL,
+    PathPart, header_view,
 };
 pub use jobs::{
     BuildStart, CommandOutput, CommandRequest, DirTotal, FileOps, JobReply, JobRequest,
@@ -818,7 +819,7 @@ pub trait Page: AsAny {
             .map(|path| {
                 path_parts(&path)
                     .iter()
-                    .map(|part| path_part_label(part))
+                    .map(|part| PathPart::new(path_part_label(part)))
                     .collect()
             })
             .unwrap_or_default();
@@ -1306,7 +1307,7 @@ mod tests {
             path: Some(file.clone()),
         };
         assert_eq!(
-            page.header().path().last().map(String::as_str),
+            page.header().path().last().map(|part| part.name.as_str()),
             Some("notes.md")
         );
         assert_eq!(

@@ -10,12 +10,14 @@
 //! What only they use:
 //!
 //! - `gpu`: asking `nvidia-smi` about the GPU.
+//! - `header`: the header every System page draws.
 //! - `net`: listing the sockets, for Ports and a process's details.
 //! - `run`: running a program for the text it prints.
 //! - `table`: the cells every list monitor draws.
 //! - `units`: how a size and a percentage are worded.
 
 mod gpu;
+mod header;
 mod net;
 pub mod ports;
 pub mod proc;

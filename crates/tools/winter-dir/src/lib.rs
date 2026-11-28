@@ -46,7 +46,7 @@ use winter_model::background::{self, Background};
 use winter_model::editor::{
     ARCHIVE_COMPRESS, ARCHIVE_EXTRACT, DiffRequest, DiffText, Editor, EditorCommand,
     EditorMenuItem, EditorOutcome, EditorStatus, HIDE_SCOPES, Header, HeaderSegment, JobReply,
-    JobRequest, JumpStep, JumpTarget, Notice, OpenTarget, Page, PromptMode, PromptReply,
+    JobRequest, JumpStep, JumpTarget, Notice, OpenTarget, Page, PathPart, PromptMode, PromptReply,
     PromptRequest, SHOW_SCOPES, ScrollPosition, SearchReport, TOGGLE_EXECUTABLE, TOGGLE_HIDDEN,
     TokenInspectData,
 };
@@ -1199,7 +1199,7 @@ impl Page for DirEditor {
     fn header(&self) -> Header {
         let path = path_parts(&self.root)
             .iter()
-            .map(|dir| path_part_label(dir))
+            .map(|dir| PathPart::new(path_part_label(dir)))
             .collect();
         let columns = rows::column_names(rows::HeaderFlags {
             show_details: self.show_details,

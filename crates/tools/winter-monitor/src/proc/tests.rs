@@ -424,15 +424,35 @@ fn test_a_failed_snapshot_is_shown_and_retried() {
 }
 
 #[test]
-fn test_a_click_on_the_header_s_listing_part_runs_what_its_key_does() {
+fn test_a_click_on_the_header_s_layout_choice_lists_the_tree() {
     let mut editor = loaded_editor();
     let text = shown(&mut editor, &window(900));
-    let (header, headings) = text.split_once("\nPID\n").expect("the headings");
-    assert!(header.contains("flat"), "the header over the headings: {text:?}");
-    assert!(!headings.contains("flat"));
-    click(&mut editor, "flat");
+    let (header, _) = text.split_once("\nPID\n").expect("the headings");
+    assert!(header.starts_with("System\n›\nProcess Monitor"), "{text:?}");
+    assert!(header.contains("Flat\nTree"), "the choices over the headings");
+    click(&mut editor, "Tree");
     assert_eq!(editor.mode, ViewMode::Tree);
-    assert!(shown(&mut editor, &window(900)).contains("tree"));
+    click(&mut editor, "Flat");
+    assert_eq!(editor.mode, ViewMode::Flat);
+}
+
+#[test]
+fn test_choosing_another_system_page_in_the_path_asks_the_window_for_it() {
+    let mut editor = loaded_editor();
+    click(&mut editor, "System");
+    let mut window = window(900);
+    let point = heading_at(&drawn(&mut editor, &window), "Port Monitor");
+    let mut asked = None;
+    for input in [
+        ButtonInput::press(PointerButton::Left, point),
+        ButtonInput::release(PointerButton::Left, point),
+    ] {
+        asked = asked.or(editor.view_input(&Input::PointerButton(input), &mut window.cx()));
+    }
+    assert_eq!(
+        asked,
+        Some(EditorOutcome::RunActionHere("ports_monitor".to_string()))
+    );
 }
 
 fn gpu_editor() -> ProcEditor {

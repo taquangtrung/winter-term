@@ -27,13 +27,11 @@ use winter_model::paint::{Frame, Row};
 use winter_model::view::ToolbarTone;
 use winter_model::vim::nav::{VimKey, VimNav};
 
+use crate::header::{FOOTER_PADDING_ROWS, PORT_MONITOR, SummaryPart, monitor_page};
 use crate::proc::act::{self, Signal, TAG_SIGNAL};
 use crate::proc::notice::{Acting, ProcNotice, Signalled};
 use crate::proc::view::SortDirection;
-use crate::table::{
-    FOOTER_PADDING_ROWS, ROW_PADDING_COLS, SummaryPart, cell, fit, heading, marked, summary_page,
-    table_row,
-};
+use crate::table::{ROW_PADDING_COLS, cell, fit, heading, marked, table_row};
 
 // ========================================================================
 // Constants
@@ -227,6 +225,8 @@ pub struct PortsEditor {
     nav: VimNav,
     /// What the last action reported, waiting for the status bar.
     notice: Option<ProcNotice>,
+    /// What a press in the header asked of the window, waiting for it.
+    outcome: Option<EditorOutcome>,
     /// The process being asked about ending: its id and name.
     pending: Option<(u32, String, Signal)>,
     /// The sockets shown, as indexes into `sockets`, in order.
@@ -257,19 +257,6 @@ impl SortKey {
     fn next(self) -> Self {
         let at = Self::ALL.iter().position(|key| *key == self).unwrap_or(0);
         Self::ALL[(at + 1) % Self::ALL.len()]
-    }
-
-    /// The column's name, as the summary says it.
-    fn label(self) -> &'static str {
-        match self {
-            SortKey::Local => "local",
-            SortKey::Pid => "pid",
-            SortKey::Port => "port",
-            SortKey::Program => "program",
-            SortKey::Protocol => "protocol",
-            SortKey::Remote => "remote",
-            SortKey::State => "state",
-        }
     }
 
     /// How `a` and `b` compare by this column, the port breaking ties.
@@ -306,6 +293,7 @@ impl PortsEditor {
             loaded: false,
             nav: VimNav::new(),
             notice: None,
+            outcome: None,
             pending: None,
             rows: Vec::new(),
             sockets: Vec::new(),
@@ -500,32 +488,27 @@ impl PortsEditor {
             (true, true) => format!("{} sockets", self.rows.len()),
             (true, false) => format!("{} listening", self.rows.len()),
         };
-        let (shown, about) = match self.all {
-            true => ("all", "Every socket; {} lists the listening ones alone"),
-            false => (
-                "listening",
-                "Sockets waiting for connections; {} lists them all",
-            ),
+        let listed = |chosen: bool, now: &str, switch: &str| match chosen {
+            true => now.to_string(),
+            false => format!("{switch} ({})", key_of(Act::All)),
         };
-        let sorted = format!(
-            "Sorted by {}; {} sorts by the next column, {} turns it round",
-            self.sort.label(),
-            key_of(Act::Sort),
-            key_of(Act::Reverse)
-        );
         let mut parts = vec![
             SummaryPart::label(count, ToolbarTone::Normal),
-            SummaryPart::button(
-                shown,
-                ToolbarTone::Dim,
+            SummaryPart::choice(
+                "Listening",
+                !self.all,
                 Act::All,
-                about.replace("{}", &key_of(Act::All)),
+                listed(
+                    !self.all,
+                    "Only sockets waiting for connections",
+                    "List Listening",
+                ),
             ),
-            SummaryPart::button(
-                format!("sort {}", self.sort.label()),
-                ToolbarTone::Dim,
-                Act::Sort,
-                sorted,
+            SummaryPart::choice(
+                "All",
+                self.all,
+                Act::All,
+                listed(self.all, "Every socket, connections too", "List All"),
             ),
         ];
         if !self.filter.is_empty() {
@@ -560,6 +543,11 @@ impl PortsEditor {
     fn run_summary(&mut self, act: Act) {
         self.list.view_mut().release();
         self.run(act);
+    }
+
+    /// What a press in the header asks of the window, for it to take.
+    fn go(&mut self, outcome: EditorOutcome) {
+        self.outcome = Some(outcome);
     }
 
     /// The column headings, each sorting by its column on a click.
@@ -732,8 +720,14 @@ impl HostedView for PortsEditor {
         // The tab names the monitor and the header sums it up, so the
         // headings sit right under them, and the footer's text lines up
         // with the table's.
-        let shown = summary_page(self, Self::summary, Self::run_summary)
-            .filled(column(table).gap(Space::Cells(0.0)));
+        let shown = monitor_page(
+            self,
+            PORT_MONITOR,
+            Self::summary,
+            Self::run_summary,
+            Self::go,
+        )
+        .filled(column(table).gap(Space::Cells(0.0)));
         match self.detail.then(|| self.detail_view()).flatten() {
             Some(detail) => shown
                 .footer(detail.padding(ROW_PADDING_COLS, FOOTER_PADDING_ROWS))
@@ -790,13 +784,17 @@ impl Page for PortsEditor {
     }
 
     fn view_input(&mut self, input: &Input, cx: &mut EventCx<'_>) -> Option<EditorOutcome> {
-        self.own_view_input(input, cx)
-            .then_some(EditorOutcome::Consumed)
+        let used = self.own_view_input(input, cx);
+        self.outcome
+            .take()
+            .or(used.then_some(EditorOutcome::Consumed))
     }
 
     fn view_access_action(&mut self, action: AccessAction) -> Option<EditorOutcome> {
-        self.own_access_action(action)
-            .then_some(EditorOutcome::Consumed)
+        let used = self.own_access_action(action);
+        self.outcome
+            .take()
+            .or(used.then_some(EditorOutcome::Consumed))
     }
 
     fn view_about_to_wait(&mut self, cx: &mut EventCx<'_>) -> Option<Instant> {

@@ -168,16 +168,16 @@ pub fn card_ids(sample: &SystemSample) -> Vec<&'static str> {
     ids
 }
 
-/// The machine in one line, for the heading: its name, its system, and how
+/// The machine in one line, for the header: its name, its system, and how
 /// long it has been up.
-pub fn machine_line<'a, A: 'static>(sample: &SystemSample) -> Element<'a, A> {
+pub fn machine_facts(sample: &SystemSample) -> String {
     let overview = &sample.overview;
     let facts = [
         overview.hostname.clone(),
         format!("{} {} ({})", overview.os, overview.release, overview.arch),
         format!("up {}", format_uptime(overview.uptime_secs)),
     ];
-    text(facts.join(FACT_SEPARATOR)).muted().into()
+    facts.join(FACT_SEPARATOR)
 }
 
 /// The dashboard for `sample`: its cards stacked in a single column so

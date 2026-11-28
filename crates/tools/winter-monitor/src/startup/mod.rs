@@ -30,9 +30,8 @@ use winter_model::paint::{Frame, Row};
 use winter_model::view::ToolbarTone;
 use winter_model::vim::nav::{VimKey, VimNav};
 
-use crate::table::{
-    FOOTER_PADDING_ROWS, ROW_PADDING_COLS, SummaryPart, cell, fit, marked, summary_page, table_row,
-};
+use crate::header::{FOOTER_PADDING_ROWS, STARTUP_PROGRAMS, SummaryPart, monitor_page};
+use crate::table::{ROW_PADDING_COLS, cell, fit, marked, table_row};
 
 use self::notice::StartupNotice;
 
@@ -173,6 +172,8 @@ pub struct StartupEditor {
     loaded: bool,
     nav: VimNav,
     notice: Option<StartupNotice>,
+    /// What a press in the header asked of the window, waiting for it.
+    outcome: Option<EditorOutcome>,
     /// Whether a reading is outstanding, so a second is not asked for.
     reading: bool,
     /// The entries shown, as indexes into `entries`, in order.
@@ -198,6 +199,7 @@ impl StartupEditor {
             loaded: false,
             nav: VimNav::new(),
             notice: None,
+            outcome: None,
             reading: false,
             rows: Vec::new(),
             toggling: None,
@@ -385,6 +387,11 @@ impl StartupEditor {
         self.run(act);
     }
 
+    /// What a press in the header asks of the window, for it to take.
+    fn go(&mut self, outcome: EditorOutcome) {
+        self.outcome = Some(outcome);
+    }
+
     /// The column headings.
     fn heading_view(&self) -> Element<'_, Self> {
         let head = |label: &'static str, about: &'static str, width: Option<usize>| {
@@ -479,8 +486,14 @@ impl HostedView for StartupEditor {
         // The tab names the monitor and the header sums it up, so the
         // headings sit right under them, and the footer's text lines up
         // with the table's.
-        let shown = summary_page(self, Self::summary, Self::run_summary)
-            .filled(column(table).gap(Space::Cells(0.0)));
+        let shown = monitor_page(
+            self,
+            STARTUP_PROGRAMS,
+            Self::summary,
+            Self::run_summary,
+            Self::go,
+        )
+        .filled(column(table).gap(Space::Cells(0.0)));
         match self.detail.then(|| self.detail_view()).flatten() {
             Some(detail) => shown
                 .footer(detail.padding(ROW_PADDING_COLS, FOOTER_PADDING_ROWS))
@@ -538,13 +551,17 @@ impl Page for StartupEditor {
     }
 
     fn view_input(&mut self, input: &Input, cx: &mut EventCx<'_>) -> Option<EditorOutcome> {
-        self.own_view_input(input, cx)
-            .then_some(EditorOutcome::Consumed)
+        let used = self.own_view_input(input, cx);
+        self.outcome
+            .take()
+            .or(used.then_some(EditorOutcome::Consumed))
     }
 
     fn view_access_action(&mut self, action: AccessAction) -> Option<EditorOutcome> {
-        self.own_access_action(action)
-            .then_some(EditorOutcome::Consumed)
+        let used = self.own_access_action(action);
+        self.outcome
+            .take()
+            .or(used.then_some(EditorOutcome::Consumed))
     }
 
     fn view_about_to_wait(&mut self, cx: &mut EventCx<'_>) -> Option<Instant> {

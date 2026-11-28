@@ -2025,7 +2025,12 @@ fn test_the_header_s_path_names_the_root_and_every_folder_above_it() {
     let tree = TempTree::new("dir-path");
     let sub = tree.dir("child");
     let mut editor = DirEditor::new(sub.clone());
-    let path = editor.header().path().to_vec();
+    let path: Vec<String> = editor
+        .header()
+        .path()
+        .iter()
+        .map(|part| part.name.clone())
+        .collect();
     assert_eq!(path.first().map(String::as_str), Some("/"));
     assert_eq!(path.last().map(String::as_str), Some("child"));
     let depth = sub.ancestors().count();

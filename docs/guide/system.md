@@ -9,11 +9,11 @@ Four pages show what the machine is doing, each from a `System:` command in the 
 | `System: Port Monitor` | Every socket and the process holding it |
 | `System: Startup Programs` | What starts on its own at boot or login |
 
-Each reads only while it is shown, and catches up when you come back to it.
+Each reads only while it is shown, and catches up when you come back to it. Each one's header starts with where it is, such as `System › Port Monitor`; click either part to list the four pages and go to another.
 
 ## Process Monitor
 
-The Process Monitor lists every process on the machine, refreshed every two seconds, as a flat list; `=` shows them as a tree of which process started which. The header sums up the list: how many there are, how they are listed and sorted, and any filter. Click a part of it to do what its key does, such as `=` for the listing. The footer describes the selected process: its name and command line (hover it for the whole), then its id, parent, owner, state, CPU and memory, video memory, how many children it started, and its paths.
+The Process Monitor lists every process on the machine, refreshed every two seconds, as a flat list; `=` shows them as a tree of which process started which. The header says how many there are and any filter (click it to clear it); click `Flat` or `Tree` there to choose how they are listed. The footer describes the selected process: its name and command line (hover it for the whole), then its id, parent, owner, state, CPU and memory, video memory, how many children it started, and its paths.
 
 | Key | Action |
 |---|---|
@@ -78,7 +78,7 @@ Usage bars and percentages turn amber at 75 percent and red at 90. The rates nee
 
 ## Port Monitor
 
-The Port Monitor lists the sockets waiting for connections and the process holding each, refreshed every two seconds: what answers "what is on port 3000?". `a` lists every socket, connections too. The header says how many sockets there are and which are listed; click a part to change it. The footer describes the selected socket.
+The Port Monitor lists the sockets waiting for connections and the process holding each, refreshed every two seconds: what answers "what is on port 3000?". `a` lists every socket, connections too. The header says how many sockets there are; click `Listening` or `All` there to choose which are listed. The footer describes the selected socket.
 
 | Key | Action |
 |---|---|

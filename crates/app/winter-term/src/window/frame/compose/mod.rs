@@ -12,7 +12,7 @@ use crate::render::{
 };
 use misty::{Rect, ScrollbarFade, ScrollbarShow};
 use winter_emulator::{CursorShape, Grid};
-use winter_model::editor::{Header, HeaderSegment, PickPlacement, ScrollPosition};
+use winter_model::editor::{Header, HeaderSegment, PathPart, PickPlacement, ScrollPosition};
 use winter_model::input::PendingPrefix;
 use winter_model::layout::TabId;
 use winter_model::list::{ViewportSettings, configure_viewports};
@@ -343,7 +343,7 @@ fn sticky_headers(
             let top = grid_area(App::layout_rect_to_pane(bands.content), cell_height).y;
             let row = Rect::new(whole.x, top, whole.width, cell_height);
             let command = block.command.replace('\n', " ");
-            let header = Header::new(vec![HeaderSegment::Path(vec![command])]);
+            let header = Header::new(vec![HeaderSegment::Path(vec![PathPart::new(command)])]);
             Some((*id, header_bar(*id, &header, None, Vec::new(), row)))
         })
         .collect()

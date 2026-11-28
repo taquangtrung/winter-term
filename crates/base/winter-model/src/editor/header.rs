@@ -6,7 +6,8 @@
 use std::rc::Rc;
 
 use misty::layout::Align;
-use misty::view::{Extent, Space, Text, column, row, text};
+use misty::view::{Corners, Extent, Space, Text, column, menu, row, text};
+use misty::widgets::{ButtonVariant, MenuEntry, MenuItem};
 use misty::{Element, ThemeToken};
 
 use crate::paint::ColumnName;
@@ -29,6 +30,9 @@ pub const PATH_TRAIL: &str = " \u{203a} ";
 /// The cell columns between two parts of a header.
 const PART_GAP_COLS: f32 = 1.0;
 
+/// The cell columns at each side of a toggle's text, inside its fill.
+const TOGGLE_PADDING_COLS: f32 = 0.5;
+
 // ========================================================================
 // Data Structures
 // ========================================================================
@@ -48,12 +52,34 @@ pub enum HeaderSegment {
     /// names, kept in place as the rows scroll.
     Columns(Vec<ColumnName>),
     /// Where the tab is, outermost first (a directory's path, one part to a
-    /// folder), each part a press away and the last in the tab's icon: at
-    /// the left.
-    Path(Vec<String>),
+    /// folder, or `System > Port Monitor`), each part a press away and the
+    /// last in the tab's icon: at the left.
+    Path(Vec<PathPart>),
     /// Short facts about what the tab shows, such as a count, a sort, or a
     /// filter: at the right.
     Summary(Vec<HeaderPart>),
+}
+
+/// One part of a header's path: a folder, or a group of pages.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathPart {
+    /// What it is called.
+    pub name: String,
+    /// The places a press lists to go to instead, such as the other pages of
+    /// its group; empty for a part a press goes to, as a folder is. Only a
+    /// page's header ([`header_view`]) lists them.
+    pub places: Vec<HeaderPlace>,
+}
+
+/// A place a [`PathPart`] lists.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HeaderPlace {
+    /// What choosing it is told back as, as a [`HeaderPart`]'s press is.
+    pub action: u16,
+    /// Whether it is where the tab is, marked in the list.
+    pub current: bool,
+    /// What it is called.
+    pub name: String,
 }
 
 /// One part of a header's summary.
@@ -63,6 +89,10 @@ pub struct HeaderPart {
     /// [`Page::on_header_part`](crate::editor::Page::on_header_part), below
     /// [`HeaderPart::MAX_ACTION`]; `None` for a part with nothing to press.
     pub action: Option<u16>,
+    /// For one of a set of choices of how the tab lays out what it shows
+    /// (`Flat` or `Tree`), whether it is the one chosen, drawn lit; `None`
+    /// for a part that is no choice.
+    pub chosen: Option<bool>,
     /// What it says.
     pub text: String,
     /// How it is drawn.
@@ -87,7 +117,7 @@ impl Header {
     }
 
     /// The parts of its path, empty for none.
-    pub fn path(&self) -> &[String] {
+    pub fn path(&self) -> &[PathPart] {
         self.segments
             .iter()
             .find_map(|segment| match segment {
@@ -153,6 +183,7 @@ impl HeaderPart {
     pub fn label(text: impl Into<String>, tone: ToolbarTone) -> Self {
         Self {
             action: None,
+            chosen: None,
             text: text.into(),
             tone,
             tooltip: None,
@@ -169,9 +200,54 @@ impl HeaderPart {
     ) -> Self {
         Self {
             action: Some(action),
+            chosen: None,
             text: text.into(),
             tone,
             tooltip: Some(tooltip.into()),
+        }
+    }
+
+    /// One of a set of choices saying `text`, lit when `chosen`, a press on
+    /// it told back as `action`, its tooltip `tooltip`. The chosen one needs
+    /// no action, since pressing it again changes nothing.
+    pub fn choice(
+        text: impl Into<String>,
+        chosen: bool,
+        action: Option<u16>,
+        tooltip: impl Into<String>,
+    ) -> Self {
+        let tone = match chosen {
+            true => ToolbarTone::Accent,
+            false => ToolbarTone::Dim,
+        };
+        Self {
+            action,
+            chosen: Some(chosen),
+            text: text.into(),
+            tone,
+            tooltip: Some(tooltip.into()),
+        }
+    }
+}
+
+// ========================================================================
+// PathPart
+// ========================================================================
+
+impl PathPart {
+    /// A part called `name` that a press goes to.
+    pub fn new(name: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            places: Vec::new(),
+        }
+    }
+
+    /// A part called `name` that a press lists `places` from.
+    pub fn listing(name: impl Into<String>, places: Vec<HeaderPlace>) -> Self {
+        Self {
+            name: name.into(),
+            places,
         }
     }
 }
@@ -182,10 +258,12 @@ impl HeaderPart {
 
 /// `header` as misty draws it in a page's header
 /// ([`misty::view::Page::header`]), [`HEADER_ROWS`] tall: its path at the
-/// left, each part a button running `on_path` with its index, its folders
-/// muted, and its summary at the right, each part with an action a button
-/// running `on_part` with it. The names of columns stand over an editor's
-/// grid, which a page has none of, so they are left out.
+/// left, each part a button running `on_path` with its index, or a flat
+/// menu of its places running `on_part` with the one chosen, its folders
+/// muted; and its summary at the right, each part with an action a button
+/// running `on_part` with it, a choice lit when chosen. The names of
+/// columns stand over an editor's grid, which a page has none of, so they
+/// are left out.
 pub fn header_view<'a, A: 'static>(
     header: &Header,
     on_path: impl Fn(&mut A, usize) + 'static,
@@ -195,16 +273,37 @@ pub fn header_view<'a, A: 'static>(
     let on_part = Rc::new(on_part);
     let path = header.path();
     let mut parts: Vec<Element<'a, A>> = Vec::new();
-    for (index, name) in path.iter().enumerate() {
+    for (index, part) in path.iter().enumerate() {
         if index > 0 {
             parts.push(text(PATH_SEPARATOR).muted().into());
         }
+        let trail = path[..=index]
+            .iter()
+            .map(|part| part.name.as_str())
+            .collect::<Vec<_>>()
+            .join(PATH_TRAIL);
+        if !part.places.is_empty() {
+            let entries = part
+                .places
+                .iter()
+                .map(|place| {
+                    MenuEntry::from(
+                        MenuItem::new(place.action, place.name.clone()).with_radio(place.current),
+                    )
+                })
+                .collect();
+            let on_part = Rc::clone(&on_part);
+            let listed = menu(part.name.clone(), entries)
+                .variant(ButtonVariant::Ghost)
+                .on_choose(move |page: &mut A, action| on_part(page, action));
+            parts.push(Element::from(listed).tooltip(trail));
+            continue;
+        }
         let shown = match index + 1 == path.len() {
-            true => text(name.clone()),
-            false => text(name.clone()).muted(),
+            true => text(part.name.clone()),
+            false => text(part.name.clone()).muted(),
         };
         let on_path = Rc::clone(&on_path);
-        let trail = path[..=index].join(PATH_TRAIL);
         parts.push(
             Element::from(shown)
                 .tooltip(trail)
@@ -214,17 +313,24 @@ pub fn header_view<'a, A: 'static>(
     parts.push(column(Vec::new()).grow(1.0));
     for part in header.summary() {
         let shown = Element::from(tinted(&part.text, part.tone));
-        let shown = match (part.action, &part.tooltip) {
-            (Some(action), tooltip) => {
+        let shown = match part.chosen {
+            Some(true) => shown
+                .padding(TOGGLE_PADDING_COLS, 0.0)
+                .background(ThemeToken::Selection)
+                .corners(Corners::Control),
+            Some(false) => shown.padding(TOGGLE_PADDING_COLS, 0.0),
+            None => shown,
+        };
+        let shown = match part.action {
+            Some(action) => {
                 let on_part = Rc::clone(&on_part);
-                let pressed = shown.on_press(move |page: &mut A, _| on_part(page, action));
-                match tooltip {
-                    Some(tooltip) => pressed.tooltip(tooltip.clone()),
-                    None => pressed,
-                }
+                shown.on_press(move |page: &mut A, _| on_part(page, action))
             }
-            (None, Some(tooltip)) => shown.tooltip(tooltip.clone()),
-            (None, None) => shown,
+            None => shown,
+        };
+        let shown = match &part.tooltip {
+            Some(tooltip) => shown.tooltip(tooltip.clone()),
+            None => shown,
         };
         parts.push(shown);
     }
@@ -295,10 +401,28 @@ mod tests {
     #[test]
     fn test_a_page_s_header_shows_its_path_and_summary_and_runs_their_presses() {
         let header = Header::new(vec![
-            HeaderSegment::Path(vec!["home".to_string(), "notes".to_string()]),
+            HeaderSegment::Path(vec![
+                PathPart::listing(
+                    "System",
+                    vec![
+                        HeaderPlace {
+                            action: 20,
+                            current: false,
+                            name: "Process Monitor".to_string(),
+                        },
+                        HeaderPlace {
+                            action: 21,
+                            current: true,
+                            name: "Port Monitor".to_string(),
+                        },
+                    ],
+                ),
+                PathPart::new("Port Monitor"),
+            ]),
             HeaderSegment::Summary(vec![
                 HeaderPart::label("12 processes", ToolbarTone::Normal),
-                HeaderPart::button("tree", ToolbarTone::Dim, 7, "Listed as a tree"),
+                HeaderPart::choice("Flat", true, None, "Listed flat"),
+                HeaderPart::choice("Tree", false, Some(7), "List as a tree (=)"),
             ]),
         ]);
         let shown = Shown {
@@ -309,16 +433,20 @@ mod tests {
         };
         let mut window = misty::testing::TreeWindow::new(shown, "header", 600, 200);
         let drawn = window.drawn_text();
-        for words in ["home", "notes", "12 processes", "tree"] {
+        for words in ["System", "Port Monitor", "12 processes", "Flat", "Tree"] {
             assert!(
                 drawn.iter().any(|line| line == words),
                 "{words:?} in {drawn:?}"
             );
         }
-        window.click(Role::Button, "home");
-        window.click(Role::Button, "tree");
-        assert_eq!(window.app().paths, [0]);
+        window.click(Role::Button, "Port Monitor");
+        window.click(Role::Button, "Tree");
+        assert_eq!(window.app().paths, [1]);
         assert_eq!(window.app().parts, [7]);
+        // "System" lists the other pages; choosing one tells back its action.
+        window.click(Role::Button, "System");
+        window.click(Role::MenuItemRadio, "Process Monitor");
+        assert_eq!(window.app().parts, [7, 20]);
         let unnamed = misty::testing::unnamed_controls(window.frame());
         assert!(unnamed.is_empty(), "{unnamed:?}");
     }
@@ -326,14 +454,14 @@ mod tests {
     #[test]
     fn test_a_press_finds_the_part_told_back_as_its_action() {
         let header = Header::new(vec![
-            HeaderSegment::Path(vec!["home".to_string()]),
+            HeaderSegment::Path(vec![PathPart::new("home")]),
             HeaderSegment::Summary(vec![
                 HeaderPart::label("12 processes", ToolbarTone::Normal),
                 HeaderPart::button("tree", ToolbarTone::Dim, 7, "Listed as a tree"),
             ]),
         ]);
         assert!(!header.is_empty());
-        assert_eq!(header.path(), ["home"]);
+        assert_eq!(header.path(), [PathPart::new("home")]);
         assert_eq!(header.part(7).map(|part| part.text.as_str()), Some("tree"));
         assert_eq!(header.part(0), None, "a label is told back as nothing");
     }

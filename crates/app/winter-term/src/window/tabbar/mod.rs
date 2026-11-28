@@ -473,7 +473,12 @@ impl App {
         match header_button(button) {
             Some(HeaderButton::Path(at)) => {
                 let header = editor.page.header();
-                let trail = header.path().get(..=at)?;
+                let trail: Vec<&str> = header
+                    .path()
+                    .get(..=at)?
+                    .iter()
+                    .map(|part| part.name.as_str())
+                    .collect();
                 Some(trail.join(PATH_TRAIL))
             }
             Some(HeaderButton::Part(action)) => editor.page.header().part(action)?.tooltip.clone(),

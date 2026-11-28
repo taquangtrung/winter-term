@@ -56,10 +56,8 @@ use self::details_view::{BODY as DETAILS_BODY, Details, SECTIONS};
 use self::view::{
     Process, SortDirection, SortKey, ViewMode, ViewOptions, ViewRow, descendants, layout,
 };
-use crate::table::{
-    FOOTER_PADDING_ROWS, ROW_PADDING_COLS, SummaryPart, cell, fit, heading as sort_heading, marked,
-    summary_page, table_row,
-};
+use crate::header::{FOOTER_PADDING_ROWS, PROCESS_MONITOR, SummaryPart, monitor_page};
+use crate::table::{ROW_PADDING_COLS, cell, fit, heading as sort_heading, marked, table_row};
 use crate::units::{format_kb, format_percent};
 use notice::{Acting, ProcNotice, Renice, Signalled};
 
@@ -496,6 +494,8 @@ pub struct ProcEditor {
     shown: bool,
     /// What the last action reported, waiting for the status bar to take it.
     notice: Option<ProcNotice>,
+    /// What a press in the header asked of the window, waiting for it.
+    outcome: Option<EditorOutcome>,
     mode: ViewMode,
     /// Cells the NAME column takes now: grown to fit, never shrunk, so the
     /// columns after it do not jump about as the list changes.
@@ -566,6 +566,7 @@ impl ProcEditor {
             loaded: false,
             shown: true,
             notice: None,
+            outcome: None,
             mode: ViewMode::Flat,
             name_width: MIN_NAME_WIDTH,
             pending_signal: None,
@@ -1048,29 +1049,28 @@ impl ProcEditor {
             (true, count) if self.filter.is_empty() => format!("{count} processes"),
             (true, count) => format!("{count} processes ({} shown)", self.rows.len()),
         };
-        let (mode, listed) = match self.mode {
-            ViewMode::Flat => ("flat", "Listed flat; {} shows the tree"),
-            ViewMode::Tree => ("tree", "Listed as a tree; {} lists them flat"),
+        let flat = self.mode == ViewMode::Flat;
+        let listed = |chosen: bool, now: &str, switch: &str| match chosen {
+            true => now.to_string(),
+            false => format!("{switch} ({})", key_of(Act::View)),
         };
-        let sorted = format!(
-            "Sorted by {}; {} sorts by the next column, {} turns it round",
-            self.sort.label(),
-            key_of(Act::Sort),
-            key_of(Act::Reverse)
-        );
         let mut parts = vec![
             SummaryPart::label(count, ToolbarTone::Normal),
-            SummaryPart::button(
-                mode,
-                ToolbarTone::Dim,
+            SummaryPart::choice(
+                "Flat",
+                flat,
                 Act::View,
-                listed.replace("{}", &key_of(Act::View)),
+                listed(flat, "Listed flat", "List Flat"),
             ),
-            SummaryPart::button(
-                format!("sort {}", self.sort.label()),
-                ToolbarTone::Dim,
-                Act::Sort,
-                sorted,
+            SummaryPart::choice(
+                "Tree",
+                !flat,
+                Act::View,
+                listed(
+                    !flat,
+                    "Listed as a tree of who started whom",
+                    "List as Tree",
+                ),
             ),
         ];
         if !self.filter.is_empty() {
@@ -1105,6 +1105,11 @@ impl ProcEditor {
     fn run_summary(&mut self, act: Act) {
         self.list.view_mut().release();
         self.run(act);
+    }
+
+    /// What a press in the header asks of the window, for it to take.
+    fn go(&mut self, outcome: EditorOutcome) {
+        self.outcome = Some(outcome);
     }
 
     /// The column headings, the sorted one marked with its direction: each
@@ -1308,7 +1313,14 @@ impl HostedView for ProcEditor {
         // The tab names the monitor and the header sums it up, so the
         // headings sit right under them, and the footer's text lines up
         // with the table's.
-        let shown = summary_page(self, Self::summary, Self::run_summary).filled(table);
+        let shown = monitor_page(
+            self,
+            PROCESS_MONITOR,
+            Self::summary,
+            Self::run_summary,
+            Self::go,
+        )
+        .filled(table);
         match self.detail {
             true => shown
                 .footer(
@@ -1378,7 +1390,9 @@ impl Page for ProcEditor {
             Some(details) => details.view_input(input, cx),
             None => self.own_view_input(input, cx),
         };
-        used.then_some(EditorOutcome::Consumed)
+        self.outcome
+            .take()
+            .or(used.then_some(EditorOutcome::Consumed))
     }
 
     fn view_access_action(&mut self, action: AccessAction) -> Option<EditorOutcome> {
@@ -1386,7 +1400,9 @@ impl Page for ProcEditor {
             Some(details) => details.access_action(action),
             None => self.own_access_action(action),
         };
-        used.then_some(EditorOutcome::Consumed)
+        self.outcome
+            .take()
+            .or(used.then_some(EditorOutcome::Consumed))
     }
 
     fn view_about_to_wait(&mut self, cx: &mut EventCx<'_>) -> Option<Instant> {

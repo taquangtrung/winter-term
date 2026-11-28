@@ -187,20 +187,6 @@ impl SortKey {
         }
     }
 
-    /// The column named in the status line.
-    pub fn label(self) -> &'static str {
-        match self {
-            SortKey::Command => "command",
-            SortKey::Cpu => "cpu",
-            SortKey::Gpu => "vram",
-            SortKey::Memory => "mem",
-            SortKey::Name => "name",
-            SortKey::Pid => "pid",
-            SortKey::State => "state",
-            SortKey::User => "user",
-        }
-    }
-
     /// The column after this one in [`SORT_ORDER`], wrapping.
     pub fn next(self) -> SortKey {
         let at = SORT_ORDER.iter().position(|key| *key == self).unwrap_or(0);

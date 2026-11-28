@@ -150,7 +150,7 @@ pub(in crate::window) fn header_bar(
                 false => None,
             },
             shrinks: true,
-            text: part.clone(),
+            text: part.name.clone(),
             tone: match is_last {
                 true => ToolbarTone::Normal,
                 false => ToolbarTone::Dim,
@@ -257,7 +257,7 @@ fn split_gutter(gutter: &Gutter, rect: Rect, cell_width: f32, pad: f32) -> (Rect
 #[cfg(test)]
 mod tests {
     use crate::render::PANE_H_PAD;
-    use winter_model::editor::HeaderSegment;
+    use winter_model::editor::{HeaderSegment, PathPart};
     use winter_model::paint::GutterLane;
 
     use super::*;
@@ -357,7 +357,7 @@ mod tests {
     #[test]
     fn test_a_header_s_summary_goes_at_the_right_each_press_told_apart() {
         let header = Header::new(vec![
-            HeaderSegment::Path(vec!["home".to_string()]),
+            HeaderSegment::Path(vec![PathPart::new("home")]),
             HeaderSegment::Summary(vec![
                 HeaderPart::label("12 processes", ToolbarTone::Normal),
                 HeaderPart::button("tree", ToolbarTone::Dim, 3, "Listed as a tree"),
@@ -387,7 +387,7 @@ mod tests {
 
     #[test]
     fn test_a_press_on_a_path_part_is_told_apart_from_the_toolbar_s_buttons() {
-        let path = vec!["/".to_string(), "tmp".to_string(), "vt".to_string()];
+        let path = ["/", "tmp", "vt"].map(PathPart::new).to_vec();
         let header = Header::new(vec![HeaderSegment::Path(path)]);
         let bar = header_bar(
             TabId(1),
@@ -409,7 +409,7 @@ mod tests {
 
     #[test]
     fn test_header_bar_dims_ancestors_and_highlights_where_it_is() {
-        let path = vec!["/".to_string(), "tmp".to_string(), "vt".to_string()];
+        let path = ["/", "tmp", "vt"].map(PathPart::new).to_vec();
         let header = Header::new(vec![HeaderSegment::Path(path)]);
         let file_icon = IconKind::File {
             name: "vt".to_string(),

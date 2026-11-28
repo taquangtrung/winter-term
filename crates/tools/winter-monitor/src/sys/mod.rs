@@ -18,9 +18,9 @@ pub mod view;
 
 use std::time::{Duration, Instant};
 
-use misty::view::{badge, page, text};
+use misty::view::{Space, text};
 use misty::{Element, EventCx, Frame as MistyFrame, HostedView, Input, Rect, ScrollStep};
-use misty::{Theme, ThemeToken};
+use misty::Theme;
 
 use winter_model::editor::refresh::RefreshTimer;
 use winter_model::editor::{
@@ -30,11 +30,13 @@ use winter_model::input::table::{self, Binding, KeyHelp, KeyTable, Listed};
 use winter_model::input::{CursorMove, Key};
 use winter_model::paint::{Frame, Row};
 use winter_model::system::SystemSample;
+use winter_model::view::ToolbarTone;
 use winter_model::vim::nav::{VimKey, VimNav};
 
 use self::traffic::{TrafficRate, TrafficTracker};
 use self::usage::{Usage, UsageTracker};
-use self::view::{History, Rates, card_ids, dashboard, machine_line, tenths_of};
+use self::view::{History, Rates, card_ids, dashboard, machine_facts, tenths_of};
+use crate::header::{RESOURCE_MONITOR, SummaryPart, monitor_page};
 
 // ========================================================================
 // Constants
@@ -49,7 +51,10 @@ const REFRESH_INTERVAL: Duration = Duration::from_secs(2);
 const STALL_TIMEOUT: Duration = Duration::from_secs(15);
 
 /// What the monitor is called in the pane title.
-const TITLE: &str = "Resource Monitor";
+const TITLE: &str = RESOURCE_MONITOR;
+
+/// The rows above and below the dashboard, under the header.
+const CONTENT_PADDING_ROWS: f32 = 0.5;
 
 /// The id of the page's scrolling body, which the keys scroll.
 const BODY: &str = "sys.body";
@@ -158,6 +163,8 @@ struct Machine {
     disk_tracker: TrafficTracker,
     /// Why the last snapshot failed, until one succeeds.
     error: Option<String>,
+    /// What a press in the header asked of the window, waiting for it.
+    outcome: Option<EditorOutcome>,
     /// The recent processor and memory shares and traffic totals.
     history: History,
     /// The interfaces' counters last seen.
@@ -183,6 +190,7 @@ impl SysEditor {
             disk_tracker: TrafficTracker::default(),
             error: None,
             history: History::default(),
+            outcome: None,
             net_tracker: TrafficTracker::default(),
             rates: Rates::default(),
             sample: None,
@@ -283,22 +291,41 @@ impl Machine {
     }
 }
 
-impl HostedView for Machine {
-    /// The heading saying whether the readings are live and any error,
-    /// over the dashboard (or what the page waits on before the first).
-    fn view(&self) -> Element<'_, Self> {
-        let state = match self.timer.is_paused() {
-            true => badge(PAUSED, ThemeToken::Warning),
-            false => badge(LIVE, ThemeToken::Muted),
-        };
-        let mut shown = page(TITLE);
+impl Machine {
+    /// The summary on the header: the machine in one line, whether the
+    /// readings are live, and why the last snapshot failed. Nothing in it is
+    /// pressed.
+    fn summary(&self) -> Vec<SummaryPart<()>> {
+        let mut parts = Vec::new();
         if let Some(sample) = &self.sample {
-            shown = shown.action(machine_line(sample));
+            parts.push(SummaryPart::label(machine_facts(sample), ToolbarTone::Dim));
         }
-        shown = shown.action(state);
+        parts.push(match self.timer.is_paused() {
+            true => SummaryPart::label(PAUSED, ToolbarTone::Warning),
+            false => SummaryPart::label(LIVE, ToolbarTone::Dim),
+        });
         if let Some(report) = &self.error {
-            shown = shown.action(text(format!("\u{26a0} {report}")).color(ThemeToken::Danger));
+            parts.push(SummaryPart::label(
+                format!("\u{26a0} {report}"),
+                ToolbarTone::Danger,
+            ));
         }
+        parts
+    }
+
+    /// What a press in the header asks of the window, for it to take.
+    fn go(&mut self, outcome: EditorOutcome) {
+        self.outcome = Some(outcome);
+    }
+}
+
+impl HostedView for Machine {
+    /// The header saying where the page is, the machine, and whether the
+    /// readings are live, over the dashboard (or what the page waits on
+    /// before the first).
+    fn view(&self) -> Element<'_, Self> {
+        let shown = monitor_page(self, TITLE, Self::summary, |_, ()| {}, Self::go)
+            .content_padding(Space::Cells(CONTENT_PADDING_ROWS));
         match &self.sample {
             Some(sample) => {
                 shown.scrolling(dashboard(sample, &self.usage, &self.rates, &self.history))
@@ -371,15 +398,15 @@ impl Page for SysEditor {
     }
 
     fn view_input(&mut self, input: &Input, cx: &mut EventCx<'_>) -> Option<EditorOutcome> {
-        self.view
-            .view_input(input, cx)
-            .then_some(EditorOutcome::Consumed)
+        let used = self.view.view_input(input, cx);
+        let asked = self.view.state_mut().outcome.take();
+        asked.or(used.then_some(EditorOutcome::Consumed))
     }
 
     fn view_access_action(&mut self, action: misty::AccessAction) -> Option<EditorOutcome> {
-        self.view
-            .access_action(action)
-            .then_some(EditorOutcome::Consumed)
+        let used = self.view.access_action(action);
+        let asked = self.view.state_mut().outcome.take();
+        asked.or(used.then_some(EditorOutcome::Consumed))
     }
 
     fn view_about_to_wait(&mut self, cx: &mut EventCx<'_>) -> Option<std::time::Instant> {
